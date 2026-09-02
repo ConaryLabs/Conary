@@ -11,7 +11,7 @@ mod tests {
     use conary_core::ccs::{CcsTransportEnvelopeV1, CcsTransportObjectV1};
     use conary_core::db::models::{ConvertedPackage, MetadataTable, set_metadata};
     use conary_core::repository::catalog::{
-        NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+        NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
         NativeParityComparisonV1, NativeParityCountsV1, NativeResolutionComparisonV1,
         NativeResolutionCountsV1,
     };
@@ -161,7 +161,7 @@ mod tests {
                         counts: NativeParityCountsV1::from(revision.counts),
                     },
                     resolution_parity: NativeResolutionComparisonV1 {
-                        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+                        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
                         profile: profile.id().to_string(),
                         profile_revision_sha256: revision_sha256,
                         package_oracle_manifest_sha256: package_oracle_sha256,
@@ -175,6 +175,7 @@ mod tests {
                             roots: 1,
                             resolved_roots: 1,
                             unresolved_roots: 0,
+                            not_installable_roots: 0,
                             closure_package_references: 1,
                             unresolved_dependencies: 0,
                         },

@@ -801,13 +801,9 @@ fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
         "arm64",
         &directory.path().join("architecture-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(architecture, Error::ConflictError(_)));
-    assert!(
-        architecture
-            .to_string()
-            .contains("incompatible target architecture")
-    );
+    .unwrap();
+    assert_eq!(architecture.implementation.projection_schema, 2);
+    assert_eq!(architecture.artifact.counts.not_installable_roots, 2);
 }
 
 #[test]
@@ -850,15 +846,11 @@ fn resolution_survey_records_all_failures_and_isolates_later_roots() {
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);
     assert_eq!(survey.counts.unresolved_roots, 0);
-    assert_eq!(survey.counts.failed_roots, 2);
+    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.failed_roots, 1);
     assert!(survey.failures.iter().any(|failure| {
         failure.name == "conflict-root"
             && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
-    }));
-    assert!(survey.failures.iter().any(|failure| {
-        failure.name == "foreign-root"
-            && failure.error_kind.reason
-                == NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected
     }));
     for failure in &survey.failures {
         let NativeResolutionSurveyNativeExplanationV1::Debian {

@@ -487,6 +487,7 @@ fn validate_package_references(
                     }
                 }
             }
+            NativeResolutionOutcomeV1::NotInstallable { .. } => {}
         }
         Ok(())
     })
@@ -557,6 +558,10 @@ fn accumulate_counts(
                 })?,
                 "unresolved dependencies",
             )?;
+        }
+        NativeResolutionOutcomeV1::NotInstallable { .. } => {
+            counts.not_installable_roots =
+                checked_add(counts.not_installable_roots, 1, "not-installable roots")?;
         }
     }
     Ok(())

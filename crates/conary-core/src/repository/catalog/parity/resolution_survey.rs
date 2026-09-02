@@ -24,7 +24,7 @@ mod evidence;
 pub(super) use evidence::NativeExplanationBudget;
 use evidence::canonical_explanation_size_with_limit;
 
-pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V1: u32 = 1;
+pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V2: u32 = 2;
 pub const NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = 5_000;
 pub const NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -54,10 +54,10 @@ pub struct NativeResolutionSurveyV1 {
 
 impl NativeResolutionSurveyV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_SURVEY_SCHEMA_V1 {
+        if self.schema_version != NATIVE_RESOLUTION_SURVEY_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "native resolution survey schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_SURVEY_SCHEMA_V1
+                self.schema_version, NATIVE_RESOLUTION_SURVEY_SCHEMA_V2
             )));
         }
         validate_identity(&self.profile, "native resolution survey profile")?;
@@ -172,6 +172,7 @@ pub struct NativeResolutionSurveyCountsV1 {
     pub roots_walked: u64,
     pub resolved_roots: u64,
     pub unresolved_roots: u64,
+    pub not_installable_roots: u64,
     pub failed_roots: u64,
     pub error_kinds: Vec<NativeResolutionSurveyErrorCountV1>,
 }
@@ -181,6 +182,7 @@ impl NativeResolutionSurveyCountsV1 {
         let outcomes = self
             .resolved_roots
             .checked_add(self.unresolved_roots)
+            .and_then(|count| count.checked_add(self.not_installable_roots))
             .and_then(|count| count.checked_add(self.failed_roots))
             .ok_or_else(|| {
                 Error::ConfigError("native resolution survey counts exceed u64".to_string())
@@ -627,6 +629,10 @@ impl NativeResolutionSurveyCollector {
             NativeResolutionOutcomeV1::Unresolved { .. } => {
                 self.counts.unresolved_roots = checked_increment(self.counts.unresolved_roots)?;
             }
+            NativeResolutionOutcomeV1::NotInstallable { .. } => {
+                self.counts.not_installable_roots =
+                    checked_increment(self.counts.not_installable_roots)?;
+            }
         }
         Ok(())
     }
@@ -726,7 +732,7 @@ impl NativeResolutionSurveyCollector {
         let retained_failures = self.failures.len() as u64;
         let total_failures = self.counts.failed_roots;
         let survey = NativeResolutionSurveyV1 {
-            schema_version: NATIVE_RESOLUTION_SURVEY_SCHEMA_V1,
+            schema_version: NATIVE_RESOLUTION_SURVEY_SCHEMA_V2,
             profile: self.profile,
             profile_revision_sha256: self.profile_revision_sha256,
             package_oracle_manifest_sha256: self.package_oracle_manifest_sha256,
@@ -783,9 +789,9 @@ fn checked_increment(value: u64) -> Result<u64> {
 mod tests {
     use super::*;
     use crate::repository::catalog::parity::{
-        NativeParityEcosystemV1, NativeResolutionInstalledStateV1,
-        NativeResolutionProviderPolicyV1, NativeResolutionRequirementPolicyV1,
-        NativeResolutionRootPolicyV1,
+        NativeParityEcosystemV1, NativeResolutionArchitectureAdmissionV1,
+        NativeResolutionInstalledStateV1, NativeResolutionProviderPolicyV1,
+        NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     };
 
     fn collector(evidence_byte_limit: u64) -> NativeResolutionSurveyCollector {
@@ -801,6 +807,7 @@ mod tests {
             },
             policy: NativeResolutionPolicyV1 {
                 architecture: "x86_64".to_string(),
+                architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
                 installed_state: NativeResolutionInstalledStateV1::Empty,
                 roots: NativeResolutionRootPolicyV1::EveryExactPackage,
                 positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,

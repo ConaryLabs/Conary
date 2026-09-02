@@ -13,7 +13,8 @@ use super::contract::NativeParityImplementationV1;
 use super::io::verify_native_parity_oracle_bundle;
 use super::resolution_compare::{NativeResolutionComparisonV1, compare_native_resolution_oracle};
 use super::resolution_contract::{
-    NativeResolutionInstalledStateV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
+    NativeResolutionArchitectureAdmissionV1, NativeResolutionInstalledStateV1,
+    NativeResolutionNotInstallableReasonV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
     NativeUnresolvedDependencyV1, native_requirement_group_sha256,
@@ -32,7 +33,7 @@ use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::resolver::sat::{SatExactResolution, solve_exact_repository_package_with_policy};
 
 /// Projection contract for the Conary SAT candidate evidence producer.
-pub const CONARY_RESOLUTION_PROJECTION_SCHEMA_V1: u32 = 1;
+pub const CONARY_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
 
 /// Produced candidate manifest and its exact successful native comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,19 +75,19 @@ pub fn produce_conary_resolution_candidate(
         ecosystem: package_oracle.manifest().implementation.ecosystem,
         name: "conary-sat".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V1,
+        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V2,
     };
     let mut writer = NativeResolutionOracleWriter::create(
         output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
         profile,
         package_oracle.manifest(),
         implementation,
-        policy,
+        policy.clone(),
     )?;
     package_oracle.for_each_package(|root| {
         writer.root(&NativeResolutionRootV1 {
             root_package_key_sha256: root.package_key_sha256.clone(),
-            outcome: projection.resolve(&root.package_key_sha256, architecture)?,
+            outcome: projection.resolve(&root.package_key_sha256, &policy)?,
         })
     })?;
     let manifest = writer.finish()?;
@@ -114,6 +115,7 @@ pub fn produce_conary_resolution_candidate(
 fn resolution_policy(architecture: &str) -> NativeResolutionPolicyV1 {
     NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
         installed_state: NativeResolutionInstalledStateV1::Empty,
         roots: NativeResolutionRootPolicyV1::EveryExactPackage,
         positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -173,7 +175,7 @@ impl CandidateResolutionProjection {
     fn resolve(
         &self,
         root_package_key_sha256: &str,
-        architecture: &str,
+        policy: &NativeResolutionPolicyV1,
     ) -> Result<NativeResolutionOutcomeV1> {
         let root_id = self
             .connection
@@ -189,13 +191,27 @@ impl CandidateResolutionProjection {
                     "candidate resolver projection omits package key {root_package_key_sha256}"
                 ))
             })?;
-        let policy =
+        let root = RepositoryPackage::find_by_id(&self.connection, root_id)?.ok_or_else(|| {
+            Error::ConflictError(format!(
+                "candidate resolver projection omits repository package {root_id}"
+            ))
+        })?;
+        if !policy.architecture_admission.admits(
+            crate::repository::versioning::resolve_package_version_scheme(&root),
+            root.architecture.as_deref(),
+            &policy.architecture,
+        ) {
+            return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+            });
+        }
+        let resolver_policy =
             ResolutionPolicy::new().with_primary_source_identity(self.source_identity.clone());
         match solve_exact_repository_package_with_policy(
             &self.connection,
             root_id,
-            architecture,
-            &policy,
+            &policy.architecture,
+            &resolver_policy,
         )? {
             SatExactResolution::Resolved { install_order } => {
                 let mut closure = BTreeSet::new();

@@ -8,8 +8,8 @@ use flate2::{Compression, GzBuilder};
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
-    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
+    NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
     NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V2, ProfileSourceMemberV2,
     SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
     native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
@@ -882,7 +882,7 @@ fn resolution_producer_projects_strict_priority_blocked_dependency() {
     )
     .unwrap();
 
-    assert_eq!(manifest.implementation.projection_schema, 3);
+    assert_eq!(manifest.implementation.projection_schema, 4);
     assert_eq!(manifest.artifact.counts.roots, 4);
     assert_eq!(manifest.artifact.counts.resolved_roots, 3);
     assert_eq!(manifest.artifact.counts.unresolved_roots, 1);
@@ -925,7 +925,7 @@ fn resolution_producer_projects_strict_priority_blocked_dependency() {
 }
 
 #[test]
-fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
+fn resolution_producer_excludes_strict_priority_multilib_root() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let root_format = r#"
@@ -1007,7 +1007,7 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
     )
     .unwrap();
 
-    assert_eq!(manifest.implementation.projection_schema, 3);
+    assert_eq!(manifest.implementation.projection_schema, 4);
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
     let mut root = None;
     package_reader
@@ -1019,16 +1019,8 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
         })
         .unwrap();
     let root = root.unwrap();
-    let blocked_group = root
-        .requirement_groups
-        .iter()
-        .find(|group| group.native_text.as_deref() == Some("strict-runtime = 1-1.fc44"))
-        .unwrap();
-    let expected = NativeResolutionOutcomeV1::Unresolved {
-        dependencies: vec![NativeUnresolvedDependencyV1 {
-            requiring_package_key_sha256: root.package_key_sha256.clone(),
-            requirement_group_sha256: native_requirement_group_sha256(blocked_group).unwrap(),
-        }],
+    let expected = NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
     };
     let resolution_reader =
         verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
@@ -1046,7 +1038,7 @@ fn resolution_producer_projects_strict_priority_multilib_provider_chain() {
 }
 
 #[test]
-fn resolution_producer_rejects_transitive_provider_conflict_in_strict_residual_probe() {
+fn resolution_producer_rejects_strict_provider_conflict_without_residual_probe() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let root_format = r#"
@@ -1122,7 +1114,7 @@ fn resolution_producer_rejects_transitive_provider_conflict_in_strict_residual_p
     else {
         panic!("RPM survey failure must carry libsolv problems");
     };
-    assert_eq!(problems.len(), 2);
+    assert_eq!(problems.len(), 1);
     assert!(
         problems[0]
             .rules
@@ -1135,19 +1127,6 @@ fn resolution_producer_rejects_transitive_provider_conflict_in_strict_residual_p
             .iter()
             .any(|rule| rule.rule_type_numeric == 0x105)
     );
-    assert!(
-        problems[1]
-            .rules
-            .iter()
-            .all(|rule| rule.rule_type_numeric != 0xd00)
-    );
-    assert!(
-        problems[1]
-            .rules
-            .iter()
-            .any(|rule| rule.rule_type_numeric == 0x105)
-    );
-
     let conflict = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
@@ -1391,7 +1370,7 @@ impl ObservedRoot {
     }
 }
 
-/// Produce both oracles under schema 3 and return the named root's outcome
+/// Produce both oracles under schema 4 and return the named root's outcome
 /// with every projected package.
 fn resolve_named_root(
     directory: &tempfile::TempDir,
@@ -1411,7 +1390,7 @@ fn resolve_named_root(
         &resolution_output,
     )
     .unwrap();
-    assert_eq!(manifest.implementation.projection_schema, 3);
+    assert_eq!(manifest.implementation.projection_schema, 4);
     let package_reader = verify_native_parity_oracle_bundle(&package_output, profile).unwrap();
     let mut packages = Vec::new();
     package_reader
@@ -1445,7 +1424,7 @@ fn resolve_named_root(
 }
 
 #[test]
-fn resolution_producer_rejects_inferior_arch_provider_without_strict_priority() {
+fn resolution_producer_excludes_cross_machine_provider_from_provider_index() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c'].map(digest);
     let root_format = r#"
@@ -1482,18 +1461,50 @@ fn resolution_producer_rejects_inferior_arch_provider_without_strict_priority() 
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
 
-    let architecture = produce_rpm_resolution_oracle(
+    let manifest = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
         &package_output,
         "x86_64",
         &directory.path().join("inferior-provider-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(architecture, Error::ConfigError(_)));
-    assert!(
-        architecture.to_string().contains("rule 0x600"),
-        "{architecture}"
+    .unwrap();
+    assert_eq!(manifest.artifact.counts.not_installable_roots, 1);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut root = None;
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "inferior-provider-root" {
+                root = Some(package);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let root = root.unwrap();
+    let missing = root.requirement_groups.first().unwrap();
+    let resolution_reader = verify_native_resolution_oracle_bundle(
+        &directory.path().join("inferior-provider-resolution"),
+        &profile,
+        &package_reader,
+    )
+    .unwrap();
+    let mut outcome = None;
+    resolution_reader
+        .for_each_root(|candidate| {
+            if candidate.root_package_key_sha256 == root.package_key_sha256 {
+                outcome = Some(candidate.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(
+        outcome.unwrap(),
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: root.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(missing).unwrap(),
+            }],
+        }
     );
 }
 
@@ -1540,13 +1551,8 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
         "aarch64",
         &directory.path().join("architecture-resolution"),
     )
-    .unwrap_err();
-    assert!(
-        architecture
-            .to_string()
-            .contains("target architecture 'aarch64'"),
-        "{architecture}"
-    );
+    .unwrap();
+    assert_eq!(architecture.artifact.counts.not_installable_roots, 2);
 
     let package_rows_path = package_output.join(NATIVE_PARITY_PACKAGE_FILE_NAME);
     let package_rows = fs::read(&package_rows_path).unwrap();
@@ -1623,15 +1629,11 @@ fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);
     assert_eq!(survey.counts.unresolved_roots, 0);
-    assert_eq!(survey.counts.failed_roots, 2);
-    assert_eq!(survey.total_failures, 2);
+    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.failed_roots, 1);
+    assert_eq!(survey.total_failures, 1);
     assert!(!survey.truncated);
-    assert_eq!(survey.failures.len(), 2);
-    assert!(survey.failures.iter().any(|failure| {
-        failure.name == "foreign-root"
-            && failure.error_kind.reason
-                == NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed
-    }));
+    assert_eq!(survey.failures.len(), 1);
     let conflict_failure = survey
         .failures
         .iter()
@@ -1703,10 +1705,7 @@ fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
     )
     .unwrap_err();
     assert_eq!(strict.to_string(), survey.failures[0].error_message);
-    assert_eq!(
-        strict.to_string(),
-        "Configuration error: libsolv found exact root 'foreign-root' not installable under target architecture 'x86_64'"
-    );
+    assert!(strict.to_string().contains("problem rule 0x105"));
 }
 
 #[test]

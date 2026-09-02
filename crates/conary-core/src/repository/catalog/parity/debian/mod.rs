@@ -35,7 +35,7 @@ mod tests;
 use ffi::{AptArchitectureQualifier, AptAtom, AptPackage, AptPackages, AptRelationKind};
 
 pub use resolution::{
-    DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1, produce_debian_resolution_oracle,
+    DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2, produce_debian_resolution_oracle,
     produce_debian_resolution_survey,
 };
 

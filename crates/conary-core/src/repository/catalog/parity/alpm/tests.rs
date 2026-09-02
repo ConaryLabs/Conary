@@ -502,7 +502,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
     assert_eq!(manifest.implementation.version, alpm::version());
     assert_eq!(
         manifest.implementation.projection_schema,
-        ALPM_RESOLUTION_PROJECTION_SCHEMA_V1
+        ALPM_RESOLUTION_PROJECTION_SCHEMA_V2
     );
     assert_eq!(manifest.policy.architecture, "x86_64");
     assert_eq!(manifest.artifact.counts.roots, 11);
@@ -611,7 +611,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
 }
 
 #[test]
-fn resolution_producer_rejects_invalid_architecture_and_conflicting_closure() {
+fn resolution_producer_excludes_non_native_roots_and_rejects_conflicting_closure() {
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut wrong_profile = profile(&snapshots);
@@ -624,15 +624,16 @@ fn resolution_producer_rejects_invalid_architecture_and_conflicting_closure() {
     )
     .unwrap();
 
-    let error = produce_alpm_resolution_oracle(
+    let excluded = produce_alpm_resolution_oracle(
         &wrong_profile,
         &inputs(&snapshots, &databases),
         &package_output,
         "aarch64",
         &directory.path().join("wrong-architecture"),
     )
-    .unwrap_err();
-    assert!(error.to_string().contains("rejected architecture"));
+    .unwrap();
+    assert_eq!(excluded.implementation.projection_schema, 2);
+    assert_eq!(excluded.artifact.counts.not_installable_roots, 11);
 
     let conflict_directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(conflict_directory.path(), true);
@@ -689,7 +690,8 @@ fn resolution_survey_records_all_failures_native_data_and_later_healthy_roots() 
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);
     assert_eq!(survey.counts.unresolved_roots, 0);
-    assert_eq!(survey.counts.failed_roots, 2);
+    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.failed_roots, 1);
     let conflict_failure = survey
         .failures
         .iter()
@@ -710,30 +712,6 @@ fn resolution_survey_records_all_failures_native_data_and_later_healthy_roots() 
             && conflict.package2.name == "blocker"
             && conflict.reason == "blocker"
     }));
-    let architecture_failure = survey
-        .failures
-        .iter()
-        .find(|failure| failure.name == "foreign-root")
-        .unwrap();
-    assert_eq!(
-        architecture_failure.error_kind.reason,
-        NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected
-    );
-    let NativeResolutionSurveyNativeExplanationV1::Alpm {
-        result:
-            NativeResolutionSurveyAlpmResultV1::InvalidArchitecture {
-                packages,
-                detail_unavailable_reason,
-            },
-    } = &architecture_failure.native_explanation
-    else {
-        panic!("libalpm architecture failure must retain typed availability");
-    };
-    assert!(packages.is_empty());
-    assert_eq!(
-        detail_unavailable_reason.as_deref(),
-        Some("pinned_alpm_binding_does_not_safely_expose_invalid_architecture_entries")
-    );
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
     let mut root_order = Vec::new();
     package_reader

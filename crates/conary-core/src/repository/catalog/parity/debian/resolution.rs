@@ -21,7 +21,8 @@ use crate::repository::catalog::parity::resolution_survey::{
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
-    NativeParityOracleReader, NativeParityOracleV1, NativeResolutionInstalledStateV1,
+    NativeParityOracleReader, NativeParityOracleV1, NativeResolutionArchitectureAdmissionV1,
+    NativeResolutionInstalledStateV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
@@ -35,7 +36,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for apt-pkg transaction selections and broken strong groups.
-pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1: u32 = 1;
+pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
 
 const CREATE_INDEX: &str = "
 CREATE TABLE packages (
@@ -115,6 +116,7 @@ fn produce_debian_resolution(
 ) -> Result<ResolutionProduct> {
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
         installed_state: NativeResolutionInstalledStateV1::Empty,
         roots: NativeResolutionRootPolicyV1::EveryExactPackage,
         positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -139,7 +141,7 @@ fn produce_debian_resolution(
         ecosystem: NativeParityEcosystemV1::Debian,
         name: "apt-pkg".to_string(),
         version: PINNED_APT_PKG_VERSION.to_string(),
-        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
+        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -149,13 +151,13 @@ fn produce_debian_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
                 &mut apt,
                 &package_index,
-                architecture,
+                &policy,
                 RootOutcomeSink::Strict(&mut writer),
             )?;
             let manifest = writer.finish()?;
@@ -175,13 +177,13 @@ fn produce_debian_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
                 &mut apt,
                 &package_index,
-                architecture,
+                &policy,
                 RootOutcomeSink::Survey(&mut collector),
             )?;
             let survey = collector.finish()?;
@@ -195,7 +197,7 @@ fn walk_resolution_roots(
     package_oracle: &NativeParityOracleReader,
     apt: &mut AptResolution,
     package_index: &PackageResolutionIndex,
-    architecture: &str,
+    policy: &NativeResolutionPolicyV1,
     mut sink: RootOutcomeSink<'_>,
 ) -> Result<()> {
     package_oracle.for_each_package(|root| {
@@ -203,7 +205,7 @@ fn walk_resolution_roots(
             apt,
             package_index,
             &root,
-            architecture,
+            policy,
             sink.explanation_byte_limit(),
         );
         sink.root(&root, result)
@@ -214,7 +216,7 @@ fn resolve_exact_root(
     apt: &mut AptResolution,
     package_index: &PackageResolutionIndex,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
-    target_architecture: &str,
+    policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
     let Some(root_architecture) = root.architecture.as_deref() else {
@@ -227,15 +229,23 @@ fn resolve_exact_root(
             debian_unavailable(),
         ));
     };
+    if !policy.architecture_admission.admits(
+        root.version_scheme,
+        Some(root_architecture),
+        &policy.architecture,
+    ) {
+        return Ok(NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+        });
+    }
     let native = apt
         .resolve(&root.name, &root.version, root_architecture)
         .map_err(|error| {
-            let reason = if root_architecture != target_architecture && root_architecture != "all" {
-                NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected
-            } else {
-                NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
-            };
-            NativeRootResolutionError::new(error, reason, debian_unavailable())
+            NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::NativeSolverFailed,
+                debian_unavailable(),
+            )
         })?;
     match &native {
         AptResolutionOutcome::Resolved(packages) => {

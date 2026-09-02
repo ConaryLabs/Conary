@@ -61,33 +61,6 @@ pub(super) fn explanation_builds() -> usize {
     EXPLANATION_BUILDS.with(std::cell::Cell::get)
 }
 
-/// Preserve residual-probe rules in the same diagnostic explanation captured
-/// from the strict solve before either problem set is projected.
-pub(super) fn extend_rpm_explanation(
-    pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
-    explanation: &mut NativeResolutionSurveyNativeExplanationV1,
-    residual_problems: &[SolvProblem],
-    byte_limit: u64,
-) {
-    let Some(mut budget) = NativeExplanationBudget::for_explanation(explanation, byte_limit) else {
-        *explanation = withheld();
-        return;
-    };
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } = explanation else {
-        return;
-    };
-    if !append_problems(
-        pool,
-        package_index,
-        problems,
-        residual_problems,
-        &mut budget,
-    ) {
-        *explanation = withheld();
-    }
-}
-
 fn append_problems(
     pool: &SolvPool,
     package_index: &PackageResolutionIndex,
