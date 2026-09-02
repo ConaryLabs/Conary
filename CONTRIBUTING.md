@@ -153,6 +153,11 @@ cargo test --lib
 cargo test --doc --workspace
 ```
 
+Some `conary` and `conary-core` suites depend on host privileges, UID, umask,
+namespaces, or tools and fail on ordinary developer hosts (tracked in #733).
+Report those by exact test name against that issue and rely on CI's provisioned
+workspace shards; do not retry or skip them silently.
+
 All tests must pass before submitting a PR. At minimum, run the verification path that matches the code you touched:
 
 1. `cargo fmt --check` -- formatting
@@ -450,9 +455,11 @@ roadmap, design, or plan.
 ### 5. Review, Merge, And Close
 
 The default-branch ruleset requires changes to arrive through a PR, required CI
-checks to pass, and review conversations to be resolved. Respond to review
-feedback in the PR and keep its verification section current after material
-changes.
+checks to pass, and every review thread to be resolved, including one an
+automated reviewer re-posts for a finding already fixed. Reply on such a thread
+with the fixing commit and resolve it rather than re-fixing; never merge over a
+thread that is genuinely new. Respond to review feedback in the PR and keep its
+verification section current after material changes.
 
 The maintainer bypass is PR-only so an urgent merge still leaves an issue, diff,
 discussion, and audit trail. Use it only when waiting for a required check would

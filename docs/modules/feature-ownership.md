@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 85
-summary: Route feature ownership through trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+last_updated: 2026-09-02
+revision: 86
+summary: Route feature ownership through native parity and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -551,6 +551,64 @@ operators and version comparison come from the source package ABI; provider
 selection is typed SAT input. Repository names, URLs, filenames, distro labels,
 and diagnostic text must not select trust, relation semantics, or bypass the
 solver.
+
+## Native Package And Resolution Parity
+
+**Slug:** native-parity
+
+**Capability:** own typed machine identity, profile-bound native admission,
+package and resolution oracles, candidate comparison and surveys, and the Remi
+proof consumers of those contracts; in `crates/conary-core/build.rs`, own only
+native-oracle probing and shim compilation.
+
+**Start here:** `crates/conary-core/src/repository/architecture.rs`;
+`crates/conary-core/src/repository/catalog/parity/mod.rs`;
+`crates/conary-core/src/repository/catalog/parity/rpm/resolution.rs`;
+`crates/conary-core/src/repository/catalog/parity/resolution_survey.rs`;
+`crates/conary-core/src/repository/catalog/parity/candidate_resolution.rs`;
+`crates/conary-core/src/repository/catalog/parity/resolution_compare.rs`;
+`docs/specs/remi-native-parity-oracle.md`;
+the native parity-producer jobs in `.github/workflows/pr-gate.yml`.
+
+**Neighbor systems:** supported source profiles, SAT solvable loading, Remi
+promotion proof and stored revision inspection, pinned oracle production, and
+release schema bindings.
+
+**Paths:** `crates/conary-core/build.rs`;
+`crates/conary-core/src/repository/architecture.rs`;
+`crates/conary-core/src/repository/architecture/*`;
+`crates/conary-core/tests/fixtures/architecture/*`;
+`crates/conary-core/src/repository/catalog/parity/*`;
+`crates/conary-core/src/bin/conary-*-oracle.rs`;
+`scripts/produce-native-oracle-lane.py`;
+`scripts/test-produce-native-oracle-lane.py`;
+`scripts/verify-native-oracle-input-transport.py`;
+`scripts/test-native-oracle-input-transport.py`;
+`.github/workflows/export-remi-native-oracle-inputs.yml`;
+`.github/workflows/produce-remi-native-oracles.yml`;
+`docs/specs/remi-native-parity-oracle.md`;
+`apps/remi/src/server/promotion_proof.rs`;
+`apps/remi/src/server/promotion_evidence.rs`;
+`apps/remi/src/server/promotion_tests.rs`;
+`apps/remi/src/server/universe_revision_inspection.rs`;
+`apps/remi/src/server/catalog_authority/revision_inspection.rs`.
+
+**Focused proof:** `cargo test -p conary-core repository::architecture`;
+`cargo test -p conary-core repository::catalog::parity`;
+`python3 scripts/test-produce-native-oracle-lane.py`;
+`bash scripts/check-release-matrix.sh`.
+
+**Interaction gate:** `cargo test -p remi promotion` when promotion-proof or
+inspection files change.
+
+**Docs to update:** `docs/specs/remi-native-parity-oracle.md`;
+`docs/modules/remi.md`; `docs/modules/source-selection.md`.
+
+**Safety notes:** survey output is never promotion authority.
+Admission is profile-bound and enforced once at solvable load.
+Unknown architecture tokens are typed failures, never exclusions.
+Obsolete stored schemas are typed rebuild or fencing state, never compatibility paths.
+Native lane proof: run `cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm`; `cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian`; and `cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm` inside the matching pinned parity-producer lane image from `.github/workflows/pr-gate.yml` with the repository mounted read-only and a writable `CARGO_TARGET_DIR`.
 
 ## Generation Build, Switch, Recovery, And Export
 
