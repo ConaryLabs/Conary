@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 26
+revision: 27
 status: active
 ---
 
@@ -560,10 +560,14 @@ positive solve.
 Before constructing an exact SAT root, the producer applies the bound
 native-only rule to that package through `PackageSelector`. An excluded root is
 written as `architecture_excluded`, so the SAT invariant error for an exact
-root with no eligible candidate remains unreachable on that path. Provider
-matching continues to exclude cross-machine packages; an admitted root whose
-only provider is excluded therefore retains the ordinary typed unresolved
-required edge.
+root with no eligible candidate remains unreachable on that path. The SAT
+provider then applies repository-row admission once when each name-,
+canonical-, declared-capability-, file-, soname-, AppStream-, or exact-root-
+discovered row would become a solvable. A rejected provider never receives a
+solver ID or enters a provider index; an unknown token is a typed load error.
+An admitted root whose only provider is excluded therefore retains the
+ordinary typed unresolved required edge. Debian Multi-Arch dependency
+qualifiers remain match-time semantics over already-admitted solvables.
 
 Successful SAT selections map back to a strictly ordered set of catalog
 package keys. An unsatisfiable dependency maps Resolvo's typed conflict graph

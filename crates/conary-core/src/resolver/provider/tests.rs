@@ -368,6 +368,114 @@ fn load_repo_packages_uses_normalized_repository_provides() {
 }
 
 #[test]
+fn repository_row_entry_points_share_single_admission_gate() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-entry-points".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "musl-provider".to_string(),
+        "1".to_string(),
+        VersionScheme::Debian,
+        "sha256:musl-provider".to_string(),
+        1,
+        "https://ubuntu.invalid/musl-provider.deb".to_string(),
+    );
+    package.architecture = Some("musl-linux-amd64".to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
+    package.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    let repository_package_id = package.insert(&conn).unwrap();
+
+    for (kind, capability) in [
+        ("virtual", "entry-point-virtual"),
+        ("file", "/entry-point/file"),
+        ("soname", "libentry-point.so.1"),
+    ] {
+        RepositoryProvide::new(
+            repository_package_id,
+            capability.to_string(),
+            None,
+            kind.to_string(),
+            None,
+            VersionScheme::Debian,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+
+    let mut provider = root_provider(
+        &conn,
+        &[
+            "musl-provider",
+            "entry-point-virtual",
+            "/entry-point/file",
+            "libentry-point.so.1",
+        ],
+    );
+    provider.build_provides_index().unwrap();
+    provider
+        .load_repo_packages_for_names(&[
+            "musl-provider".to_string(),
+            "entry-point-virtual".to_string(),
+            "/entry-point/file".to_string(),
+            "libentry-point.so.1".to_string(),
+        ])
+        .unwrap();
+
+    assert!(
+        provider
+            .solvables
+            .iter()
+            .all(|candidate| candidate.repo_package_id != Some(repository_package_id)),
+        "name, virtual, file, and soname discovery must all converge on repository-row admission"
+    );
+    assert!(
+        !provider
+            .loaded_repo_package_ids
+            .contains(&repository_package_id)
+    );
+}
+
+#[test]
+fn unknown_repository_architecture_fails_at_solvable_load() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-unknown-architecture".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "unknown-architecture".to_string(),
+        "1".to_string(),
+        VersionScheme::Debian,
+        "sha256:unknown-architecture".to_string(),
+        1,
+        "https://ubuntu.invalid/unknown-architecture.deb".to_string(),
+    );
+    package.architecture = Some("future-libc-linux-amd64".to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
+    package.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    package.insert(&conn).unwrap();
+
+    let mut provider = root_provider(&conn, &["unknown-architecture"]);
+    let error = provider
+        .load_repo_packages_for_names(&["unknown-architecture".to_string()])
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::UnknownArchitectureToken { scheme, token }
+            if scheme == "debian" && token == "future-libc-linux-amd64"
+    ));
+    assert!(provider.solvables.is_empty());
+}
+
+#[test]
 fn test_intern_name_roundtrip() {
     let (_dir, conn) = setup_test_db();
     let mut provider = ConaryProvider::new(&conn).unwrap();

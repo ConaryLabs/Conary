@@ -1007,6 +1007,97 @@ fn ubuntu_sat_candidates_enforce_profile_abi_for_names_and_provides() {
 }
 
 #[test]
+fn ubuntu_nonadmitted_capability_providers_are_typed_unresolved() {
+    use crate::repository::dependency_model::{DebianMultiArch, RepositoryCapabilityKind};
+
+    for (kind, persisted_kind, capability) in [
+        (
+            RepositoryCapabilityKind::Virtual,
+            "virtual",
+            "only-musl-virtual",
+        ),
+        (RepositoryCapabilityKind::File, "file", "/only-musl/file"),
+        (
+            RepositoryCapabilityKind::Soname,
+            "soname",
+            "libonly-musl.so.1",
+        ),
+    ] {
+        let (_dir, conn) = setup_test_db();
+        let mut repository = Repository::new(
+            format!("ubuntu-{persisted_kind}"),
+            "https://ubuntu.invalid".to_string(),
+        );
+        repository.source_profile = Some("ubuntu-26.04".to_string());
+        let repository_id = repository.insert(&conn).unwrap();
+
+        let consumer_id = insert_debian_repo_package(
+            &conn,
+            repository_id,
+            &format!("consumer-{persisted_kind}"),
+            "1",
+            "amd64",
+            DebianMultiArch::No,
+        );
+        let clause = RepositoryRequirementClause {
+            name: capability.to_string(),
+            capability_kind: Some(kind),
+            version_constraint: None,
+            architecture_qualifier: Default::default(),
+            native_text: Some(capability.to_string()),
+        };
+        let requirement = crate::repository::dependency_model::RepositoryRequirementGroup::simple(
+            crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+            clause,
+        );
+        insert_typed_repo_requirement_group(&conn, consumer_id, &requirement);
+        let group_id = RepositoryRequirementGroup::find_by_repository_package(&conn, consumer_id)
+            .unwrap()[0]
+            .id
+            .unwrap();
+
+        let provider_id = insert_debian_repo_package(
+            &conn,
+            repository_id,
+            &format!("musl-provider-{persisted_kind}"),
+            "1",
+            "musl-linux-amd64",
+            DebianMultiArch::No,
+        );
+        RepositoryProvide::new(
+            provider_id,
+            capability.to_string(),
+            None,
+            persisted_kind.to_string(),
+            None,
+            VersionScheme::Debian,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let result = solve_exact_repository_package_with_policy(
+            &conn,
+            consumer_id,
+            "amd64",
+            &ResolutionPolicy::new().with_mixing(
+                crate::repository::resolution_policy::DependencyMixingPolicy::Permissive,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            SatExactResolution::Unresolved {
+                dependencies: vec![SatUnresolvedDependency {
+                    repository_package_id: consumer_id,
+                    repository_requirement_group_id: group_id,
+                }],
+            },
+            "{persisted_kind} provider must be excluded before it can become a SAT candidate"
+        );
+    }
+}
+
+#[test]
 fn conary_repository_without_a_source_profile_resolves_through_sat() {
     let (_dir, conn) = setup_test_db();
     let mut repository = Repository::new(

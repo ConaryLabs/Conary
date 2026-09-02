@@ -201,54 +201,56 @@ impl PackageSelector {
                 continue;
             }
 
-            // Foreign package admission is bound to the source profile's
-            // machine token and package ABI, never the executable's libc.
-            let architecture_compatible = match scheme {
-                VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
-                    let Some(profile_id) = candidate_source_profile(&pkg, &repo)? else {
-                        return Err(Error::ConfigError(format!(
-                            "repository '{}' has no source profile for native package admission",
-                            repo.name
-                        )));
-                    };
-                    let profile =
-                        crate::repository::supported_profiles::profile_by_public_id(profile_id)
-                            .ok_or_else(|| {
-                                Error::ConfigError(format!(
-                                    "repository '{}' declares unsupported source profile '{}'",
-                                    repo.name, profile_id
-                                ))
-                            })?;
-                    if options.architecture.is_some() {
-                        require_profile_host_architecture_token(profile, system_arch)?;
-                    } else {
-                        require_profile_host_architecture(
+            if options.architecture_scope == ArchitectureScope::Native {
+                // Foreign package admission is bound to the source profile's
+                // machine token and package ABI, never the executable's libc.
+                let architecture_compatible = match scheme {
+                    VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
+                        let Some(profile_id) = candidate_source_profile(&pkg, &repo)? else {
+                            return Err(Error::ConfigError(format!(
+                                "repository '{}' has no source profile for native package admission",
+                                repo.name
+                            )));
+                        };
+                        let profile =
+                            crate::repository::supported_profiles::profile_by_public_id(profile_id)
+                                .ok_or_else(|| {
+                                    Error::ConfigError(format!(
+                                        "repository '{}' declares unsupported source profile '{}'",
+                                        repo.name, profile_id
+                                    ))
+                                })?;
+                        if options.architecture.is_some() {
+                            require_profile_host_architecture_token(profile, system_arch)?;
+                        } else {
+                            require_profile_host_architecture(
+                                profile,
+                                &detected_identity,
+                                &detected_arch,
+                            )?;
+                        }
+                        Self::is_architecture_compatible_for_profile(
                             profile,
-                            &detected_identity,
-                            &detected_arch,
-                        )?;
+                            Some(package_architecture),
+                        )?
                     }
-                    Self::is_architecture_compatible_for_profile(
-                        profile,
-                        Some(package_architecture),
-                    )?
+                    VersionScheme::Conary | VersionScheme::Eopkg => {
+                        // These schemes do not have the typed foreign-profile
+                        // architecture authority owned by RPM, dpkg, and ALPM.
+                        Self::is_machine_architecture_compatible(
+                            scheme,
+                            Some(package_architecture),
+                            system_arch,
+                        )
+                    }
+                };
+                if !architecture_compatible {
+                    debug!(
+                        "Skipping package {} {} with incompatible arch {:?}",
+                        pkg.name, pkg.version, pkg.architecture
+                    );
+                    continue;
                 }
-                VersionScheme::Conary | VersionScheme::Eopkg => {
-                    // These schemes do not have the typed foreign-profile
-                    // architecture authority owned by RPM, dpkg, and ALPM.
-                    Self::is_machine_architecture_compatible(
-                        scheme,
-                        Some(package_architecture),
-                        system_arch,
-                    )
-                }
-            };
-            if options.architecture_scope == ArchitectureScope::Native && !architecture_compatible {
-                debug!(
-                    "Skipping package {} {} with incompatible arch {:?}",
-                    pkg.name, pkg.version, pkg.architecture
-                );
-                continue;
             }
 
             // Native source identity comes from the stream-bound repository
