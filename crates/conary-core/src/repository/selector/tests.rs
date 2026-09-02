@@ -363,6 +363,108 @@ fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
 }
 
 #[test]
+fn unscoped_variants_validate_each_candidate_scheme_before_independent_matching() {
+    let conn = test_db();
+    let candidates = [
+        (
+            "fedora-independent",
+            "https://fedora.invalid",
+            "fedora-44",
+            VersionScheme::Rpm,
+            "noarch",
+        ),
+        (
+            "ubuntu-independent",
+            "https://ubuntu.invalid",
+            "ubuntu-26.04",
+            VersionScheme::Debian,
+            "all",
+        ),
+        (
+            "arch-independent",
+            "https://arch.invalid",
+            "arch",
+            VersionScheme::Arch,
+            "any",
+        ),
+    ];
+
+    for (repository_name, url, profile, scheme, architecture) in candidates {
+        let mut repository = Repository::new(repository_name.to_string(), url.to_string());
+        repository.source_profile = Some(profile.to_string());
+        let repository_id = repository.insert(&conn).unwrap();
+
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            repository_name.to_string(),
+            "1.0".to_string(),
+            scheme,
+            format!("sha256:{repository_name}"),
+            1,
+            format!("{url}/{repository_name}"),
+        );
+        package.architecture = Some(architecture.to_string());
+        package.insert(&conn).unwrap();
+
+        let error = PackageSelector::search_packages(
+            &conn,
+            repository_name,
+            &SelectionOptions {
+                variant: Some(PackageArchitectureVariant::unscoped(
+                    "definitely-not-a-machine",
+                )),
+                host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
+                ..SelectionOptions::default()
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            Error::UnknownArchitectureToken {
+                scheme: ref error_scheme,
+                ref token,
+            } if error_scheme == scheme.as_str()
+                && token == "definitely-not-a-machine"
+        ));
+    }
+
+    let unscoped = PackageSelector::search_packages(
+        &conn,
+        "fedora-independent",
+        &SelectionOptions {
+            variant: Some(PackageArchitectureVariant::unscoped("x86_64")),
+            host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        unscoped.len(),
+        1,
+        "x86_64 must continue to match RPM noarch"
+    );
+
+    let scoped = PackageSelector::search_packages(
+        &conn,
+        "fedora-independent",
+        &SelectionOptions {
+            variant: Some(PackageArchitectureVariant::from_package(
+                VersionScheme::Debian,
+                "amd64",
+            )),
+            host_assertion: Some(HostArchitectureAssertion::new("x86_64")),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        scoped.len(),
+        1,
+        "a scheme-scoped machine variant must still admit an independent candidate"
+    );
+}
+
+#[test]
 fn policy_repo_scope_filters_root_request() {
     let conn = test_db();
 

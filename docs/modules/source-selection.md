@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-02
-revision: 59
+last_updated: 2026-09-03
+revision: 60
 summary: Document distinct package-variant selection and host-architecture assertions, profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -156,7 +156,11 @@ only an independent target variant, including the target scheme's corresponding
 that same machine identity plus the target scheme's architecture-independent
 variant. `HostArchitectureAssertion` is a separate profile-bound check and may
 contain only a machine token; an independent package token can never become a
-host assertion.
+host assertion. An unscoped package-variant request is validated against every
+candidate's pinned scheme authority before architecture-independent matching;
+ALPM uses the candidate's exact source profile for that validation. An unknown
+token returns `UnknownArchitectureToken` and cannot match `noarch`, `all`, or
+`any` by literal substitution.
 
 The SAT provider applies that repository-row admission exactly once, when a
 persisted row is promoted to a solvable. Excluded rows receive no `SolvableId`

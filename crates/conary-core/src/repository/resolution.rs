@@ -484,13 +484,15 @@ impl<'a> PackageResolver<'a> {
 
         // Check if any installed version matches the requested version
         for trove in &installed {
-            let architecture_matches = options.architecture.as_deref().is_none_or(|requested| {
-                PackageSelector::is_package_architecture_compatible(
+            let architecture_matches = match options.architecture.as_deref() {
+                Some(requested) => PackageSelector::is_package_architecture_compatible(
                     trove.version_scheme,
+                    trove.source_profile.as_deref(),
                     trove.architecture.as_deref(),
                     requested,
-                )
-            });
+                )?,
+                None => true,
+            };
             let version_matches = match &options.version {
                 // Specific version requested - must match exactly
                 Some(requested) => &trove.version == requested,

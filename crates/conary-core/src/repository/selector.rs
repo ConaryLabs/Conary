@@ -16,7 +16,8 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::{
     KnownPackageArchitecture, NativeMachineIdentityV1, NativeResolutionArchitectureDecisionV1,
     host_machine_identity, known_package_architecture, native_host_machine_identity,
-    native_resolution_architecture_decision, require_profile_host_architecture,
+    native_resolution_architecture_decision, require_known_package_architecture,
+    require_known_package_architecture_for_profile, require_profile_host_architecture,
     require_profile_host_architecture_token,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
@@ -150,18 +151,27 @@ impl PackageSelector {
             == native_machine_architecture(system_arch)
     }
 
-    /// Check one installed package against an explicit token in that package's
-    /// own architecture vocabulary.
+    /// Check one package against an explicit token in that package's own
+    /// architecture vocabulary.
+    ///
+    /// ALPM architecture authority is profile-scoped, so callers must supply
+    /// the candidate or installed package's exact source profile for that
+    /// scheme. Eopkg retains literal comparison because Conary has no pinned
+    /// Eopkg architecture vocabulary.
     pub fn is_package_architecture_compatible(
         scheme: VersionScheme,
+        source_profile: Option<&str>,
         pkg_arch: Option<&str>,
         requested_arch: &str,
-    ) -> bool {
+    ) -> Result<bool> {
         let Some(architecture) = pkg_arch else {
-            return false;
+            return Ok(false);
         };
-        effective_package_architecture(scheme, architecture, requested_arch)
-            == package_machine_architecture_in_scheme(scheme, requested_arch)
+        require_known_unscoped_variant(scheme, source_profile, requested_arch)?;
+        Ok(
+            effective_package_architecture(scheme, architecture, requested_arch)
+                == package_machine_architecture_in_scheme(scheme, requested_arch),
+        )
     }
 
     /// Check package machine and ABI admission against its exact source profile.
@@ -319,9 +329,10 @@ impl PackageSelector {
                 && !package_variant_matches(
                     requested_variant,
                     scheme,
+                    candidate_source_profile(&pkg, &repo)?,
                     package_architecture,
                     &detected_arch,
-                )
+                )?
             {
                 debug!(
                     "Skipping package {} {} with variant {:?}; requested {}",
@@ -653,12 +664,14 @@ fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> boo
 fn package_variant_matches(
     requested: &PackageArchitectureVariant,
     candidate_scheme: VersionScheme,
+    candidate_source_profile: Option<&str>,
     candidate_architecture: &str,
     native_architecture: &str,
-) -> bool {
+) -> Result<bool> {
     let Some(requested_scheme) = requested.scheme else {
         return PackageSelector::is_package_architecture_compatible(
             candidate_scheme,
+            candidate_source_profile,
             Some(candidate_architecture),
             requested.as_str(),
         );
@@ -670,19 +683,45 @@ fn package_variant_matches(
         is_architecture_independent(candidate_scheme, candidate_architecture);
 
     if requested_is_independent {
-        return candidate_is_independent;
+        return Ok(candidate_is_independent);
     }
     if candidate_is_independent {
-        return true;
+        return Ok(true);
     }
 
-    package_architectures_match(
+    Ok(package_architectures_match(
         requested_scheme,
         requested.as_str(),
         candidate_scheme,
         candidate_architecture,
         native_architecture,
-    )
+    ))
+}
+
+fn require_known_unscoped_variant(
+    candidate_scheme: VersionScheme,
+    candidate_source_profile: Option<&str>,
+    requested_architecture: &str,
+) -> Result<()> {
+    match candidate_scheme {
+        VersionScheme::Arch => {
+            let Some(profile) = candidate_source_profile else {
+                return Err(Error::UnknownArchitectureToken {
+                    scheme: candidate_scheme.as_str().to_string(),
+                    token: requested_architecture.to_string(),
+                });
+            };
+            require_known_package_architecture_for_profile(
+                profile,
+                candidate_scheme,
+                requested_architecture,
+            )
+        }
+        VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Conary => {
+            require_known_package_architecture(candidate_scheme, requested_architecture)
+        }
+        VersionScheme::Eopkg => Ok(()),
+    }
 }
 
 fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
