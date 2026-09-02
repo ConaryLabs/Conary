@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts with profile-owned native-only architecture admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
+summary: Define strict native parity artifacts with profile-owned source-derived three-valued architecture admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 22
+revision: 23
 status: active
 ---
 
@@ -76,6 +76,41 @@ Each `NativeParityPackageV1` row carries:
 - typed providers; and
 - grouped positive and negative requirements, including conflicts, breaks,
   replacements, and obsoletes.
+
+Package architecture is validated before a native package row can enter the
+oracle writer. Each RPM, Debian, and ALPM `project_package` boundary requires
+the exact token to exist in its pinned typed architecture table, and
+`NativeParityPackageV1` validation repeats that guard on reopen. An absent
+token returns typed `UnknownArchitectureToken { scheme, token }` before any
+resolution evidence can exist; it is never normalized, admitted, or treated
+as a non-native package.
+
+The checked-in architecture fixtures pin the source authority without runtime
+parsing or test-time fetches:
+
+- RPM 6.0.1 `rpmrc.in` at tag `rpm-6.0.1-release`, commit
+  `58a917a6c5e24e9e8a01976c17d2eee06249b9b6`, contributes every
+  `arch_canon`, `arch_compat`, and `buildarch_compat` line from
+  [the exact upstream file](https://github.com/rpm-software-management/rpm/blob/rpm-6.0.1-release/rpmrc.in).
+  The pinned Fedora 44 image ships `rpm-6.0.1-2.fc44.x86_64`.
+- dpkg 1.23.7 tag `1.23.7`, commit
+  `ef4d59f5925661818484ac666014ee3e665aadcf`, contributes
+  [`data/cputable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
+  and
+  [`data/tupletable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
+  The pinned Ubuntu 26.04 image ships `dpkg 1.23.7ubuntu1`.
+- The Arch producer pins `pacman 7.1.0.r9.g54d9411-2`; its installed
+  `CARCH=x86_64` derives from
+  [`etc/makepkg.conf.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/etc/makepkg.conf.in)
+  at commit `54d94116164b0b2202c6061c4a59c6f3e70820d8`. The accepted package
+  `arch` values `x86_64` and `any` are pinned to the 2026-08-02 core, extra,
+  and multilib archive databases named in the fixture header.
+
+Conformance tests parse those vendored files and require every RPM table token,
+every dpkg CPU and tuple expansion, and every pinned Arch package `arch` value
+to project to a typed class. Tokens outside the supported x86_64/amd64 machine
+profiles, including Debian `x32` and RPM micro-architecture levels, remain
+known typed non-native classes rather than literal fallback values.
 
 Rows are canonical JSON ordered by the exact profile package key. The writer
 and verifier retain one complete package projection at a time; neither may
@@ -236,11 +271,20 @@ Schema 2 fixes the resolution policy rather than accepting solver flags or
 free-form policy: the installed state is empty, every exact package variant is
 requested as its exact root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
-uses native repository precedence. `architecture_admission: native_only` admits
-only the effective native machine architecture and the source scheme's
-architecture-independent token (`noarch`, `all`, or `any`). The admission
-decision is made by Conary's typed rpmrc/dpkg-cputable/CARCH-derived selector
-authority on every producer side. A different policy requires a schema change.
+uses native repository precedence. `architecture_admission: native_only`
+admits only the effective native machine architecture, source-authoritative
+compatible aliases, and the source scheme's architecture-independent token
+(`noarch`, `all`, or `any`). Its decision is the closed runtime enum
+`Admitted`, `Excluded { class: NativeMachineArchitectureClassV1 }`, or
+`UnknownArchitectureToken { scheme, token }`. Only `Excluded` may produce
+`not_installable { reason: architecture_excluded }`. Unknown tokens return the
+typed producer error and the diagnostics-only survey records the separate
+`unknown_architecture_token` error kind. This resolution-time branch is an
+invariant guard because the package oracle must already have rejected the row.
+Native solvers apply their pinned package-manager architecture policy to
+provider selection, while the Conary candidate resolver uses the same checked
+source-derived token classes for root and provider matching. A different
+policy requires a schema change.
 The three native producers and the Conary candidate producer derive the solver
 architecture from the profile revision. Their `--architecture` or operator
 input is only an assertion: a mismatch returns the typed
