@@ -113,11 +113,6 @@ enum ResolutionProduct {
     Survey(NativeResolutionSurveyV1),
 }
 
-struct RpmExplanationCapture {
-    value: NativeResolutionSurveyNativeExplanationV1,
-    byte_limit: u64,
-}
-
 fn produce_rpm_resolution(
     profile: &ProfileRevisionV2,
     inputs: &[RpmParityMemberInput<'_>],
@@ -447,26 +442,36 @@ fn resolve_exact_root(
             })
         }
         SolvResolution::Unresolved(problems) => {
-            let mut explanation = RpmExplanationCapture {
-                value: rpm_explanation(pool, package_index, &problems, explanation_byte_limit),
-                byte_limit: explanation_byte_limit,
-            };
-            unresolved_outcome(
+            let mut residual_problems = Vec::new();
+            match unresolved_outcome(
                 pool,
                 package_index,
                 root_index,
                 root,
                 architecture,
-                problems,
-                &mut explanation,
-            )
-            .map_err(|error| {
-                NativeRootResolutionError::new(
-                    error,
-                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    explanation.value,
-                )
-            })
+                &problems,
+                &mut residual_problems,
+            ) {
+                Ok(outcome) => Ok(outcome),
+                Err(error) => {
+                    let mut explanation =
+                        rpm_explanation(pool, package_index, &problems, explanation_byte_limit);
+                    if !residual_problems.is_empty() {
+                        extend_rpm_explanation(
+                            pool,
+                            package_index,
+                            &mut explanation,
+                            &residual_problems,
+                            explanation_byte_limit,
+                        );
+                    }
+                    Err(NativeRootResolutionError::new(
+                        error,
+                        NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                        explanation,
+                    ))
+                }
+            }
         }
     }
 }
@@ -477,8 +482,8 @@ fn unresolved_outcome(
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     architecture: &str,
-    problems: Vec<SolvProblem>,
-    explanation: &mut RpmExplanationCapture,
+    problems: &[SolvProblem],
+    residual_capture: &mut Vec<SolvProblem>,
 ) -> Result<NativeResolutionOutcomeV1> {
     let mut dependencies = BTreeSet::new();
     let mut requires_residual_probe = false;
@@ -486,8 +491,8 @@ fn unresolved_outcome(
         .strict_shadowed_packages()?
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let visibility = StrictVisibility::derive(pool, root_index, &shadowed, &problems)?;
-    for problem in &problems {
+    let visibility = StrictVisibility::derive(pool, root_index, &shadowed, problems)?;
+    for problem in problems {
         let (problem_dependencies, problem_requires_residual_probe) = project_unresolved_problem(
             pool,
             package_index,
@@ -510,21 +515,16 @@ fn unresolved_outcome(
                 }
             }
             SolvResolution::Unresolved(residual_problems) => {
-                extend_rpm_explanation(
-                    pool,
-                    package_index,
-                    &mut explanation.value,
-                    &residual_problems,
-                    explanation.byte_limit,
-                );
+                *residual_capture = residual_problems;
+                let residual_problems = residual_capture.as_slice();
                 let visibility = StrictVisibility::derive(
                     pool,
                     root_index,
                     &shadowed,
-                    problems.iter().chain(&residual_problems),
+                    problems.iter().chain(residual_problems.iter()),
                 )?;
                 let mut final_dependencies = BTreeSet::new();
-                for problem in &problems {
+                for problem in problems {
                     let (strict_dependencies, _) = project_unresolved_problem(
                         pool,
                         package_index,
@@ -535,7 +535,7 @@ fn unresolved_outcome(
                     )?;
                     final_dependencies.extend(strict_dependencies);
                 }
-                for problem in &residual_problems {
+                for problem in residual_problems {
                     let (residual_dependencies, nested_probe) = project_unresolved_problem(
                         pool,
                         package_index,
@@ -565,6 +565,16 @@ fn unresolved_outcome(
     Ok(NativeResolutionOutcomeV1::Unresolved {
         dependencies: dependencies.into_iter().collect(),
     })
+}
+
+#[cfg(test)]
+pub(super) fn reset_explanation_builds() {
+    evidence::reset_explanation_builds();
+}
+
+#[cfg(test)]
+pub(super) fn explanation_builds() -> usize {
+    evidence::explanation_builds()
 }
 
 /// Requiring packages that Conary's candidate resolver can also reach under

@@ -593,6 +593,7 @@ fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
     let resolution_output = directory.path().join("resolution-oracle");
+    resolution::reset_explanation_builds();
 
     let manifest = produce_rpm_resolution_oracle(
         &profile,
@@ -671,6 +672,11 @@ fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
             }
         );
     }
+    assert_eq!(
+        resolution::explanation_builds(),
+        0,
+        "resolved and typed-unresolved RPM roots must not build survey evidence"
+    );
 }
 
 #[test]

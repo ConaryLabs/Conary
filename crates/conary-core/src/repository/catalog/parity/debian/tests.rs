@@ -654,6 +654,7 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
     produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
         .unwrap();
     let resolution_output = directory.path().join("resolution-oracle");
+    resolution::reset_explanation_builds();
 
     let manifest = produce_debian_resolution_oracle(
         &profile,
@@ -749,6 +750,11 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
     assert_eq!(
         dependencies[0].requirement_group_sha256,
         native_requirement_group_sha256(missing_group).unwrap()
+    );
+    assert_eq!(
+        resolution::explanation_builds(),
+        0,
+        "resolved and typed-unresolved Debian roots must not build survey evidence"
     );
 }
 

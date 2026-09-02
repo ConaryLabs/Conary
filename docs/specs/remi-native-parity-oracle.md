@@ -1,7 +1,7 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
-last_updated: 2026-09-01
+last_updated: 2026-09-02
 revision: 20
 status: active
 ---

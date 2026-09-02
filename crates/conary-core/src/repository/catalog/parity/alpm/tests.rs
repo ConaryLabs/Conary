@@ -488,6 +488,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
 
     let resolution_output = directory.path().join("resolution-oracle");
+    resolution::reset_explanation_builds();
     let manifest = produce_alpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &databases),
@@ -602,6 +603,11 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
         };
         assert!(closure_package_keys_sha256.contains(&package.package_key_sha256));
     }
+    assert_eq!(
+        resolution::explanation_builds(),
+        0,
+        "resolved and typed-unresolved ALPM roots must not build survey evidence"
+    );
 }
 
 #[test]

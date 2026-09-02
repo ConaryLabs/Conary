@@ -237,8 +237,7 @@ fn resolve_exact_root(
             };
             NativeRootResolutionError::new(error, reason, debian_unavailable())
         })?;
-    let explanation = debian_explanation(&native, explanation_byte_limit);
-    match native {
+    match &native {
         AptResolutionOutcome::Resolved(packages) => {
             let closure = packages
                 .iter()
@@ -248,7 +247,7 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
-                        explanation.clone(),
+                        debian_explanation(&native, explanation_byte_limit),
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
@@ -258,7 +257,7 @@ fn resolve_exact_root(
                         root.name
                     )),
                     NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    explanation,
+                    debian_explanation(&native, explanation_byte_limit),
                 ));
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
@@ -274,7 +273,7 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                        explanation.clone(),
+                        debian_explanation(&native, explanation_byte_limit),
                     )
                 })?;
             if dependencies.is_empty() {
@@ -284,7 +283,7 @@ fn resolve_exact_root(
                         root.name
                     )),
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    explanation,
+                    debian_explanation(&native, explanation_byte_limit),
                 ));
             }
             Ok(NativeResolutionOutcomeV1::Unresolved {
@@ -298,6 +297,7 @@ fn debian_explanation(
     outcome: &AptResolutionOutcome,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
     match outcome {
         AptResolutionOutcome::Resolved(source_packages) => {
             let mut explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
@@ -366,6 +366,26 @@ fn debian_explanation(
             explanation
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPLANATION_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn record_explanation_build() {
+    #[cfg(test)]
+    EXPLANATION_BUILDS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+pub(super) fn reset_explanation_builds() {
+    EXPLANATION_BUILDS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn explanation_builds() -> usize {
+    EXPLANATION_BUILDS.with(std::cell::Cell::get)
 }
 
 fn evidence_withheld() -> NativeResolutionSurveyNativeExplanationV1 {

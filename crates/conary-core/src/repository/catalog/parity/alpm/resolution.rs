@@ -416,68 +416,94 @@ fn resolve_initialized_transaction(
 ) -> NativeRootResolutionResult {
     enum Preparation {
         Prepared,
-        Unsatisfied(
-            Vec<(String, String)>,
-            NativeResolutionSurveyNativeExplanationV1,
-        ),
-        InvalidArchitecture(NativeResolutionSurveyNativeExplanationV1),
-        Conflict(NativeResolutionSurveyNativeExplanationV1),
-        Unexpected(alpm::Error),
+        Unsatisfied(Vec<(String, String)>),
     }
 
-    let preparation = {
-        let prepare_result = alpm.trans_prepare();
-        match prepare_result {
-            Ok(()) => Preparation::Prepared,
-            Err(error) => {
-                let error_class = error.error();
-                match error.data() {
-                    Some(PrepareData::UnsatisfiedDeps(dependencies)) => {
-                        let explanation = alpm_unsatisfied_explanation(
-                            dependencies.iter(),
-                            explanation_byte_limit,
-                        );
-                        let missing = dependencies
-                            .iter()
-                            .map(|dependency| {
-                                Ok((
-                                    dependency.target().to_string(),
-                                    native_requirement_group_sha256(&project_requirement(
-                                        dependency.depend(),
-                                        RepositoryRequirementKind::Depends,
-                                    )?)?,
-                                ))
-                            })
-                            .collect::<Result<Vec<_>>>()
-                            .map_err(|error| {
-                                NativeRootResolutionError::new(
-                                    error,
-                                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                                    explanation.clone(),
-                                )
-                            })?;
-                        Preparation::Unsatisfied(missing, explanation)
+    let target_architecture = alpm
+        .architectures()
+        .first()
+        .unwrap_or("<unset>")
+        .to_string();
+    let preparation = match alpm.trans_prepare() {
+        Ok(()) => Preparation::Prepared,
+        Err(error) => {
+            let error_class = error.error();
+            match error.data() {
+                Some(PrepareData::UnsatisfiedDeps(source_missing)) => {
+                    let missing = source_missing
+                        .iter()
+                        .map(|dependency| {
+                            Ok((
+                                dependency.target().to_string(),
+                                native_requirement_group_sha256(&project_requirement(
+                                    dependency.depend(),
+                                    RepositoryRequirementKind::Depends,
+                                )?)?,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>>>()
+                        .map_err(|error| {
+                            NativeRootResolutionError::new(
+                                error,
+                                NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                                alpm_unsatisfied_explanation(
+                                    source_missing.iter(),
+                                    explanation_byte_limit,
+                                ),
+                            )
+                        })?;
+                    if missing.is_empty() {
+                        return Err(NativeRootResolutionError::new(
+                            Error::ConflictError(format!(
+                                "libalpm reported unsatisfied dependencies for '{}' without typed records",
+                                root.name
+                            )),
+                            NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                            alpm_unsatisfied_explanation(
+                                source_missing.iter(),
+                                explanation_byte_limit,
+                            ),
+                        ));
                     }
-                    Some(PrepareData::PkgInvalidArch(_)) => {
-                        Preparation::InvalidArchitecture(
-                            NativeResolutionSurveyNativeExplanationV1::Alpm {
-                                result: NativeResolutionSurveyAlpmResultV1::InvalidArchitecture {
-                                    packages: Vec::new(),
-                                    detail_unavailable_reason: Some(
-                                        "pinned_alpm_binding_does_not_safely_expose_invalid_architecture_entries"
-                                            .to_string(),
-                                    ),
-                                },
+                    Preparation::Unsatisfied(missing)
+                }
+                Some(PrepareData::PkgInvalidArch(_)) => {
+                    return Err(NativeRootResolutionError::new(
+                        Error::ConfigError(format!(
+                            "libalpm rejected architecture '{target_architecture}' while resolving exact root '{}'",
+                            root.name
+                        )),
+                        NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected,
+                        NativeResolutionSurveyNativeExplanationV1::Alpm {
+                            result: NativeResolutionSurveyAlpmResultV1::InvalidArchitecture {
+                                packages: Vec::new(),
+                                detail_unavailable_reason: Some(
+                                    "pinned_alpm_binding_does_not_safely_expose_invalid_architecture_entries"
+                                        .to_string(),
+                                ),
                             },
-                        )
-                    }
-                    Some(PrepareData::ConflictingDeps(conflicts)) => {
-                        Preparation::Conflict(alpm_conflict_explanation(
-                            conflicts.iter(),
-                            explanation_byte_limit,
-                        ))
-                    }
-                    None => Preparation::Unexpected(error_class),
+                        },
+                    ));
+                }
+                Some(PrepareData::ConflictingDeps(conflicts)) => {
+                    return Err(NativeRootResolutionError::new(
+                        Error::ConflictError(format!(
+                            "libalpm found a package conflict while resolving exact root '{}'",
+                            root.name
+                        )),
+                        NativeResolutionSurveyErrorReasonV1::NativePackageConflict,
+                        alpm_conflict_explanation(conflicts.iter(), explanation_byte_limit),
+                    ));
+                }
+                None => {
+                    return Err(NativeRootResolutionError::new(
+                        Error::ConfigError(format!(
+                            "libalpm failed to prepare exact root '{}' with unexpected error {error_class}",
+                            root.name
+                        )),
+                        NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
+                        alpm_unavailable("libalpm_returned_no_typed_prepare_data"),
+                    ));
                 }
             }
         }
@@ -485,13 +511,12 @@ fn resolve_initialized_transaction(
 
     match preparation {
         Preparation::Prepared => {
-            let explanation = alpm_prepared_explanation(alpm, explanation_byte_limit);
             let closure = transaction_packages(alpm, profile, inputs, root)
                 .map_err(|error| {
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
-                        explanation.clone(),
+                        alpm_prepared_explanation(alpm, explanation_byte_limit),
                     )
                 })?
                 .into_values()
@@ -503,19 +528,21 @@ fn resolve_initialized_transaction(
                         root.name
                     )),
                     NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    explanation,
+                    alpm_prepared_explanation(alpm, explanation_byte_limit),
                 ));
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
                 closure_package_keys_sha256: closure.into_iter().collect(),
             })
         }
-        Preparation::Unsatisfied(missing, explanation) => {
+        Preparation::Unsatisfied(missing) => {
             let packages = transaction_packages(alpm, profile, inputs, root).map_err(|error| {
                 NativeRootResolutionError::new(
                     error,
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    explanation.clone(),
+                    alpm_unavailable(
+                        "native_unsatisfied_data_expired_before_transaction_projection_failed",
+                    ),
                 )
             })?;
             let mut dependencies = BTreeSet::new();
@@ -530,7 +557,9 @@ fn resolve_initialized_transaction(
                         NativeRootResolutionError::new(
                             error,
                             NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                            explanation.clone(),
+                            alpm_unavailable(
+                                "native_unsatisfied_data_expired_before_requirement_binding_failed",
+                            ),
                         )
                     })?;
                 dependencies.insert(NativeUnresolvedDependencyV1 {
@@ -538,45 +567,10 @@ fn resolve_initialized_transaction(
                     requirement_group_sha256,
                 });
             }
-            if dependencies.is_empty() {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "libalpm reported unsatisfied dependencies for '{}' without typed records",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    explanation,
-                ));
-            }
             Ok(NativeResolutionOutcomeV1::Unresolved {
                 dependencies: dependencies.into_iter().collect(),
             })
         }
-        Preparation::InvalidArchitecture(explanation) => Err(NativeRootResolutionError::new(
-            Error::ConfigError(format!(
-                "libalpm rejected architecture '{}' while resolving exact root '{}'",
-                alpm.architectures().first().unwrap_or("<unset>"),
-                root.name
-            )),
-            NativeResolutionSurveyErrorReasonV1::NativeArchitectureRejected,
-            explanation,
-        )),
-        Preparation::Conflict(explanation) => Err(NativeRootResolutionError::new(
-            Error::ConflictError(format!(
-                "libalpm found a package conflict while resolving exact root '{}'",
-                root.name
-            )),
-            NativeResolutionSurveyErrorReasonV1::NativePackageConflict,
-            explanation,
-        )),
-        Preparation::Unexpected(error) => Err(NativeRootResolutionError::new(
-            Error::ConfigError(format!(
-                "libalpm failed to prepare exact root '{}' with unexpected error {error}",
-                root.name
-            )),
-            NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
-            alpm_unavailable("libalpm_returned_no_typed_prepare_data"),
-        )),
     }
 }
 
@@ -584,6 +578,7 @@ fn alpm_prepared_explanation(
     alpm: &Alpm,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Prepared {
             packages: Vec::new(),
@@ -613,6 +608,7 @@ fn alpm_unsatisfied_explanation<'a>(
     dependencies: impl IntoIterator<Item = &'a alpm::DepMissing>,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Unsatisfied {
             missing: Vec::new(),
@@ -646,6 +642,7 @@ fn alpm_conflict_explanation<'a>(
     conflicts: impl IntoIterator<Item = &'a alpm::Conflict>,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Conflicts {
             conflicts: Vec::new(),
@@ -698,6 +695,26 @@ fn evidence_withheld() -> NativeResolutionSurveyNativeExplanationV1 {
     NativeResolutionSurveyNativeExplanationV1::Withheld {
         reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPLANATION_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn record_explanation_build() {
+    #[cfg(test)]
+    EXPLANATION_BUILDS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+pub(super) fn reset_explanation_builds() {
+    EXPLANATION_BUILDS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn explanation_builds() -> usize {
+    EXPLANATION_BUILDS.with(std::cell::Cell::get)
 }
 
 fn transaction_packages(

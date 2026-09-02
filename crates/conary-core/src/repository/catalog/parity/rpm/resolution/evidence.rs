@@ -24,6 +24,7 @@ pub(super) fn rpm_explanation(
     source_problems: &[SolvProblem],
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
         problems: Vec::new(),
     };
@@ -38,6 +39,26 @@ pub(super) fn rpm_explanation(
         return withheld();
     }
     explanation
+}
+
+#[cfg(test)]
+thread_local! {
+    static EXPLANATION_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn record_explanation_build() {
+    #[cfg(test)]
+    EXPLANATION_BUILDS.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+pub(super) fn reset_explanation_builds() {
+    EXPLANATION_BUILDS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(super) fn explanation_builds() -> usize {
+    EXPLANATION_BUILDS.with(std::cell::Cell::get)
 }
 
 /// Preserve residual-probe rules in the same diagnostic explanation captured
