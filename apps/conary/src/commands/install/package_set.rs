@@ -268,16 +268,23 @@ mod tests {
                 |repository| repository.id.unwrap(),
             );
 
+        let (version_scheme, architecture, extension) = match profile {
+            "ubuntu-26.04" => (VersionScheme::Debian, "all", "deb"),
+            "arch" => (VersionScheme::Arch, "any", "pkg.tar.zst"),
+            _ => (VersionScheme::Rpm, "noarch", "rpm"),
+        };
         let mut package = RepositoryPackage::new(
             repository_id,
             package_name.to_string(),
             version.to_string(),
-            VersionScheme::Rpm,
+            version_scheme,
             format!("sha256:{repository_name}-{version}"),
             1,
-            format!("https://{repository_name}.example.invalid/{package_name}-{version}.rpm"),
+            format!(
+                "https://{repository_name}.example.invalid/{package_name}-{version}.{extension}"
+            ),
         );
-        package.architecture = Some("noarch".to_string());
+        package.architecture = Some(architecture.to_string());
         package.source_profile = Some(profile.to_string());
         package.insert(conn).unwrap();
     }
