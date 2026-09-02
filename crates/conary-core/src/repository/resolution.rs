@@ -479,7 +479,7 @@ impl<'a> PackageResolver<'a> {
         // Check if any installed version matches the requested version
         for trove in &installed {
             let architecture_matches = options.architecture.as_deref().is_none_or(|requested| {
-                PackageSelector::is_machine_architecture_compatible(
+                PackageSelector::is_package_architecture_compatible(
                     trove.version_scheme,
                     trove.architecture.as_deref(),
                     requested,

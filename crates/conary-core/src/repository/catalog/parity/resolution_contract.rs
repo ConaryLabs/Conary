@@ -64,7 +64,6 @@ impl NativeResolutionArchitectureAdmissionV1 {
         }
     }
 
-    #[must_use]
     pub fn admits(
         self,
         source_profile: &str,

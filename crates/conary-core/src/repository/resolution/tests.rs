@@ -17,8 +17,8 @@ mod tests {
     fn create_test_package(conn: &Connection, repo_id: i64, name: &str, version: &str) -> i64 {
         conn.execute(
             "INSERT INTO repository_packages
-             (repository_id, name, version, architecture, checksum, size, download_url, version_scheme)
-             VALUES (?1, ?2, ?3, 'x86_64', 'sha256:abc123', 1024, 'https://example.com/pkg.rpm', 'rpm')",
+             (repository_id, name, version, architecture, checksum, size, download_url, version_scheme, source_profile)
+             VALUES (?1, ?2, ?3, 'x86_64', 'sha256:abc123', 1024, 'https://example.com/pkg.rpm', 'rpm', 'fedora-44')",
             rusqlite::params![repo_id, name, version],
         )
         .unwrap();
@@ -272,7 +272,9 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "UPDATE repository_packages SET version_scheme = 'arch' WHERE repository_id = ?1",
+            "UPDATE repository_packages
+                SET version_scheme = 'arch', source_profile = 'arch'
+              WHERE repository_id = ?1",
             [repo_id],
         )
         .unwrap();

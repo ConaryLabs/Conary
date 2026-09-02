@@ -96,6 +96,20 @@ impl PackageSelector {
             == native_machine_architecture(system_arch)
     }
 
+    /// Check one installed package against an explicit token in that package's
+    /// own architecture vocabulary.
+    pub fn is_package_architecture_compatible(
+        scheme: VersionScheme,
+        pkg_arch: Option<&str>,
+        requested_arch: &str,
+    ) -> bool {
+        let Some(architecture) = pkg_arch else {
+            return false;
+        };
+        effective_package_architecture(scheme, architecture, requested_arch)
+            == package_machine_architecture_in_scheme(scheme, requested_arch)
+    }
+
     /// Check package machine and ABI admission against its exact source profile.
     pub fn is_architecture_compatible_for_profile(
         profile: &crate::repository::supported_profiles::SupportedProfile,
@@ -201,12 +215,20 @@ impl PackageSelector {
             // machine token and package ABI, never the executable's libc.
             let architecture_compatible = match scheme {
                 VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
-                    let Some(profile) = repo.resolution_source_profile()? else {
+                    let Some(profile_id) = candidate_source_profile(&pkg, &repo)? else {
                         return Err(Error::ConfigError(format!(
                             "repository '{}' has no source profile for native package admission",
                             repo.name
                         )));
                     };
+                    let profile =
+                        crate::repository::supported_profiles::profile_by_public_id(profile_id)
+                            .ok_or_else(|| {
+                                Error::ConfigError(format!(
+                                    "repository '{}' declares unsupported source profile '{}'",
+                                    repo.name, profile_id
+                                ))
+                            })?;
                     if options.architecture.is_some() {
                         Self::is_architecture_compatible_for_profile(
                             profile,
@@ -517,6 +539,31 @@ fn effective_machine_architecture(
         return native_machine_architecture(native_architecture);
     }
     package_machine_architecture(scheme, architecture)
+}
+
+fn effective_package_architecture(
+    scheme: VersionScheme,
+    architecture: &str,
+    native_architecture: &str,
+) -> MachineArchitecture {
+    if is_architecture_independent(scheme, architecture) {
+        return package_machine_architecture_in_scheme(scheme, native_architecture);
+    }
+    package_machine_architecture_in_scheme(scheme, architecture)
+}
+
+fn package_machine_architecture_in_scheme(
+    scheme: VersionScheme,
+    architecture: &str,
+) -> MachineArchitecture {
+    match known_package_architecture(scheme, architecture) {
+        Some(KnownPackageArchitecture::Machine { identity, .. }) => {
+            MachineArchitecture::Known(identity)
+        }
+        Some(KnownPackageArchitecture::Independent) | None => {
+            MachineArchitecture::Literal(architecture.to_string())
+        }
+    }
 }
 
 fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {

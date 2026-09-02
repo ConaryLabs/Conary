@@ -133,6 +133,7 @@ fn insert_debian_repo_package(
         format!("https://debian.invalid/{name}_{version}_{architecture}.deb"),
     );
     package.architecture = Some(architecture.to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
     package.debian_multi_arch = Some(multi_arch);
     package.insert(conn).unwrap()
 }
@@ -655,6 +656,7 @@ fn test_sat_install_uses_repo_native_debian_constraints_via_provider() {
         "ubuntu-main".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut app = RepositoryPackage::new(
@@ -710,6 +712,7 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
         "arch-core".to_string(),
         "https://geo.mirror.pkgbuild.com".to_string(),
     );
+    repo.source_profile = Some("arch".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut app = RepositoryPackage::new(
