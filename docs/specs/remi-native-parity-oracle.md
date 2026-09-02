@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 24
+revision: 25
 status: active
 ---
 
@@ -78,12 +78,14 @@ Each `NativeParityPackageV1` row carries:
   replacements, and obsoletes.
 
 Package architecture is validated before a native package row can enter the
-oracle writer. Each RPM, Debian, and ALPM `project_package` boundary requires
-the exact token to exist in its pinned typed architecture table, and
-`NativeParityPackageV1` validation repeats that guard on reopen. An absent
-token returns typed `UnknownArchitectureToken { scheme, token }` before any
-resolution evidence can exist; it is never normalized, admitted, or treated
-as a non-native package.
+oracle writer. RPM and Debian boundaries require the exact token to exist in
+their pinned format-wide tables. ALPM boundaries require the exact token in
+the source profile's declared set: its target architecture plus `any`.
+`NativeParityPackageV1` validation repeats the same profile-aware guard on
+reopen. An absent token returns typed
+`UnknownArchitectureToken { scheme, token }` before any resolution evidence
+can exist; it is never normalized, admitted, or treated as a non-native
+package.
 
 The checked-in architecture fixtures pin the source authority without runtime
 parsing or test-time fetches:
@@ -102,9 +104,14 @@ parsing or test-time fetches:
 - The Arch producer pins `pacman 7.1.0.r9.g54d9411-2`; its installed
   `CARCH=x86_64` derives from
   [`etc/makepkg.conf.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/etc/makepkg.conf.in)
-  at commit `54d94116164b0b2202c6061c4a59c6f3e70820d8`. The accepted package
-  `arch` values `x86_64` and `any` are pinned to the 2026-08-02 core, extra,
-  and multilib archive databases named in the fixture header.
+  at commit `54d94116164b0b2202c6061c4a59c6f3e70820d8`.
+  [`pacman.conf(5)`](https://man.archlinux.org/man/pacman.conf.5.en#Architecture)
+  defines `Architecture` as `auto`/`uname -m` or an explicit list, and the
+  [pinned libalpm comparison](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/trans.c#L69-106)
+  compares `%ARCH%` literally while admitting `any`. The supported `arch`
+  profile therefore owns `x86_64` plus `any`; the 2026-08-02 databases in the
+  fixture header prove that exact profile snapshot rather than a format-wide
+  vocabulary.
 
 Conformance tests parse those vendored files and require every RPM table token,
 every dpkg CPU and tuple expansion, and every pinned Arch package `arch` value
@@ -282,18 +289,14 @@ closed runtime enum
 typed producer error and the diagnostics-only survey records the separate
 `unknown_architecture_token` error kind. This resolution-time branch is an
 invariant guard because the package oracle must already have rejected the row.
-`NativeMachineIdentityV1` preserves the dimensions published by each pinned
-table. A dpkg identity contains the `cputable` GNU CPU name, pointer bits, and
-endianness plus the `tupletable` ABI, libc, and OS components. An RPM identity
-contains the exact `arch_canon` result; `arch_compat` and `buildarch_compat`
-only establish that a token is known and never grant native-only equality. A
-makepkg identity contains exact `CARCH`. Cross-scheme identities exist only
-where those fields justify the complete mapping: Debian `amd64`, `arm64`,
-`ppc64el`, `s390x`, `riscv64`, and `i386` map respectively to RPM
-`x86_64`, `aarch64`, `ppc64le`, `s390x`, `riscv64`, and `i686`; the pinned
-Arch `x86_64` `CARCH` joins the first mapping. Debian `armhf` does not equal
-RPM `armv7hl`, and `armel` does not equal `armv5tel` or `armv7l`, because the
-vendored fields do not establish the missing ARM ISA/float-ABI equivalence.
+`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
+32-bit ARM float ABI. The executable's libc and OS never enter it. Package ABI
+is a separate typed dimension: dpkg contributes `gnu`, `musl`, or `uclibc`
+from `tupletable`; RPM and ALPM contribute their profile-declared implied
+glibc ABI. The profile registry owns the required target package ABI.
+Native-only admission requires both package/host machine equality and
+package/profile ABI equality. RPM `arch_compat` and `buildarch_compat` still
+only establish that a token is known and never grant native-only equality.
 Native solvers apply their pinned package-manager architecture policy to
 provider selection, while the Conary candidate resolver uses the same full
 identities for root and provider matching. A different policy requires a

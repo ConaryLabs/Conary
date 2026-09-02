@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-02
-revision: 55
-summary: Document compile-target-derived typed host machine identity, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 56
+summary: Document libc-independent compile-target host machine identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -120,18 +120,25 @@ package rows when present; it is not required for repository identity or
 refresh authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
 
-Host-native admission derives `NativeMachineIdentityV1` from the Rust compile
-target's exact triple plus `target_arch`, pointer width, endianness,
-`target_abi`, `target_env`, and target OS. The closed derivation distinguishes
-`armv7-unknown-linux-gnueabihf` from `arm-unknown-linux-gnueabi`; it does not
-interpret Rust's shared raw `arm` token as package ABI authority. The resulting
-identity is projected to an ecosystem token only through the pinned RPM,
-dpkg, or Arch architecture table used to parse package tokens. Package search,
-provider resolution, CCS preflight inputs, generation targets, and the legacy
-`detect_system_arch` string adapter all begin at this typed identity. An
-unmapped compile target returns `UnsupportedNativeHostTarget` with its exact
-triple before resolution or mutation; there is no pass-through token or host
-default.
+Host-native admission derives `NativeMachineIdentityV1` only from compile-time
+machine facts: `target_arch`, pointer width, endianness, and `target_abi` for
+32-bit ARM float ABI. The executable's target triple is retained only for an
+`UnsupportedNativeHostTarget` diagnostic; `target_env`, libc, and target OS do
+not enter machine identity. Thus GNU and musl executables built for the same
+x86_64 machine produce identical host identities, as do GNU and musl ARMv7
+hard-float executables.
+
+Package libc/ABI remains separate typed source-format authority. The
+supported-profile registry declares Ubuntu's dpkg `gnu` ABI and Fedora/Arch's
+implied glibc ABI. Native-only admission requires both package machine equality
+with the host and package ABI equality with that exact profile target. RPM and
+dpkg architecture tokens remain format-wide because their pinned upstream
+tables define those vocabularies. ALPM has no format-wide vocabulary:
+`pacman.conf(5)` configures `Architecture` as `auto`/`uname -m` or an explicit
+list, and libalpm compares package `%ARCH%` literally while always accepting
+`any`. Each ALPM profile therefore declares exactly its own machine token set
+plus `any`; a token outside that set is `UnknownArchitectureToken`, not a
+silent non-native filter.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`

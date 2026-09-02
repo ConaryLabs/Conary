@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-02
-revision: 133
+revision: 134
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -908,27 +908,28 @@ promotion proof validation. Native and Conary producers derive the solver
 architecture from that field; `--architecture` is retained only as a checked
 operator assertion, and a mismatch fails with typed
 `ProfileArchitectureMismatch` before any root walk or output bundle. Package
-projection and oracle reopen reject any architecture absent from the
-pinned source table with typed `UnknownArchitectureToken { scheme, token }`
+projection and oracle reopen reject any architecture absent from its typed
+authority with `UnknownArchitectureToken { scheme, token }`
 before resolution evidence exists. The vendored tables are RPM 6.0.1 tag
 `rpm-6.0.1-release` `rpmrc.in` architecture lines; dpkg 1.23.7 tag `1.23.7`
-`data/cputable` and `data/tupletable`; and pacman
+`data/cputable` and `data/tupletable`. Pacman
 `7.1.0.r9.g54d9411-2` commit
 `54d94116164b0b2202c6061c4a59c6f3e70820d8` `makepkg.conf.in` plus the
-2026-08-02 Arch core, extra, and multilib database `arch` values. Exact files,
-versions, commits, and upstream URLs are recorded in the fixture headers, and
-conformance tests require complete typed projection from every vendored row.
+2026-08-02 Arch core, extra, and multilib database `arch` values prove the
+supported x86_64 profile snapshot. Pacman defines no format-wide closed token
+table: the registry declares each ALPM profile's target token plus `any`, and
+libalpm compares those configured strings literally. Exact files, versions,
+commits, and upstream URLs are recorded in the fixture headers.
 
-`NativeMachineIdentityV1` is built directly from those tables. Its dpkg form
-retains the `cputable` GNU CPU, pointer bits, and endianness plus the
-`tupletable` ABI, libc, and OS; its RPM form retains the exact `arch_canon`
-result; and its makepkg form retains exact `CARCH`. RPM `arch_compat` and
-`buildarch_compat` enumerate known tokens but cannot grant native-only
-compatibility. A cross-scheme form is used only for table-justified complete
-identities: Debian `amd64`/RPM and Arch `x86_64`, `arm64`/`aarch64`,
-`ppc64el`/`ppc64le`, `s390x`, `riscv64`, and Debian `i386`/RPM `i686`.
-The tables do not justify Debian `armhf` as RPM `armv7hl`, or Debian `armel`
-as RPM `armv5tel` or `armv7l`, so those identities remain distinct.
+`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
+32-bit ARM float ABI. It is derived from compile-time machine facts without
+the executable's libc, target environment, or OS, so GNU and musl builds for
+one machine are identical hosts. Package libc/ABI is separate: dpkg contributes
+its `gnu`, `musl`, or `uclibc` tuple dimension, while RPM and ALPM carry their
+profile-declared implied glibc ABI. Native-only admission requires package
+machine equality with the host and package ABI equality with the exact source
+profile. RPM `arch_compat` and `buildarch_compat` enumerate known tokens but
+cannot grant native-only compatibility.
 
 `native_only` admission returns `Admitted`,
 `Excluded { identity: NativeMachineIdentityV1 }`, or
