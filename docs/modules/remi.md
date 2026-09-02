@@ -88,6 +88,10 @@ the obsolete active or candidate revision as unpopulated until that refresh
 finishes. Serving and promotion remain strict: schema-2 profile revisions and
 projection-version-2 profile catalogs never become readable authority, and no
 compatibility deserializer or migration adapter remains.
+`apps/remi/src/server/catalog_authority/revision_inspection.rs` owns that
+upgrade/rebuild classification and strict manifest deserialization;
+`apps/remi/src/server/admin_service/profile_refresh/source_reuse.rs` owns the
+corresponding reuse decision.
 Every serving projection resolves a package origin back to that manifest.
 When two members publish the same source-independent native package identity,
 profile composition retains the member with the exact higher declared
@@ -491,8 +495,10 @@ page-derived finalization scratch. A
 one-byte-short refusal leaves no native candidate file. Profile candidates use
 the corresponding ordered-member contract described above.
 
-`apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
-unconditional liveness reply and proves only that the process is listening;
+`apps/remi/src/server/readiness.rs` owns serving-readiness orchestration, while
+`apps/remi/src/server/readiness/source_profiles.rs` owns exact configured-profile
+and active-catalog population inspection. `/health` is an unconditional
+liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
 requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
@@ -1523,8 +1529,10 @@ Implementation ownership lives in child modules:
 - `catalog_capacity.rs`: shared filesystem-scoped metadata, profile-candidate
   growth, catalog finalization, and projection-copy reservations with typed
   capacity refusal.
-- `catalog_authority.rs` and `profile_catalog.rs`: exact-revision resolution,
-  verified immutable readers, reader-lifetime pins, and catalog projections.
+- `catalog_authority.rs`, `catalog_authority/revision_inspection.rs`, and
+  `profile_catalog.rs`: exact-revision resolution, upgrade/rebuild inspection,
+  strict manifest deserialization, verified immutable readers, reader-lifetime
+  pins, and catalog projections.
 - `public_universe.rs` and `handlers/public_read.rs`: signed-universe snapshot
   selection, typed public unavailability, and exact response identity headers.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion

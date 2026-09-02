@@ -4,32 +4,36 @@
 
 mod source_reuse;
 
+#[cfg(test)]
+pub(super) fn profile_members_match_plan(
+    members: &[conary_core::repository::catalog::ProfileSourceMemberV2],
+    plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
+) -> bool {
+    source_reuse::profile_members_match_plan(members, plans)
+}
+
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::Context;
 use conary_core::db::models::{RemiActiveProfileRevision, RemiProfileRevisionMember, Repository};
-use conary_core::repository::catalog::{ProfileSourceMemberV2, SourceStreamKindV1};
 use conary_core::repository::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncFailureCategory, ProfileSyncFailureStage,
     ProfileSyncRun, ProfileSyncRunMember, RepositoryFormat, abort_profile_sync_run,
     acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run_with_members,
-    complete_profile_sync_candidate, current_profile_sync_candidate, heartbeat_profile_sync_run,
-    ready_profile_sync_run, record_profile_sync_run_member,
+    complete_profile_sync_candidate, heartbeat_profile_sync_run, ready_profile_sync_run,
+    record_profile_sync_run_member,
 };
 
 use super::publication::{ProfilePublicationIntent, staged_profile_intent};
 use super::refresh::RepoRefreshResult;
 use super::{ServiceError, blocking_anyhow};
-use crate::server::catalog_authority::{
-    CatalogAuthority, PinnedProfileCatalog, ProfileRevisionSelection,
-};
+use crate::server::catalog_authority::{CatalogAuthority, ProfileRevisionSelection};
 use crate::server::catalog_capacity::CatalogScratchCoordinator;
 use crate::server::catalog_refresh::{
     ProfileSourceStageInput, PublishedProfileCatalog, StagedProfileCatalog, cleanup_candidate_run,
-    finish_staged_profile_catalog, plan_profile_sources, profile_revision_matches_contract,
-    publish_staged_profile_catalog, stage_profile_sources,
+    finish_staged_profile_catalog, plan_profile_sources, publish_staged_profile_catalog,
+    stage_profile_sources,
 };
 use crate::server::{ServerState, database_writer::DatabaseWriter};
 
@@ -98,7 +102,7 @@ async fn refresh_native_profile_inner(
         && repositories
             .iter()
             .all(|repository| !conary_core::repository::needs_sync(repository))
-        && current_catalog_matches_plan(&roots, &source_profile, &plans).await
+        && source_reuse::current_catalog_matches_plan(&roots, &source_profile, &plans).await
     {
         return Ok((
             repositories
@@ -397,7 +401,8 @@ async fn stage_profile_catalog_with_heartbeat(
                 .await?
             }
         };
-        let reusable = reusable_profile_catalog(roots, source_profile, sources.members()).await?;
+        let reusable =
+            source_reuse::reusable_profile_catalog(roots, source_profile, sources.members()).await?;
         Ok::<_, anyhow::Error>((
             finish_staged_profile_catalog(sources, reusable).await?,
             reuse_decision,
@@ -413,66 +418,6 @@ async fn stage_profile_catalog_with_heartbeat(
             ))),
         },
     }
-}
-
-async fn reusable_profile_catalog(
-    roots: &RefreshRoots,
-    source_profile: &str,
-    members: &[ProfileSourceMemberV2],
-) -> anyhow::Result<Option<PinnedProfileCatalog>> {
-    for selection in source_reuse::profile_reuse_selections(roots, source_profile).await? {
-        let authority = roots.catalog_authority.clone();
-        let inspected_selection = selection.clone();
-        let inspection = tokio::task::spawn_blocking(move || {
-            authority.inspect_selected_profile_for_upgrade(&inspected_selection)
-        })
-        .await
-        .context("reusable profile inspection task panicked")??;
-        let inspection = match inspection {
-            crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
-                inspection
-            }
-            crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
-                found,
-                required,
-            } => {
-                tracing::info!(
-                    source_profile,
-                    profile_revision_sha256 = %selection.profile_revision_sha256,
-                    found,
-                    required,
-                    reuse_decision = "obsolete_schema",
-                    "profile refresh rejected an obsolete profile catalog for reuse"
-                );
-                continue;
-            }
-        };
-        if !profile_revision_matches_contract(&inspection.manifest, source_profile, members) {
-            continue;
-        }
-
-        let authority = roots.catalog_authority.clone();
-        let opened_selection = selection.clone();
-        let reusable =
-            tokio::task::spawn_blocking(move || authority.open_selected_profile(&opened_selection))
-                .await
-                .context("reusable profile reopen task panicked")??;
-        if !profile_revision_matches_contract(reusable.manifest(), source_profile, members) {
-            anyhow::bail!(
-                "profile '{}' revision {} changed its exact member contract while reopening",
-                source_profile,
-                selection.profile_revision_sha256
-            );
-        }
-        tracing::info!(
-            source_profile,
-            profile_revision_sha256 = %selection.profile_revision_sha256,
-            "reusing exact durable immutable profile catalog"
-        );
-        return Ok(Some(reusable));
-    }
-
-    Ok(None)
 }
 
 type ProfileHeartbeat = (
@@ -554,73 +499,6 @@ fn profile_refresh_results(
             })
         })
         .collect()
-}
-
-async fn current_catalog_matches_plan(
-    roots: &RefreshRoots,
-    source_profile: &str,
-    plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
-) -> bool {
-    let authority = CatalogAuthority::from_paths(
-        &roots.db_path,
-        &roots.catalog_dir,
-        roots.database_writer.clone(),
-    );
-    let db_path = roots.db_path.clone();
-    let source_profile = source_profile.to_string();
-    let plans = plans.to_vec();
-    tokio::task::spawn_blocking(move || {
-        let conn = conary_core::db::open_fast(&db_path)?;
-        if let Some(candidate) = current_profile_sync_candidate(&conn, &source_profile)? {
-            let selection = ProfileRevisionSelection {
-                source_profile: candidate.source_profile,
-                profile_revision_sha256: candidate.profile_revision_sha256,
-            };
-            return authority
-                .open_selected_profile(&selection)
-                .map(|catalog| profile_members_match_plan(&catalog.manifest().members, &plans));
-        }
-        authority
-            .inspect_active_profile_for_upgrade(&source_profile)
-            .map(|inspection| match inspection {
-                crate::server::catalog_authority::ProfileRevisionInspection::Current(catalog) => {
-                    profile_members_match_plan(&catalog.manifest.members, &plans)
-                }
-                crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
-                    ..
-                } => false,
-            })
-    })
-    .await
-    .is_ok_and(|result| result.unwrap_or(false))
-}
-
-pub(super) fn profile_members_match_plan(
-    members: &[ProfileSourceMemberV2],
-    plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
-) -> bool {
-    members.len() == plans.len()
-        && members.iter().zip(plans).all(|(member, plan)| {
-            let Ok(policy) = plan.repository.require_source_policy() else {
-                return false;
-            };
-            let Some(repository_identity) = plan.repository.repository_identity.as_deref() else {
-                return false;
-            };
-            let stream_kind = match member.stream.kind {
-                SourceStreamKindV1::Release => "release",
-                SourceStreamKindV1::Channel => "channel",
-                SourceStreamKindV1::Rolling => "rolling",
-            };
-            member.ordinal == plan.ordinal
-                && member.source_identity == policy.source_identity
-                && member.repository_identity == repository_identity
-                && stream_kind == policy.stream.kind()
-                && member.stream.identity == policy.stream.identity()
-                && member.role == plan.role
-                && member.precedence == plan.precedence
-                && member.required == plan.required
-        })
 }
 
 async fn begin_run(
