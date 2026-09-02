@@ -224,20 +224,14 @@ fn debian_architecture(token: &str) -> Option<KnownPackageArchitecture> {
         "solaris-sparc" => Class::Sparc,
         "solaris-sparc64" => Class::Sparc64,
         "mint-m68k" => Class::M68k,
-        _ => {
-            if let Some(class) = debian_cpu_class(token) {
-                class
-            } else if let Some(cpu) = token
+        _ => debian_cpu_class(token).or_else(|| {
+            let cpu = token
                 .strip_prefix("uclibc-linux-")
                 .or_else(|| token.strip_prefix("musl-linux-"))
                 .or_else(|| token.strip_prefix("openbsd-"))
-                .or_else(|| token.strip_prefix("netbsd-"))
-            {
-                debian_cpu_class(cpu)?
-            } else {
-                return None;
-            }
-        }
+                .or_else(|| token.strip_prefix("netbsd-"))?;
+            debian_cpu_class(cpu)
+        })?,
     };
     Some(Machine(class))
 }
