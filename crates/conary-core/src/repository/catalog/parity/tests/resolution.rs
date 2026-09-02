@@ -417,6 +417,182 @@ fn comparison_rejects_policy_drift_before_accepting_equal_rows() {
         error,
         NativeResolutionComparisonError::Candidate(_)
     ));
+    let survey_error = compare_native_resolution_oracle_survey(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &changed,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        survey_error,
+        crate::Error::ProfileArchitectureMismatch { .. }
+    ));
+}
+
+#[test]
+fn comparison_survey_collects_every_mismatch_and_exact_histograms() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate =
+        super::candidate_resolution::candidate_fixture_with(ecosystem, |_, packages| {
+            packages
+                .iter_mut()
+                .find(|package| package.name == "unresolved")
+                .unwrap()
+                .requirement_groups
+                .push(requirement("depends", "second-absent"));
+        });
+    let packages = rows(&candidate);
+    let package_oracle = oracle(&candidate, ecosystem, packages.clone());
+    let native_roots = super::candidate_resolution::expected_roots(&candidate);
+    let native = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "libsolv",
+        &native_roots,
+        true,
+    );
+    let mut changed = native_roots.clone();
+    let resolved_positions = changed
+        .iter()
+        .enumerate()
+        .filter_map(|(index, root)| {
+            matches!(root.outcome, NativeResolutionOutcomeV1::Resolved { .. }).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let first = resolved_positions[0];
+    let second = resolved_positions[1];
+    let unresolved_position = changed
+        .iter()
+        .position(|root| matches!(root.outcome, NativeResolutionOutcomeV1::Unresolved { .. }))
+        .unwrap();
+    let extra_key = changed[second].root_package_key_sha256.clone();
+    let NativeResolutionOutcomeV1::Resolved {
+        closure_package_keys_sha256,
+    } = &mut changed[first].outcome
+    else {
+        unreachable!()
+    };
+    closure_package_keys_sha256.push(extra_key);
+    closure_package_keys_sha256.sort();
+    changed[second].outcome = NativeResolutionOutcomeV1::Unresolved {
+        dependencies: match &native_roots
+            .iter()
+            .find(|root| matches!(root.outcome, NativeResolutionOutcomeV1::Unresolved { .. }))
+            .unwrap()
+            .outcome
+        {
+            NativeResolutionOutcomeV1::Unresolved { dependencies } => dependencies.clone(),
+            _ => unreachable!(),
+        },
+    };
+    let unresolved_package = packages
+        .iter()
+        .find(|package| package.name == "unresolved")
+        .unwrap();
+    changed[unresolved_position].outcome = NativeResolutionOutcomeV1::Unresolved {
+        dependencies: vec![NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: unresolved_package.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(
+                &unresolved_package.requirement_groups[1],
+            )
+            .unwrap(),
+        }],
+    };
+    let conary = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-sat",
+        &changed,
+        true,
+    );
+
+    let survey = compare_native_resolution_oracle_survey(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &conary.reader,
+    )
+    .unwrap();
+    assert_eq!(survey.counts.roots_walked, 3);
+    assert_eq!(survey.counts.matching_roots, 0);
+    assert_eq!(survey.total_mismatches, 3);
+    assert_eq!(survey.retained_mismatches, 3);
+    assert_eq!(
+        survey
+            .counts
+            .mismatch_kinds
+            .iter()
+            .map(|entry| (entry.kind, entry.count))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                NativeResolutionComparisonSurveyMismatchKindV1::ResolutionOutcome,
+                1,
+            ),
+            (
+                NativeResolutionComparisonSurveyMismatchKindV1::DependencyClosure,
+                1,
+            ),
+            (
+                NativeResolutionComparisonSurveyMismatchKindV1::UnresolvedDependencies,
+                1,
+            ),
+        ]
+    );
+    assert_eq!(survey.counts.outcome_kind_pairs.len(), 3);
+    assert!(survey.mismatches.iter().all(|mismatch| {
+        !mismatch.root.name.is_empty() && mismatch.oracle.outcome != mismatch.candidate.outcome
+    }));
+
+    let strict = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &conary.reader,
+    )
+    .unwrap_err();
+    let NativeResolutionComparisonError::Mismatch(strict_mismatch) = strict else {
+        panic!("strict comparison must abort on its first mismatch");
+    };
+    let strict_root = match strict_mismatch.as_ref() {
+        NativeResolutionMismatchV1::OracleOnlyRoot {
+            root_package_key_sha256,
+        }
+        | NativeResolutionMismatchV1::CandidateOnlyRoot {
+            root_package_key_sha256,
+        }
+        | NativeResolutionMismatchV1::ResolutionOutcome {
+            root_package_key_sha256,
+            ..
+        }
+        | NativeResolutionMismatchV1::DependencyClosure {
+            root_package_key_sha256,
+        }
+        | NativeResolutionMismatchV1::UnresolvedDependencies {
+            root_package_key_sha256,
+        }
+        | NativeResolutionMismatchV1::NotInstallableReason {
+            root_package_key_sha256,
+            ..
+        } => root_package_key_sha256,
+    };
+    assert_eq!(strict_root, &survey.mismatches[0].root.package_key_sha256);
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("comparison-survey.json");
+    write_native_resolution_comparison_survey(&path, &survey).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(write_native_resolution_comparison_survey(&path, &survey).is_err());
 }
 
 #[test]

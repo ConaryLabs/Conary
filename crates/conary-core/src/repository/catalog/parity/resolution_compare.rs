@@ -15,7 +15,7 @@ use crate::error::Error as ConaryError;
 
 pub const NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2: u32 = 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeResolutionOutcomeKindV1 {
     Resolved,
@@ -24,7 +24,7 @@ pub enum NativeResolutionOutcomeKindV1 {
 }
 
 impl NativeResolutionOutcomeKindV1 {
-    fn from_outcome(outcome: &NativeResolutionOutcomeV1) -> Self {
+    pub(super) fn from_outcome(outcome: &NativeResolutionOutcomeV1) -> Self {
         match outcome {
             NativeResolutionOutcomeV1::Resolved { .. } => Self::Resolved,
             NativeResolutionOutcomeV1::Unresolved { .. } => Self::Unresolved,
@@ -195,7 +195,7 @@ pub fn compare_native_resolution_oracle(
     })
 }
 
-fn outcome_mismatch(
+pub(super) fn outcome_mismatch(
     root_package_key_sha256: &str,
     oracle: &NativeResolutionOutcomeV1,
     candidate: &NativeResolutionOutcomeV1,

@@ -3,13 +3,16 @@
 //! Strict native full-catalog parity oracle artifacts and comparison.
 
 mod candidate_resolution;
+mod candidate_resolution_survey;
 mod compare;
 mod contract;
 mod io;
 mod resolution_compare;
+mod resolution_comparison_survey;
 mod resolution_contract;
 mod resolution_io;
 mod resolution_survey;
+mod survey_support;
 
 #[cfg(feature = "native-alpm-oracle")]
 mod alpm;
@@ -44,7 +47,20 @@ pub use crate::repository::architecture::{
 };
 pub use candidate_resolution::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,
-    produce_conary_resolution_candidate,
+    produce_conary_resolution_candidate, produce_conary_resolution_comparison_survey,
+    produce_conary_resolution_survey,
+};
+pub use candidate_resolution_survey::{
+    CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, CONARY_RESOLUTION_SURVEY_FAILURE_LIMIT,
+    CONARY_RESOLUTION_SURVEY_SCHEMA_V1, ConaryResolutionSurveyConflictEdgeV1,
+    ConaryResolutionSurveyConflictKindV1, ConaryResolutionSurveyCountsV1,
+    ConaryResolutionSurveyErrorCountV1, ConaryResolutionSurveyErrorKindV1,
+    ConaryResolutionSurveyErrorReasonV1, ConaryResolutionSurveyEvidenceWithheldReasonV1,
+    ConaryResolutionSurveyExcludedNodeV1, ConaryResolutionSurveyExcludedReasonV1,
+    ConaryResolutionSurveyFailureV1, ConaryResolutionSurveyNativeExplanationV1,
+    ConaryResolutionSurveyRootOutcomeV1, ConaryResolutionSurveySolvableV1,
+    ConaryResolutionSurveyUnresolvedEdgeV1, ConaryResolutionSurveyV1,
+    ConaryResolutionSurveyVersionSetV1, write_conary_resolution_survey,
 };
 pub use compare::{
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NativeParityComparisonError, NativeParityComparisonV1,
@@ -65,6 +81,17 @@ pub use resolution_compare::{
     NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NativeResolutionComparisonError,
     NativeResolutionComparisonV1, NativeResolutionMismatchV1, NativeResolutionOutcomeKindV1,
     compare_native_resolution_oracle,
+};
+pub use resolution_comparison_survey::{
+    NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT,
+    NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1, NativeResolutionComparisonSurveyCountsV1,
+    NativeResolutionComparisonSurveyMismatchCountV1,
+    NativeResolutionComparisonSurveyMismatchKindV1, NativeResolutionComparisonSurveyMismatchV1,
+    NativeResolutionComparisonSurveyOutcomeEvidenceV1,
+    NativeResolutionComparisonSurveyOutcomePairCountV1,
+    NativeResolutionComparisonSurveyOutcomePairV1, NativeResolutionComparisonSurveyRootIdentityV1,
+    NativeResolutionComparisonSurveyV1, compare_native_resolution_oracle_survey,
+    write_native_resolution_comparison_survey,
 };
 pub use resolution_contract::{
     NATIVE_RESOLUTION_ORACLE_SCHEMA_V2, NativeResolutionArchitectureAdmissionV1,

@@ -2,7 +2,7 @@
 
 //! Exact-root and typed conflict evidence helpers for resolution proof production.
 
-use resolvo::{DenseIndex, Requirement, SolvableId, VersionSetId};
+use resolvo::{DenseIndex, Requirement, SolvableId, StringId, VersionSetId};
 
 use crate::error::Result;
 
@@ -10,6 +10,10 @@ use super::ConaryProvider;
 use super::types::{ConaryConstraint, RepositoryRequirementGroupIdentity};
 
 impl ConaryProvider<'_> {
+    pub(crate) fn is_missing_dependency_authority_reason(&self, reason: StringId) -> bool {
+        reason == self.missing_dependency_authority
+    }
+
     pub(crate) fn set_native_architecture(&mut self, architecture: impl Into<String>) {
         self.native_architecture = architecture.into();
     }

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-02
-revision: 135
-summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+last_updated: 2026-09-03
+revision: 136
+summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -1010,6 +1010,72 @@ never writes strict bundle filenames, and is
 diagnostics only: Remi comparison, proof, activation, and publication do not
 accept it as authority. The command exits non-zero after writing any non-empty
 failure inventory.
+
+`ConaryResolutionSurveyV1` schema 1 applies that collector discipline to the
+Conary SAT candidate. It binds the exact schema-3 profile revision,
+package-oracle manifest, `conary-sat` implementation, native-only policy, and
+profile-owned typed target architecture. The producer and strict candidate
+writer share one per-root sink walk. Each successful root retains its exact
+package identity and key with a complete `resolved`, `unresolved`, or
+`not_installable` outcome; each hard failure contributes to uncapped totals
+and the typed error-variant/reason histogram. At most 5,000 failures retain
+their exact root, full error message, and lazily built native explanation.
+
+The explanation is a direct typed projection of resolvo's conflict graph. It
+contains unresolved-node incoming edges with requiring solvable and rendered
+requirement/version sets, conflict edges with both solvables and the typed
+conflict kind, and excluded solvables with their typed provider reason. It
+never parses resolvo's user-friendly diagnostic text. The 64 MiB canonical
+byte budget, first-exhaustion withholding behavior, create-only mode `0600`
+writer, counts, histogram, and truncation validation are shared with the
+native survey.
+
+`NativeResolutionComparisonSurveyV1` schema 1 consumes independently reopened
+complete native and candidate bundles. It walks every root pair in canonical
+key order and retains up to 5,000 mismatches. Each record contains the exact
+root identity, typed mismatch kind, both complete outcomes, and the manifest
+SHA-256 identifying each side. Uncapped mismatch totals, exact histograms by
+mismatch kind and by outcome-kind pair, and explicit truncation remain in the
+validated document. The strict comparison still aborts on the first mismatch.
+
+`remi resolution-survey` is the stopped-runtime owner. It takes the normal
+exclusive runtime lock and exactly mirrors `promotion-prove`'s canonical
+ordered `--candidate`, `--package-oracle`, `--native-resolution`, and
+`--architecture` bindings. Reordered profiles, foreign revisions, or an
+operator architecture that differs from the profile's typed target fail
+before a survey file is created. The destination must be a new directory; it
+is mode `0700` on Unix and every contained JSON file is create-only mode
+`0600`.
+
+```text
+remi resolution-survey \
+  --config /etc/conary/remi.toml \
+  --candidate fedora-44=<revision> \
+  --candidate ubuntu-26.04=<revision> \
+  --candidate arch=<revision> \
+  --package-oracle fedora-44=<directory> \
+  --package-oracle ubuntu-26.04=<directory> \
+  --package-oracle arch=<directory> \
+  --native-resolution fedora-44=<directory> \
+  --native-resolution ubuntu-26.04=<directory> \
+  --native-resolution arch=<directory> \
+  --architecture fedora-44=x86_64 \
+  --architecture ubuntu-26.04=amd64 \
+  --architecture arch=x86_64 \
+  --output-dir <new-private-survey-directory>
+```
+
+The command writes `<profile>.candidate-resolution-survey.json`. When that
+profile has no hard candidate failures it builds a strict candidate only in an
+automatically removed temporary directory and writes
+`<profile>.native-resolution-comparison-survey.json`; otherwise comparison for
+that profile is skipped because no complete candidate exists. All profiles are
+still visited, and the command exits non-zero after reporting any findings.
+
+These files are diagnosis, never authority. They cannot satisfy a strict
+resolution-bundle or `NativeResolutionComparisonV1` reader, and promotion
+proof, activation, publication, and public binding paths reject them. They
+contain no input paths, credentials, process environment, or host identity.
 
 Conary separately replays the exact verified profile catalog into a
 private temporary resolver projection, resolves every exact package key

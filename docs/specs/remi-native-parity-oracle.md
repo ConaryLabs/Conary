@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
-last_updated: 2026-09-02
-revision: 27
+summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
+last_updated: 2026-09-03
+revision: 28
 status: active
 ---
 
@@ -409,6 +409,76 @@ cargo run -p conary-core --features native-rpm-oracle \
 
 The Debian and ALPM binaries use the same `--survey <FILE>` alternative with
 their existing `--packages` and `--database` member inputs respectively.
+
+### Candidate-resolution and comparison surveys
+
+`ConaryResolutionSurveyV1` schema 1 is the diagnostics-only Conary counterpart
+to the native survey. It binds the exact profile revision, package-oracle
+manifest, `conary-sat` implementation and projection schema, native-only
+policy, and the profile's typed target architecture. The policy architecture,
+operator assertion, and profile target must agree before output creation. The
+producer walks every exact package-oracle key through the same per-root code as
+strict candidate production. Every successful root retains its exact
+name/version/release/architecture/key and one complete `resolved`,
+`unresolved`, or `not_installable` outcome. A failed root contributes to
+uncapped counts and a canonical histogram keyed by typed Conary error variant
+and stable producer reason; up to 5,000 failures retain the same exact root
+identity, full error message, and native explanation.
+
+Candidate native explanations are projected directly from resolvo's typed
+`ConflictGraph`, `ConflictNode`, `ConflictEdge`, and `ConflictCause` values.
+They retain unresolved-node incoming edges with the requiring solvable and
+rendered requirement/version sets, conflict edges with both solvable
+identities and typed conflict kind, and excluded solvables with their typed
+provider reason. No `display_user_friendly` text is parsed. Explanations share
+the native survey's exact canonical-JSON accounting, 64 MiB budget,
+failure-record cap, first-exhaustion withholding rule, and independently
+validated count/truncation invariants. They are built only on a hard per-root
+failure.
+
+`NativeResolutionComparisonSurveyV1` schema 1 first reopens two complete,
+package-oracle-bound resolution bundles, then walks every root pair in
+canonical key order. Every retained mismatch records the exact root identity,
+typed mismatch kind, both complete outcomes, and the manifest SHA-256 that
+identifies each side's evidence. It retains at most 5,000 mismatch records
+while preserving uncapped totals, a canonical histogram by mismatch kind, a
+canonical histogram by native/candidate outcome-kind pair, and explicit
+truncation. Strict comparison still aborts on its first mismatch.
+
+`remi resolution-survey` owns both surveys under the normal exclusive
+stopped-runtime lock and mirrors `promotion-prove`'s ordered private bindings:
+
+```text
+remi resolution-survey \
+  --config /etc/conary/remi.toml \
+  --candidate fedora-44=<profile-revision-sha256> \
+  --candidate ubuntu-26.04=<profile-revision-sha256> \
+  --candidate arch=<profile-revision-sha256> \
+  --package-oracle fedora-44=<directory> \
+  --package-oracle ubuntu-26.04=<directory> \
+  --package-oracle arch=<directory> \
+  --native-resolution fedora-44=<directory> \
+  --native-resolution ubuntu-26.04=<directory> \
+  --native-resolution arch=<directory> \
+  --architecture fedora-44=x86_64 \
+  --architecture ubuntu-26.04=amd64 \
+  --architecture arch=x86_64 \
+  --output-dir <new-private-survey-directory>
+```
+
+The output directory is create-only and mode `0700` on Unix; each canonical
+survey file is create-only and mode `0600`. A profile with candidate failures
+cannot produce a complete candidate bundle, so its comparison survey is
+skipped while later profiles are still surveyed. Complete candidates are
+materialized only below an automatically removed temporary directory. The
+command reports all written findings and exits non-zero when any candidate
+failure or comparison mismatch exists.
+
+Neither survey is evidence authority. Their JSON cannot be opened as a strict
+resolution bundle or `NativeResolutionComparisonV1`; promotion proof,
+activation, publication, and every binding/validation path reject it. Survey
+files also carry no private paths, credentials, environment data, or host
+identity.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact
