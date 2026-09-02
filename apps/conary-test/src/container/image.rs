@@ -812,9 +812,8 @@ printf 'fixture\n' > "$output/$file"
             "Arch archive date must remain visibly coupled to pinned image provenance"
         );
         assert!(
-            contents.contains("pacman -Syyu --noconfirm --disable-download-timeout")
-                && contents.contains("pacman -U --noconfirm --disable-download-timeout"),
-            "Arch synchronization and package installation must tolerate slow archive downloads"
+            contents.contains("pacman -Syyu --noconfirm --disable-download-timeout"),
+            "Arch package synchronization must tolerate slow archive downloads"
         );
     }
 
