@@ -150,6 +150,16 @@ impl ActiveCatalogFixture {
             rusqlite::params![&obsolete_revision, revision],
         )
         .expect("select obsolete candidate profile revision");
+        conn.execute(
+            "INSERT OR IGNORE INTO repository_sync_scopes (
+                 source_profile, fencing_epoch, current_run_id
+             )
+             SELECT source_profile, fencing_epoch, activation_run_id
+             FROM remi_active_profile_revisions
+             WHERE profile_revision_sha256 = ?1",
+            [&obsolete_revision],
+        )
+        .expect("retain the obsolete active revision fencing epoch");
         obsolete_revision
     }
 

@@ -175,7 +175,6 @@ mod tests {
     use crate::server::catalog_authority::{
         ProfileRevisionInspection, test_support::ActiveCatalogFixture,
     };
-    use crate::server::catalog_capacity::CatalogScratchCoordinator;
 
     #[tokio::test]
     async fn obsolete_revision_is_recorded_non_reusable_before_schema_three_rebuild() {
@@ -192,18 +191,7 @@ mod tests {
             .expect("inspect current fixture revision");
         let obsolete_revision = fixture.replace_with_obsolete_schema(&current_revision);
         let scratch = tempfile::tempdir().expect("create refresh scratch root");
-        let roots = RefreshRoots {
-            db_path: fixture.db_path().to_path_buf(),
-            keyring_dir: scratch.path().join("keys"),
-            catalog_candidate_dir: scratch.path().join("candidates"),
-            catalog_dir: fixture.catalog_dir().to_path_buf(),
-            projection_cache_dir: scratch.path().join("projections"),
-            database_writer: fixture.authority().database_writer_for_test(),
-            catalog_authority: fixture.authority().clone(),
-            catalog_gc_coordinator: Arc::new(tokio::sync::Mutex::new(())),
-            catalog_scratch_coordinator: Arc::new(CatalogScratchCoordinator::default()),
-        };
-        let plans = current
+        let mut repositories = current
             .manifest
             .members
             .iter()
@@ -251,32 +239,60 @@ mod tests {
                         None,
                     )
                     .expect("bind source policy");
-                crate::server::catalog_refresh::ProfileSourcePlan {
-                    ordinal: member.ordinal,
-                    role: member.role,
-                    precedence: member.precedence,
-                    required: member.required,
-                    repository,
-                }
+                repository.id = Some(
+                    fixture
+                        .connection()
+                        .query_row(
+                            "SELECT id FROM repositories WHERE repository_identity = ?1",
+                            [&member.repository_identity],
+                            |row| row.get(0),
+                        )
+                        .expect("resolve fixture repository ID"),
+                );
+                repository
             })
             .collect::<Vec<_>>();
-
-        let reuse = registered_source_reuse(&roots, profile, &plans)
+        let chunk_dir = scratch.path().join("chunks");
+        let cache_dir = scratch.path().join("cache");
+        let catalog_candidate_dir = scratch.path().join("candidates");
+        for directory in [&chunk_dir, &cache_dir, &catalog_candidate_dir] {
+            std::fs::create_dir_all(directory).expect("create refresh directory");
+        }
+        let state = Arc::new(tokio::sync::RwLock::new(
+            crate::server::ServerState::new(crate::server::ServerConfig {
+                db_path: fixture.db_path().to_path_buf(),
+                chunk_dir,
+                cache_dir,
+                catalog_dir: fixture.catalog_dir().to_path_buf(),
+                catalog_candidate_dir,
+                ..Default::default()
+            })
+            .expect("build refresh server state"),
+        ));
+        let current_pin = state
+            .read()
             .await
-            .expect("classify obsolete source reuse");
-        assert!(reuse.sources.is_empty());
+            .catalog_authority
+            .open_selected_profile(&current_selection)
+            .expect("pin current source fixture through refresh garbage collection");
+
+        let (results, decision) = super::super::refresh_native_profile_inner(
+            &state,
+            profile.to_string(),
+            std::mem::take(&mut repositories),
+            true,
+            Some(current_selection),
+        )
+        .await
+        .expect("refresh obsolete profile revision");
+        drop(current_pin);
+        assert_eq!(results.len(), current.manifest.members.len());
         assert_eq!(
-            reuse.decision,
+            decision,
             ReuseDecision::ObsoleteSchema {
                 found: 2,
                 required: PROFILE_REVISION_SCHEMA_V3,
             }
-        );
-        assert!(
-            super::super::reusable_profile_catalog(&roots, profile, &current.manifest.members)
-                .await
-                .expect("classify obsolete profile reuse")
-                .is_none()
         );
 
         let obsolete_selection = ProfileRevisionSelection {
@@ -293,12 +309,15 @@ mod tests {
                 required: PROFILE_REVISION_SCHEMA_V3,
             }
         ));
-        let rebuilt_revision = fixture.register(profile, 2, Vec::new());
+        let candidate =
+            conary_core::repository::current_profile_sync_candidate(&fixture.connection(), profile)
+                .expect("read refreshed profile candidate")
+                .expect("refresh produced a profile candidate");
         let rebuilt = fixture
             .authority()
             .inspect_selected_profile(&ProfileRevisionSelection {
                 source_profile: profile.to_string(),
-                profile_revision_sha256: rebuilt_revision,
+                profile_revision_sha256: candidate.profile_revision_sha256,
             })
             .expect("inspect schema-three replacement");
         assert_eq!(rebuilt.manifest.schema_version, PROFILE_REVISION_SCHEMA_V3);

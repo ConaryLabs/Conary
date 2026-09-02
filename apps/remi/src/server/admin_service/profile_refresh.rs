@@ -63,6 +63,18 @@ pub(super) async fn refresh_native_profile(
     repositories: Vec<Repository>,
     force: bool,
 ) -> Result<Vec<RepoRefreshResult>, ServiceError> {
+    refresh_native_profile_inner(state, source_profile, repositories, force, None)
+        .await
+        .map(|(results, _reuse)| results)
+}
+
+async fn refresh_native_profile_inner(
+    state: &std::sync::Arc<tokio::sync::RwLock<ServerState>>,
+    source_profile: String,
+    repositories: Vec<Repository>,
+    force: bool,
+    staged_source_selection: Option<ProfileRevisionSelection>,
+) -> Result<(Vec<RepoRefreshResult>, source_reuse::ReuseDecision), ServiceError> {
     let roots = {
         let state = state.read().await;
         RefreshRoots {
@@ -88,15 +100,18 @@ pub(super) async fn refresh_native_profile(
             .all(|repository| !conary_core::repository::needs_sync(repository))
         && current_catalog_matches_plan(&roots, &source_profile, &plans).await
     {
-        return Ok(repositories
-            .into_iter()
-            .map(|repository| RepoRefreshResult {
-                name: repository.name,
-                source_profile: repository.source_profile,
-                packages_synced: 0,
-                skipped: true,
-            })
-            .collect());
+        return Ok((
+            repositories
+                .into_iter()
+                .map(|repository| RepoRefreshResult {
+                    name: repository.name,
+                    source_profile: repository.source_profile,
+                    packages_synced: 0,
+                    skipped: true,
+                })
+                .collect(),
+            source_reuse::ReuseDecision::NoReusableRevision,
+        ));
     }
 
     let names = plans
@@ -140,12 +155,13 @@ pub(super) async fn refresh_native_profile(
         return Err(error);
     }
 
-    let (staged, heartbeat) = match stage_profile_catalog_with_heartbeat(
+    let (staged, heartbeat, reuse_decision) = match stage_profile_catalog_with_heartbeat(
         &roots,
         &run,
         &source_profile,
         repositories,
         &plans,
+        staged_source_selection,
     )
     .await
     {
@@ -267,7 +283,7 @@ pub(super) async fn refresh_native_profile(
         tracing::error!(%error, "profile candidate completed but exact catalog collection failed");
     }
 
-    Ok(results)
+    Ok((results, reuse_decision))
 }
 
 fn profile_stage_service_error(error: &anyhow::Error) -> ServiceError {
@@ -304,7 +320,12 @@ async fn stage_profile_catalog_with_heartbeat(
     source_profile: &str,
     repositories: Vec<Repository>,
     plans: &[crate::server::catalog_refresh::ProfileSourcePlan],
-) -> anyhow::Result<(StagedProfileCatalog, ProfileHeartbeat)> {
+    staged_source_selection: Option<ProfileRevisionSelection>,
+) -> anyhow::Result<(
+    StagedProfileCatalog,
+    ProfileHeartbeat,
+    source_reuse::ReuseDecision,
+)> {
     let heartbeat = spawn_profile_heartbeat(roots, run)?;
     let staged = async {
         let reusable = source_reuse::registered_source_reuse(roots, source_profile, plans).await?;
@@ -332,25 +353,59 @@ async fn stage_profile_catalog_with_heartbeat(
                 "profile refresh rejected an obsolete profile revision for reuse"
             ),
         }
-        let sources = stage_profile_sources(
-            &run.run_id,
-            source_profile,
-            ProfileSourceStageInput {
-                repositories,
-                reusable_sources: reusable.sources,
-            },
-            &roots.keyring_dir,
-            &roots.catalog_candidate_dir,
-            &roots.projection_cache_dir,
-            roots.catalog_scratch_coordinator.clone(),
-        )
-        .await?;
+        let reuse_decision = reusable.decision;
+        let sources = {
+            #[cfg(test)]
+            if let Some(selection) = staged_source_selection {
+                crate::server::catalog_refresh::staged_profile_sources_from_registered_revision_for_test(
+                    &roots.catalog_authority,
+                    &selection,
+                    &roots.catalog_candidate_dir,
+                    &run.run_id,
+                    roots.catalog_scratch_coordinator.clone(),
+                )?
+            } else {
+                stage_profile_sources(
+                    &run.run_id,
+                    source_profile,
+                    ProfileSourceStageInput {
+                        repositories,
+                        reusable_sources: reusable.sources,
+                    },
+                    &roots.keyring_dir,
+                    &roots.catalog_candidate_dir,
+                    &roots.projection_cache_dir,
+                    roots.catalog_scratch_coordinator.clone(),
+                )
+                .await?
+            }
+            #[cfg(not(test))]
+            {
+                debug_assert!(staged_source_selection.is_none());
+                stage_profile_sources(
+                    &run.run_id,
+                    source_profile,
+                    ProfileSourceStageInput {
+                        repositories,
+                        reusable_sources: reusable.sources,
+                    },
+                    &roots.keyring_dir,
+                    &roots.catalog_candidate_dir,
+                    &roots.projection_cache_dir,
+                    roots.catalog_scratch_coordinator.clone(),
+                )
+                .await?
+            }
+        };
         let reusable = reusable_profile_catalog(roots, source_profile, sources.members()).await?;
-        finish_staged_profile_catalog(sources, reusable).await
+        Ok::<_, anyhow::Error>((
+            finish_staged_profile_catalog(sources, reusable).await?,
+            reuse_decision,
+        ))
     }
     .await;
     match staged {
-        Ok(staged) => Ok((staged, heartbeat)),
+        Ok((staged, reuse_decision)) => Ok((staged, heartbeat, reuse_decision)),
         Err(error) => match stop_profile_heartbeat(heartbeat).await {
             Ok(()) => Err(error),
             Err(heartbeat) => Err(error.context(format!(

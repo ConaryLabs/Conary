@@ -551,6 +551,54 @@ impl StagedProfileSources {
     }
 }
 
+#[cfg(test)]
+pub(crate) fn staged_profile_sources_from_registered_revision_for_test(
+    authority: &crate::server::catalog_authority::CatalogAuthority,
+    selection: &crate::server::catalog_authority::ProfileRevisionSelection,
+    candidate_root: &Path,
+    run_id: &str,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+) -> Result<StagedProfileSources> {
+    let inspected = authority.inspect_selected_profile(selection)?;
+    let registered = authority.inspect_source_reuse_for_selection(selection)?;
+    let candidate_run_dir = create_candidate_run_dir(candidate_root, run_id)?;
+    let mut sources = Vec::with_capacity(registered.len());
+    for (ordinal, source) in registered {
+        let member = inspected
+            .manifest
+            .members
+            .iter()
+            .find(|member| member.ordinal == ordinal)
+            .with_context(|| format!("registered test source ordinal {ordinal} has no member"))?;
+        let reader = verify_registered_source_catalog_bundle(
+            source.bundle_path(),
+            source.manifest(),
+            source.portable_manifest_attestation(),
+        )?;
+        sources.push(VerifiedStagedSourceCatalog {
+            staged: StagedSourceCatalog {
+                ordinal,
+                role: member.role,
+                precedence: member.precedence,
+                required: member.required,
+                manifest: source.manifest().clone(),
+                path: source.bundle_path().to_path_buf(),
+                artifact: StagedSourceArtifact::DurableReuse {
+                    portable_manifest_attestation: source.portable_manifest_attestation().clone(),
+                },
+            },
+            reader,
+        });
+    }
+    Ok(StagedProfileSources {
+        profile: selection.source_profile.clone(),
+        members: inspected.manifest.members,
+        sources,
+        candidate_run_dir,
+        scratch_admission,
+    })
+}
+
 /// Either bind a fully reopened immutable profile with the exact same member
 /// contract or compose a new private profile candidate.
 pub async fn finish_staged_profile_catalog(
