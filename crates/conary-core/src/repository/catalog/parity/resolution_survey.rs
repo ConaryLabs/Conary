@@ -3,8 +3,6 @@
 //! Diagnostics-only native resolution survey contracts and collection.
 
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -18,11 +16,9 @@ use super::resolution_contract::{
 use super::resolution_io::NativeResolutionOracleWriter;
 use crate::error::{Error, Result};
 
-mod evidence;
-
 #[allow(unused_imports)] // Consumed by feature-gated native explanation builders.
-pub(super) use evidence::NativeExplanationBudget;
-use evidence::canonical_explanation_size_with_limit;
+pub(super) use super::survey_support::SurveyEvidenceBudget as NativeExplanationBudget;
+use super::survey_support::{canonical_value_size_with_limit, write_private_canonical_json};
 
 pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V2: u32 = 2;
 pub const NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = 5_000;
@@ -127,7 +123,7 @@ impl NativeResolutionSurveyV1 {
                             )
                         })?;
                     let Some(explanation_bytes) =
-                        canonical_explanation_size_with_limit(explanation, remaining_bytes)?
+                        canonical_value_size_with_limit(explanation, remaining_bytes)?
                     else {
                         return Err(Error::ConfigError(
                             "native resolution survey retained evidence exceeds its byte limit"
@@ -298,7 +294,7 @@ pub enum NativeResolutionSurveyErrorVariantV1 {
 
 #[allow(dead_code)] // Used by feature-gated native producers and default-feature contract tests.
 impl NativeResolutionSurveyErrorVariantV1 {
-    fn from_error(error: &Error) -> Self {
+    pub(super) fn from_error(error: &Error) -> Self {
         match error {
             Error::Database(_) => Self::Database,
             Error::Io(_) => Self::Io,
@@ -708,7 +704,7 @@ impl NativeResolutionSurveyCollector {
                 .evidence_byte_limit
                 .saturating_sub(self.retained_evidence_bytes);
             if let Some(explanation_bytes) =
-                canonical_explanation_size_with_limit(&explanation, remaining_bytes)?
+                canonical_value_size_with_limit(&explanation, remaining_bytes)?
             {
                 let retained_evidence_bytes = self
                     .retained_evidence_bytes
@@ -769,20 +765,7 @@ pub fn write_native_resolution_survey(
     survey: &NativeResolutionSurveyV1,
 ) -> Result<()> {
     survey.validate()?;
-    let bytes = crate::json::canonical_json(survey).map_err(|error| {
-        Error::ParseError(format!("serialize native resolution survey: {error}"))
-    })?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    Ok(())
+    write_private_canonical_json(path, survey, "native resolution survey")
 }
 
 #[allow(dead_code)]
@@ -917,7 +900,7 @@ mod tests {
         let explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
             problems: Vec::new(),
         };
-        let explanation_bytes = canonical_explanation_size_with_limit(&explanation, u64::MAX)
+        let explanation_bytes = canonical_value_size_with_limit(&explanation, u64::MAX)
             .unwrap()
             .unwrap();
         assert_eq!(

@@ -8,10 +8,19 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use super::candidate_resolution_survey::{
+    ConaryResolutionSurveyCollector, ConaryResolutionSurveyErrorReasonV1, ConaryResolutionSurveyV1,
+    ConaryRootResolutionError, ConaryRootResolutionResult, conflict_graph_explanation,
+    write_conary_resolution_survey,
+};
 use super::compare::compare_native_parity_oracle;
 use super::contract::NativeParityImplementationV1;
 use super::io::verify_native_parity_oracle_bundle;
 use super::resolution_compare::{NativeResolutionComparisonV1, compare_native_resolution_oracle};
+use super::resolution_comparison_survey::{
+    NativeResolutionComparisonSurveyV1, compare_native_resolution_oracle_survey,
+    write_native_resolution_comparison_survey,
+};
 use super::resolution_contract::{
     NativeResolutionArchitectureAdmissionV1, NativeResolutionInstalledStateV1,
     NativeResolutionNotInstallableReasonV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
@@ -31,7 +40,9 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::{CatalogPackageRecordV1, CatalogReader, ProfileRevisionV2};
 use crate::repository::resolution_policy::ResolutionPolicy;
-use crate::resolver::sat::{SatExactResolution, solve_exact_repository_package_with_policy};
+use crate::resolver::sat::{
+    SatExactResolution, solve_exact_repository_package_with_policy_and_failure_graph,
+};
 
 /// Projection contract for the Conary SAT candidate evidence producer.
 pub const CONARY_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
@@ -71,30 +82,8 @@ pub fn produce_conary_resolution_candidate(
         ));
     }
 
-    let projection = CandidateResolutionProjection::create(profile, catalog)?;
-    fs::create_dir(output)?;
-    let implementation = NativeParityImplementationV1 {
-        ecosystem: package_oracle.manifest().implementation.ecosystem,
-        name: "conary-sat".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V2,
-    };
-    let mut writer = NativeResolutionOracleWriter::create(
-        output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-        profile,
-        package_oracle.manifest(),
-        implementation,
-        policy.clone(),
-    )?;
-    package_oracle.for_each_package(|root| {
-        writer.root(&NativeResolutionRootV1 {
-            root_package_key_sha256: root.package_key_sha256.clone(),
-            outcome: projection.resolve(&root.package_key_sha256, &policy)?,
-        })
-    })?;
-    let manifest = writer.finish()?;
-    write_native_resolution_oracle_manifest(output, &manifest)?;
-
+    let manifest =
+        produce_conary_resolution_bundle(profile, catalog, &package_oracle, &policy, output)?;
     let reopened = verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
     if reopened.manifest() != &manifest {
         return Err(Error::InternalError(
@@ -111,6 +100,175 @@ pub fn produce_conary_resolution_candidate(
     Ok(ConaryResolutionCandidateV1 {
         manifest,
         comparison,
+    })
+}
+
+/// Produce a collect-all comparison survey through an ephemeral strict
+/// candidate bundle. The candidate bundle never escapes the temporary root.
+pub fn produce_conary_resolution_comparison_survey(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle_directory: &Path,
+    native_resolution_directory: &Path,
+    architecture: &str,
+    output: &Path,
+) -> Result<NativeResolutionComparisonSurveyV1> {
+    let architecture = profile.require_target_architecture(architecture)?;
+    let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
+    compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
+        Error::ConflictError(format!(
+            "candidate catalog does not match the pinned package oracle: {error}"
+        ))
+    })?;
+    let native_resolution = verify_native_resolution_oracle_bundle(
+        native_resolution_directory,
+        profile,
+        &package_oracle,
+    )?;
+    let policy = resolution_policy(architecture);
+    if native_resolution.manifest().policy != policy {
+        return Err(Error::ConflictError(
+            "native resolution oracle uses a different candidate policy".to_string(),
+        ));
+    }
+    let scratch = tempfile::Builder::new()
+        .prefix("conary-resolution-comparison-survey-")
+        .tempdir()?;
+    let candidate_directory = scratch.path().join("candidate");
+    produce_conary_resolution_bundle(
+        profile,
+        catalog,
+        &package_oracle,
+        &policy,
+        &candidate_directory,
+    )?;
+    let candidate =
+        verify_native_resolution_oracle_bundle(&candidate_directory, profile, &package_oracle)?;
+    let survey = compare_native_resolution_oracle_survey(
+        profile,
+        &package_oracle,
+        &native_resolution,
+        &candidate,
+    )?;
+    write_native_resolution_comparison_survey(output, &survey)?;
+    Ok(survey)
+}
+
+fn produce_conary_resolution_bundle(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle: &super::io::NativeParityOracleReader,
+    policy: &NativeResolutionPolicyV1,
+    output: &Path,
+) -> Result<NativeResolutionOracleV1> {
+    let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    fs::create_dir(output)?;
+    let mut writer = NativeResolutionOracleWriter::create(
+        output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
+        profile,
+        package_oracle.manifest(),
+        conary_implementation(package_oracle.manifest()),
+        policy.clone(),
+    )?;
+    walk_resolution_roots(
+        package_oracle,
+        &projection,
+        policy,
+        ConaryRootOutcomeSink::Strict(&mut writer),
+    )?;
+    let manifest = writer.finish()?;
+    write_native_resolution_oracle_manifest(output, &manifest)?;
+    Ok(manifest)
+}
+
+/// Walk every exact package root and write a diagnostics-only Conary survey.
+pub fn produce_conary_resolution_survey(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+) -> Result<ConaryResolutionSurveyV1> {
+    let architecture = profile.require_target_architecture(architecture)?;
+    let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
+    compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
+        Error::ConflictError(format!(
+            "candidate catalog does not match the pinned package oracle: {error}"
+        ))
+    })?;
+    let policy = resolution_policy(architecture);
+    let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    let implementation = conary_implementation(package_oracle.manifest());
+    let mut collector = ConaryResolutionSurveyCollector::new(
+        profile,
+        package_oracle.manifest(),
+        implementation,
+        policy.clone(),
+    )?;
+    walk_resolution_roots(
+        &package_oracle,
+        &projection,
+        &policy,
+        ConaryRootOutcomeSink::Survey(&mut collector),
+    )?;
+    let survey = collector.finish()?;
+    write_conary_resolution_survey(output, &survey)?;
+    Ok(survey)
+}
+
+fn conary_implementation(
+    package_oracle: &super::contract::NativeParityOracleV1,
+) -> NativeParityImplementationV1 {
+    NativeParityImplementationV1 {
+        ecosystem: package_oracle.implementation.ecosystem,
+        name: "conary-sat".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V2,
+    }
+}
+
+enum ConaryRootOutcomeSink<'a> {
+    Strict(&'a mut NativeResolutionOracleWriter),
+    Survey(&'a mut ConaryResolutionSurveyCollector),
+}
+
+impl ConaryRootOutcomeSink<'_> {
+    fn explanation_byte_limit(&self) -> u64 {
+        match self {
+            Self::Strict(_) => 0,
+            Self::Survey(collector) => collector.explanation_byte_limit(),
+        }
+    }
+
+    fn root(
+        &mut self,
+        root: &super::contract::NativeParityPackageV1,
+        result: ConaryRootResolutionResult,
+    ) -> Result<()> {
+        match (self, result) {
+            (Self::Strict(writer), Ok(outcome)) => writer.root(&NativeResolutionRootV1 {
+                root_package_key_sha256: root.package_key_sha256.clone(),
+                outcome,
+            }),
+            (Self::Strict(_), Err(failure)) => Err(failure.error),
+            (Self::Survey(collector), result) => collector.root(root, result),
+        }
+    }
+}
+
+fn walk_resolution_roots(
+    package_oracle: &super::io::NativeParityOracleReader,
+    projection: &CandidateResolutionProjection,
+    policy: &NativeResolutionPolicyV1,
+    mut sink: ConaryRootOutcomeSink<'_>,
+) -> Result<()> {
+    package_oracle.for_each_package(|root| {
+        let result = projection.resolve(
+            &root.package_key_sha256,
+            policy,
+            sink.explanation_byte_limit(),
+        );
+        sink.root(&root, result)
     })
 }
 
@@ -178,7 +336,8 @@ impl CandidateResolutionProjection {
         &self,
         root_package_key_sha256: &str,
         policy: &NativeResolutionPolicyV1,
-    ) -> Result<NativeResolutionOutcomeV1> {
+        explanation_byte_limit: u64,
+    ) -> ConaryRootResolutionResult {
         let root_id = self
             .connection
             .query_row(
@@ -187,28 +346,50 @@ impl CandidateResolutionProjection {
                 [root_package_key_sha256],
                 |row| row.get::<_, i64>(0),
             )
-            .optional()?
+            .optional()
+            .map_err(|error| {
+                root_failure(
+                    error.into(),
+                    ConaryResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                )
+            })?
             .ok_or_else(|| {
-                Error::ConflictError(format!(
-                    "candidate resolver projection omits package key {root_package_key_sha256}"
-                ))
+                root_failure(
+                    Error::ConflictError(format!(
+                        "candidate resolver projection omits package key {root_package_key_sha256}"
+                    )),
+                    ConaryResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                )
             })?;
-        let root = RepositoryPackage::find_by_id(&self.connection, root_id)?.ok_or_else(|| {
-            Error::ConflictError(format!(
-                "candidate resolver projection omits repository package {root_id}"
-            ))
-        })?;
+        let root = RepositoryPackage::find_by_id(&self.connection, root_id)
+            .map_err(|error| {
+                root_failure(
+                    error,
+                    ConaryResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                )
+            })?
+            .ok_or_else(|| {
+                root_failure(
+                    Error::ConflictError(format!(
+                        "candidate resolver projection omits repository package {root_id}"
+                    )),
+                    ConaryResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                )
+            })?;
         let root_architecture = root.architecture.as_deref().ok_or_else(|| {
-            Error::ConfigError(format!(
-                "candidate repository package '{}-{}' has no architecture authority",
-                root.name, root.version
-            ))
+            root_failure(
+                Error::ConfigError(format!(
+                    "candidate repository package '{}-{}' has no architecture authority",
+                    root.name, root.version
+                )),
+                ConaryResolutionSurveyErrorReasonV1::ArchitectureAdmissionFailed,
+            )
         })?;
         let root_profile = root.source_profile.as_deref().ok_or_else(|| {
-            Error::ConfigError(format!(
+            root_failure(Error::ConfigError(format!(
                 "candidate repository package '{}-{}' has no source profile for native admission",
                 root.name, root.version
-            ))
+            )), ConaryResolutionSurveyErrorReasonV1::ArchitectureAdmissionFailed)
         })?;
         match policy
             .architecture_admission
@@ -216,9 +397,14 @@ impl CandidateResolutionProjection {
                 root_profile,
                 crate::repository::versioning::resolve_package_version_scheme(&root),
                 root_architecture,
-            )?
-            .into_result()?
-        {
+            )
+            .and_then(|decision| decision.into_result())
+            .map_err(|error| {
+                root_failure(
+                    error,
+                    ConaryResolutionSurveyErrorReasonV1::ArchitectureAdmissionFailed,
+                )
+            })? {
             NativeResolutionArchitectureDecisionV1::Admitted => {}
             NativeResolutionArchitectureDecisionV1::Excluded { .. } => {
                 return Ok(NativeResolutionOutcomeV1::NotInstallable {
@@ -231,27 +417,54 @@ impl CandidateResolutionProjection {
         }
         let resolver_policy =
             ResolutionPolicy::new().with_primary_source_identity(self.source_identity.clone());
-        match solve_exact_repository_package_with_policy(
+        let mut explanation = None;
+        let solved = solve_exact_repository_package_with_policy_and_failure_graph(
             &self.connection,
             root_id,
             &policy.architecture,
             &resolver_policy,
-        )? {
+            |graph, provider| {
+                if explanation_byte_limit > 0 {
+                    explanation = Some(conflict_graph_explanation(graph, provider, |package_id| {
+                        self.package_key(package_id).ok()
+                    }));
+                }
+            },
+        )
+        .map_err(|error| {
+            Box::new(ConaryRootResolutionError {
+                error,
+                reason: ConaryResolutionSurveyErrorReasonV1::SolverFailed,
+                explanation,
+            })
+        })?;
+        match solved {
             SatExactResolution::Resolved { install_order } => {
                 let mut closure = BTreeSet::new();
                 for package in install_order {
                     let repository_package_id = package.repo_package_id.ok_or_else(|| {
-                        Error::InternalError(
-                            "empty-state candidate resolution selected an installed package"
-                                .to_string(),
+                        root_failure(
+                            Error::InternalError(
+                                "empty-state candidate resolution selected an installed package"
+                                    .to_string(),
+                            ),
+                            ConaryResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
                         )
                     })?;
-                    closure.insert(self.package_key(repository_package_id)?);
+                    closure.insert(self.package_key(repository_package_id).map_err(|error| {
+                        root_failure(
+                            error,
+                            ConaryResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
+                        )
+                    })?);
                 }
                 if !closure.contains(root_package_key_sha256) {
-                    return Err(Error::ConflictError(format!(
-                        "Conary candidate closure omits exact root {root_package_key_sha256}"
-                    )));
+                    return Err(root_failure(
+                        Error::ConflictError(format!(
+                            "Conary candidate closure omits exact root {root_package_key_sha256}"
+                        )),
+                        ConaryResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
+                    ));
                 }
                 Ok(NativeResolutionOutcomeV1::Resolved {
                     closure_package_keys_sha256: closure.into_iter().collect(),
@@ -275,13 +488,14 @@ impl CandidateResolutionProjection {
                             ],
                             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
                         )
-                        .optional()?
+                        .optional()
+                        .map_err(|error| root_failure(error.into(), ConaryResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed))?
                         .ok_or_else(|| {
-                            Error::ConflictError(format!(
+                            root_failure(Error::ConflictError(format!(
                                 "candidate unresolved group {} is absent from exact package {}",
                                 dependency.repository_requirement_group_id,
                                 dependency.repository_package_id
-                            ))
+                            )), ConaryResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed)
                         })?;
                     unresolved.insert(NativeUnresolvedDependencyV1 {
                         requiring_package_key_sha256,
@@ -309,6 +523,17 @@ impl CandidateResolutionProjection {
                 ))
             })
     }
+}
+
+fn root_failure(
+    error: Error,
+    reason: ConaryResolutionSurveyErrorReasonV1,
+) -> Box<ConaryRootResolutionError> {
+    Box::new(ConaryRootResolutionError {
+        error,
+        reason,
+        explanation: None,
+    })
 }
 
 fn insert_catalog_package(

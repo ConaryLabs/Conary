@@ -175,6 +175,46 @@ pub fn solve_exact_repository_package_with_policy(
     architecture: &str,
     policy: &ResolutionPolicy,
 ) -> Result<SatExactResolution> {
+    solve_exact_repository_package_with_policy_inner(
+        conn,
+        repository_package_id,
+        architecture,
+        policy,
+        |_, _| {},
+    )
+}
+
+/// Resolve one exact package while exposing typed resolvo conflict data only
+/// when the exact-root projection fails.
+pub(crate) fn solve_exact_repository_package_with_policy_and_failure_graph(
+    conn: &Connection,
+    repository_package_id: i64,
+    architecture: &str,
+    policy: &ResolutionPolicy,
+    on_failure: impl FnMut(
+        &resolvo::conflict::ConflictGraph<resolvo::SolvableId>,
+        &crate::resolver::provider::ConaryProvider<'_>,
+    ),
+) -> Result<SatExactResolution> {
+    solve_exact_repository_package_with_policy_inner(
+        conn,
+        repository_package_id,
+        architecture,
+        policy,
+        on_failure,
+    )
+}
+
+fn solve_exact_repository_package_with_policy_inner(
+    conn: &Connection,
+    repository_package_id: i64,
+    architecture: &str,
+    policy: &ResolutionPolicy,
+    mut on_failure: impl FnMut(
+        &resolvo::conflict::ConflictGraph<resolvo::SolvableId>,
+        &crate::resolver::provider::ConaryProvider<'_>,
+    ),
+) -> Result<SatExactResolution> {
     let root = crate::db::models::RepositoryPackage::find_by_id(conn, repository_package_id)?
         .ok_or_else(|| {
             Error::NotFound(format!(
@@ -212,44 +252,51 @@ pub fn solve_exact_repository_package_with_policy(
         }
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
             let graph = conflict.graph(&solver);
-            let Some(unresolved) = graph.unresolved_node else {
-                return Err(Error::ConflictError(format!(
-                    "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
-                    conflict.display_user_friendly(&solver)
-                )));
-            };
-            let mut dependencies = BTreeSet::new();
-            for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
-                let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight() else {
-                    return Err(Error::InternalError(
-                        "resolver unresolved sink has a non-requirement edge".to_string(),
-                    ));
-                };
-                let resolvo::conflict::ConflictNode::Solvable(requiring) =
-                    graph.graph[edge.source()]
-                else {
+            let projected = (|| {
+                let Some(unresolved) = graph.unresolved_node else {
                     return Err(Error::ConflictError(format!(
-                        "exact repository package {repository_package_id} root constraint has no eligible candidate for architecture '{architecture}'"
+                        "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
+                        conflict.display_user_friendly(&solver)
                     )));
                 };
-                for group in solver
-                    .provider()
-                    .unresolved_requirement_groups(requiring, requirement)
-                {
-                    dependencies.insert(SatUnresolvedDependency {
-                        repository_package_id: group.repository_package_id,
-                        repository_requirement_group_id: group.repository_requirement_group_id,
-                    });
+                let mut dependencies = BTreeSet::new();
+                for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
+                    let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight()
+                    else {
+                        return Err(Error::InternalError(
+                            "resolver unresolved sink has a non-requirement edge".to_string(),
+                        ));
+                    };
+                    let resolvo::conflict::ConflictNode::Solvable(requiring) =
+                        graph.graph[edge.source()]
+                    else {
+                        return Err(Error::ConflictError(format!(
+                            "exact repository package {repository_package_id} root constraint has no eligible candidate for architecture '{architecture}'"
+                        )));
+                    };
+                    for group in solver
+                        .provider()
+                        .unresolved_requirement_groups(requiring, requirement)
+                    {
+                        dependencies.insert(SatUnresolvedDependency {
+                            repository_package_id: group.repository_package_id,
+                            repository_requirement_group_id: group.repository_requirement_group_id,
+                        });
+                    }
                 }
+                if dependencies.is_empty() {
+                    return Err(Error::ConflictError(format!(
+                        "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
+                    )));
+                }
+                Ok(SatExactResolution::Unresolved {
+                    dependencies: dependencies.into_iter().collect(),
+                })
+            })();
+            if projected.is_err() {
+                on_failure(&graph, solver.provider());
             }
-            if dependencies.is_empty() {
-                return Err(Error::ConflictError(format!(
-                    "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
-                )));
-            }
-            Ok(SatExactResolution::Unresolved {
-                dependencies: dependencies.into_iter().collect(),
-            })
+            projected
         }
         Err(UnsolvableOrCancelled::Cancelled(_)) => Err(Error::InitError(
             "Dependency resolution was cancelled".to_string(),

@@ -12,11 +12,11 @@ fn architecture(ecosystem: NativeParityEcosystemV1) -> &'static str {
     }
 }
 
-fn candidate_fixture(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
+pub(super) fn candidate_fixture(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
     candidate_fixture_with(ecosystem, |_, _| {})
 }
 
-fn candidate_fixture_with(
+pub(super) fn candidate_fixture_with(
     ecosystem: NativeParityEcosystemV1,
     customize: impl FnOnce(&[ProfileSourceMemberV2], &mut Vec<CatalogPackageRecordV1>),
 ) -> CandidateFixture {
@@ -116,7 +116,7 @@ fn candidate_fixture_with(
     }
 }
 
-fn expected_roots(candidate: &CandidateFixture) -> Vec<NativeResolutionRootV1> {
+pub(super) fn expected_roots(candidate: &CandidateFixture) -> Vec<NativeResolutionRootV1> {
     let packages = rows(candidate);
     let dependency = packages
         .iter()
@@ -167,7 +167,7 @@ fn expected_roots(candidate: &CandidateFixture) -> Vec<NativeResolutionRootV1> {
     roots
 }
 
-fn write_native_resolution(
+pub(super) fn write_native_resolution(
     candidate: &CandidateFixture,
     package_oracle: &OracleFixture,
     ecosystem: NativeParityEcosystemV1,
@@ -395,4 +395,150 @@ fn candidate_crawl_excludes_foreign_root_and_projects_its_provider_edge() {
         produced.comparison.counts,
         produced.manifest.artifact.counts
     );
+}
+
+#[test]
+fn candidate_survey_walks_conflict_missing_architecture_and_healthy_roots() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture_with(ecosystem, |members, packages| {
+        let mut provider = package(ecosystem, members, "conflict-root", "x86_64", 0, 'f');
+        provider.version = "2.0-1".to_string();
+        provider.package_release = "2".to_string();
+        provider.requirement_groups.clear();
+        let capability = provider.provides[0].capability.clone();
+        let mut conflict = package(ecosystem, members, "conflict-root", "x86_64", 1, 'g');
+        conflict.provides[0].capability = "virtual-conflict-root-old".to_string();
+        conflict.requirement_groups = vec![requirement("depends", &capability)];
+        let mut excluded = package(ecosystem, members, "foreign-root", "i686", 1, 'h');
+        excluded.requirement_groups.clear();
+        packages.extend([provider, conflict, excluded]);
+    });
+    let package_rows = rows(&candidate);
+    let package_oracle = oracle(&candidate, ecosystem, package_rows.clone());
+    let output_parent = tempfile::tempdir().unwrap();
+    let survey_path = output_parent.path().join("candidate-survey.json");
+
+    let survey = produce_conary_resolution_survey(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        "x86_64",
+        &survey_path,
+    )
+    .unwrap();
+
+    assert_eq!(survey.counts.roots_walked, package_rows.len() as u64);
+    assert_eq!(survey.counts.failed_roots, 1);
+    assert_eq!(survey.counts.unresolved_roots, 1);
+    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.resolved_roots, 3);
+    assert_eq!(survey.outcomes.len(), 5);
+    assert_eq!(survey.failures.len(), 1);
+    assert!(matches!(
+        survey
+            .outcomes
+            .iter()
+            .find(|root| root.name == "unresolved")
+            .unwrap()
+            .outcome,
+        NativeResolutionOutcomeV1::Unresolved { .. }
+    ));
+    assert!(matches!(
+        survey
+            .outcomes
+            .iter()
+            .find(|root| root.name == "foreign-root")
+            .unwrap()
+            .outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded
+        }
+    ));
+    assert_eq!(survey.failures[0].name, "conflict-root");
+    assert_eq!(
+        survey.failures[0].error_kind.reason,
+        ConaryResolutionSurveyErrorReasonV1::SolverFailed
+    );
+    let ConaryResolutionSurveyNativeExplanationV1::ResolvoConflictGraph {
+        unresolved_edges,
+        conflict_edges,
+        excluded_nodes: _,
+    } = &survey.failures[0].native_explanation
+    else {
+        panic!("SAT failure must retain typed resolvo graph evidence");
+    };
+    assert!(unresolved_edges.is_empty());
+    assert!(!conflict_edges.is_empty());
+    assert!(conflict_edges.iter().all(|edge| {
+        edge.from.package_key_sha256.is_some() && edge.to.package_key_sha256.is_some()
+    }));
+    assert!(survey_path.is_file());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&survey_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    assert!(write_conary_resolution_survey(&survey_path, &survey).is_err());
+    assert!(!output_parent.path().join("manifest.json").exists());
+    assert!(!output_parent.path().join("roots.jsonl").exists());
+
+    let native_roots = package_rows
+        .iter()
+        .map(|package| NativeResolutionRootV1 {
+            root_package_key_sha256: package.package_key_sha256.clone(),
+            outcome: NativeResolutionOutcomeV1::Resolved {
+                closure_package_keys_sha256: vec![package.package_key_sha256.clone()],
+            },
+        })
+        .collect::<Vec<_>>();
+    let native = write_native_resolution(&candidate, &package_oracle, ecosystem, &native_roots);
+    let strict_output = output_parent.path().join("strict-candidate");
+    let error = produce_conary_resolution_candidate(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        "x86_64",
+        &strict_output,
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        concat!(
+            "Conflict: exact repository package 6 is unsatisfiable without a missing typed dependency: The following packages are incompatible\n",
+            "└─ conflict-root repository package 6 cannot be installed because there are no viable options:\n",
+            "   └─ conflict-root conflict-root=1.0-1 would require\n",
+            "      └─ virtual-conflict-root Any, which cannot be installed because there are no viable options:\n",
+            "         └─ conflict-root conflict-root=2.0-1, which conflicts with the versions reported above.\n"
+        )
+    );
+    assert!(
+        !strict_output
+            .join(NATIVE_RESOLUTION_MANIFEST_FILE_NAME)
+            .exists()
+    );
+}
+
+#[test]
+fn candidate_survey_rejects_architecture_before_creating_output() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture(ecosystem);
+    let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+    let output = candidate._directory.path().join("survey.json");
+    let error = produce_conary_resolution_survey(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        "aarch64",
+        &output,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        crate::Error::ProfileArchitectureMismatch { .. }
+    ));
+    assert!(!output.exists());
 }
