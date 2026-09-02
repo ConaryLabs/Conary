@@ -61,6 +61,7 @@ pub mod rate_limit;
 mod readiness;
 pub mod release_publish;
 pub mod repository_manifest;
+mod resolution_survey;
 mod routes;
 pub(crate) mod runtime_lock;
 mod runtime_session;
@@ -119,6 +120,7 @@ pub use promotion_proof::{
     RemiPromotionProofConfig, RemiPromotionProofOutcome, RemiPromotionProofProfileInput,
 };
 pub use r2::R2Store;
+pub use resolution_survey::{RemiResolutionSurveyConfig, RemiResolutionSurveyOutcome};
 pub use routes::{create_admin_router, create_external_admin_router, create_router};
 pub use search::SearchEngine;
 pub use security::BanList;
@@ -576,6 +578,30 @@ pub fn run_promotion_proof_from_config(
             profiles,
         },
         &catalog_authority,
+    )
+}
+
+/// Produce diagnostics-only candidate and comparison surveys while holding
+/// exclusive stopped-runtime authority.
+pub fn run_resolution_surveys_from_config(
+    remi_config: &RemiConfig,
+    output_dir: PathBuf,
+    profiles: Vec<RemiPromotionProofProfileInput>,
+) -> Result<RemiResolutionSurveyOutcome> {
+    remi_config.validate()?;
+    let server_config = remi_config.to_server_config()?;
+    let _runtime_lock = acquire_existing_runtime_storage(remi_config, &server_config)?;
+    let authority = catalog_authority::CatalogAuthority::from_paths(
+        server_config.db_path,
+        server_config.catalog_dir,
+        database_writer::DatabaseWriter::default(),
+    );
+    resolution_survey::produce_remi_resolution_surveys(
+        &RemiResolutionSurveyConfig {
+            output_dir,
+            profiles,
+        },
+        &authority,
     )
 }
 

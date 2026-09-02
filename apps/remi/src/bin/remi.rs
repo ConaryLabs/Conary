@@ -11,7 +11,7 @@ use clap::{Args, Parser, Subcommand};
 use remi::server::{
     IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig, RemiConfig,
     RemiPromotionProofProfileInput, generate_indices, run_conversion_crawl_from_config,
-    run_prewarm, run_proxy, run_server_from_config,
+    run_prewarm, run_proxy, run_resolution_surveys_from_config, run_server_from_config,
 };
 use remi::trust;
 use std::path::PathBuf;
@@ -44,6 +44,8 @@ enum Command {
     PromotionActivate(PromotionActivateArgs),
     /// Produce complete Conary resolution and final promotion evidence.
     PromotionProve(PromotionProveArgs),
+    /// Survey every candidate root and every native/candidate mismatch.
+    ResolutionSurvey(ResolutionSurveyArgs),
     /// Materialize exact native metadata for the ordered private candidates.
     NativeOracleInput(native_oracle_input_command::CommandArgs),
     /// Record reproducible conversion latency and work evidence.
@@ -250,6 +252,33 @@ struct PromotionProveArgs {
     output_dir: PathBuf,
 }
 
+#[derive(Args)]
+struct ResolutionSurveyArgs {
+    /// Current Remi service configuration; the runtime must be stopped.
+    #[arg(long, default_value = "/etc/conary/remi.toml")]
+    config: PathBuf,
+
+    /// Exact public candidate as PROFILE=REVISION; repeat in canonical order.
+    #[arg(long = "candidate", required = true, value_parser = parse_candidate)]
+    candidates: Vec<ProfileRevisionSelection>,
+
+    /// Package oracle directory as PROFILE=PATH; repeat in canonical order.
+    #[arg(long = "package-oracle", required = true, value_parser = parse_profile_path)]
+    package_oracles: Vec<ProfilePathBinding>,
+
+    /// Native resolution directory as PROFILE=PATH; repeat in canonical order.
+    #[arg(long = "native-resolution", required = true, value_parser = parse_profile_path)]
+    native_resolutions: Vec<ProfilePathBinding>,
+
+    /// Profile-architecture assertion as PROFILE=ARCH; repeat in canonical order.
+    #[arg(long = "architecture", required = true, value_parser = parse_profile_value)]
+    architectures: Vec<ProfileValueBinding>,
+
+    /// New private directory receiving diagnostics-only survey JSON files.
+    #[arg(long)]
+    output_dir: PathBuf,
+}
+
 #[derive(Debug, Clone)]
 struct ProfilePathBinding {
     profile: String,
@@ -355,6 +384,7 @@ fn main() {
         Some(Command::ConversionCrawl(args)) => run_conversion_crawl_command(args),
         Some(Command::PromotionActivate(args)) => run_promotion_activate_command(args),
         Some(Command::PromotionProve(args)) => run_promotion_prove_command(args),
+        Some(Command::ResolutionSurvey(args)) => run_resolution_survey_command(args),
         Some(Command::NativeOracleInput(args)) => native_oracle_input_command::run(args),
         Some(Command::ConversionBenchmark(args)) => run_conversion_benchmark_command(args),
         Some(Command::Trust { command }) => run_trust_command(command),
@@ -590,6 +620,26 @@ fn run_promotion_prove_command(args: PromotionProveArgs) -> Result<()> {
         profiles,
     )?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
+    Ok(())
+}
+
+fn run_resolution_survey_command(args: ResolutionSurveyArgs) -> Result<()> {
+    let config = RemiConfig::load(&args.config)?;
+    let profiles = combine_promotion_proof_bindings(
+        args.candidates,
+        args.package_oracles,
+        args.native_resolutions,
+        args.architectures,
+    )?;
+    let outcome = run_resolution_surveys_from_config(&config, args.output_dir, profiles)?;
+    println!("{}", serde_json::to_string_pretty(&outcome)?);
+    anyhow::ensure!(
+        outcome.candidate_failures == 0 && outcome.comparison_mismatches == 0,
+        "resolution surveys recorded {} candidate failures and {} comparison mismatches; inventory written to {}",
+        outcome.candidate_failures,
+        outcome.comparison_mismatches,
+        outcome.output_dir.display()
+    );
     Ok(())
 }
 

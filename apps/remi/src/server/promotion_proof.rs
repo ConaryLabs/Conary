@@ -158,7 +158,7 @@ pub(crate) fn produce_remi_promotion_proof(
     })
 }
 
-fn validate_inputs(inputs: &[RemiPromotionProofProfileInput]) -> Result<()> {
+pub(crate) fn validate_inputs(inputs: &[RemiPromotionProofProfileInput]) -> Result<()> {
     let public = conary_core::repository::supported_profiles::public_profiles();
     ensure!(
         inputs.len() == public.len(),
@@ -311,6 +311,38 @@ mod tests {
                 .to_string()
                 .contains("must match profile authority 'x86_64'")
         );
+    }
+
+    #[test]
+    fn promotion_proof_comparison_type_rejects_a_survey_file() {
+        use conary_core::repository::catalog::{
+            NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT,
+            NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            NativeResolutionComparisonSurveyCountsV1, NativeResolutionComparisonSurveyV1,
+            NativeResolutionComparisonV1, write_native_resolution_comparison_survey,
+        };
+
+        let survey = NativeResolutionComparisonSurveyV1 {
+            schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            profile: "fedora-44".to_string(),
+            profile_revision_sha256: "a".repeat(64),
+            package_oracle_manifest_sha256: "b".repeat(64),
+            oracle_manifest_sha256: "c".repeat(64),
+            candidate_manifest_sha256: "d".repeat(64),
+            counts: NativeResolutionComparisonSurveyCountsV1::default(),
+            mismatch_record_limit: NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT as u64,
+            total_mismatches: 0,
+            retained_mismatches: 0,
+            truncated: false,
+            mismatches: Vec::new(),
+        };
+        survey.validate().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("comparison-survey.json");
+        write_native_resolution_comparison_survey(&path, &survey).unwrap();
+        let bytes = fs::read(path).unwrap();
+
+        assert!(serde_json::from_slice::<NativeResolutionComparisonV1>(&bytes).is_err());
     }
 
     #[test]

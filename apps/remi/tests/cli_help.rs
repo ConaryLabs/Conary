@@ -122,6 +122,30 @@ fn promotion_proof_requires_every_exact_ordered_evidence_binding() {
 }
 
 #[test]
+fn resolution_survey_mirrors_stopped_runtime_proof_bindings() {
+    let output = run_remi(&["resolution-survey", "--help"]);
+
+    assert!(output.status.success(), "{}", output_text(&output));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for required in [
+        "--config",
+        "--candidate",
+        "--package-oracle",
+        "--native-resolution",
+        "--architecture",
+        "--output-dir",
+    ] {
+        assert!(stdout.contains(required), "missing {required}: {stdout}");
+    }
+    for forbidden in ["--conversion-crawl", "--exclude", "--skip", "--dry-run"] {
+        assert!(
+            !stdout.contains(forbidden),
+            "forbidden {forbidden}: {stdout}"
+        );
+    }
+}
+
+#[test]
 fn native_oracle_input_accepts_only_exact_candidate_and_output_bindings() {
     let output = run_remi(&["native-oracle-input", "--help"]);
 
