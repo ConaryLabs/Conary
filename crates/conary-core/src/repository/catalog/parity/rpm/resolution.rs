@@ -806,8 +806,8 @@ fn rpm_explanation(
                             rpm_package_field(pool, package_index, rule.from_index);
                         let (to, to_unavailable_reason) =
                             rpm_package_field(pool, package_index, rule.to_index);
-                        let (dependency, dependency_unavailable_reason) =
-                            rpm_dependency_field(pool, rule.dependency);
+                        let (dependency_id, dependency, dependency_unavailable_reason) =
+                            rpm_rule_dependency_fields(pool, rule);
                         NativeResolutionSurveyRpmRuleV1 {
                             rule_type_numeric: rule.rule_type,
                             rule_type_symbolic: rpm_rule_type_symbolic(rule.rule_type).to_string(),
@@ -819,7 +819,7 @@ fn rpm_explanation(
                             to_native_index: rule.to_index.and_then(|index| index.try_into().ok()),
                             to,
                             to_unavailable_reason,
-                            dependency_id: (rule.dependency != 0).then_some(rule.dependency),
+                            dependency_id,
                             dependency,
                             dependency_unavailable_reason,
                         }
@@ -884,6 +884,26 @@ fn rpm_dependency_field(pool: &SolvPool, dependency: i32) -> (Option<String>, Op
         Ok(text) => (Some(text), None),
         Err(_) => (None, Some("native_dependency_text_unavailable".to_string())),
     }
+}
+
+fn rpm_rule_dependency_fields(
+    pool: &SolvPool,
+    rule: &SolvProblemRule,
+) -> (Option<i32>, Option<String>, Option<String>) {
+    let unavailable_reason = match rule.rule_type {
+        SOLVER_RULE_JOB => Some("solver_rule_job_dep_is_job_index"),
+        SOLVER_RULE_JOB_UNSUPPORTED => Some("solver_rule_job_unsupported_dep_is_job_index"),
+        _ => None,
+    };
+    if let Some(unavailable_reason) = unavailable_reason {
+        return (None, None, Some(unavailable_reason.to_string()));
+    }
+    let (dependency, dependency_unavailable_reason) = rpm_dependency_field(pool, rule.dependency);
+    (
+        (rule.dependency != 0).then_some(rule.dependency),
+        dependency,
+        dependency_unavailable_reason,
+    )
 }
 
 fn rpm_rule_type_symbolic(rule_type: i32) -> &'static str {

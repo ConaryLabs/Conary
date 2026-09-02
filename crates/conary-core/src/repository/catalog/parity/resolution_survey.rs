@@ -597,6 +597,11 @@ pub fn write_native_resolution_survey(
     })?;
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
     let mut file = options.open(path)?;
     file.write_all(&bytes)?;
     file.sync_all()?;
@@ -694,6 +699,14 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("survey.json");
         write_native_resolution_survey(&output, &survey).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&output).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
         let error = write_native_resolution_survey(&output, &survey).unwrap_err();
         assert!(matches!(error, Error::Io(_)));
     }

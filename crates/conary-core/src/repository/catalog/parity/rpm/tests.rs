@@ -1655,6 +1655,17 @@ fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
                 .is_some_and(|package| package.name == "blocker")
             && rule.dependency.as_deref() == Some("blocker")
     }));
+    let job_rule = rules
+        .iter()
+        .find(|rule| rule.rule_type_numeric == 0x400)
+        .expect("RPM survey explanation must retain the exact-root JOB rule");
+    assert_eq!(job_rule.rule_type_symbolic, "SOLVER_RULE_JOB");
+    assert_eq!(job_rule.dependency_id, None);
+    assert_eq!(job_rule.dependency, None);
+    assert_eq!(
+        job_rule.dependency_unavailable_reason.as_deref(),
+        Some("solver_rule_job_dep_is_job_index")
+    );
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
     let mut root_order = Vec::new();
     package_reader
