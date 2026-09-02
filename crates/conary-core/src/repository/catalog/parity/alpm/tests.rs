@@ -669,10 +669,10 @@ fn resolution_survey_records_all_failures_native_data_and_later_healthy_roots() 
     conflict.depends = &["blocker"];
     conflict.conflicts = &["blocker"];
     let blocker = PackageFixture::new("blocker", &checksums[1]);
-    let mut foreign = PackageFixture::new("foreign-root", &checksums[2]);
-    foreign.architecture = "aarch64";
+    let mut unresolved = PackageFixture::new("unresolved-root", &checksums[2]);
+    unresolved.depends = &["missing-survey-provider"];
     let healthy = PackageFixture::new("healthy-after-failures", &checksums[3]);
-    write_database(&database, &[conflict, blocker, foreign, healthy]);
+    write_database(&database, &[conflict, blocker, unresolved, healthy]);
     let databases = vec![database];
     let snapshots = vec![source_snapshot("arch-core-x86_64", &databases[0])];
     let mut profile = profile(&snapshots);
@@ -692,8 +692,8 @@ fn resolution_survey_records_all_failures_native_data_and_later_healthy_roots() 
 
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);
-    assert_eq!(survey.counts.unresolved_roots, 0);
-    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.unresolved_roots, 1);
+    assert_eq!(survey.counts.not_installable_roots, 0);
     assert_eq!(survey.counts.failed_roots, 1);
     let conflict_failure = survey
         .failures
