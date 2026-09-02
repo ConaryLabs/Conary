@@ -532,11 +532,14 @@ fn inspect_active_universe(
     let Some((manifest_sha256, sequence, manifest_json)) = active else {
         return Ok(None);
     };
-    let manifest =
-        serde_json::from_str::<conary_core::repository::universe::RemiUniverseManifestV2>(
-            &manifest_json,
-        )
-        .context("parse active Remi universe manifest")?;
+    let manifest = match deserialize_active_universe_for_deployment(
+        &manifest_sha256,
+        sequence,
+        &manifest_json,
+    )? {
+        ActiveUniverseInspection::Current(manifest) => manifest,
+        ActiveUniverseInspection::ObsoleteProfileSchema => return Ok(None),
+    };
     manifest.validate().map_err(anyhow::Error::from)?;
     let canonical = conary_core::json::canonical_json(&manifest)
         .map_err(anyhow::Error::msg)
@@ -569,6 +572,65 @@ fn inspect_active_universe(
         matches_active_profiles,
         fresh,
     }))
+}
+
+enum ActiveUniverseInspection {
+    Current(conary_core::repository::universe::RemiUniverseManifestV2),
+    ObsoleteProfileSchema,
+}
+
+fn deserialize_active_universe_for_deployment(
+    manifest_sha256: &str,
+    sequence: i64,
+    manifest_json: &str,
+) -> Result<ActiveUniverseInspection> {
+    let raw: serde_json::Value =
+        serde_json::from_str(manifest_json).context("parse active Remi universe manifest")?;
+    let canonical_raw = conary_core::json::canonical_json(&raw)
+        .map_err(anyhow::Error::msg)
+        .context("canonicalize active Remi universe manifest")?;
+    let sequence = u64::try_from(sequence).context("active universe sequence is negative")?;
+    let raw_sequence = raw
+        .get("sequence")
+        .and_then(serde_json::Value::as_u64)
+        .context("active Remi universe sequence must be an unsigned integer")?;
+    if canonical_raw != manifest_json.as_bytes()
+        || conary_core::hash::sha256(manifest_json.as_bytes()) != manifest_sha256
+        || raw_sequence != sequence
+    {
+        bail!("active Remi universe pointer disagrees with its manifest authority");
+    }
+
+    let required = conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3;
+    let mut obsolete = false;
+    for (ordinal, profile) in raw
+        .get("profiles")
+        .and_then(serde_json::Value::as_array)
+        .context("active Remi universe profiles must be an array")?
+        .iter()
+        .enumerate()
+    {
+        let schema = profile
+            .get("revision")
+            .and_then(|revision| revision.get("schema_version"))
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|schema| u32::try_from(schema).ok())
+            .with_context(|| {
+                format!(
+                    "active Remi universe profile {ordinal} revision schema_version must be an unsigned 32-bit integer"
+                )
+            })?;
+        if schema < required {
+            obsolete = true;
+        }
+    }
+    if obsolete {
+        return Ok(ActiveUniverseInspection::ObsoleteProfileSchema);
+    }
+
+    serde_json::from_value(raw)
+        .map(ActiveUniverseInspection::Current)
+        .context("parse active Remi universe manifest")
 }
 
 fn build_current_config(

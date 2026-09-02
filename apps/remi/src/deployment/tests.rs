@@ -391,6 +391,85 @@ fn obsolete_profile_revisions_are_unpopulated_deployment_state() {
 }
 
 #[test]
+fn obsolete_active_universe_is_unpopulated_deployment_state() {
+    use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+    use conary_core::db::models::RemiCatalogResource;
+
+    let fixture = ActiveCatalogFixture::new();
+    let active_revision = fixture.activate("fedora-44", 1, Vec::new());
+    let current_universe = fixture.activate_universe(1);
+    let obsolete_revision = fixture.replace_with_obsolete_schema(&active_revision);
+    let conn = fixture.connection();
+    let obsolete_resource = RemiCatalogResource::find_by_sha256(&conn, &obsolete_revision)
+        .expect("read obsolete profile resource")
+        .expect("obsolete profile resource exists");
+    let mut universe: serde_json::Value = conn
+        .query_row(
+            "SELECT manifest_json FROM remi_universe_revisions WHERE manifest_sha256 = ?1",
+            [&current_universe],
+            |row| row.get::<_, String>(0),
+        )
+        .map(|json| serde_json::from_str(&json).expect("parse current universe"))
+        .expect("read current universe");
+    universe["sequence"] = serde_json::Value::from(2_u64);
+    universe["profiles"][0]["profile_revision_sha256"] =
+        serde_json::Value::String(obsolete_revision.clone());
+    universe["profiles"][0]["revision"] = serde_json::from_str(&obsolete_resource.manifest_json)
+        .expect("parse obsolete profile revision");
+    let obsolete_universe_json = String::from_utf8(
+        conary_core::json::canonical_json(&universe).expect("serialize obsolete universe"),
+    )
+    .expect("obsolete universe JSON is UTF-8");
+    let obsolete_universe = conary_core::hash::sha256(obsolete_universe_json.as_bytes());
+    conn.execute(
+        "INSERT INTO remi_universe_revisions (
+             manifest_sha256, sequence, promotion_evidence_sha256,
+             conversion_crawl_sha256, metadata_root_sha256,
+             canonical_map_sha256, canonical_map_size, targets_version,
+             snapshot_version, timestamp_version, manifest_json, durable, created_at
+         )
+         SELECT ?1, 2, promotion_evidence_sha256,
+                conversion_crawl_sha256, metadata_root_sha256,
+                canonical_map_sha256, canonical_map_size, targets_version,
+                snapshot_version, timestamp_version, ?2, durable, created_at
+         FROM remi_universe_revisions WHERE manifest_sha256 = ?3",
+        rusqlite::params![
+            &obsolete_universe,
+            &obsolete_universe_json,
+            &current_universe,
+        ],
+    )
+    .expect("insert obsolete universe revision");
+    conn.execute(
+        "INSERT INTO remi_universe_profile_revisions (
+             manifest_sha256, ordinal, source_profile, profile_revision_sha256,
+             catalog_sha256, catalog_size
+         )
+         SELECT ?1, ordinal, source_profile, ?2, catalog_sha256, catalog_size
+         FROM remi_universe_profile_revisions WHERE manifest_sha256 = ?3",
+        rusqlite::params![&obsolete_universe, &obsolete_revision, &current_universe],
+    )
+    .expect("insert obsolete universe profile revision");
+    conn.execute(
+        "UPDATE remi_active_universe_revision
+         SET manifest_sha256 = ?1, sequence = 2
+         WHERE singleton = 1",
+        [&obsolete_universe],
+    )
+    .expect("activate obsolete universe revision");
+
+    let configured = vec![("fedora-44".to_string(), 2)];
+    let profiles = inspect_deployment_profiles(&conn, fixture.authority(), &configured)
+        .expect("inspect obsolete active profile");
+
+    assert!(
+        inspect_active_universe(&conn, &profiles)
+            .expect("inspect obsolete active universe")
+            .is_none()
+    );
+}
+
+#[test]
 fn repopulation_requires_current_conversions_and_the_matching_signed_universe() {
     let profile = DeploymentProfileState {
         profile: "fedora-44".to_string(),
