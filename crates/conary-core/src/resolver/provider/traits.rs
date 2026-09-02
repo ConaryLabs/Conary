@@ -130,7 +130,7 @@ impl DependencyProvider for ConaryProvider<'_> {
                     &self.native_architecture,
                     identity_name_matches,
                 )
-                .expect("resolver package versions are validated before SAT filtering");
+                .expect("resolver candidate identity is validated before SAT filtering");
                 if inverse { !matches } else { matches }
             })
             .collect()

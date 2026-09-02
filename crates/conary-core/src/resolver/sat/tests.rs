@@ -932,6 +932,81 @@ fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
 }
 
 #[test]
+fn ubuntu_sat_candidates_enforce_profile_abi_for_names_and_provides() {
+    use crate::repository::dependency_model::DebianMultiArch;
+
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-abi".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let musl_id = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "abi-fixture",
+        "2",
+        "musl-linux-amd64",
+        DebianMultiArch::No,
+    );
+    RepositoryProvide::new(
+        musl_id,
+        "abi-fixture-virtual".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Debian,
+    )
+    .insert(&conn)
+    .unwrap();
+    insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "abi-fixture",
+        "1",
+        "amd64",
+        DebianMultiArch::No,
+    );
+
+    let selected = solve_install(
+        &conn,
+        &[("abi-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(selected.conflict_message.is_none(), "{selected:?}");
+    assert_eq!(selected.install_order.len(), 1, "{selected:?}");
+    assert_eq!(selected.install_order[0].version, "1");
+    assert_eq!(
+        selected.install_order[0].architecture.as_deref(),
+        Some("amd64")
+    );
+
+    conn.execute(
+        "DELETE FROM repository_packages WHERE name = 'abi-fixture' AND architecture = 'amd64'",
+        [],
+    )
+    .unwrap();
+
+    let unresolved_name = solve_install(
+        &conn,
+        &[("abi-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(unresolved_name.install_order.is_empty());
+    assert!(unresolved_name.conflict_message.is_some());
+
+    let unresolved_provide = solve_install(
+        &conn,
+        &[("abi-fixture-virtual".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(unresolved_provide.install_order.is_empty());
+    assert!(unresolved_provide.conflict_message.is_some());
+}
+
+#[test]
 fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
     use crate::repository::dependency_model::{
         DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,

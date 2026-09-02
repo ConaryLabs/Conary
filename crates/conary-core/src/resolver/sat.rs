@@ -404,7 +404,6 @@ pub fn positive_requirement_group_satisfied_by_package(
                     native_architecture,
                     package.name == atom.name,
                 )
-                .map_err(Error::from)
             }
             Expression::And(operands) => {
                 for operand in operands {
