@@ -16,6 +16,7 @@ fn policy(ecosystem: NativeParityEcosystemV1) -> NativeResolutionPolicyV1 {
             NativeParityEcosystemV1::Debian => "amd64",
         }
         .to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
         installed_state: NativeResolutionInstalledStateV1::Empty,
         roots: NativeResolutionRootPolicyV1::EveryExactPackage,
         positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -151,6 +152,7 @@ fn all_ecosystems_reopen_and_compare_exact_resolution_evidence() {
         assert_eq!(comparison.counts.roots, 2);
         assert_eq!(comparison.counts.resolved_roots, 1);
         assert_eq!(comparison.counts.unresolved_roots, 1);
+        assert_eq!(comparison.counts.not_installable_roots, 0);
     }
 }
 
@@ -261,6 +263,47 @@ fn closure_unresolved_and_outcome_drift_are_typed() {
         NativeResolutionComparisonError::Mismatch(mismatch)
             if matches!(mismatch.as_ref(), NativeResolutionMismatchV1::ResolutionOutcome { .. })
     ));
+
+    let mut changed = roots.clone();
+    changed[1].outcome = NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+    };
+    let conary = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-resolvo",
+        &changed,
+        true,
+    );
+    assert_eq!(
+        conary
+            .reader
+            .manifest()
+            .artifact
+            .counts
+            .not_installable_roots,
+        1
+    );
+    let error = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &conary.reader,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        NativeResolutionComparisonError::Mismatch(mismatch)
+            if matches!(
+                mismatch.as_ref(),
+                NativeResolutionMismatchV1::ResolutionOutcome {
+                    oracle: NativeResolutionOutcomeKindV1::Unresolved,
+                    candidate: NativeResolutionOutcomeKindV1::NotInstallable,
+                    ..
+                }
+            )
+    ));
 }
 
 #[test]
@@ -345,20 +388,23 @@ fn comparison_rejects_policy_drift_before_accepting_equal_rows() {
 
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join(NATIVE_RESOLUTION_ROOT_FILE_NAME);
-    let mut changed_policy = policy(ecosystem);
-    changed_policy.architecture = "aarch64".to_string();
     let mut writer = NativeResolutionOracleWriter::create(
         &path,
         &candidate.profile,
         package_oracle.reader.manifest(),
         solver_implementation(ecosystem, "conary-resolvo"),
-        changed_policy,
+        policy(ecosystem),
     )
     .unwrap();
     for root in &roots {
         writer.root(root).unwrap();
     }
-    let manifest = writer.finish().unwrap();
+    let mut manifest = writer.finish().unwrap();
+    manifest.policy.architecture = "aarch64".to_string();
+    assert!(matches!(
+        manifest.validate_binding(&candidate.profile, package_oracle.reader.manifest()),
+        Err(crate::Error::ProfileArchitectureMismatch { .. })
+    ));
     let changed = NativeResolutionOracleReader::open_verified(&path, &manifest).unwrap();
     let error = compare_native_resolution_oracle(
         &candidate.profile,
@@ -470,6 +516,25 @@ fn reopen_rejects_tamper_count_drift_unknown_references_and_package_oracle_drift
         }
     });
     assert!(serde_json::from_value::<NativeResolutionRootV1>(mixed).is_err());
+
+    let mut legacy = roots.first().unwrap().clone();
+    legacy.outcome = NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+    };
+    legacy.validate().unwrap();
+    let mut legacy_manifest = resolution.reader.manifest().clone();
+    legacy_manifest.schema_version = 1;
+    assert!(legacy_manifest.validate().is_err());
+
+    let unsupported_policy = serde_json::json!({
+        "architecture": "x86_64",
+        "architecture_admission": "multilib",
+        "installed_state": "empty",
+        "roots": "every_exact_package",
+        "positive_requirements": "required_only",
+        "provider_selection": "native_precedence"
+    });
+    assert!(serde_json::from_value::<NativeResolutionPolicyV1>(unsupported_policy).is_err());
 }
 
 #[test]

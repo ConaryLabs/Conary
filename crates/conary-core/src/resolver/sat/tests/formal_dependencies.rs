@@ -83,6 +83,14 @@ pub(super) fn insert_repo_pkg_with_reqs(
         }
         .to_string(),
     );
+    pkg.source_profile = Some(
+        match version_scheme {
+            VersionScheme::Debian => "ubuntu-26.04",
+            VersionScheme::Arch => "arch",
+            _ => "fedora-44",
+        }
+        .to_string(),
+    );
     pkg.insert(conn).unwrap();
     let pkg_id = pkg.id.unwrap();
 
@@ -173,6 +181,7 @@ fn debian_or_plus_versioned_virtual_dep() {
         "ubuntu-main".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     // exim4 provides "mail-transport-agent"

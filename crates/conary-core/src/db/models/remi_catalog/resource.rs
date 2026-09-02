@@ -646,7 +646,7 @@ mod tests {
     use super::*;
     use crate::db::schema::ensure_current;
     use crate::repository::catalog::{
-        CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
+        CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, SOURCE_SNAPSHOT_SCHEMA_V1,
         SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
         SourceStreamV1,
     };
@@ -738,8 +738,10 @@ mod tests {
 
     fn profile_manifest(source: &SourceSnapshotV1) -> ProfileRevisionV2 {
         ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: "fedora-44".to_string(),
+            target_architecture:
+                crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
             projection_version: 1,
             members: vec![ProfileSourceMemberV2 {
                 ordinal: 0,

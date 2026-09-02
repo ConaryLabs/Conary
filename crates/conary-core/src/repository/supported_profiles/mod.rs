@@ -9,8 +9,9 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 pub use types::{
-    ProfilePackageFormat, ProfileSourceMemberContract, ProfileSourceRole, SupportTier,
-    SupportedProfile, SupportedRoute,
+    ProfilePackageFormat, ProfileSourceMemberContract, ProfileSourceRole,
+    ProfileTargetArchitecture, ProfileTargetPackageAbi, SupportTier, SupportedProfile,
+    SupportedRoute,
 };
 
 use types::{CatalogDocument, SupportedProfile as Profile};
@@ -57,6 +58,14 @@ fn validate_catalog(profiles: Vec<types::ProfileDocument>) -> Vec<SupportedProfi
             "profile Repology repository id must not be empty"
         );
         assert!(
+            !profile.target_architecture().as_str().is_empty(),
+            "profile target architecture must not be empty"
+        );
+        assert!(
+            !profile.target_package_abi().as_str().is_empty(),
+            "profile target package ABI must not be empty"
+        );
+        assert!(
             !profile.members().is_empty(),
             "profile {} must declare its exact repository members",
             profile.id()
@@ -95,6 +104,28 @@ fn validate_catalog(profiles: Vec<types::ProfileDocument>) -> Vec<SupportedProfi
                 panic!("only ALPM source profiles may declare a scriptlet shell")
             }
             (_, None) => {}
+        }
+        match profile.package_format() {
+            ProfilePackageFormat::Arch => {
+                let expected = [profile.target_architecture().as_str(), "any"]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>();
+                let actual = profile
+                    .package_architecture_tokens()
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<std::collections::BTreeSet<_>>();
+                assert_eq!(
+                    actual,
+                    expected,
+                    "Arch profile {} must declare exactly its target architecture and any",
+                    profile.id()
+                );
+            }
+            _ => assert!(
+                profile.package_architecture_tokens().is_empty(),
+                "only ALPM profiles declare profile-scoped architecture tokens"
+            ),
         }
     }
 

@@ -49,7 +49,7 @@ impl NativeResolutionOracleWriter {
         policy: NativeResolutionPolicyV1,
     ) -> Result<Self> {
         package_oracle.validate_profile(profile)?;
-        policy.validate()?;
+        policy.validate_for_profile(profile)?;
         let path = path.as_ref();
         validate_candidate_path(path)?;
         let mut options = OpenOptions::new();
@@ -487,6 +487,7 @@ fn validate_package_references(
                     }
                 }
             }
+            NativeResolutionOutcomeV1::NotInstallable { .. } => {}
         }
         Ok(())
     })
@@ -557,6 +558,10 @@ fn accumulate_counts(
                 })?,
                 "unresolved dependencies",
             )?;
+        }
+        NativeResolutionOutcomeV1::NotInstallable { .. } => {
+            counts.not_installable_roots =
+                checked_add(counts.not_installable_roots, 1, "not-installable roots")?;
         }
     }
     Ok(())

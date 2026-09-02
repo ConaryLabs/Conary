@@ -128,6 +128,22 @@ pub enum Error {
     #[error("Conflict: {0}")]
     ConflictError(String),
 
+    /// Operator-supplied architecture disagrees with the selected profile authority.
+    #[error("Architecture mismatch for profile '{profile}': expected '{expected}', got '{actual}'")]
+    ProfileArchitectureMismatch {
+        profile: String,
+        expected: String,
+        actual: String,
+    },
+
+    /// A package architecture is absent from the pinned table for its source scheme.
+    #[error("Unknown architecture token for {scheme}: '{token}'")]
+    UnknownArchitectureToken { scheme: String, token: String },
+
+    /// The compile target cannot be projected through pinned package architecture authority.
+    #[error("Unsupported native host target '{triple}'")]
+    UnsupportedNativeHostTarget { triple: String },
+
     /// Eligible package candidates remain tied without a comparable version
     /// contract or an explicit repository/priority winner.
     #[error(

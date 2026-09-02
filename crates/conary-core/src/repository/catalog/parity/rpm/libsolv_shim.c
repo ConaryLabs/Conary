@@ -376,12 +376,15 @@ conary_solv_set_architecture(ConarySolv *handle, const char *architecture)
         return 0;
     clear_resolution(handle);
     pool_setarch(handle->pool, architecture);
+    /* pool_setarch selects libsolv's multilib policy. Replace it with the
+     * contract's single native architecture; pool_setarchpolicy retains the
+     * built-in noarch class as installable. */
+    pool_setarchpolicy(handle->pool, architecture);
     return 1;
 }
 
 int
-conary_solv_solve(ConarySolv *handle, size_t root_index,
-                  int strict_repo_priority)
+conary_solv_solve(ConarySolv *handle, size_t root_index)
 {
     if (!handle || root_index >= handle->package_count)
         return -1;
@@ -398,8 +401,7 @@ conary_solv_solve(ConarySolv *handle, size_t root_index,
             return -1;
         }
         solver_set_flag(handle->solver, SOLVER_FLAG_IGNORE_RECOMMENDED, 1);
-        solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY,
-                        strict_repo_priority ? 1 : 0);
+        solver_set_flag(handle->solver, SOLVER_FLAG_STRICT_REPO_PRIORITY, 1);
 
         Queue jobs;
         queue_init(&jobs);

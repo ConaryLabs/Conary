@@ -76,6 +76,34 @@ pub(super) fn inspect_deployment_candidates(
             source_profile: candidate.source_profile.clone(),
             profile_revision_sha256: candidate.profile_revision_sha256.clone(),
         };
+        let bounded = match verification {
+            CandidateInspectionMode::FullReopen => {
+                authority.classify_selected_profile_for_upgrade(&selection)
+            }
+            CandidateInspectionMode::PublicationAttested { .. } => {
+                authority.inspect_selected_profile_for_upgrade(&selection)
+            }
+        }
+        .with_context(|| format!("inspect private immutable profile '{profile}'"))?;
+        let bounded = match bounded {
+            crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
+                inspection
+            }
+            crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
+                ..
+            } => {
+                candidates.push(DeploymentCandidateState {
+                    profile: profile.clone(),
+                    configured_sources: *configured_sources,
+                    profile_revision_sha256: None,
+                    run_id: None,
+                    completed_at: None,
+                    packages: 0,
+                    latest_refresh,
+                });
+                continue;
+            }
+        };
         let inspection = match verification {
             CandidateInspectionMode::FullReopen => {
                 let inspection = authority
@@ -92,11 +120,7 @@ pub(super) fn inspect_deployment_candidates(
                     .context("deployment catalog integrity-byte count overflow")?;
                 inspection
             }
-            CandidateInspectionMode::PublicationAttested { .. } => authority
-                .inspect_selected_profile(&selection)
-                .with_context(|| {
-                    format!("inspect publication-attested private profile '{profile}'")
-                })?,
+            CandidateInspectionMode::PublicationAttested { .. } => bounded,
         };
         inspection
             .manifest

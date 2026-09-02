@@ -6,7 +6,7 @@ use super::*;
 use crate::repository::catalog::{
     CatalogContentV1, CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogProvideRecordV1,
     CatalogReader, CatalogRequirementAtomV1, CatalogRequirementGroupV1, CatalogScopeV1,
-    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2, ProfileSourceMemberV2,
+    CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2, ProfileSourceMemberV2,
     SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
 };
 use crate::repository::dependency_model::{
@@ -198,8 +198,13 @@ fn candidate(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
     let path = directory.path().join("catalog.sqlite");
     let binding = write_catalog_candidate(&path, &content).unwrap();
     let profile = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: profile_name(ecosystem).to_string(),
+        target_architecture: crate::repository::supported_profiles::profile_by_public_id(
+            profile_name(ecosystem),
+        )
+        .unwrap()
+        .target_architecture(),
         projection_version: 1,
         members,
         catalog: binding.artifact.clone(),
@@ -284,6 +289,30 @@ fn rpm_debian_and_alpm_complete_catalog_oracles_compare_exactly() {
             NativeParityCountsV1::from(candidate.profile.counts)
         );
     }
+}
+
+#[test]
+fn package_oracle_rejects_unknown_architecture_before_writing_evidence() {
+    let candidate = candidate(NativeParityEcosystemV1::Debian);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(NATIVE_PARITY_PACKAGE_FILE_NAME);
+    let mut writer = NativeParityOracleWriter::create(
+        &path,
+        &candidate.profile,
+        implementation(NativeParityEcosystemV1::Debian),
+    )
+    .unwrap();
+    let mut package = rows(&candidate).remove(0);
+    package.architecture = Some("future-dpkg-architecture".to_string());
+    let error = writer
+        .package(&package)
+        .expect_err("unknown architecture must fail the package oracle");
+    assert!(matches!(
+        error,
+        crate::Error::UnknownArchitectureToken { ref scheme, ref token }
+            if scheme == "debian" && token == "future-dpkg-architecture"
+    ));
+    assert_eq!(fs::metadata(path).unwrap().len(), 0);
 }
 
 #[test]

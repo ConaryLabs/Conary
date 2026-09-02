@@ -14,6 +14,7 @@ use super::{
     project_requirement,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
@@ -21,7 +22,8 @@ use crate::repository::catalog::parity::resolution_survey::{
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityOracleReader,
-    NativeParityOracleV1, NativeParityPackageV1, NativeResolutionInstalledStateV1,
+    NativeParityOracleV1, NativeParityPackageV1, NativeResolutionArchitectureAdmissionV1,
+    NativeResolutionInstalledStateV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
@@ -36,7 +38,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libalpm transaction results.
-pub const ALPM_RESOLUTION_PROJECTION_SCHEMA_V1: u32 = 1;
+pub const ALPM_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
 
 /// Produce and independently reopen one strict ALPM resolution parity bundle.
 pub fn produce_alpm_resolution_oracle(
@@ -97,8 +99,10 @@ fn produce_alpm_resolution(
     architecture: &str,
     destination: ResolutionDestination<'_>,
 ) -> Result<ResolutionProduct> {
+    let architecture = profile.require_target_architecture(architecture)?;
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
         installed_state: NativeResolutionInstalledStateV1::Empty,
         roots: NativeResolutionRootPolicyV1::EveryExactPackage,
         positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -116,7 +120,7 @@ fn produce_alpm_resolution(
         ecosystem: NativeParityEcosystemV1::Alpm,
         name: "libalpm".to_string(),
         version: alpm::version().to_string(),
-        projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V1,
+        projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V2,
     };
 
     match destination {
@@ -127,7 +131,7 @@ fn produce_alpm_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
@@ -135,6 +139,7 @@ fn produce_alpm_resolution(
                 profile,
                 inputs,
                 &package_index,
+                &policy,
                 RootOutcomeSink::Strict(&mut writer),
             )?;
             let manifest = writer.finish()?;
@@ -153,7 +158,7 @@ fn produce_alpm_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
@@ -161,6 +166,7 @@ fn produce_alpm_resolution(
                 profile,
                 inputs,
                 &package_index,
+                &policy,
                 RootOutcomeSink::Survey(&mut collector),
             )?;
             let survey = collector.finish()?;
@@ -176,6 +182,7 @@ fn walk_resolution_roots(
     profile: &ProfileRevisionV2,
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
+    policy: &NativeResolutionPolicyV1,
     mut sink: RootOutcomeSink<'_>,
 ) -> Result<()> {
     package_oracle.for_each_package(|root| {
@@ -185,6 +192,7 @@ fn walk_resolution_roots(
             inputs,
             package_index,
             &root,
+            policy,
             sink.explanation_byte_limit(),
         );
         sink.root(&root, result)
@@ -330,8 +338,41 @@ fn resolve_exact_root(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     root: &NativeParityPackageV1,
+    policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
+    let Some(root_architecture) = root.architecture.as_deref() else {
+        return Err(NativeRootResolutionError::new(
+            Error::ConflictError(format!(
+                "ALPM package-oracle root '{}' has no architecture",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            alpm_unavailable("exact_root_architecture_missing"),
+        ));
+    };
+    match policy
+        .architecture_admission
+        .admits(&root.source_profile, root.version_scheme, root_architecture)
+        .and_then(NativeResolutionArchitectureDecisionV1::into_result)
+    {
+        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
+        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
+            return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+            });
+        }
+        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+        Err(error) => {
+            return Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
+                alpm_unavailable("unknown_architecture_token"),
+            ));
+        }
+    }
     let root_package = locate_exact_root(alpm, profile, inputs, root).map_err(|error| {
         NativeRootResolutionError::new(
             error,

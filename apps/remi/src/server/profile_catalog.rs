@@ -252,7 +252,7 @@ mod tests {
     use conary_core::repository::catalog::{
         CatalogArtifactV1, CatalogContentV1, CatalogCountsV1, CatalogPackageOriginV1,
         CatalogProvideRecordV1, CatalogReader, CatalogRequirementAtomV1, CatalogScopeV1,
-        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+        CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
         ProfileSourceMemberV2, SourceStreamKindV1, SourceStreamV1, write_catalog_candidate,
     };
     use conary_core::repository::dependency_model::{
@@ -267,7 +267,7 @@ mod tests {
                 source_identity: "source".to_string(),
                 repository_identity: "repository".to_string(),
             },
-            source_profile: "profile".to_string(),
+            source_profile: "fedora-44".to_string(),
             name: "demo".to_string(),
             version: "1.2.3".to_string(),
             package_release: "4".to_string(),
@@ -315,8 +315,10 @@ mod tests {
 
     fn profile_manifest() -> ProfileRevisionV2 {
         ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
-            profile: "profile".to_string(),
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
+            profile: "fedora-44".to_string(),
+            target_architecture:
+                conary_core::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
             projection_version: 1,
             members: vec![
                 ProfileSourceMemberV2 {
@@ -441,7 +443,7 @@ mod tests {
             .collect();
         let content = CatalogContentV1::new(
             CatalogScopeV1::Profile {
-                profile: "profile".to_string(),
+                profile: "fedora-44".to_string(),
             },
             evidence,
             vec![higher_placeholder, lower_artifact],
@@ -460,7 +462,7 @@ mod tests {
             .expect("open verified profile catalog");
         let pinned = PinnedProfileCatalog::from_verified_test_parts(
             RemiActiveProfileRevision {
-                source_profile: "profile".to_string(),
+                source_profile: "fedora-44".to_string(),
                 profile_revision_sha256: revision,
                 fencing_epoch: 1,
                 activation_run_id: uuid::Uuid::new_v4().to_string(),

@@ -15,6 +15,7 @@ use super::{
     validate_inputs,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
@@ -22,7 +23,8 @@ use crate::repository::catalog::parity::resolution_survey::{
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
-    NativeParityOracleReader, NativeParityOracleV1, NativeResolutionInstalledStateV1,
+    NativeParityOracleReader, NativeParityOracleV1, NativeResolutionArchitectureAdmissionV1,
+    NativeResolutionInstalledStateV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
@@ -35,10 +37,10 @@ use crate::repository::dependency_model::RepositoryRequirementKind;
 
 mod evidence;
 
-use evidence::{extend_rpm_explanation, rpm_explanation};
+use evidence::rpm_explanation;
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V4: u32 = 4;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
@@ -120,8 +122,10 @@ fn produce_rpm_resolution(
     architecture: &str,
     destination: ResolutionDestination<'_>,
 ) -> Result<ResolutionProduct> {
+    let architecture = profile.require_target_architecture(architecture)?;
     let policy = NativeResolutionPolicyV1 {
         architecture: architecture.to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
         installed_state: NativeResolutionInstalledStateV1::Empty,
         roots: NativeResolutionRootPolicyV1::EveryExactPackage,
         positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -162,7 +166,7 @@ fn produce_rpm_resolution(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V3,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V4,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -172,13 +176,13 @@ fn produce_rpm_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
                 &mut pool,
                 &package_index,
-                architecture,
+                &policy,
                 RootOutcomeSink::Strict(&mut writer),
             )?;
             let manifest = writer.finish()?;
@@ -197,13 +201,13 @@ fn produce_rpm_resolution(
                 profile,
                 package_oracle.manifest(),
                 implementation,
-                policy,
+                policy.clone(),
             )?;
             walk_resolution_roots(
                 &package_oracle,
                 &mut pool,
                 &package_index,
-                architecture,
+                &policy,
                 RootOutcomeSink::Survey(&mut collector),
             )?;
             let survey = collector.finish()?;
@@ -217,7 +221,7 @@ fn walk_resolution_roots(
     package_oracle: &NativeParityOracleReader,
     pool: &mut SolvPool,
     package_index: &PackageResolutionIndex,
-    architecture: &str,
+    policy: &NativeResolutionPolicyV1,
     mut sink: RootOutcomeSink<'_>,
 ) -> Result<()> {
     package_oracle.for_each_package(|root| {
@@ -228,7 +232,7 @@ fn walk_resolution_roots(
                 package_index,
                 root_index,
                 &root,
-                architecture,
+                policy,
                 explanation_byte_limit,
             ),
             Err(error) => Err(NativeRootResolutionError::new(
@@ -398,9 +402,41 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndex,
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
-    architecture: &str,
+    policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
+    let root_architecture = root.architecture.as_deref().ok_or_else(|| {
+        NativeRootResolutionError::new(
+            Error::ConflictError(format!(
+                "RPM package-oracle root '{}' has no architecture",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            NativeResolutionSurveyNativeExplanationV1::Rpm {
+                problems: Vec::new(),
+            },
+        )
+    })?;
+    let root_is_admitted = match policy
+        .architecture_admission
+        .admits(&root.source_profile, root.version_scheme, root_architecture)
+        .and_then(NativeResolutionArchitectureDecisionV1::into_result)
+    {
+        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => true,
+        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => false,
+        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+        Err(error) => {
+            return Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
+                NativeResolutionSurveyNativeExplanationV1::Rpm {
+                    problems: Vec::new(),
+                },
+            ));
+        }
+    };
     let resolution = pool.solve(root_index).map_err(|error| {
         NativeRootResolutionError::new(
             error,
@@ -412,6 +448,18 @@ fn resolve_exact_root(
     })?;
     match resolution {
         SolvResolution::Resolved(packages) => {
+            if !root_is_admitted {
+                return Err(NativeRootResolutionError::new(
+                    Error::ConflictError(format!(
+                        "libsolv resolved architecture-excluded exact root '{}'",
+                        root.name
+                    )),
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    NativeResolutionSurveyNativeExplanationV1::Rpm {
+                        problems: Vec::new(),
+                    },
+                ));
+            }
             let closure = packages
                 .into_iter()
                 .map(|index| package_index.package_key(index))
@@ -442,29 +490,11 @@ fn resolve_exact_root(
             })
         }
         SolvResolution::Unresolved(problems) => {
-            let mut residual_problems = Vec::new();
-            match unresolved_outcome(
-                pool,
-                package_index,
-                root_index,
-                root,
-                architecture,
-                &problems,
-                &mut residual_problems,
-            ) {
+            match unresolved_outcome(pool, package_index, root_index, root, policy, &problems) {
                 Ok(outcome) => Ok(outcome),
                 Err(error) => {
-                    let mut explanation =
+                    let explanation =
                         rpm_explanation(pool, package_index, &problems, explanation_byte_limit);
-                    if !residual_problems.is_empty() {
-                        extend_rpm_explanation(
-                            pool,
-                            package_index,
-                            &mut explanation,
-                            &residual_problems,
-                            explanation_byte_limit,
-                        );
-                    }
                     Err(NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
@@ -477,84 +507,32 @@ fn resolve_exact_root(
 }
 
 fn unresolved_outcome(
-    pool: &mut SolvPool,
+    pool: &SolvPool,
     package_index: &PackageResolutionIndex,
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
-    architecture: &str,
+    policy: &NativeResolutionPolicyV1,
     problems: &[SolvProblem],
-    residual_capture: &mut Vec<SolvProblem>,
 ) -> Result<NativeResolutionOutcomeV1> {
+    if let Some(outcome) = architecture_excluded_outcome(root_index, root, policy, problems)? {
+        return Ok(outcome);
+    }
     let mut dependencies = BTreeSet::new();
-    let mut requires_residual_probe = false;
     let shadowed = pool
         .strict_shadowed_packages()?
         .into_iter()
         .collect::<BTreeSet<_>>();
     let visibility = StrictVisibility::derive(pool, root_index, &shadowed, problems)?;
     for problem in problems {
-        let (problem_dependencies, problem_requires_residual_probe) = project_unresolved_problem(
+        let problem_dependencies = project_unresolved_problem(
             pool,
             package_index,
             root,
-            architecture,
+            &policy.architecture,
             &problem.rules,
             &visibility,
         )?;
         dependencies.extend(problem_dependencies);
-        requires_residual_probe |= problem_requires_residual_probe;
-    }
-    if requires_residual_probe {
-        match pool.solve_without_strict_repo_priority(root_index)? {
-            SolvResolution::Resolved(packages) => {
-                if !packages.contains(&root_index) {
-                    return Err(Error::ConflictError(format!(
-                        "libsolv residual probe for '{}' omitted its exact root",
-                        root.name
-                    )));
-                }
-            }
-            SolvResolution::Unresolved(residual_problems) => {
-                *residual_capture = residual_problems;
-                let residual_problems = residual_capture.as_slice();
-                let visibility = StrictVisibility::derive(
-                    pool,
-                    root_index,
-                    &shadowed,
-                    problems.iter().chain(residual_problems.iter()),
-                )?;
-                let mut final_dependencies = BTreeSet::new();
-                for problem in problems {
-                    let (strict_dependencies, _) = project_unresolved_problem(
-                        pool,
-                        package_index,
-                        root,
-                        architecture,
-                        &problem.rules,
-                        &visibility,
-                    )?;
-                    final_dependencies.extend(strict_dependencies);
-                }
-                for problem in residual_problems {
-                    let (residual_dependencies, nested_probe) = project_unresolved_problem(
-                        pool,
-                        package_index,
-                        root,
-                        architecture,
-                        &problem.rules,
-                        &visibility,
-                    )?;
-                    if nested_probe {
-                        return Err(Error::InternalError(format!(
-                            "libsolv residual probe for '{}' retained strict-priority authority",
-                            root.name
-                        )));
-                    }
-                    final_dependencies.extend(residual_dependencies);
-                }
-                dependencies = final_dependencies;
-            }
-        }
     }
     if dependencies.is_empty() {
         return Err(Error::ConflictError(format!(
@@ -565,6 +543,68 @@ fn unresolved_outcome(
     Ok(NativeResolutionOutcomeV1::Unresolved {
         dependencies: dependencies.into_iter().collect(),
     })
+}
+
+fn architecture_excluded_outcome(
+    root_index: usize,
+    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    policy: &NativeResolutionPolicyV1,
+    problems: &[SolvProblem],
+) -> Result<Option<NativeResolutionOutcomeV1>> {
+    let architecture = root.architecture.as_deref().ok_or_else(|| {
+        Error::ConflictError(format!(
+            "RPM package-oracle root '{}' has no architecture",
+            root.name
+        ))
+    })?;
+    let admitted = match policy
+        .architecture_admission
+        .admits(&root.source_profile, root.version_scheme, architecture)?
+        .into_result()?
+    {
+        NativeResolutionArchitectureDecisionV1::Admitted => true,
+        NativeResolutionArchitectureDecisionV1::Excluded { .. } => false,
+        NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. } => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+    };
+    let has_not_installable = problems
+        .iter()
+        .flat_map(|problem| &problem.rules)
+        .any(|rule| rule.rule_type == SOLVER_RULE_PKG_NOT_INSTALLABLE);
+    if !has_not_installable {
+        if admitted {
+            return Ok(None);
+        }
+        return Err(Error::ConflictError(format!(
+            "libsolv rejected architecture-excluded exact root '{}' without SOLVER_RULE_PKG_NOT_INSTALLABLE",
+            root.name
+        )));
+    }
+    if admitted {
+        return Err(Error::ConfigError(format!(
+            "libsolv found admitted exact root '{}' not installable under target architecture '{}'",
+            root.name, policy.architecture
+        )));
+    }
+    for rule in problems.iter().flat_map(|problem| &problem.rules) {
+        match rule.rule_type {
+            SOLVER_RULE_JOB => {}
+            SOLVER_RULE_PKG_NOT_INSTALLABLE
+                if rule.from_index == Some(root_index)
+                    && rule.to_index.is_none()
+                    && rule.dependency == 0 => {}
+            rule_type => {
+                return Err(Error::ConflictError(format!(
+                    "libsolv architecture exclusion for exact root '{}' carried unexpected rule {rule_type:#x} (from={:?}, to={:?}, dependency={})",
+                    root.name, rule.from_index, rule.to_index, rule.dependency
+                )));
+            }
+        }
+    }
+    Ok(Some(NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+    }))
 }
 
 #[cfg(test)]
@@ -580,9 +620,6 @@ pub(super) fn explanation_builds() -> usize {
 /// Requiring packages that Conary's candidate resolver can also reach under
 /// the strict solve's repository-priority authority.
 struct StrictVisibility {
-    /// Exact root whose own policy failures may never be projected as missing
-    /// provider edges.
-    root_index: usize,
     /// The exact root plus every provider reachable from it through hard
     /// required edges that strict repository priority does not shadow.
     reachable: BTreeSet<usize>,
@@ -632,7 +669,6 @@ impl StrictVisibility {
             }
         }
         Ok(Self {
-            root_index,
             reachable,
             edge_owners,
         })
@@ -659,18 +695,8 @@ fn project_unresolved_problem(
     architecture: &str,
     rules: &[SolvProblemRule],
     visibility: &StrictVisibility,
-) -> Result<(BTreeSet<NativeUnresolvedDependencyV1>, bool)> {
+) -> Result<BTreeSet<NativeUnresolvedDependencyV1>> {
     let mut dependencies = BTreeSet::new();
-    let has_required_edge = rules
-        .iter()
-        .any(|rule| rule.rule_type == SOLVER_RULE_PKG_REQUIRES);
-    let has_strict_repo_priority = rules
-        .iter()
-        .any(|rule| rule.rule_type == SOLVER_RULE_STRICT_REPO_PRIORITY);
-    let has_provider_policy_rule = rules.iter().any(|rule| {
-        rule.rule_type == SOLVER_RULE_PKG_CONFLICTS || rule.rule_type == SOLVER_RULE_INFARCH
-    });
-    let tolerates_provider_policy_rules = has_required_edge && has_strict_repo_priority;
     for rule in rules {
         match rule.rule_type {
             SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP => {
@@ -702,13 +728,6 @@ fn project_unresolved_problem(
                 }
             }
             SOLVER_RULE_JOB => {}
-            SOLVER_RULE_PKG_CONFLICTS
-                if tolerates_provider_policy_rules
-                    && rule.from_index != Some(visibility.root_index)
-                    && rule.to_index != Some(visibility.root_index) =>
-            {
-                validate_required_provider_conflict_rule(pool, package_index, root, rule)?;
-            }
             SOLVER_RULE_STRICT_REPO_PRIORITY => {
                 let excluded_index = rule.from_index.ok_or_else(|| {
                     Error::ConflictError(format!(
@@ -730,12 +749,11 @@ fn project_unresolved_problem(
                     root.name, architecture
                 )));
             }
-            SOLVER_RULE_INFARCH
-                if tolerates_provider_policy_rules
-                    && rule.from_index != Some(visibility.root_index)
-                    && rule.to_index != Some(visibility.root_index) =>
-            {
-                validate_required_provider_inferior_arch_rule(pool, package_index, root, rule)?;
+            SOLVER_RULE_PKG_CONFLICTS => {
+                return Err(Error::ConflictError(format!(
+                    "libsolv found exact root '{}' unsatisfiable with problem rule {:#x} (from={:?}, to={:?}, dependency={})",
+                    root.name, rule.rule_type, rule.from_index, rule.to_index, rule.dependency
+                )));
             }
             SOLVER_RULE_JOB_UNSUPPORTED | SOLVER_RULE_INFARCH => {
                 return Err(Error::ConfigError(format!(
@@ -756,69 +774,7 @@ fn project_unresolved_problem(
             }
         }
     }
-    Ok((
-        dependencies,
-        has_strict_repo_priority && has_provider_policy_rule,
-    ))
-}
-
-fn validate_required_provider_inferior_arch_rule(
-    pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
-    root: &crate::repository::catalog::parity::NativeParityPackageV1,
-    rule: &SolvProblemRule,
-) -> Result<()> {
-    let inferior_index = rule.from_index.ok_or_else(|| {
-        Error::ConflictError(format!(
-            "libsolv required-provider inferior-architecture rule for '{}' has no package",
-            root.name
-        ))
-    })?;
-    if rule.to_index.is_some() || rule.dependency == 0 {
-        return Err(Error::ConflictError(format!(
-            "libsolv required-provider inferior-architecture rule for '{}' has unexpected target or package-name dependency",
-            root.name
-        )));
-    }
-    package_index.package_key(inferior_index)?;
-    let package_name = pool.package(inferior_index)?.name()?;
-    if pool.dependency(rule.dependency)?.atom()? != package_name {
-        return Err(Error::ConflictError(format!(
-            "libsolv required-provider inferior-architecture rule for '{}' names a different package",
-            root.name
-        )));
-    }
-    Ok(())
-}
-
-fn validate_required_provider_conflict_rule(
-    pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
-    root: &crate::repository::catalog::parity::NativeParityPackageV1,
-    rule: &SolvProblemRule,
-) -> Result<()> {
-    let conflicting_index = rule.from_index.ok_or_else(|| {
-        Error::ConflictError(format!(
-            "libsolv required-provider package-conflict rule for '{}' has no conflicting package",
-            root.name
-        ))
-    })?;
-    let provided_index = rule.to_index.ok_or_else(|| {
-        Error::ConflictError(format!(
-            "libsolv required-provider package-conflict rule for '{}' has no provider package",
-            root.name
-        ))
-    })?;
-    if rule.dependency == 0 {
-        return Err(Error::ConflictError(format!(
-            "libsolv required-provider package-conflict rule for '{}' has no conflicting dependency",
-            root.name
-        )));
-    }
-    package_index.package_key(conflicting_index)?;
-    package_index.package_key(provided_index)?;
-    pool.dependency(rule.dependency)?.text()?;
-    Ok(())
+    Ok(dependencies)
 }
 
 fn project_unresolved_dependency(

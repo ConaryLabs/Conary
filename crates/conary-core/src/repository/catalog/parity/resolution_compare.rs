@@ -7,17 +7,20 @@ use thiserror::Error;
 
 use super::super::ProfileRevisionV2;
 use super::io::NativeParityOracleReader;
-use super::resolution_contract::{NativeResolutionCountsV1, NativeResolutionOutcomeV1};
+use super::resolution_contract::{
+    NativeResolutionCountsV1, NativeResolutionNotInstallableReasonV1, NativeResolutionOutcomeV1,
+};
 use super::resolution_io::NativeResolutionOracleReader;
 use crate::error::Error as ConaryError;
 
-pub const NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1: u32 = 1;
+pub const NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeResolutionOutcomeKindV1 {
     Resolved,
     Unresolved,
+    NotInstallable,
 }
 
 impl NativeResolutionOutcomeKindV1 {
@@ -25,6 +28,7 @@ impl NativeResolutionOutcomeKindV1 {
         match outcome {
             NativeResolutionOutcomeV1::Resolved { .. } => Self::Resolved,
             NativeResolutionOutcomeV1::Unresolved { .. } => Self::Unresolved,
+            NativeResolutionOutcomeV1::NotInstallable { .. } => Self::NotInstallable,
         }
     }
 }
@@ -49,6 +53,11 @@ pub enum NativeResolutionMismatchV1 {
     },
     UnresolvedDependencies {
         root_package_key_sha256: String,
+    },
+    NotInstallableReason {
+        root_package_key_sha256: String,
+        oracle: NativeResolutionNotInstallableReasonV1,
+        candidate: NativeResolutionNotInstallableReasonV1,
     },
 }
 
@@ -165,7 +174,7 @@ pub fn compare_native_resolution_oracle(
         .map_err(NativeResolutionComparisonError::Candidate)?;
 
     Ok(NativeResolutionComparisonV1 {
-        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
         profile: profile.profile.clone(),
         profile_revision_sha256: profile
             .manifest_sha256()
@@ -203,6 +212,14 @@ fn outcome_mismatch(
             NativeResolutionOutcomeV1::Unresolved { .. },
         ) => NativeResolutionMismatchV1::UnresolvedDependencies {
             root_package_key_sha256: root_package_key_sha256.to_string(),
+        },
+        (
+            NativeResolutionOutcomeV1::NotInstallable { reason: oracle },
+            NativeResolutionOutcomeV1::NotInstallable { reason: candidate },
+        ) => NativeResolutionMismatchV1::NotInstallableReason {
+            root_package_key_sha256: root_package_key_sha256.to_string(),
+            oracle: *oracle,
+            candidate: *candidate,
         },
         _ => NativeResolutionMismatchV1::ResolutionOutcome {
             root_package_key_sha256: root_package_key_sha256.to_string(),

@@ -11,7 +11,7 @@ use conary_core::db::models::{
 use conary_core::repository::catalog::{
     CATALOG_CONTENT_SCHEMA_V1, CATALOG_FILE_NAME, CatalogArtifactV1, CatalogContentV1,
     CatalogPackageOriginV1, CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1,
-    PROFILE_REVISION_SCHEMA_V2, PortableManifestAttestationV1, ProfileRevisionV2,
+    PROFILE_REVISION_SCHEMA_V3, PortableManifestAttestationV1, ProfileRevisionV2,
     ProfileSourceMemberV2, SOURCE_METADATA_DIRECTORY_NAME, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1, portable_chunk_count_v1,
@@ -101,6 +101,66 @@ impl ActiveCatalogFixture {
 
     pub(crate) fn catalog_dir(&self) -> &Path {
         &self.catalog_dir
+    }
+
+    pub(crate) fn replace_with_obsolete_schema(&self, revision: &str) -> String {
+        let conn = self.connection();
+        let resource = RemiCatalogResource::find_by_sha256(&conn, revision)
+            .expect("read current profile resource")
+            .expect("current profile resource exists");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&resource.manifest_json).expect("parse current profile manifest");
+        let object = manifest
+            .as_object_mut()
+            .expect("profile manifest is an object");
+        object.insert("schema_version".to_string(), serde_json::Value::from(2));
+        object.remove("target_architecture");
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest)
+                .expect("serialize obsolete profile manifest"),
+        )
+        .expect("obsolete profile manifest is UTF-8");
+        let obsolete_revision = conary_core::hash::sha256(manifest_json.as_bytes());
+        RemiCatalogResource {
+            resource_sha256: obsolete_revision.clone(),
+            manifest_json,
+            ..resource
+        }
+        .insert(&conn)
+        .expect("insert obsolete profile resource");
+        for mut member in RemiProfileRevisionMember::list_for_revision(&conn, revision)
+            .expect("list current profile members")
+        {
+            member.profile_revision_sha256 = obsolete_revision.clone();
+            member
+                .insert(&conn)
+                .expect("insert obsolete profile member");
+        }
+        conn.execute(
+            "UPDATE remi_active_profile_revisions
+             SET profile_revision_sha256 = ?1
+             WHERE profile_revision_sha256 = ?2",
+            rusqlite::params![&obsolete_revision, revision],
+        )
+        .expect("select obsolete active profile revision");
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET candidate_profile_digest = ?1
+             WHERE candidate_profile_digest = ?2",
+            rusqlite::params![&obsolete_revision, revision],
+        )
+        .expect("select obsolete candidate profile revision");
+        conn.execute(
+            "INSERT OR IGNORE INTO repository_sync_scopes (
+                 source_profile, fencing_epoch, current_run_id
+             )
+             SELECT source_profile, fencing_epoch, activation_run_id
+             FROM remi_active_profile_revisions
+             WHERE profile_revision_sha256 = ?1",
+            [&obsolete_revision],
+        )
+        .expect("retain the obsolete active revision fencing epoch");
+        obsolete_revision
     }
 
     pub(crate) fn connection(&self) -> rusqlite::Connection {
@@ -473,8 +533,13 @@ impl ActiveCatalogFixture {
         let binding = write_catalog_candidate(candidate_dir.join(CATALOG_FILE_NAME), &content)
             .expect("write catalog candidate");
         let manifest = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: profile.to_string(),
+            target_architecture: conary_core::repository::supported_profiles::profile_by_id(
+                profile,
+            )
+            .expect("known active catalog fixture profile")
+            .target_architecture(),
             projection_version: crate::server::catalog_refresh::PROFILE_CATALOG_PROJECTION_VERSION,
             members,
             catalog: binding.artifact.clone(),

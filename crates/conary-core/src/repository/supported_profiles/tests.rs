@@ -35,6 +35,51 @@ fn catalog_assigns_exact_typed_support_tiers() {
 }
 
 #[test]
+fn catalog_owns_exact_typed_target_architectures() {
+    let architectures = profiles()
+        .iter()
+        .map(|profile| (profile.id(), profile.target_architecture()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        architectures,
+        vec![
+            ("fedora-44", ProfileTargetArchitecture::X86_64),
+            ("ubuntu-26.04", ProfileTargetArchitecture::Amd64),
+            ("arch", ProfileTargetArchitecture::X86_64),
+            ("solus", ProfileTargetArchitecture::X86_64),
+        ]
+    );
+}
+
+#[test]
+fn catalog_owns_exact_typed_package_abis() {
+    let abis = profiles()
+        .iter()
+        .map(|profile| (profile.id(), profile.target_package_abi()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        abis,
+        vec![
+            ("fedora-44", ProfileTargetPackageAbi::Glibc),
+            ("ubuntu-26.04", ProfileTargetPackageAbi::Gnu),
+            ("arch", ProfileTargetPackageAbi::Glibc),
+            ("solus", ProfileTargetPackageAbi::Glibc),
+        ]
+    );
+}
+
+#[test]
+fn only_alpm_profiles_declare_profile_scoped_architecture_tokens() {
+    for profile in profiles() {
+        if profile.id() == "arch" {
+            assert_eq!(profile.package_architecture_tokens(), ["x86_64", "any"]);
+        } else {
+            assert!(profile.package_architecture_tokens().is_empty());
+        }
+    }
+}
+
+#[test]
 fn catalog_declares_complete_exact_repository_membership() {
     let fedora = profile_by_public_id("fedora-44").unwrap();
     assert_eq!(fedora.members().len(), 2);

@@ -30,7 +30,7 @@ use crate::server::r2_durability::{
     MAX_BACKFILL_CONCURRENCY, R2DurabilityMode, R2DurabilityReport, run_r2_durability,
 };
 
-mod profile_refresh;
+pub(crate) mod profile_refresh;
 mod publication;
 mod refresh;
 mod repository_policy;

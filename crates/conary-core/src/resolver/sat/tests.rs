@@ -133,6 +133,7 @@ fn insert_debian_repo_package(
         format!("https://debian.invalid/{name}_{version}_{architecture}.deb"),
     );
     package.architecture = Some(architecture.to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
     package.debian_multi_arch = Some(multi_arch);
     package.insert(conn).unwrap()
 }
@@ -655,6 +656,7 @@ fn test_sat_install_uses_repo_native_debian_constraints_via_provider() {
         "ubuntu-main".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut app = RepositoryPackage::new(
@@ -710,6 +712,7 @@ fn test_sat_install_uses_repo_native_arch_constraints_via_provider() {
         "arch-core".to_string(),
         "https://geo.mirror.pkgbuild.com".to_string(),
     );
+    repo.source_profile = Some("arch".to_string());
     let repo_id = repo.insert(&conn).unwrap();
 
     let mut app = RepositoryPackage::new(
@@ -856,7 +859,7 @@ fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
         repository_id,
         "liballowed",
         "1",
-        "arm64",
+        "amd64",
         DebianMultiArch::Allowed,
     );
 
@@ -929,6 +932,236 @@ fn debian_multi_arch_qualifiers_reach_sat_without_name_suffix_matching() {
 }
 
 #[test]
+fn ubuntu_sat_candidates_enforce_profile_abi_for_names_and_provides() {
+    use crate::repository::dependency_model::DebianMultiArch;
+
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-abi".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    let musl_id = insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "abi-fixture",
+        "2",
+        "musl-linux-amd64",
+        DebianMultiArch::No,
+    );
+    RepositoryProvide::new(
+        musl_id,
+        "abi-fixture-virtual".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Debian,
+    )
+    .insert(&conn)
+    .unwrap();
+    insert_debian_repo_package(
+        &conn,
+        repository_id,
+        "abi-fixture",
+        "1",
+        "amd64",
+        DebianMultiArch::No,
+    );
+
+    let selected = solve_install(
+        &conn,
+        &[("abi-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(selected.conflict_message.is_none(), "{selected:?}");
+    assert_eq!(selected.install_order.len(), 1, "{selected:?}");
+    assert_eq!(selected.install_order[0].version, "1");
+    assert_eq!(
+        selected.install_order[0].architecture.as_deref(),
+        Some("amd64")
+    );
+
+    conn.execute(
+        "DELETE FROM repository_packages WHERE name = 'abi-fixture' AND architecture = 'amd64'",
+        [],
+    )
+    .unwrap();
+
+    let unresolved_name = solve_install(
+        &conn,
+        &[("abi-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(unresolved_name.install_order.is_empty());
+    assert!(unresolved_name.conflict_message.is_some());
+
+    let unresolved_provide = solve_install(
+        &conn,
+        &[("abi-fixture-virtual".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(unresolved_provide.install_order.is_empty());
+    assert!(unresolved_provide.conflict_message.is_some());
+}
+
+#[test]
+fn ubuntu_nonadmitted_capability_providers_are_typed_unresolved() {
+    use crate::repository::dependency_model::{DebianMultiArch, RepositoryCapabilityKind};
+
+    for (kind, persisted_kind, capability) in [
+        (
+            RepositoryCapabilityKind::Virtual,
+            "virtual",
+            "only-musl-virtual",
+        ),
+        (RepositoryCapabilityKind::File, "file", "/only-musl/file"),
+        (
+            RepositoryCapabilityKind::Soname,
+            "soname",
+            "libonly-musl.so.1",
+        ),
+    ] {
+        let (_dir, conn) = setup_test_db();
+        let mut repository = Repository::new(
+            format!("ubuntu-{persisted_kind}"),
+            "https://ubuntu.invalid".to_string(),
+        );
+        repository.source_profile = Some("ubuntu-26.04".to_string());
+        let repository_id = repository.insert(&conn).unwrap();
+
+        let consumer_id = insert_debian_repo_package(
+            &conn,
+            repository_id,
+            &format!("consumer-{persisted_kind}"),
+            "1",
+            "amd64",
+            DebianMultiArch::No,
+        );
+        let clause = RepositoryRequirementClause {
+            name: capability.to_string(),
+            capability_kind: Some(kind),
+            version_constraint: None,
+            architecture_qualifier: Default::default(),
+            native_text: Some(capability.to_string()),
+        };
+        let requirement = crate::repository::dependency_model::RepositoryRequirementGroup::simple(
+            crate::repository::dependency_model::RepositoryRequirementKind::Depends,
+            clause,
+        );
+        insert_typed_repo_requirement_group(&conn, consumer_id, &requirement);
+        let group_id = RepositoryRequirementGroup::find_by_repository_package(&conn, consumer_id)
+            .unwrap()[0]
+            .id
+            .unwrap();
+
+        let provider_id = insert_debian_repo_package(
+            &conn,
+            repository_id,
+            &format!("musl-provider-{persisted_kind}"),
+            "1",
+            "musl-linux-amd64",
+            DebianMultiArch::No,
+        );
+        RepositoryProvide::new(
+            provider_id,
+            capability.to_string(),
+            None,
+            persisted_kind.to_string(),
+            None,
+            VersionScheme::Debian,
+        )
+        .insert(&conn)
+        .unwrap();
+
+        let result = solve_exact_repository_package_with_policy(
+            &conn,
+            consumer_id,
+            "amd64",
+            &ResolutionPolicy::new().with_mixing(
+                crate::repository::resolution_policy::DependencyMixingPolicy::Permissive,
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            result,
+            SatExactResolution::Unresolved {
+                dependencies: vec![SatUnresolvedDependency {
+                    repository_package_id: consumer_id,
+                    repository_requirement_group_id: group_id,
+                }],
+            },
+            "{persisted_kind} provider must be excluded before it can become a SAT candidate"
+        );
+    }
+}
+
+#[test]
+fn conary_repository_without_a_source_profile_resolves_through_sat() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "conary-native".to_string(),
+        "https://conary.invalid".to_string(),
+    );
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "conary-fixture".to_string(),
+        "1.0.0".to_string(),
+        VersionScheme::Conary,
+        "sha256:conary-fixture".to_string(),
+        1,
+        "https://conary.invalid/conary-fixture.ccs".to_string(),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("conary-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert_eq!(result.install_order.len(), 1, "{result:?}");
+    assert_eq!(
+        result.install_order[0].version_scheme,
+        VersionScheme::Conary
+    );
+}
+
+#[test]
+fn eopkg_repository_candidate_uses_scheme_owned_machine_matching() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "solus-native".to_string(),
+        "https://solus.invalid".to_string(),
+    );
+    repository.source_profile = Some("solus".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "eopkg-fixture".to_string(),
+        "1.0-1".to_string(),
+        VersionScheme::Eopkg,
+        "sha256:eopkg-fixture".to_string(),
+        1,
+        "https://solus.invalid/eopkg-fixture.eopkg".to_string(),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("eopkg-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert_eq!(result.install_order.len(), 1, "{result:?}");
+    assert_eq!(result.install_order[0].version_scheme, VersionScheme::Eopkg);
+}
+
+#[test]
 fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
     use crate::repository::dependency_model::{
         DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,
@@ -962,7 +1195,7 @@ fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
         repository_id,
         "mail-provider",
         "1",
-        "arm64",
+        "amd64",
         DebianMultiArch::No,
     );
     let mut provide = RepositoryProvide::new(

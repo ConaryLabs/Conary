@@ -22,7 +22,7 @@ use conary_core::recipe::hermetic::{
     ReproducibilityRecord, SourceIdentity,
 };
 use conary_core::repository::catalog::{
-    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2,
+    CATALOG_CONTENT_SCHEMA_V1, CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3,
     PortableManifestAttestationV1, ProfileRevisionV2, ProfileSourceMemberV2, SourceStreamKindV1,
     SourceStreamV1, portable_chunk_count_v1, portable_manifest_size_v1,
 };
@@ -191,8 +191,9 @@ impl M4cFixture {
             })
             .collect::<Vec<_>>();
         let revision = ProfileRevisionV2 {
-            schema_version: PROFILE_REVISION_SCHEMA_V2,
+            schema_version: PROFILE_REVISION_SCHEMA_V3,
             profile: profile.id().to_string(),
+            target_architecture: profile.target_architecture(),
             projection_version: 1,
             counts: CatalogCountsV1 {
                 source_evidence: members.len() as u64,

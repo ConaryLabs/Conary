@@ -27,7 +27,7 @@ pub(super) fn order_packages_for_transaction(
     conn: &Connection,
     packages: &mut Vec<PreparedPackage>,
 ) -> Result<PromiseWitnessPlan> {
-    let native_architecture = conary_core::repository::registry::detect_system_arch();
+    let native_architecture = conary_core::repository::registry::detect_system_arch()?;
     // A lone package with no hard requirements has nothing to certify and no
     // edges to order, so the installed universe is not loaded for it. This is
     // the only excused shape: one package, zero Depends/PreDepends. Every

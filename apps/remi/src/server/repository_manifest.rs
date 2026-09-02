@@ -604,6 +604,39 @@ mod tests {
     }
 
     #[test]
+    fn debian_and_alpm_profiles_fetch_only_native_binary_indexes() {
+        let manifest = manifest();
+        let ubuntu = manifest
+            .repositories
+            .iter()
+            .filter(|repository| repository.profile == "ubuntu-26.04")
+            .collect::<Vec<_>>();
+        assert_eq!(ubuntu.len(), 16);
+        assert!(ubuntu.iter().all(|repository| matches!(
+            &repository.parser,
+            RepositoryParserConfig::Deb { architecture, .. } if architecture == "amd64"
+        )));
+        assert!(
+            ubuntu
+                .iter()
+                .all(|repository| repository.repository_identity.ends_with("-amd64"))
+        );
+
+        let arch = manifest
+            .repositories
+            .iter()
+            .filter(|repository| repository.profile == "arch")
+            .collect::<Vec<_>>();
+        assert_eq!(arch.len(), 3);
+        assert!(arch.iter().all(|repository| {
+            matches!(repository.parser, RepositoryParserConfig::Arch { .. })
+                && repository.url.ends_with("/os/x86_64")
+                && repository.repository_identity.ends_with("-x86_64")
+                && repository.policy_group.as_deref() == Some("official-x86_64")
+        }));
+    }
+
+    #[test]
     fn reconcile_is_idempotent_and_config_owned() {
         let (_temp, mut conn) = create_test_db();
         let desired = manifest();

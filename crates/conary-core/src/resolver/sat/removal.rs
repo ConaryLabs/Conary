@@ -15,7 +15,7 @@ use super::super::provider::{
 pub(super) fn build_provider_for_removal<'conn>(
     conn: &'conn Connection,
 ) -> Result<ConaryProvider<'conn>> {
-    let mut provider = ConaryProvider::new(conn);
+    let mut provider = ConaryProvider::new(conn)?;
     provider.load_installed_packages()?;
     provider.intern_all_dependency_version_sets()?;
     provider.load_removal_data()?;

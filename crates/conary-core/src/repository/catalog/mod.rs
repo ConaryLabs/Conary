@@ -40,30 +40,33 @@ pub use capacity::{
     CatalogScratchCapacityError, CatalogSourceCandidateScratchV1,
 };
 pub use contract::{
-    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V2, ProfileRevisionV2,
+    CatalogArtifactV1, CatalogCountsV1, PROFILE_REVISION_SCHEMA_V3, ProfileRevisionV2,
     ProfileSourceMemberV2, SOURCE_CATALOG_PROJECTION_VERSION_V2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1,
     SourceSnapshotV1, SourceStreamKindV1, SourceStreamV1,
 };
 #[cfg(feature = "native-alpm-oracle")]
 pub use parity::{
-    ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V1, AlpmParityMemberInput,
+    ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V2, AlpmParityMemberInput,
     produce_alpm_parity_oracle, produce_alpm_resolution_oracle, produce_alpm_resolution_survey,
 };
 pub use parity::{
-    CONARY_RESOLUTION_PROJECTION_SCHEMA_V1, ConaryResolutionCandidateV1,
+    CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,
     NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_PARITY_MANIFEST_FILE_NAME,
     NATIVE_PARITY_ORACLE_SCHEMA_V1, NATIVE_PARITY_PACKAGE_FILE_NAME,
-    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
-    NATIVE_RESOLUTION_ORACLE_SCHEMA_V1, NATIVE_RESOLUTION_ROOT_FILE_NAME,
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    NATIVE_RESOLUTION_ORACLE_SCHEMA_V2, NATIVE_RESOLUTION_ROOT_FILE_NAME,
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,
-    NATIVE_RESOLUTION_SURVEY_SCHEMA_V1, NativeParityArtifactV1, NativeParityComparisonError,
-    NativeParityComparisonV1, NativeParityCountsV1, NativeParityEcosystemV1, NativeParityFactV1,
+    NATIVE_RESOLUTION_SURVEY_SCHEMA_V2, NativeMachineEndiannessV1, NativeMachineIdentityV1,
+    NativeParityArtifactV1, NativeParityComparisonError, NativeParityComparisonV1,
+    NativeParityCountsV1, NativeParityEcosystemV1, NativeParityFactV1,
     NativeParityImplementationV1, NativeParityMismatchV1, NativeParityOracleReader,
     NativeParityOracleV1, NativeParityOracleWriter, NativeParityPackageIdentityV1,
-    NativeParityPackageV1, NativeResolutionArtifactV1, NativeResolutionComparisonError,
-    NativeResolutionComparisonV1, NativeResolutionCountsV1, NativeResolutionInstalledStateV1,
-    NativeResolutionMismatchV1, NativeResolutionOracleReader, NativeResolutionOracleV1,
+    NativeParityPackageV1, NativeResolutionArchitectureAdmissionV1,
+    NativeResolutionArchitectureDecisionV1, NativeResolutionArtifactV1,
+    NativeResolutionComparisonError, NativeResolutionComparisonV1, NativeResolutionCountsV1,
+    NativeResolutionInstalledStateV1, NativeResolutionMismatchV1,
+    NativeResolutionNotInstallableReasonV1, NativeResolutionOracleReader, NativeResolutionOracleV1,
     NativeResolutionOracleWriter, NativeResolutionOutcomeKindV1, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
@@ -84,13 +87,13 @@ pub use parity::{
 };
 #[cfg(feature = "native-debian-oracle")]
 pub use parity::{
-    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1,
+    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
     produce_debian_resolution_survey,
 };
 #[cfg(feature = "native-rpm-oracle")]
 pub use parity::{
-    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V3, RpmParityMemberInput,
+    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V4, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle, produce_rpm_resolution_survey,
 };
 pub use portable_integrity::{

@@ -37,6 +37,14 @@ fn insert_repo_package(
         }
         .to_string(),
     );
+    package.source_profile = Some(
+        match scheme {
+            VersionScheme::Debian => "ubuntu-26.04",
+            VersionScheme::Arch => "arch",
+            _ => "fedora-44",
+        }
+        .to_string(),
+    );
     package.insert(conn).unwrap();
     package
 }

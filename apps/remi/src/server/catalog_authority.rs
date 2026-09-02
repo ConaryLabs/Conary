@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 use conary_core::db::models::{
-    RemiActiveProfileRevision, RemiCatalogPhysicalAttestation, RemiCatalogResource,
-    RemiCatalogResourceKind, RemiProfileRevisionPin, RemiRevisionPinKind, RemiRuntimeSession,
+    RemiActiveProfileRevision, RemiCatalogPhysicalAttestation, RemiProfileRevisionPin,
+    RemiRevisionPinKind, RemiRuntimeSession,
 };
 use conary_core::repository::catalog::{
     CATALOG_FILE_NAME, CatalogReader, ProfileRevisionV2,
@@ -29,9 +29,13 @@ use rusqlite::{Transaction, TransactionBehavior};
 use super::database_writer::DatabaseWriter;
 use super::open_runtime_db;
 
+mod revision_inspection;
 mod source;
 #[cfg(test)]
 pub(crate) mod test_support;
+
+pub(crate) use revision_inspection::{ProfileRevisionInspection, SelectedProfileInspection};
+use revision_inspection::{ResolvedProfileCatalog, resolve_profile_selection};
 
 /// The configured roots used to resolve one active immutable profile catalog.
 #[derive(Clone)]
@@ -67,23 +71,6 @@ impl From<&RemiActiveProfileRevision> for ProfileRevisionSelection {
             profile_revision_sha256: active.profile_revision_sha256.clone(),
         }
     }
-}
-
-/// Bounded, read-only facts about one active immutable profile catalog.
-///
-/// This is deliberately not a serving reader. Health and deployment probes
-/// use it to establish active identity and population without replaying a
-/// multi-gigabyte catalog or claiming SQLite write authority.
-#[derive(Debug, Clone)]
-pub(crate) struct ActiveProfileInspection {
-    pub(crate) pointer: RemiActiveProfileRevision,
-    pub(crate) manifest: ProfileRevisionV2,
-}
-
-/// Bounded, read-only facts about one exact durable immutable profile catalog.
-#[derive(Debug, Clone)]
-pub(crate) struct SelectedProfileInspection {
-    pub(crate) manifest: ProfileRevisionV2,
 }
 
 impl CatalogAuthority {
@@ -134,59 +121,6 @@ impl CatalogAuthority {
                 )
             })?;
         Ok(ProfileRevisionSelection::from(&pointer))
-    }
-
-    /// Inspect the active pointer, strict manifest, and bounded filesystem
-    /// identity without opening or hashing the catalog contents.
-    pub(crate) fn inspect_active_profile(
-        &self,
-        source_profile: &str,
-    ) -> Result<ActiveProfileInspection> {
-        let flags =
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
-            format!("open Remi operational database to inspect profile '{source_profile}'")
-        })?;
-        let pointer = RemiActiveProfileRevision::find(&conn, source_profile)
-            .context("resolve active Remi profile revision pointer")?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "profile '{source_profile}' has no active immutable catalog revision"
-                )
-            })?;
-        let resolved = resolve_profile_selection(
-            &conn,
-            &self.catalog_dir,
-            ProfileRevisionSelection::from(&pointer),
-        )?;
-        inspect_resolved_profile_files(&resolved)?;
-        Ok(ActiveProfileInspection {
-            pointer,
-            manifest: resolved.manifest,
-        })
-    }
-
-    /// Inspect one exact registered revision without opening or hashing its
-    /// catalog contents. Callers may use these bounded facts to decide whether
-    /// an exact registered, independently reopened bundle is eligible for
-    /// immutable reuse.
-    pub(crate) fn inspect_selected_profile(
-        &self,
-        selection: &ProfileRevisionSelection,
-    ) -> Result<SelectedProfileInspection> {
-        let flags =
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = Connection::open_with_flags(&self.db_path, flags).with_context(|| {
-            format!(
-                "open Remi operational database to inspect profile '{}' revision {}",
-                selection.source_profile, selection.profile_revision_sha256
-            )
-        })?;
-        let resolved = resolve_profile_selection(&conn, &self.catalog_dir, selection.clone())?;
-        inspect_resolved_profile_files(&resolved)?;
-        Ok(SelectedProfileInspection {
-            manifest: resolved.manifest,
-        })
     }
 
     /// Independently reopen one exact registered revision without granting it
@@ -682,13 +616,6 @@ fn open_active_profile_from_connection(
     open_resolved_profile(resolve_active_profile(conn, catalog_dir, source_profile)?)
 }
 
-struct ResolvedProfileCatalog {
-    selection: ProfileRevisionSelection,
-    manifest: ProfileRevisionV2,
-    bundle_path: PathBuf,
-    physical_attestation: RemiCatalogPhysicalAttestation,
-}
-
 fn resolve_active_profile(
     conn: &Connection,
     catalog_dir: &Path,
@@ -708,113 +635,6 @@ fn resolve_active_profile(
     }
 
     resolve_profile_selection(conn, catalog_dir, ProfileRevisionSelection::from(&pointer))
-}
-
-fn resolve_profile_selection(
-    conn: &Connection,
-    catalog_dir: &Path,
-    selection: ProfileRevisionSelection,
-) -> Result<ResolvedProfileCatalog> {
-    let resource = RemiCatalogResource::find_profile_revision(
-        conn,
-        &selection.source_profile,
-        &selection.profile_revision_sha256,
-    )
-    .context("resolve selected profile catalog resource")?
-    .ok_or_else(|| {
-        anyhow::anyhow!(
-            "selected profile '{}' revision {} has no catalog resource",
-            selection.source_profile,
-            selection.profile_revision_sha256
-        )
-    })?;
-
-    if resource.kind != RemiCatalogResourceKind::ProfileRevision {
-        bail!(
-            "selected profile '{}' revision {} has resource kind {:?}",
-            selection.source_profile,
-            selection.profile_revision_sha256,
-            resource.kind
-        );
-    }
-    if !resource.durable {
-        bail!(
-            "selected profile '{}' revision {} is not durable",
-            selection.source_profile,
-            selection.profile_revision_sha256
-        );
-    }
-    if resource.resource_sha256 != selection.profile_revision_sha256 {
-        bail!(
-            "selected profile '{}' and resource revision digests disagree",
-            selection.source_profile
-        );
-    }
-    if resource.source_profile != selection.source_profile {
-        bail!(
-            "selected profile revision {} belongs to '{}' instead of '{}'",
-            selection.profile_revision_sha256,
-            resource.source_profile,
-            selection.source_profile
-        );
-    }
-
-    let manifest = deserialize_profile_revision(&resource)
-        .context("deserialize selected profile revision manifest")?;
-    if manifest.profile != selection.source_profile {
-        bail!(
-            "selected profile revision {} names '{}' instead of '{}'",
-            selection.profile_revision_sha256,
-            manifest.profile,
-            selection.source_profile
-        );
-    }
-
-    let manifest_digest = manifest
-        .manifest_sha256()
-        .context("compute selected profile revision digest")?;
-    if manifest_digest != selection.profile_revision_sha256
-        || manifest_digest != resource.resource_sha256
-    {
-        bail!(
-            "selected profile '{}' manifest and resource digests disagree",
-            selection.source_profile
-        );
-    }
-    if resource.artifact_sha256 != manifest.catalog.sha256 {
-        bail!(
-            "selected profile '{}' resource and manifest artifact digests disagree",
-            selection.source_profile
-        );
-    }
-    let manifest_artifact_size = i64::try_from(manifest.catalog.size)
-        .context("profile catalog artifact size exceeds SQLite integer range")?;
-    if resource.artifact_size != manifest_artifact_size {
-        bail!(
-            "selected profile '{}' resource and manifest artifact sizes disagree",
-            selection.source_profile
-        );
-    }
-    if resource.logical_digest_sha256 != manifest.logical_digest_sha256 {
-        bail!(
-            "selected profile '{}' resource and manifest logical digests disagree",
-            selection.source_profile
-        );
-    }
-
-    // The path is derived solely from the typed manifest profile and the exact
-    // pointer digest. No path-like value is accepted from operational SQLite.
-    let bundle_path = catalog_dir
-        .join("profiles")
-        .join(&manifest.profile)
-        .join(&selection.profile_revision_sha256);
-
-    Ok(ResolvedProfileCatalog {
-        selection,
-        manifest,
-        bundle_path,
-        physical_attestation: resource.physical_attestation,
-    })
 }
 
 fn insert_reader_pin(
@@ -910,29 +730,6 @@ fn unix_seconds() -> Result<i64> {
         .context("system time precedes Unix epoch")?
         .as_secs();
     i64::try_from(seconds).context("system time exceeds SQLite integer range")
-}
-
-fn deserialize_profile_revision(resource: &RemiCatalogResource) -> Result<ProfileRevisionV2> {
-    let manifest: ProfileRevisionV2 = serde_json::from_str(&resource.manifest_json)
-        .context("parse ProfileRevisionV2 manifest JSON")?;
-    manifest
-        .validate()
-        .context("validate ProfileRevisionV2 manifest")?;
-    let canonical = conary_core::json::canonical_json(&manifest)
-        .map_err(anyhow::Error::msg)
-        .context("canonicalize ProfileRevisionV2 manifest")?;
-    if canonical != resource.manifest_json.as_bytes() {
-        bail!("profile revision manifest JSON is not canonical");
-    }
-    let raw_digest = conary_core::hash::sha256(resource.manifest_json.as_bytes());
-    if raw_digest != resource.resource_sha256 {
-        bail!(
-            "profile revision manifest digest mismatch: expected {}, got {}",
-            resource.resource_sha256,
-            raw_digest
-        );
-    }
-    Ok(manifest)
 }
 
 #[cfg(test)]

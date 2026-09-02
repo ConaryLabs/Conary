@@ -13,6 +13,13 @@ fn architecture(ecosystem: NativeParityEcosystemV1) -> &'static str {
 }
 
 fn candidate_fixture(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
+    candidate_fixture_with(ecosystem, |_, _| {})
+}
+
+fn candidate_fixture_with(
+    ecosystem: NativeParityEcosystemV1,
+    customize: impl FnOnce(&[ProfileSourceMemberV2], &mut Vec<CatalogPackageRecordV1>),
+) -> CandidateFixture {
     let directory = tempfile::tempdir().unwrap();
     let members = members(ecosystem);
     let scope = CatalogScopeV1::Profile {
@@ -81,13 +88,19 @@ fn candidate_fixture(ecosystem: NativeParityEcosystemV1) -> CandidateFixture {
         'e',
     );
     unresolved.requirement_groups = vec![requirement("pre_depends", "absent")];
-    let content =
-        CatalogContentV1::new(scope, evidence, vec![dependency, resolved, unresolved]).unwrap();
+    let mut packages = vec![dependency, resolved, unresolved];
+    customize(&members, &mut packages);
+    let content = CatalogContentV1::new(scope, evidence, packages).unwrap();
     let path = directory.path().join("catalog.sqlite");
     let binding = write_catalog_candidate(&path, &content).unwrap();
     let profile = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: profile_name(ecosystem).to_string(),
+        target_architecture: crate::repository::supported_profiles::profile_by_public_id(
+            profile_name(ecosystem),
+        )
+        .unwrap()
+        .target_architecture(),
         projection_version: 1,
         members,
         catalog: binding.artifact.clone(),
@@ -178,6 +191,7 @@ fn write_native_resolution(
         },
         NativeResolutionPolicyV1 {
             architecture: architecture(ecosystem).to_string(),
+            architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
             installed_state: NativeResolutionInstalledStateV1::Empty,
             roots: NativeResolutionRootPolicyV1::EveryExactPackage,
             positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -241,6 +255,37 @@ fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
 }
 
 #[test]
+fn candidate_producer_rejects_operator_architecture_before_writing_roots() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture(ecosystem);
+    let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+    let native = write_native_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        &expected_roots(&candidate),
+    );
+    let output_parent = tempfile::tempdir().unwrap();
+    let output = output_parent.path().join("candidate-resolution");
+
+    let error = produce_conary_resolution_candidate(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        "aarch64",
+        &output,
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::Error::ProfileArchitectureMismatch { .. }
+    ));
+    assert!(!output.exists());
+}
+
+#[test]
 fn candidate_crawl_rejects_native_closure_drift() {
     let ecosystem = NativeParityEcosystemV1::Rpm;
     let candidate = candidate_fixture(ecosystem);
@@ -279,4 +324,75 @@ fn candidate_crawl_rejects_native_closure_drift() {
     .unwrap_err();
     assert!(error.to_string().contains("DependencyClosure"));
     assert!(fs::metadata(output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME)).is_ok());
+}
+
+#[test]
+fn candidate_crawl_excludes_foreign_root_and_projects_its_provider_edge() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture_with(ecosystem, |members, packages| {
+        let mut provider = package(ecosystem, members, "cross-provider", "i686", 0, 'f');
+        provider.requirement_groups.clear();
+        let mut root = package(ecosystem, members, "cross-provider-root", "x86_64", 1, 'g');
+        root.requirement_groups = vec![requirement("depends", "virtual-cross-provider")];
+        packages.extend([provider, root]);
+    });
+    let package_rows = rows(&candidate);
+    let package_oracle = oracle(&candidate, ecosystem, package_rows.clone());
+    let provider = package_rows
+        .iter()
+        .find(|package| package.name == "cross-provider")
+        .unwrap();
+    let root = package_rows
+        .iter()
+        .find(|package| package.name == "cross-provider-root")
+        .unwrap();
+    let mut expected = expected_roots(&candidate);
+    expected.push(NativeResolutionRootV1 {
+        root_package_key_sha256: provider.package_key_sha256.clone(),
+        outcome: NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+        },
+    });
+    expected.push(NativeResolutionRootV1 {
+        root_package_key_sha256: root.package_key_sha256.clone(),
+        outcome: NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: root.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(
+                    root.requirement_groups.first().unwrap(),
+                )
+                .unwrap(),
+            }],
+        },
+    });
+    expected.sort_by(|left, right| {
+        left.root_package_key_sha256
+            .cmp(&right.root_package_key_sha256)
+    });
+    let excluded_position = expected
+        .iter()
+        .position(|candidate| candidate.root_package_key_sha256 == provider.package_key_sha256)
+        .unwrap();
+    assert!(excluded_position + 1 < expected.len());
+    let native = write_native_resolution(&candidate, &package_oracle, ecosystem, &expected);
+    let output_parent = tempfile::tempdir().unwrap();
+    let output = output_parent.path().join("candidate-resolution");
+
+    let produced = produce_conary_resolution_candidate(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        "x86_64",
+        &output,
+    )
+    .unwrap();
+
+    assert_eq!(produced.manifest.artifact.counts.roots, 5);
+    assert_eq!(produced.manifest.artifact.counts.not_installable_roots, 1);
+    assert_eq!(produced.manifest.artifact.counts.unresolved_roots, 2);
+    assert_eq!(
+        produced.comparison.counts,
+        produced.manifest.artifact.counts
+    );
 }

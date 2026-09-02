@@ -53,7 +53,7 @@ fn insert_repo_fixture(conn: &rusqlite::Connection, package: &mut RepositoryPack
 }
 
 fn root_provider<'db>(conn: &'db rusqlite::Connection, root_names: &[&str]) -> ConaryProvider<'db> {
-    let mut provider = ConaryProvider::new(conn);
+    let mut provider = ConaryProvider::new(conn).unwrap();
     provider.set_root_request_names(root_names.iter().map(|name| (*name).to_string()));
     provider
 }
@@ -157,7 +157,7 @@ fn repo_identity(
 #[test]
 fn resolver_uses_loaded_pin_authority_and_excludes_uncompiled_candidates() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     let name = provider.intern_name("fixture").unwrap();
     let mut installed = installed_identity("fixture", "1", VersionScheme::Rpm, Some(7));
     installed.installed_pinned = true;
@@ -368,9 +368,117 @@ fn load_repo_packages_uses_normalized_repository_provides() {
 }
 
 #[test]
+fn repository_row_entry_points_share_single_admission_gate() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-entry-points".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "musl-provider".to_string(),
+        "1".to_string(),
+        VersionScheme::Debian,
+        "sha256:musl-provider".to_string(),
+        1,
+        "https://ubuntu.invalid/musl-provider.deb".to_string(),
+    );
+    package.architecture = Some("musl-linux-amd64".to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
+    package.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    let repository_package_id = package.insert(&conn).unwrap();
+
+    for (kind, capability) in [
+        ("virtual", "entry-point-virtual"),
+        ("file", "/entry-point/file"),
+        ("soname", "libentry-point.so.1"),
+    ] {
+        RepositoryProvide::new(
+            repository_package_id,
+            capability.to_string(),
+            None,
+            kind.to_string(),
+            None,
+            VersionScheme::Debian,
+        )
+        .insert(&conn)
+        .unwrap();
+    }
+
+    let mut provider = root_provider(
+        &conn,
+        &[
+            "musl-provider",
+            "entry-point-virtual",
+            "/entry-point/file",
+            "libentry-point.so.1",
+        ],
+    );
+    provider.build_provides_index().unwrap();
+    provider
+        .load_repo_packages_for_names(&[
+            "musl-provider".to_string(),
+            "entry-point-virtual".to_string(),
+            "/entry-point/file".to_string(),
+            "libentry-point.so.1".to_string(),
+        ])
+        .unwrap();
+
+    assert!(
+        provider
+            .solvables
+            .iter()
+            .all(|candidate| candidate.repo_package_id != Some(repository_package_id)),
+        "name, virtual, file, and soname discovery must all converge on repository-row admission"
+    );
+    assert!(
+        !provider
+            .loaded_repo_package_ids
+            .contains(&repository_package_id)
+    );
+}
+
+#[test]
+fn unknown_repository_architecture_fails_at_solvable_load() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "ubuntu-unknown-architecture".to_string(),
+        "https://ubuntu.invalid".to_string(),
+    );
+    repository.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "unknown-architecture".to_string(),
+        "1".to_string(),
+        VersionScheme::Debian,
+        "sha256:unknown-architecture".to_string(),
+        1,
+        "https://ubuntu.invalid/unknown-architecture.deb".to_string(),
+    );
+    package.architecture = Some("future-libc-linux-amd64".to_string());
+    package.source_profile = Some("ubuntu-26.04".to_string());
+    package.debian_multi_arch = Some(crate::repository::dependency_model::DebianMultiArch::No);
+    package.insert(&conn).unwrap();
+
+    let mut provider = root_provider(&conn, &["unknown-architecture"]);
+    let error = provider
+        .load_repo_packages_for_names(&["unknown-architecture".to_string()])
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::UnknownArchitectureToken { scheme, token }
+            if scheme == "debian" && token == "future-libc-linux-amd64"
+    ));
+    assert!(provider.solvables.is_empty());
+}
+
+#[test]
 fn test_intern_name_roundtrip() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let id1 = provider.intern_name("nginx").unwrap();
     let id2 = provider.intern_name("nginx").unwrap();
@@ -385,7 +493,7 @@ fn test_intern_name_roundtrip() {
 #[test]
 fn test_version_set_filtering() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let name_id = provider.intern_name("lib").unwrap();
     let constraint = VersionConstraint::parse(">= 2.0.0").unwrap();
@@ -425,7 +533,7 @@ fn test_version_set_filtering() {
 #[test]
 fn test_favored_installed() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let name_id = provider.intern_name("nginx").unwrap();
 
@@ -460,7 +568,7 @@ fn test_favored_installed() {
 #[test]
 fn test_unknown_version_set_ids_are_rejected_before_solver_callbacks() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let err = provider
         .intern_version_set(
@@ -479,7 +587,7 @@ fn test_unknown_version_set_ids_are_rejected_before_solver_callbacks() {
 #[test]
 fn test_corrupt_solvable_name_index_is_a_typed_invariant_error() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider
         .add_solvable(installed_identity(
             "pkg",
@@ -585,7 +693,7 @@ fn test_display_methods() {
     use resolvo::Interner;
 
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let name_id = provider.intern_name("nginx").unwrap();
     let vs_id = provider
@@ -612,7 +720,7 @@ fn test_display_methods() {
 #[test]
 fn filter_candidates_uses_provide_version_for_virtual_capabilities() {
     let (_dir, conn) = setup_test_db();
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
 
     let capability_name = provider.intern_name("kernel-modules-core-uname-r").unwrap();
     let version_set = provider
@@ -961,7 +1069,7 @@ fn installed_debian_package_uses_native_version_scheme() {
 
     insert_installed_requirement(&conn, trove_id, VersionScheme::Debian, "libgcc-s1 (>= 3.0)");
 
-    let mut provider = ConaryProvider::new(&conn);
+    let mut provider = ConaryProvider::new(&conn).unwrap();
     provider.load_installed_packages().unwrap();
 
     // Version should use Debian scheme

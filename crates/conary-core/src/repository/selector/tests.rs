@@ -10,7 +10,7 @@ use rusqlite::Connection;
 
 #[test]
 fn test_detect_architecture() {
-    let arch = PackageSelector::detect_architecture();
+    let arch = PackageSelector::detect_architecture().unwrap();
     // Should return one of the known architectures
     assert!(!arch.is_empty());
     // On most development machines, this will be x86_64
@@ -22,28 +22,28 @@ fn test_architecture_compatibility() {
     let system_arch = "x86_64";
 
     // noarch is compatible with everything
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Rpm,
         Some("noarch"),
         system_arch
     ));
 
     // Exact match is compatible
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Rpm,
         Some("x86_64"),
         system_arch
     ));
 
     // Different arch is not compatible
-    assert!(!PackageSelector::is_architecture_compatible(
+    assert!(!PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Rpm,
         Some("aarch64"),
         system_arch
     ));
 
     // Missing architecture is not resolution authority.
-    assert!(!PackageSelector::is_architecture_compatible(
+    assert!(!PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Rpm,
         None,
         system_arch
@@ -52,7 +52,7 @@ fn test_architecture_compatibility() {
 
 #[test]
 fn test_debian_amd64_compatible_with_x86_64() {
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Debian,
         Some("amd64"),
         "x86_64"
@@ -61,7 +61,7 @@ fn test_debian_amd64_compatible_with_x86_64() {
 
 #[test]
 fn test_debian_arm64_compatible_with_aarch64() {
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Debian,
         Some("arm64"),
         "aarch64"
@@ -70,7 +70,7 @@ fn test_debian_arm64_compatible_with_aarch64() {
 
 #[test]
 fn test_debian_i386_compatible_with_i686() {
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Debian,
         Some("i386"),
         "i686"
@@ -96,8 +96,43 @@ fn architecture_equivalence_requires_both_owning_schemes() {
 }
 
 #[test]
+fn ordinary_matching_preserves_abi_dimensions() {
+    for (scheme, package, native) in [
+        (VersionScheme::Debian, "armel", "armhf"),
+        (VersionScheme::Debian, "mips", "mipsel"),
+        (VersionScheme::Debian, "mips64", "mips64el"),
+        (VersionScheme::Debian, "ppc64", "ppc64el"),
+        (VersionScheme::Debian, "sparc", "sparc64"),
+        (VersionScheme::Rpm, "armv7l", "armv7hl"),
+    ] {
+        assert!(!PackageSelector::is_machine_architecture_compatible(
+            scheme,
+            Some(package),
+            native,
+        ));
+    }
+}
+
+#[test]
+fn independent_tokens_resolve_to_the_same_native_identity_across_schemes() {
+    for (left_scheme, left, right_scheme, right) in [
+        (VersionScheme::Rpm, "noarch", VersionScheme::Debian, "all"),
+        (VersionScheme::Debian, "all", VersionScheme::Arch, "any"),
+        (VersionScheme::Arch, "any", VersionScheme::Rpm, "x86_64"),
+    ] {
+        assert!(package_architectures_match(
+            left_scheme,
+            left,
+            right_scheme,
+            right,
+            "x86_64",
+        ));
+    }
+}
+
+#[test]
 fn test_debian_all_architecture_compatible() {
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Debian,
         Some("all"),
         "x86_64"
@@ -106,7 +141,7 @@ fn test_debian_all_architecture_compatible() {
 
 #[test]
 fn test_arch_any_architecture_compatible() {
-    assert!(PackageSelector::is_architecture_compatible(
+    assert!(PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Arch,
         Some("any"),
         "x86_64"
@@ -115,17 +150,17 @@ fn test_arch_any_architecture_compatible() {
 
 #[test]
 fn architecture_independent_tokens_are_not_cross_scheme_aliases() {
-    assert!(!PackageSelector::is_architecture_compatible(
+    assert!(!PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Rpm,
         Some("all"),
         "x86_64",
     ));
-    assert!(!PackageSelector::is_architecture_compatible(
+    assert!(!PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Debian,
         Some("noarch"),
         "x86_64",
     ));
-    assert!(!PackageSelector::is_architecture_compatible(
+    assert!(!PackageSelector::is_machine_architecture_compatible(
         VersionScheme::Arch,
         Some("all"),
         "x86_64",
@@ -147,6 +182,7 @@ fn select_best_uses_debian_version_ordering() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
     repo.priority = 10;
     repo.insert(&conn).unwrap();
     let repository = Repository::find_by_name(&conn, "ubuntu-noble")
@@ -186,6 +222,109 @@ fn select_best_uses_debian_version_ordering() {
 }
 
 #[test]
+fn search_rejects_unknown_architecture_instead_of_selecting_older_version() {
+    let conn = test_db();
+
+    let mut repo = Repository::new(
+        "ubuntu-future".to_string(),
+        "https://archive.ubuntu.com/ubuntu".to_string(),
+    );
+    repo.source_profile = Some("ubuntu-26.04".to_string());
+    let repository_id = repo.insert(&conn).unwrap();
+
+    for (version, architecture) in [("1.0", "amd64"), ("2.0", "future-dpkg64")] {
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "demo".to_string(),
+            version.to_string(),
+            VersionScheme::Debian,
+            format!("sha256:{version}"),
+            1,
+            format!("https://archive.ubuntu.com/ubuntu/pool/demo_{version}_{architecture}.deb"),
+        );
+        package.architecture = Some(architecture.to_string());
+        package.insert(&conn).unwrap();
+    }
+
+    let error = PackageSelector::find_best_package(
+        &conn,
+        "demo",
+        &SelectionOptions {
+            architecture: Some("amd64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        Error::UnknownArchitectureToken { ref scheme, ref token }
+            if scheme == "debian" && token == "future-dpkg64"
+    ));
+}
+
+#[test]
+fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
+    let conn = test_db();
+    let mut repository = Repository::new(
+        "fedora-profile-target".to_string(),
+        "https://fedora.invalid".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    for architecture in ["x86_64", "noarch", "aarch64"] {
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "profile-target-fixture".to_string(),
+            format!("1-{architecture}"),
+            VersionScheme::Rpm,
+            format!("sha256:{architecture}"),
+            1,
+            format!("https://fedora.invalid/profile-target-fixture.{architecture}.rpm"),
+        );
+        package.architecture = Some(architecture.to_string());
+        package.insert(&conn).unwrap();
+    }
+
+    let candidates = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            architecture: Some("x86_64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap();
+    let architectures = candidates
+        .iter()
+        .map(|candidate| candidate.package.architecture.as_deref().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        architectures,
+        std::collections::BTreeSet::from(["noarch", "x86_64"])
+    );
+
+    let error = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            architecture: Some("aarch64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ProfileArchitectureMismatch {
+            ref profile,
+            ref expected,
+            ref actual,
+        } if profile == "fedora-44" && expected == "x86_64" && actual == "aarch64"
+    ));
+}
+
+#[test]
 fn policy_repo_scope_filters_root_request() {
     let conn = test_db();
 
@@ -194,6 +333,7 @@ fn policy_repo_scope_filters_root_request() {
         "fedora-44".to_string(),
         "https://mirrors.fedoraproject.org/metalink".to_string(),
     );
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     fedora_repo.priority = 10;
     fedora_repo.insert(&conn).unwrap();
     let fedora = Repository::find_by_name(&conn, "fedora-44")
@@ -204,6 +344,7 @@ fn policy_repo_scope_filters_root_request() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
@@ -258,6 +399,7 @@ fn policy_repo_scope_does_not_filter_transitive_deps() {
         "fedora-44".to_string(),
         "https://mirrors.fedoraproject.org/metalink".to_string(),
     );
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     fedora_repo.priority = 10;
     fedora_repo.insert(&conn).unwrap();
     let fedora = Repository::find_by_name(&conn, "fedora-44")
@@ -268,6 +410,7 @@ fn policy_repo_scope_does_not_filter_transitive_deps() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
@@ -320,8 +463,8 @@ fn strict_policy_rejects_cross_profile_dep() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
-    ubuntu_repo.priority = 10;
     ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
+    ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -407,8 +550,8 @@ fn permissive_policy_allows_cross_profile_dep() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
-    ubuntu_repo.priority = 10;
     ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
+    ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -447,8 +590,8 @@ fn guarded_policy_allows_cross_profile_dep() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
-    ubuntu_repo.priority = 10;
     ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
+    ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
         .unwrap()
@@ -489,6 +632,7 @@ fn equal_priority_cross_scheme_candidates_are_typed_ambiguity() {
         "fedora-44".to_string(),
         "https://mirrors.fedoraproject.org/metalink".to_string(),
     );
+    fedora_repo.source_profile = Some("fedora-44".to_string());
     fedora_repo.priority = 10;
     fedora_repo.insert(&conn).unwrap();
     let fedora = Repository::find_by_name(&conn, "fedora-44")
@@ -499,6 +643,7 @@ fn equal_priority_cross_scheme_candidates_are_typed_ambiguity() {
         "ubuntu-noble".to_string(),
         "https://archive.ubuntu.com/ubuntu".to_string(),
     );
+    ubuntu_repo.source_profile = Some("ubuntu-26.04".to_string());
     ubuntu_repo.priority = 10;
     ubuntu_repo.insert(&conn).unwrap();
     let ubuntu = Repository::find_by_name(&conn, "ubuntu-noble")
@@ -570,8 +715,8 @@ fn repology_signal_cannot_override_exact_repository_priority() {
         "fedora-remi".to_string(),
         "https://example.invalid".to_string(),
     );
-    fedora_repo.priority = 20;
     fedora_repo.source_profile = Some("fedora-44".to_string());
+    fedora_repo.priority = 20;
     fedora_repo.insert(&conn).unwrap();
     let fedora = Repository::find_by_name(&conn, "fedora-remi")
         .unwrap()

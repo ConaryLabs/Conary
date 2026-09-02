@@ -54,19 +54,29 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
     objects: dict[str, bytes] = {}
     candidates: list[str] = []
     source_facts = (
-        ("fedora-44", "rpm", "rpm", "rpm", "rpm_primary", "repodata/primary.xml.gz"),
+        (
+            "fedora-44",
+            "x86_64",
+            "rpm",
+            "rpm",
+            "rpm",
+            "rpm_primary",
+            "repodata/primary.xml.gz",
+        ),
         (
             "ubuntu-26.04",
+            "amd64",
             "deb",
             "deb",
             "debian",
             "debian_packages",
             "dists/resolute/main/binary-amd64/Packages.xz",
         ),
-        ("arch", "alpm", "arch", "arch", "arch_database", "extra.db"),
+        ("arch", "x86_64", "alpm", "arch", "arch", "arch_database", "extra.db"),
     )
     for ordinal, (
         profile,
+        target_architecture,
         ecosystem,
         parser_format,
         trust_format,
@@ -113,8 +123,9 @@ def build_fixture() -> tuple[dict[str, object], dict[str, bytes], list[str]]:
         }
         source_digest = digest_json(source)
         revision = {
-            "schema_version": 2,
+            "schema_version": 3,
             "profile": profile,
+            "target_architecture": target_architecture,
             "projection_version": 2,
             "members": [
                 {

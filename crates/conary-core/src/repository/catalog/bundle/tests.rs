@@ -3,7 +3,7 @@
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCandidateWriter, CatalogContentV1, CatalogPackageOriginV1,
-    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V2,
+    CatalogPackageRecordV1, CatalogScopeV1, CatalogSourceEvidenceV1, PROFILE_REVISION_SCHEMA_V3,
     ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceEcosystemV1,
     SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
     SourceStreamV1, logical_verification_passes_for_test, physical_verification_passes_for_test,
@@ -182,8 +182,10 @@ fn profile_content(source_snapshot_sha256: &str) -> CatalogContentV1 {
 
 fn profile_manifest(binding: &CatalogBindingV1, source_snapshot_sha256: &str) -> ProfileRevisionV2 {
     ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "fedora-44".to_string(),
+        target_architecture:
+            crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
         projection_version: 1,
         members: vec![ProfileSourceMemberV2 {
             ordinal: 0,
@@ -989,8 +991,10 @@ fn profile_bundle_rejects_mixed_member_evidence() {
     .unwrap();
     let binding = write_catalog_candidate(candidate.join(CATALOG_FILE_NAME), &content).unwrap();
     let manifest = ProfileRevisionV2 {
-        schema_version: PROFILE_REVISION_SCHEMA_V2,
+        schema_version: PROFILE_REVISION_SCHEMA_V3,
         profile: "fedora-44".to_string(),
+        target_architecture:
+            crate::repository::supported_profiles::ProfileTargetArchitecture::X86_64,
         projection_version: 1,
         members: vec![ProfileSourceMemberV2 {
             ordinal: 0,

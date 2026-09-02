@@ -454,7 +454,7 @@ fn atom_satisfied(
         None | Some(RepositoryCapabilityKind::PackageName)
     ) && package.name == clause.name;
     if is_package_identity_name
-        && constraint_architecture_matches_package(&constraint, package, native_architecture)
+        && constraint_architecture_matches_package(&constraint, package, native_architecture)?
         && constraint_matches_package(&constraint, &package.version, package.version_scheme)?
     {
         return Ok(true);
@@ -477,7 +477,7 @@ fn atom_satisfied(
             &provide.architecture_qualifier,
             provide.version_scheme,
             native_architecture,
-        ) && constraint_matches_provide(
+        )? && constraint_matches_provide(
             &constraint,
             provide.version.as_deref(),
             provide.version_relation,

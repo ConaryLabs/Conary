@@ -101,6 +101,14 @@ fn copy_dir_filtered(src: &Path, dst: &Path, skip_names: &[&str]) -> Result<()> 
         }
     }
 
+    fs::set_permissions(dst, fs::metadata(src)?.permissions()).with_context(|| {
+        format!(
+            "failed to preserve directory permissions from {} on {}",
+            src.display(),
+            dst.display()
+        )
+    })?;
+
     Ok(())
 }
 
@@ -442,6 +450,52 @@ mod tests {
     use std::fs;
     use std::path::Path;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn filtered_copy_preserves_directory_modes() {
+        let source = tempfile::tempdir().expect("create source directory");
+        let destination = tempfile::tempdir().expect("create destination directory");
+        let fixture = source.path().join("fixture");
+        let nested = fixture.join("usr/bin");
+        fs::create_dir_all(&nested).expect("create fixture tree");
+        fs::set_permissions(&fixture, fs::Permissions::from_mode(0o751))
+            .expect("set fixture root mode");
+        fs::set_permissions(fixture.join("usr"), fs::Permissions::from_mode(0o755))
+            .expect("set usr mode");
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o750)).expect("set nested mode");
+
+        let copied = destination.path().join("fixture");
+        super::copy_dir_filtered(&fixture, &copied, &[]).expect("copy fixture tree");
+
+        assert_eq!(
+            fs::metadata(&copied)
+                .expect("copied root metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o751
+        );
+        assert_eq!(
+            fs::metadata(copied.join("usr"))
+                .expect("copied usr metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o755
+        );
+        assert_eq!(
+            fs::metadata(copied.join("usr/bin"))
+                .expect("copied nested metadata")
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o750
+        );
+    }
 
     #[test]
     fn stage_build_context_creates_small_remi_context() {

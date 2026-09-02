@@ -266,7 +266,7 @@ pub fn solve_requirement_groups_with_policy(
     policy: &ResolutionPolicy,
 ) -> Result<SatResolution> {
     let depending_architecture =
-        crate::repository::registry::native_architecture_for_scheme(version_scheme);
+        crate::repository::registry::native_architecture_for_scheme(version_scheme)?;
     solve_requirement_groups_for_architecture_with_policy(
         conn,
         groups,
@@ -404,7 +404,6 @@ pub fn positive_requirement_group_satisfied_by_package(
                     native_architecture,
                     package.name == atom.name,
                 )
-                .map_err(Error::from)
             }
             Expression::And(operands) => {
                 for operand in operands {
@@ -441,7 +440,7 @@ pub fn positive_requirement_group_satisfied_by_package(
         }
     }
 
-    let native_architecture = crate::repository::registry::detect_system_arch();
+    let native_architecture = crate::repository::registry::detect_system_arch()?;
     let depending_architecture = package
         .architecture
         .as_deref()
@@ -493,12 +492,12 @@ pub fn solve_package_requirements_with_policy(
             external_requirements.push(requirement.clone());
         }
     }
-    let depending_architecture = package
-        .architecture()
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            crate::repository::registry::native_architecture_for_scheme(package.version_scheme())
-        });
+    let depending_architecture = match package.architecture() {
+        Some(architecture) => architecture.to_string(),
+        None => {
+            crate::repository::registry::native_architecture_for_scheme(package.version_scheme())?
+        }
+    };
     solve_requirement_groups_for_architecture_with_policy(
         conn,
         &external_requirements,

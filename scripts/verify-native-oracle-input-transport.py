@@ -356,6 +356,7 @@ def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[st
         {
             "schema_version",
             "profile",
+            "target_architecture",
             "projection_version",
             "members",
             "catalog",
@@ -364,10 +365,20 @@ def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[st
         },
         label,
     )
-    if exact_int(value["schema_version"], f"{label}.schema_version") != 2:
+    if exact_int(value["schema_version"], f"{label}.schema_version") != 3:
         fail(f"{label} uses an unsupported schema")
     if exact_string(value["profile"], f"{label}.profile") != profile_name:
         fail(f"{label} names the wrong public profile")
+    expected_architecture = {
+        "fedora-44": "x86_64",
+        "ubuntu-26.04": "amd64",
+        "arch": "x86_64",
+    }[profile_name]
+    if (
+        exact_string(value["target_architecture"], f"{label}.target_architecture")
+        != expected_architecture
+    ):
+        fail(f"{label} target architecture disagrees with the supported profile")
     exact_int(value["projection_version"], f"{label}.projection_version", minimum=1)
     validate_artifact(value["catalog"], f"{label}.catalog")
     sha256_string(value["logical_digest_sha256"], f"{label}.logical_digest_sha256")

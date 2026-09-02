@@ -33,6 +33,7 @@ mod sync;
 pub mod trust;
 pub mod universe;
 
+pub mod architecture;
 pub mod declarations;
 pub mod dependency_model;
 mod dependency_source;

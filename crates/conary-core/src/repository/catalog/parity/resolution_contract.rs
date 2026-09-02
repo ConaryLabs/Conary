@@ -8,14 +8,19 @@ use super::super::contract::{validate_identity, validate_sha256};
 use super::super::{CatalogRequirementGroupV1, ProfileRevisionV2, ProfileSourceMemberV2};
 use super::contract::{NativeParityImplementationV1, NativeParityOracleV1};
 use crate::error::{Error, Result};
+use crate::repository::architecture::{
+    NativeResolutionArchitectureDecisionV1, native_resolution_architecture_decision,
+};
+use crate::repository::versioning::VersionScheme;
 
-pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V1: u32 = 1;
+pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V2: u32 = 2;
 
 /// The fixed solver policy whose output may become release evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeResolutionPolicyV1 {
     pub architecture: String,
+    pub architecture_admission: NativeResolutionArchitectureAdmissionV1,
     pub installed_state: NativeResolutionInstalledStateV1,
     pub roots: NativeResolutionRootPolicyV1,
     pub positive_requirements: NativeResolutionRequirementPolicyV1,
@@ -46,9 +51,58 @@ pub enum NativeResolutionProviderPolicyV1 {
     NativePrecedence,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeResolutionArchitectureAdmissionV1 {
+    NativeOnly,
+}
+
+impl NativeResolutionArchitectureAdmissionV1 {
+    pub fn validate(self) -> Result<()> {
+        match self {
+            Self::NativeOnly => Ok(()),
+        }
+    }
+
+    pub fn admits(
+        self,
+        source_profile: &str,
+        scheme: VersionScheme,
+        package_architecture: &str,
+    ) -> Result<NativeResolutionArchitectureDecisionV1> {
+        let profile = crate::repository::supported_profiles::profile_by_id(source_profile)
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "native resolution names unsupported source profile '{source_profile}'"
+                ))
+            })?;
+        if profile.version_scheme() != scheme {
+            return Err(Error::ConfigError(format!(
+                "native resolution package scheme '{}' conflicts with source profile '{}' scheme '{}'",
+                scheme.as_str(),
+                profile.id(),
+                profile.version_scheme().as_str()
+            )));
+        }
+        match self {
+            Self::NativeOnly => Ok(native_resolution_architecture_decision(
+                profile,
+                package_architecture,
+            )),
+        }
+    }
+}
+
 impl NativeResolutionPolicyV1 {
     pub fn validate(&self) -> Result<()> {
-        validate_identity(&self.architecture, "native resolution architecture")
+        validate_identity(&self.architecture, "native resolution architecture")?;
+        self.architecture_admission.validate()
+    }
+
+    pub fn validate_for_profile(&self, profile: &ProfileRevisionV2) -> Result<()> {
+        self.validate()?;
+        profile.require_target_architecture(&self.architecture)?;
+        Ok(())
     }
 }
 
@@ -59,6 +113,7 @@ pub struct NativeResolutionCountsV1 {
     pub roots: u64,
     pub resolved_roots: u64,
     pub unresolved_roots: u64,
+    pub not_installable_roots: u64,
     pub closure_package_references: u64,
     pub unresolved_dependencies: u64,
 }
@@ -80,6 +135,7 @@ impl NativeResolutionArtifactV1 {
                 .counts
                 .resolved_roots
                 .checked_add(self.counts.unresolved_roots)
+                .and_then(|count| count.checked_add(self.counts.not_installable_roots))
                 .ok_or_else(|| {
                     Error::ConfigError(
                         "native resolution root outcome counts exceed u64".to_string(),
@@ -124,7 +180,7 @@ impl NativeResolutionOracleV1 {
             ));
         }
         let manifest = Self {
-            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V1,
+            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V2,
             profile: profile.profile.clone(),
             profile_revision_sha256: profile.manifest_sha256()?,
             profile_logical_digest_sha256: profile.logical_digest_sha256.clone(),
@@ -139,10 +195,10 @@ impl NativeResolutionOracleV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V1 {
+        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "native resolution oracle schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V1
+                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V2
             )));
         }
         validate_identity(&self.profile, "native resolution profile")?;
@@ -171,6 +227,7 @@ impl NativeResolutionOracleV1 {
     ) -> Result<()> {
         self.validate()?;
         package_oracle.validate_profile(profile)?;
+        self.policy.validate_for_profile(profile)?;
         if self.profile != profile.profile
             || self.profile_revision_sha256 != profile.manifest_sha256()?
             || self.profile_logical_digest_sha256 != profile.logical_digest_sha256
@@ -226,6 +283,15 @@ pub enum NativeResolutionOutcomeV1 {
     Unresolved {
         dependencies: Vec<NativeUnresolvedDependencyV1>,
     },
+    NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeResolutionNotInstallableReasonV1 {
+    ArchitectureExcluded,
 }
 
 /// One canonical row for every package in the bound package oracle.
@@ -282,6 +348,9 @@ impl NativeResolutionRootV1 {
                     previous = Some(dependency);
                 }
             }
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+            } => {}
         }
         Ok(())
     }

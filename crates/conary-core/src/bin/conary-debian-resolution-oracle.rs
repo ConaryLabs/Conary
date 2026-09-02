@@ -37,7 +37,7 @@ struct Arguments {
     #[arg(long)]
     package_oracle: PathBuf,
 
-    /// Exact native target architecture.
+    /// Assertion matching the profile revision's typed target architecture.
     #[arg(long)]
     architecture: String,
 

@@ -9,9 +9,9 @@ mod tests {
         BuildOutputIdentity, FOREIGN_CONVERSION_BOUNDARY_SCHEMA_V1, ForeignConversionBoundary,
     };
     use conary_core::ccs::{CcsTransportEnvelopeV1, CcsTransportObjectV1};
-    use conary_core::db::models::{ConvertedPackage, MetadataTable, set_metadata};
+    use conary_core::db::models::{ConvertedPackage, MetadataTable, Repository, set_metadata};
     use conary_core::repository::catalog::{
-        NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+        NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
         NativeParityComparisonV1, NativeParityCountsV1, NativeResolutionComparisonV1,
         NativeResolutionCountsV1,
     };
@@ -30,6 +30,13 @@ mod tests {
     use crate::server::promotion_evidence::{
         REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1,
         RemiPromotionProfileEvidenceV1,
+    };
+    use crate::server::promotion_evidence::tests::{
+        architecture, write_package_oracle, write_resolution,
+    };
+    use crate::server::promotion_proof::{
+        RemiPromotionProofConfig, RemiPromotionProofProfileInput,
+        produce_remi_promotion_proof,
     };
     use crate::server::signing_authority::ensure_universe_authority;
 
@@ -161,7 +168,7 @@ mod tests {
                         counts: NativeParityCountsV1::from(revision.counts),
                     },
                     resolution_parity: NativeResolutionComparisonV1 {
-                        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+                        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
                         profile: profile.id().to_string(),
                         profile_revision_sha256: revision_sha256,
                         package_oracle_manifest_sha256: package_oracle_sha256,
@@ -175,6 +182,7 @@ mod tests {
                             roots: 1,
                             resolved_roots: 1,
                             unresolved_roots: 0,
+                            not_installable_roots: 0,
                             closure_package_references: 1,
                             unresolved_dependencies: 0,
                         },
@@ -282,6 +290,218 @@ mod tests {
                 crawl_sha256,
             )
         }
+    }
+
+    fn activate_obsolete_profile_schema_universe(
+        catalogs: &ActiveCatalogFixture,
+        sequence: u64,
+    ) -> String {
+        let conn = catalogs.connection();
+        let mut statement = conn
+            .prepare(
+                "SELECT active.source_profile, active.profile_revision_sha256,
+                        resource.manifest_json
+                 FROM remi_active_profile_revisions active
+                 JOIN remi_catalog_resources resource
+                   ON resource.resource_sha256 = active.profile_revision_sha256
+                 ORDER BY active.source_profile COLLATE BINARY",
+            )
+            .expect("prepare obsolete active profile query");
+        let profiles = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .expect("query obsolete active profiles")
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect obsolete active profiles");
+        drop(statement);
+        assert_eq!(profiles.len(), 3);
+        let profile_values = profiles
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (_profile, revision_sha256, manifest_json))| {
+                let revision: serde_json::Value =
+                    serde_json::from_str(manifest_json).expect("parse obsolete profile revision");
+                assert_eq!(revision["schema_version"], 2);
+                serde_json::json!({
+                    "ordinal": u32::try_from(ordinal).expect("ordinal fits u32"),
+                    "profile_revision_sha256": revision_sha256,
+                    "catalog": {
+                        "schema_version": revision["catalog"]["schema_version"],
+                        "sha256": revision["catalog"]["sha256"],
+                        "size": revision["catalog"]["size"],
+                        "logical_digest_sha256": revision["logical_digest_sha256"],
+                    },
+                    "revision": revision,
+                })
+            })
+            .collect::<Vec<_>>();
+        let generated_at = chrono::Utc::now();
+        let manifest = serde_json::json!({
+            "schema_version": conary_core::repository::universe::REMI_UNIVERSE_SCHEMA_V2,
+            "sequence": sequence,
+            "metadata_root_sha256": conary_core::hash::sha256(b"obsolete fixture root"),
+            "generated_at": generated_at,
+            "expires_at": generated_at + chrono::Duration::days(7),
+            "profiles": profile_values,
+            "canonical_map": {
+                "schema_version": conary_core::canonical::CANONICAL_MAP_SCHEMA_VERSION,
+                "sha256": conary_core::hash::sha256(b"obsolete fixture canonical map"),
+                "size": 0,
+                "revision": 0,
+                "entry_count": 0,
+            },
+        });
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest)
+                .expect("canonicalize obsolete universe manifest"),
+        )
+        .expect("obsolete universe manifest is UTF-8");
+        let manifest_sha256 = conary_core::hash::sha256(manifest_json.as_bytes());
+        let sequence = i64::try_from(sequence).expect("obsolete sequence fits i64");
+        conn.execute(
+            "INSERT INTO remi_universe_revisions (
+                 manifest_sha256, sequence, promotion_evidence_sha256,
+                 conversion_crawl_sha256, metadata_root_sha256,
+                 canonical_map_sha256, canonical_map_size, targets_version,
+                 snapshot_version, timestamp_version, manifest_json, durable, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?2, ?2, ?2, ?7, 1, ?2)",
+            rusqlite::params![
+                &manifest_sha256,
+                sequence,
+                "e".repeat(64),
+                "c".repeat(64),
+                conary_core::hash::sha256(b"obsolete fixture root"),
+                conary_core::hash::sha256(b"obsolete fixture canonical map"),
+                &manifest_json,
+            ],
+        )
+        .expect("insert obsolete universe revision");
+        for (ordinal, (profile, revision_sha256, manifest_json)) in profiles.iter().enumerate() {
+            let revision: serde_json::Value =
+                serde_json::from_str(manifest_json).expect("parse obsolete profile revision");
+            conn.execute(
+                "INSERT INTO remi_universe_profile_revisions (
+                     manifest_sha256, ordinal, source_profile, profile_revision_sha256,
+                     catalog_sha256, catalog_size
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    &manifest_sha256,
+                    i64::try_from(ordinal).expect("ordinal fits i64"),
+                    profile,
+                    revision_sha256,
+                    revision["catalog"]["sha256"].as_str().expect("catalog digest"),
+                    revision["catalog"]["size"].as_i64().expect("catalog size"),
+                ],
+            )
+            .expect("insert obsolete universe member");
+        }
+        conn.execute(
+            "INSERT INTO remi_active_universe_revision (
+                 singleton, manifest_sha256, sequence, activated_at
+             ) VALUES (1, ?1, ?2, ?2)",
+            rusqlite::params![&manifest_sha256, sequence],
+        )
+        .expect("activate obsolete universe revision");
+        manifest_sha256
+    }
+
+    fn refresh_repositories_for_revision(
+        catalogs: &ActiveCatalogFixture,
+        revision: &ProfileRevisionV2,
+    ) -> Vec<Repository> {
+        revision
+            .members
+            .iter()
+            .map(|member| {
+                let conn = catalogs.connection();
+                let resource = RemiCatalogResource::find_by_sha256(
+                    &conn,
+                    &member.source_snapshot_sha256,
+                )
+                .expect("read source resource")
+                .expect("source resource exists");
+                let source: SourceSnapshotV1 = serde_json::from_str(&resource.manifest_json)
+                    .expect("parse source snapshot manifest");
+                let mut repository = Repository::new(
+                    format!("refresh-{}-{}", revision.profile, member.repository_identity),
+                    source.provenance.metadata_url,
+                );
+                repository.source_profile = Some(revision.profile.clone());
+                repository.priority = member.precedence;
+                repository.profile_member_role = Some(member.role);
+                repository.profile_member_required = member.required;
+                repository
+                    .set_parser_config(source.provenance.parser_config)
+                    .expect("bind refresh parser configuration");
+                repository
+                    .set_trust_policy(source.provenance.trust_policy)
+                    .expect("bind refresh trust policy");
+                let ecosystem = match source.provenance.ecosystem {
+                    conary_core::repository::catalog::SourceEcosystemV1::Rpm => {
+                        conary_core::db::models::NativeSourceEcosystem::Rpm
+                    }
+                    conary_core::repository::catalog::SourceEcosystemV1::Deb => {
+                        conary_core::db::models::NativeSourceEcosystem::Deb
+                    }
+                    conary_core::repository::catalog::SourceEcosystemV1::Alpm => {
+                        conary_core::db::models::NativeSourceEcosystem::Alpm
+                    }
+                    conary_core::repository::catalog::SourceEcosystemV1::Eopkg => {
+                        conary_core::db::models::NativeSourceEcosystem::Eopkg
+                    }
+                };
+                let stream = match source.stream.kind {
+                    conary_core::repository::catalog::SourceStreamKindV1::Release => {
+                        conary_core::db::models::NativeSourceStream::release(
+                            &source.stream.identity,
+                        )
+                    }
+                    conary_core::repository::catalog::SourceStreamKindV1::Channel => {
+                        conary_core::db::models::NativeSourceStream::channel(
+                            &source.stream.identity,
+                        )
+                    }
+                    conary_core::repository::catalog::SourceStreamKindV1::Rolling => {
+                        conary_core::db::models::NativeSourceStream::rolling(
+                            &source.stream.identity,
+                        )
+                    }
+                }
+                .expect("construct refresh source stream");
+                repository
+                    .set_native_source_policy(
+                        conary_core::db::models::RepositorySourcePolicy::new(
+                            member.source_identity.clone(),
+                            conary_core::db::models::RepositoryPolicyScope::repository(
+                                &member.repository_identity,
+                            )
+                            .expect("valid repository identity"),
+                            ecosystem,
+                            stream,
+                            conary_core::db::models::RepositoryUpdateMode::Follow,
+                        )
+                        .expect("construct refresh source policy"),
+                        member.repository_identity.clone(),
+                        None,
+                    )
+                    .expect("bind refresh source policy");
+                repository.id = Some(
+                    conn.query_row(
+                        "SELECT id FROM repositories
+                         WHERE source_profile = ?1 AND repository_identity = ?2",
+                        rusqlite::params![revision.profile, member.repository_identity],
+                        |row| row.get(0),
+                    )
+                    .expect("resolve fixture repository ID"),
+                );
+                repository
+            })
+            .collect()
     }
 
     fn install_conversion_proof(
@@ -483,6 +703,296 @@ mod tests {
                 manifest_sha256,
                 sequence: 1,
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_proof_and_activation_supersede_obsolete_active_universe() {
+        let catalogs = ActiveCatalogFixture::new();
+        let conn = catalogs.connection();
+        set_metadata(&conn, MetadataTable::Server, "canonical_map_revision", "1")
+            .expect("set canonical revision");
+        set_metadata(
+            &conn,
+            MetadataTable::Server,
+            "last_canonical_rebuild",
+            "2026-08-25T00:00:00Z",
+        )
+        .expect("set canonical timestamp");
+        drop(conn);
+
+        let mut staged_source_selections = Vec::new();
+        let mut current_pins = Vec::new();
+        let mut refresh_repositories = Vec::new();
+        for (index, profile) in conary_core::repository::supported_profiles::public_profiles()
+            .iter()
+            .enumerate()
+        {
+            let mut input = package(
+                profile.id(),
+                "upgrade-demo",
+                "1.0",
+                "1",
+                Some(architecture(profile.id())),
+                42,
+                profile.id(),
+            );
+            input.checksum = format!(
+                "sha256:{}",
+                conary_core::hash::sha256(format!("upgrade-{}", profile.id()).as_bytes())
+            );
+            let revision = catalogs.activate(
+                profile.id(),
+                i64::try_from(index + 1).expect("fence fits i64"),
+                vec![input],
+            );
+            let current_selection = ProfileRevisionSelection {
+                source_profile: profile.id().to_string(),
+                profile_revision_sha256: revision.clone(),
+            };
+            let pin = catalogs
+                .authority()
+                .open_selected_profile(&current_selection)
+                .expect("pin current profile through refresh");
+            refresh_repositories.push(refresh_repositories_for_revision(
+                &catalogs,
+                pin.manifest(),
+            ));
+            current_pins.push(pin);
+            staged_source_selections.push(current_selection);
+            catalogs.replace_with_obsolete_schema(&revision);
+        }
+        let obsolete_universe = activate_obsolete_profile_schema_universe(&catalogs, 41);
+
+        let root = catalogs
+            .catalog_dir()
+            .parent()
+            .expect("fixture root")
+            .to_path_buf();
+        let chunk_dir = root.join("chunks");
+        let cache_dir = root.join("cache");
+        let candidate_dir = root.join("candidates");
+        for directory in [&chunk_dir, &cache_dir, &candidate_dir] {
+            fs::create_dir_all(directory).expect("create upgrade refresh directory");
+        }
+        let object_bytes = b"upgrade-window durable object";
+        let object_sha256 = conary_core::hash::sha256(object_bytes);
+        let object_path =
+            crate::server::handlers::cas_object_path(&chunk_dir, &object_sha256);
+        fs::create_dir_all(object_path.parent().expect("upgrade CAS object parent"))
+            .expect("create upgrade CAS object directory");
+        fs::write(&object_path, object_bytes).expect("write upgrade CAS object");
+        let state = Arc::new(tokio::sync::RwLock::new(
+            crate::server::ServerState::new(crate::server::ServerConfig {
+                db_path: catalogs.db_path().to_path_buf(),
+                chunk_dir: chunk_dir.clone(),
+                cache_dir,
+                catalog_dir: catalogs.catalog_dir().to_path_buf(),
+                catalog_candidate_dir: candidate_dir.clone(),
+                ..Default::default()
+            })
+            .expect("build upgrade refresh server state"),
+        ));
+        assert_eq!(
+            crate::server::universe_publish::publish_current_universe(
+                catalogs.db_path(),
+                catalogs.catalog_dir(),
+                &candidate_dir,
+                None,
+                &DatabaseWriter::default(),
+            )
+            .expect("classify obsolete publication authority"),
+            crate::server::universe_publish::UniversePublicationOutcome::Unavailable
+        );
+        for (selection, repositories) in staged_source_selections.iter().zip(refresh_repositories) {
+            crate::server::admin_service::profile_refresh::refresh_native_profile_for_upgrade_test(
+                &state,
+                selection.source_profile.clone(),
+                repositories,
+                selection.clone(),
+            )
+            .await
+            .expect("refresh obsolete profile into schema-three candidate");
+        }
+        drop(current_pins);
+
+        struct ProofInput {
+            input: RemiPromotionProofProfileInput,
+            revision: ProfileRevisionV2,
+            packages: Vec<conary_core::repository::catalog::CatalogPackageRecordV1>,
+            _package: tempfile::TempDir,
+            _resolution: tempfile::TempDir,
+        }
+        let mut proof_inputs = Vec::new();
+        for profile in conary_core::repository::supported_profiles::public_profiles() {
+            let candidate = conary_core::repository::current_profile_sync_candidate(
+                &catalogs.connection(),
+                profile.id(),
+            )
+            .expect("read refreshed candidate")
+            .expect("refresh produced candidate");
+            let selection = ProfileRevisionSelection {
+                source_profile: profile.id().to_string(),
+                profile_revision_sha256: candidate.profile_revision_sha256,
+            };
+            let pin = catalogs
+                .authority()
+                .open_selected_profile(&selection)
+                .expect("open refreshed schema-three candidate");
+            let revision = pin.manifest().clone();
+            assert_eq!(
+                revision.schema_version,
+                conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3
+            );
+            let packages = pin.reader().packages().expect("read refreshed packages");
+            assert_eq!(packages.len(), 1);
+            let package = write_package_oracle(&revision, &packages);
+            let resolution = write_resolution(
+                &revision,
+                package.path(),
+                &packages,
+                "upgrade-window-native",
+            );
+            proof_inputs.push(ProofInput {
+                input: RemiPromotionProofProfileInput {
+                    selection,
+                    package_oracle_dir: package.path().to_path_buf(),
+                    native_resolution_dir: resolution.path().to_path_buf(),
+                    architecture: architecture(profile.id()).to_string(),
+                },
+                revision,
+                packages,
+                _package: package,
+                _resolution: resolution,
+            });
+        }
+        let evidence_dir = root.join("upgrade-evidence");
+        fs::create_dir(&evidence_dir).expect("create upgrade evidence directory");
+        let crawl_path = evidence_dir.join("crawl.json");
+        write_and_reopen_conversion_crawl(
+            &crawl_path,
+            &RemiConversionCrawlV4 {
+                schema_version: REMI_CONVERSION_CRAWL_SCHEMA_V4,
+                profiles: proof_inputs
+                    .iter()
+                    .map(|input| ConversionCrawlProfileV4 {
+                        profile: input.revision.profile.clone(),
+                        profile_revision_sha256: input
+                            .revision
+                            .manifest_sha256()
+                            .expect("refreshed revision digest"),
+                        expected_packages: 1,
+                        outcomes: input
+                            .packages
+                            .iter()
+                            .map(|package| ConversionCrawlPackageOutcomeV4 {
+                                package_key_sha256: package.package_key_sha256.clone(),
+                                name: package.name.clone(),
+                                version: package.version.clone(),
+                                package_release: package.package_release.clone(),
+                                architecture: package.architecture.clone(),
+                                repository_checksum: package.checksum.clone(),
+                                state: ConversionCrawlOutcomeStateV4::Succeeded,
+                                proof_disposition: Some(
+                                    ConversionProofDispositionV1::Validated,
+                                ),
+                                conversion_proof: Some(install_conversion_proof(
+                                    &catalogs,
+                                    &input
+                                        .revision
+                                        .manifest_sha256()
+                                        .expect("refreshed revision digest"),
+                                    package,
+                                    &object_sha256,
+                                    object_bytes,
+                                    &root,
+                                )),
+                                failure: None,
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            },
+        )
+        .expect("write complete upgrade conversion crawl");
+        let proof = produce_remi_promotion_proof(
+            &RemiPromotionProofConfig {
+                db_path: catalogs.db_path().to_path_buf(),
+                catalog_dir: catalogs.catalog_dir().to_path_buf(),
+                conversion_crawl_path: crawl_path.clone(),
+                output_dir: evidence_dir.join("proof"),
+                profiles: proof_inputs.iter().map(|input| input.input.clone()).collect(),
+            },
+            catalogs.authority(),
+        )
+        .expect("prove refreshed schema-three candidates");
+
+        let keys_dir = root.join("repository-keys");
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&keys_dir)
+            .expect("create promotion key directory");
+        ensure_universe_authority(&keys_dir).expect("provision universe keys");
+        let outcome = activate_remi_promotion(
+            &RemiPromotionActivationConfig {
+                db_path: catalogs.db_path().to_path_buf(),
+                catalog_dir: catalogs.catalog_dir().to_path_buf(),
+                catalog_candidate_dir: candidate_dir,
+                chunk_dir,
+                repository_keys_dir: keys_dir,
+                promotion_evidence_path: proof.promotion_evidence_path,
+                conversion_crawl_path: crawl_path,
+            },
+            &DatabaseWriter::default(),
+            catalogs.authority(),
+            None,
+        )
+        .await
+        .expect("activate schema-three replacement over obsolete universe");
+        let RemiPromotionActivationOutcome::Activated {
+            manifest_sha256,
+            sequence: 42,
+            promoted_profiles: 3,
+            reopened_objects: 1,
+        } = outcome
+        else {
+            panic!("upgrade-window promotion did not activate the replacement")
+        };
+
+        let conn = catalogs.connection();
+        assert_eq!(
+            conn.query_row(
+                "SELECT manifest_sha256 FROM remi_active_universe_revision WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("read replacement universe pointer"),
+            manifest_sha256
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT sequence FROM remi_universe_revisions WHERE manifest_sha256 = ?1",
+                [&obsolete_universe],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("obsolete universe remains as history"),
+            41
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM remi_universe_revisions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count universe history"),
+            2
+        );
+        drop(conn);
+        assert_eq!(
+            crate::server::public_universe::PublicUniverseSnapshot::load(catalogs.db_path())
+                .expect("load strict replacement serving authority")
+                .expect("replacement universe is active")
+                .identity()
+                .manifest_sha256,
+            manifest_sha256
         );
     }
 

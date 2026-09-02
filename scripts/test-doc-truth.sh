@@ -59,13 +59,18 @@ make_good_repo() {
         "$root/apps/conary" \
         "$root/apps/conaryd/src/daemon/routes" \
         "$root/apps/conaryd/src/daemon" \
+        "$root/apps/remi/src/server" \
         "$root/crates/conary-core/src/db" \
+        "$root/crates/conary-core/src/repository/catalog" \
+        "$root/crates/conary-core/src/repository/supported_profiles" \
         "$root/crates/conary-core/src" \
         "$root/docs/guides" \
         "$root/docs/llms" \
         "$root/docs/modules" \
         "$root/docs/operations" \
         "$root/docs/roadmaps" \
+        "$root/docs/specs" \
+        "$root/scripts" \
         "$root/site/src/lib" \
         "$root/site/src/routes/about" \
         "$root/site/src/routes/features" \
@@ -97,6 +102,38 @@ EOF
     cat > "$root/crates/conary-core/src/db/schema.rs" <<'EOF'
 /// Current schema version
 pub const SCHEMA_VERSION: i32 = 69;
+EOF
+
+    cat > "$root/crates/conary-core/src/repository/supported_profiles/catalog.toml" <<'EOF'
+[[profiles]]
+id = "ubuntu-26.04"
+target_architecture = "amd64"
+EOF
+
+    cat > "$root/crates/conary-core/src/repository/catalog/contract.rs" <<'EOF'
+pub const PROFILE_REVISION_SCHEMA_V3: u32 = 3;
+EOF
+
+    cat > "$root/apps/remi/src/server/catalog_refresh.rs" <<'EOF'
+const PROFILE_CATALOG_PROJECTION_VERSION: u32 = 3;
+EOF
+
+    cat > "$root/scripts/verify-native-oracle-input-transport.py" <<'EOF'
+if value["schema_version"] != 3:
+    raise ValueError("profile revision schema is obsolete")
+value["target_architecture"]
+EOF
+
+    cat > "$root/docs/specs/remi-native-parity-oracle.md" <<'EOF'
+# Native parity oracle
+
+The supported-profile registry is the sole target-architecture authority.
+EOF
+
+    cat > "$root/docs/modules/remi.md" <<'EOF'
+# Remi
+
+`ProfileArchitectureMismatch` rejects an architecture outside the profile authority.
 EOF
 
     cat > "$root/docs/ARCHITECTURE.md" <<'EOF'
@@ -483,7 +520,6 @@ EOF
 Roadmap ordering lives under `docs/roadmaps/`.
 EOF
 
-    mkdir -p "$root/docs/specs"
     add_fixture_doc_frontmatter "$root"
     git -C "$root" init -q
     stage_fixture "$root"

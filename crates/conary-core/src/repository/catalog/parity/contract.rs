@@ -303,6 +303,17 @@ impl NativeParityPackageV1 {
                 implementation.ecosystem
             )));
         }
+        let architecture = self.architecture.as_deref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "native parity package '{}' has no architecture authority",
+                self.name
+            ))
+        })?;
+        crate::repository::architecture::require_known_package_architecture_for_profile(
+            profile,
+            self.version_scheme,
+            architecture,
+        )?;
         self.as_catalog_record().validate(&CatalogScopeV1::Profile {
             profile: profile.to_string(),
         })

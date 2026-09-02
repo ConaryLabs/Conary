@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-02
-revision: 127
-summary: Document byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed strict-priority RPM unresolved-dependency projection over the final reachable unshadowed requiring frontier with strict-problem-scoped ancillary policy rules, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 134
+summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native resolution projection surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof operator, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -39,8 +39,10 @@ roots are transient refresh inputs and become immutable source-catalog evidence;
 they are not mutable repository revision state. Reconciliation replaces a
 repository transactionally when those source inputs change; ordinary enabled,
 precedence, and expiry changes preserve the enrollment. The supported-profile
-catalog independently declares the exact repository identities, roles, and
-precedence required for each complete profile. The hosted manifest must match
+catalog independently declares the exact target machine architecture,
+repository identities, roles, and precedence required for each complete
+profile. Its closed `ProfileTargetArchitecture` authority declares Fedora 44
+`x86_64`, Ubuntu 26.04 `amd64`, and Arch `x86_64`. The hosted manifest must match
 every public declaration exactly: Fedora includes release and updates; Ubuntu
 includes release, updates, security, and backports across main, restricted,
 universe, and multiverse; Arch includes core, extra, and multilib. The same
@@ -73,10 +75,30 @@ and a canonical `SourceSnapshotV1` manifest under
 `<storage.root>/catalogs/sources/<manifest-sha256>/`. The manifest binds exact
 source, repository, stream, parser-projection, authenticated root and child
 objects, catalog bytes, logical digest, and row counts. A strict
-`ProfileRevisionV2` then binds each member's role, precedence, required state,
-ordered source identity, and one composed
+profile-revision schema 3 `ProfileRevisionV2` then binds that typed target
+architecture, each member's role, precedence, required state, ordered source
+identity, and one composed
 profile catalog under `catalogs/profiles/<manifest-sha256>/`. Core contract and
 bundle verification live in `crates/conary-core/src/repository/catalog/`.
+Profile catalog projection version 3 is the current hard cut. Upgrade-tolerant
+inspection classifies a stored schema-2 profile revision as
+`ObsoleteSchema { found: 2, required: 3 }`; refresh records that non-reuse
+decision and composes a schema-3 replacement. Deployment and readiness report
+the obsolete active or candidate revision as unpopulated until that refresh
+finishes. Serving, catalog comparison, and promotion evidence remain strict:
+schema-2 profile revisions and projection-version-2 profile catalogs never
+become readable authority, and no compatibility deserializer or migration
+adapter remains. Promotion activation may classify a canonical, digest-bound
+active universe containing an embedded schema-2 revision as
+`ObsoleteProfileSchema`. That typed state contributes only its immutable
+manifest identity and sequence to the activation fence; it is never serving,
+comparison, or replay authority. A proved schema-3 candidate may supersede it
+at the next sequence, while the obsolete universe row remains as fencing
+history.
+`apps/remi/src/server/catalog_authority/revision_inspection.rs` owns that
+upgrade/rebuild classification and strict manifest deserialization;
+`apps/remi/src/server/admin_service/profile_refresh/source_reuse.rs` owns the
+corresponding reuse decision.
 Every serving projection resolves a package origin back to that manifest.
 When two members publish the same source-independent native package identity,
 profile composition retains the member with the exact higher declared
@@ -480,8 +502,10 @@ page-derived finalization scratch. A
 one-byte-short refusal leaves no native candidate file. Profile candidates use
 the corresponding ordered-member contract described above.
 
-`apps/remi/src/server/readiness.rs` owns serving readiness. `/health` is an
-unconditional liveness reply and proves only that the process is listening;
+`apps/remi/src/server/readiness.rs` owns serving-readiness orchestration, while
+`apps/remi/src/server/readiness/source_profiles.rs` owns exact configured-profile
+and active-catalog population inspection. `/health` is an unconditional
+liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
 requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
@@ -878,12 +902,48 @@ solver closure and unresolved-dependency evidence. It binds the exact profile
 and package-oracle manifest, pinned solver implementation/version, target
 architecture, and one fixed typed policy: empty installed state, every exact
 package as a root, required/pre-required groups only, and native
-provider/repository precedence. Every package root has exactly one canonical
-resolved closure or typed unresolved set. Independent reopen uses a private
-disk-backed membership index for referenced package and required-group
+provider/repository precedence. The policy architecture must equal the profile
+revision's typed target architecture during bundle binding, comparison, and
+promotion proof validation. Native and Conary producers derive the solver
+architecture from that field; `--architecture` is retained only as a checked
+operator assertion, and a mismatch fails with typed
+`ProfileArchitectureMismatch` before any root walk or output bundle. Package
+projection and oracle reopen reject any architecture absent from its typed
+authority with `UnknownArchitectureToken { scheme, token }`
+before resolution evidence exists. The vendored tables are RPM 6.0.1 tag
+`rpm-6.0.1-release` `rpmrc.in` architecture lines; dpkg 1.23.7 tag `1.23.7`
+`data/cputable` and `data/tupletable`. Pacman
+`7.1.0.r9.g54d9411-2` commit
+`54d94116164b0b2202c6061c4a59c6f3e70820d8` `makepkg.conf.in` plus the
+2026-08-02 Arch core, extra, and multilib database `arch` values prove the
+supported x86_64 profile snapshot. Pacman defines no format-wide closed token
+table: the registry declares each ALPM profile's target token plus `any`, and
+libalpm compares those configured strings literally. Exact files, versions,
+commits, and upstream URLs are recorded in the fixture headers.
+
+`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
+32-bit ARM float ABI. It is derived from compile-time machine facts without
+the executable's libc, target environment, or OS, so GNU and musl builds for
+one machine are identical hosts. Package libc/ABI is separate: dpkg contributes
+its `gnu`, `musl`, or `uclibc` tuple dimension, while RPM and ALPM carry their
+profile-declared implied glibc ABI. Native-only admission requires package
+machine equality with the host and package ABI equality with the exact source
+profile. RPM `arch_compat` and `buildarch_compat` enumerate known tokens but
+cannot grant native-only compatibility.
+
+`native_only` admission returns `Admitted`,
+`Excluded { identity: NativeMachineIdentityV1 }`, or
+`UnknownArchitectureToken { scheme, token }`. Only a known non-native identity
+becomes `architecture_excluded`; unknown tokens are producer failures and have
+their own survey error kind. Native package managers retain provider-selection
+authority under their pinned architecture configuration, and Conary root and
+provider matching consumes the same checked full identities. Every
+package root has exactly one canonical resolved closure, typed unresolved set,
+or known-identity `architecture_excluded` outcome. Independent reopen uses a
+private disk-backed membership index for referenced package and required-group
 authority plus a bounded merge walk for complete root coverage. Comparison
 retains one native/candidate root pair and reports typed root, outcome, closure,
-or unresolved-set drift.
+unresolved-set, or not-installable-reason drift.
 
 ALPM, RPM, and Debian have implemented native solver producers. Each independently
 reopens and freshly reproduces the bound package oracle from the exact
@@ -893,33 +953,18 @@ transaction packages and typed missing-dependency records. The RPM producer
 uses exact libsolv transaction and problem-rule IDs, applies profile precedence
 as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. Its resolution projection schema
-3 preserves every exact authenticated root while projecting a hard requirement
-as a typed unresolved dependency when libsolv reports no provider or reports
-that its providers cannot install because of strict repository priority,
-architecture precedence, or a package conflict. It projects every contributing
-hard required edge in that problem rather than laundering a genuine conflict as
-one missing edge. An edge is emitted only when its requiring package is the
-exact root or a provider reachable from the root through hard required edges
-that strict priority does not shadow, and a required edge whose reachable
-providers explain the failure with missing or required edges of their own
-yields to those deeper edges, so the projection reports the same terminal
-frontier Conary's candidate resolver sees. A problem containing both strict
-priority and provider-policy rules is solved again without strict priority
-solely to discover residual hard required edges. When that probe remains
-unresolved, both the original and residual problem edges are reprojected under
-one final visibility derived from both problem sets; the provisional strict
-projection is discarded. Edges owned by a shadowed provider are validated but
-excluded from both problem sets. Package-conflict and inferior-architecture
-rules are tolerated only as ancillary provider-side rules within a problem that
-itself contains strict-priority authority. A conflict involving the exact root,
-either policy rule in a residual probe, or either policy rule outside a strict
-problem remains fatal; inferior-architecture-only provider failures stay
-conservative until the native-resolution survey in #810 establishes broader
-production shapes. The residual probe discovers only additional missing and
-hard required edges; its diagnostic closure is never emitted or used as a
-provider substitution. Problem identity is preserved through the native shim.
-The producer does not disable precedence or substitute a shadowed
-provider. The Debian producer uses private
+4 calls libsolv 0.7.36 `pool_setarchpolicy` with the single native architecture
+after `pool_setarch`; pinned libsolv still admits `noarch`, while cross-machine
+solvables are not installable and are absent from its provider index. An exact
+excluded root must report `SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the
+typed excluded outcome. The same rule for an admitted root is fatal.
+Native-only admission removes the former strict-priority multilib
+strict-plus-conflict shape, so the residual solve, ancillary `PKG_CONFLICTS`
+tolerance, and `INFARCH` tolerance are gone. Either policy rule is fatal if it
+ever appears. Ordinary same-architecture strict-priority blocked requirements
+still project their terminal unresolved edge.
+
+The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
 order into candidate and provider priority, records exact native transactions,
 and forces each exact root through apt 3.0's complete-version solver with
@@ -930,10 +975,19 @@ native-candidate probe remains the fast resolved result or contributes required
 or pre-required groups with no native target as typed unresolved evidence. Only
 its available-target failure enters the complete-version solver, and that
 solver never reuses the failed candidate state. All three bind closures and
-missing groups back to
-exact package-oracle authority, reject architecture/conflict/identity or input
-drift, write the canonical resolution bundle, and fully reopen it before
+missing groups back to exact package-oracle authority. Policy-excluded Debian
+and ALPM roots are typed before native solving; the configured Ubuntu profile
+contains sixteen `binary-amd64` indexes and the Arch profile contains three
+`/os/x86_64` databases, with `all` and `any` admitted respectively. Conflicts,
+identity or input drift, and unexpected native errors remain fatal. The
+producers write the canonical resolution bundle and fully reopen it before
 success.
+
+The resolution contract is schema 2; Conary candidate, Debian, and ALPM
+projections are schema 2; RPM is schema 4; comparison and survey are schema 2.
+There are no compatibility readers. Every retained native-resolution and
+Conary candidate bundle from the superseded schemas is invalid and must be
+regenerated before promotion proof.
 
 The same three binaries expose a mutually exclusive `--survey <FILE>`
 diagnostic destination. Survey mode uses the identical per-root native solve
@@ -1145,6 +1199,15 @@ CCS transport; the CCS bytes and foreign-conversion identity are revalidated.
 The union of transport objects is kept in a private disk-backed spool. Every
 object is fetched again from configured R2, or from the local CAS when R2 is
 absent, and must match its exact size and SHA-256.
+
+The active-universe baseline is inspected before candidate construction. A
+current universe is eligible for exact replay comparison. An
+`ObsoleteProfileSchema` universe is accepted only after canonical JSON,
+manifest digest, universe schema, and pointer sequence validation; activation
+uses that identity and sequence solely to fence concurrent replacement and to
+choose the successor sequence. Future embedded profile schemas and malformed
+or pointer-divergent manifests fail closed. The hard cut never deserializes an
+obsolete embedded revision as `ProfileRevisionV2`.
 
 Only after those checks does promotion construct the next signed universe,
 durably publish all six metadata and content files, and independently reopen
@@ -1509,8 +1572,10 @@ Implementation ownership lives in child modules:
 - `catalog_capacity.rs`: shared filesystem-scoped metadata, profile-candidate
   growth, catalog finalization, and projection-copy reservations with typed
   capacity refusal.
-- `catalog_authority.rs` and `profile_catalog.rs`: exact-revision resolution,
-  verified immutable readers, reader-lifetime pins, and catalog projections.
+- `catalog_authority.rs`, `catalog_authority/revision_inspection.rs`, and
+  `profile_catalog.rs`: exact-revision resolution, upgrade/rebuild inspection,
+  strict manifest deserialization, verified immutable readers, reader-lifetime
+  pins, and catalog projections.
 - `public_universe.rs` and `handlers/public_read.rs`: signed-universe snapshot
   selection, typed public unavailability, and exact response identity headers.
 - `catalog_gc.rs`: exact active/current-candidate/work/reader/conversion

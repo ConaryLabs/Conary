@@ -1,6 +1,8 @@
 // crates/conary-core/build.rs
 
 fn main() {
+    let target = std::env::var("TARGET").expect("Cargo provides TARGET to build scripts");
+    println!("cargo:rustc-env=CONARY_BUILD_TARGET={target}");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_NATIVE_RPM_ORACLE");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_NATIVE_DEBIAN_ORACLE");
     if std::env::var_os("CARGO_FEATURE_NATIVE_RPM_ORACLE").is_some() {

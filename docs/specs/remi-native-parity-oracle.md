@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
+summary: Define strict native parity artifacts with profile-owned source-derived full machine-identity admission and a non-authoritative all-roots resolution projection survey for one complete immutable profile candidate
 last_updated: 2026-09-02
-revision: 20
+revision: 27
 status: active
 ---
 
@@ -15,6 +15,14 @@ exact `ProfileRevisionV2`. It is distinct from the hosted
 `phase4-native-pm-parity` suite: that suite proves deterministic one-package
 lifecycle and CLI behavior, while this contract covers every package admitted
 to one immutable profile candidate.
+
+The supported-profile registry is the sole target-architecture authority.
+Its closed `ProfileTargetArchitecture` value declares Fedora 44 `x86_64`,
+Ubuntu 26.04 `amd64`, and Arch `x86_64`; profile-revision schema 3 carries that
+typed value into every `ProfileRevisionV2`. Profile catalog projection version
+3 is the only current producer. Schema-2 profile revisions and
+projection-version-2 profile catalogs lack this binding, are invalid, and must
+be rebuilt from authenticated sources. There is no compatibility reader.
 
 ## Exact input handoff
 
@@ -68,6 +76,48 @@ Each `NativeParityPackageV1` row carries:
 - typed providers; and
 - grouped positive and negative requirements, including conflicts, breaks,
   replacements, and obsoletes.
+
+Package architecture is validated before a native package row can enter the
+oracle writer. RPM and Debian boundaries require the exact token to exist in
+their pinned format-wide tables. ALPM boundaries require the exact token in
+the source profile's declared set: its target architecture plus `any`.
+`NativeParityPackageV1` validation repeats the same profile-aware guard on
+reopen. An absent token returns typed
+`UnknownArchitectureToken { scheme, token }` before any resolution evidence
+can exist; it is never normalized, admitted, or treated as a non-native
+package.
+
+The checked-in architecture fixtures pin the source authority without runtime
+parsing or test-time fetches:
+
+- RPM 6.0.1 `rpmrc.in` at tag `rpm-6.0.1-release`, commit
+  `58a917a6c5e24e9e8a01976c17d2eee06249b9b6`, contributes every
+  `arch_canon`, `arch_compat`, and `buildarch_compat` line from
+  [the exact upstream file](https://github.com/rpm-software-management/rpm/blob/rpm-6.0.1-release/rpmrc.in).
+  The pinned Fedora 44 image ships `rpm-6.0.1-2.fc44.x86_64`.
+- dpkg 1.23.7 tag `1.23.7`, commit
+  `ef4d59f5925661818484ac666014ee3e665aadcf`, contributes
+  [`data/cputable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
+  and
+  [`data/tupletable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
+  The pinned Ubuntu 26.04 image ships `dpkg 1.23.7ubuntu1`.
+- The Arch producer pins `pacman 7.1.0.r9.g54d9411-2`; its installed
+  `CARCH=x86_64` derives from
+  [`etc/makepkg.conf.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/etc/makepkg.conf.in)
+  at commit `54d94116164b0b2202c6061c4a59c6f3e70820d8`.
+  [`pacman.conf(5)`](https://man.archlinux.org/man/pacman.conf.5.en#Architecture)
+  defines `Architecture` as `auto`/`uname -m` or an explicit list, and the
+  [pinned libalpm comparison](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/trans.c#L69-106)
+  compares `%ARCH%` literally while admitting `any`. The supported `arch`
+  profile therefore owns `x86_64` plus `any`; the 2026-08-02 databases in the
+  fixture header prove that exact profile snapshot rather than a format-wide
+  vocabulary.
+
+Conformance tests parse those vendored files and require every RPM table token,
+every dpkg CPU and tuple expansion, and every pinned Arch package `arch` value
+to project to a typed class. Tokens outside the supported x86_64/amd64 machine
+profiles, including Debian `x32` and RPM micro-architecture levels, remain
+known typed non-native classes rather than literal fallback values.
 
 Rows are canonical JSON ordered by the exact profile package key. The writer
 and verifier retain one complete package projection at a time; neither may
@@ -220,13 +270,46 @@ dependency closure and unresolved dependencies. Its manifest binds the exact
 `ProfileRevisionV2`, the exact `NativeParityOracleV1` manifest digest, the
 solver implementation and version, its projection schema, the target
 architecture, normalized counts, and the SHA-256 and size of `roots.jsonl`.
+The resolution policy architecture must equal the bound profile revision's
+typed target architecture during manifest binding, comparison, and promotion
+proof validation.
 
-Schema 1 fixes the resolution policy rather than accepting solver flags or
+Schema 2 fixes the resolution policy rather than accepting solver flags or
 free-form policy: the installed state is empty, every exact package variant is
 requested as its exact root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
-uses native repository precedence. A different policy requires a schema
-change.
+uses native repository precedence. `architecture_admission: native_only`
+admits only equality of the complete source-derived machine identity and the
+source scheme's architecture-independent token (`noarch`, `all`, or `any`),
+which resolves to the target identity for comparison. Its decision is the
+closed runtime enum
+`Admitted`, `Excluded { identity: NativeMachineIdentityV1 }`, or
+`UnknownArchitectureToken { scheme, token }`. Only `Excluded` may produce
+`not_installable { reason: architecture_excluded }`. Unknown tokens return the
+typed producer error and the diagnostics-only survey records the separate
+`unknown_architecture_token` error kind. This resolution-time branch is an
+invariant guard because the package oracle must already have rejected the row.
+`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
+32-bit ARM float ABI. The executable's libc and OS never enter it. Package ABI
+is a separate typed dimension: dpkg contributes `gnu`, `musl`, or `uclibc`
+from `tupletable`; RPM and ALPM contribute their profile-declared implied
+glibc ABI. The profile registry owns the required target package ABI.
+Native-only admission requires both package/profile-target machine equality
+and package/profile ABI equality. The shared decision accepts the selected
+profile and package architecture; it does not accept a host architecture. RPM
+`arch_compat` and `buildarch_compat` still only establish that a token is known
+and never grant native-only equality. Native solvers apply their pinned
+package-manager architecture policy to provider selection, while the Conary
+candidate resolver uses the same profile-bound full identities for RPM,
+Debian, and Arch roots and providers. Conary and Eopkg repository candidates
+remain on their explicit scheme-owned machine-matching paths because those
+schemes have no typed foreign-profile architecture authority. A different
+policy requires a schema change.
+The three native producers and the Conary candidate producer derive the solver
+architecture from the profile revision. Their `--architecture` or operator
+input is only an assertion: a mismatch returns the typed
+`ProfileArchitectureMismatch` error before any root is walked or output bundle
+is created.
 
 There is exactly one canonical row for every package key in the bound package
 oracle. A row records exactly one outcome:
@@ -234,7 +317,11 @@ oracle. A row records exactly one outcome:
 - `resolved`, with a strictly ordered duplicate-free closure of exact package
   keys that includes the root; or
 - `unresolved`, with a strictly ordered duplicate-free set of requiring
-  package keys and canonical required-group digests.
+  package keys and canonical required-group digests; or
+- `not_installable { reason: architecture_excluded }`, when native-only policy
+  excludes the exact root before Conary's SAT solver or a Debian/ALPM native
+  solve is invoked, or when libsolv reports the matching exact-root
+  `SOLVER_RULE_PKG_NOT_INSTALLABLE` rule.
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,
@@ -247,8 +334,14 @@ drift fail closed.
 Comparison applies the same exact profile, package oracle, architecture, and
 typed policy to native and Conary evidence. It merge-walks one root pair at a
 time and reports typed oracle-only root, candidate-only root, outcome,
-dependency-closure, or unresolved-dependency drift. Diagnostic strings and
-native solver error prose never establish the result.
+dependency-closure, unresolved-dependency, or not-installable-reason drift.
+Diagnostic strings and native solver error prose never establish the result.
+
+This schema is a hard cut. Resolution-oracle schema 1, RPM projection schema
+3, Conary candidate projection schema 1, Debian and ALPM projection schema 1,
+comparison schema 1, and survey schema 1 have no compatibility readers. Every
+retained native-resolution and Conary candidate bundle is invalid and must be
+regenerated before comparison or promotion proof.
 
 ### Diagnostics-only resolution survey
 
@@ -260,10 +353,10 @@ canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing
 path, and exits non-zero after writing when any root failed so unattended
 diagnostics cannot look successful.
 
-`NativeResolutionSurveyV1` schema 1 binds the profile identity and revision
+`NativeResolutionSurveyV1` schema 2 binds the profile identity and revision
 digest, package-oracle manifest digest, native implementation and projection
 schema, fixed resolution policy, and target architecture. Its counts record
-roots walked, resolved, unresolved, and failed plus a canonical histogram
+roots walked, resolved, unresolved, not-installable, and failed plus a canonical histogram
 keyed by the originating typed Conary `Error` variant and a stable short
 reason. Each retained failure records the exact root package key,
 name/version/release/architecture, full sanitized error message, and typed
@@ -274,9 +367,10 @@ reporting the uncapped `total_failures`, retained count, limit, and explicit
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
 from/to package key plus name-EVR-architecture, dependency ID, and dependency
-text. If strict-priority projection runs a residual probe, the strict problems
-precede every residual-probe problem in the explanation; both sets are captured
-before their respective projection. Any native field that cannot safely be
+text. Native-only provider admission removed the strict-priority multilib
+problem shape, so there is no residual solve without strict priority and no
+ancillary package-conflict or inferior-architecture tolerance. Either rule is
+fatal if it appears. Any native field that cannot safely be
 projected carries an explicit unavailability reason. Debian explanations retain
 the selected native package identities or typed missing requirements when
 apt-pkg returns them; an
@@ -325,9 +419,12 @@ package row, it prepares a database-only libalpm transaction against an empty
 local database with the target architecture and profile databases registered
 in precedence order. Prepared transaction packages become exact closure keys;
 typed libalpm missing-dependency records become exact requiring-package keys
-and canonical required-group digests. Invalid architecture, conflicting
+and canonical required-group digests. A non-native exact root becomes the
+typed architecture-excluded outcome before transaction setup. Conflicting
 transactions, ambiguous identities, unbound requirements, and unexpected
-native error classes fail the complete crawl.
+native error classes fail the complete crawl. The public Arch profile's three
+authenticated database inputs are all `/os/x86_64`; their package rows are
+`x86_64` or architecture-independent `any` under the pinned lane.
 
 Invoke the resolver helper with the exact package bundle produced above:
 
@@ -356,15 +453,23 @@ solver pool. Profile member precedence becomes native repository priority;
 distinct versions remain native candidates, while exact duplicate identities
 retain the already-proved higher-precedence provenance.
 
+After `pool_setarch`, the shim calls libsolv 0.7.36
+`pool_setarchpolicy(pool, architecture)` with the single native architecture.
+Pinned `poolarch.c` initializes `noarch` as installable independently of that
+policy string. Cross-machine solvables remain inspectable exact roots but are
+not installable and are absent from the prepared provider index.
+
 Every package-oracle key binds through a private disk-backed index to one exact
 native solvable root. Weak relations are disabled. Successful transaction IDs
 become exact closure package keys. Typed libsolv problem-rule and dependency
 IDs become exact requiring-package keys and canonical required or pre-required
-group digests. A typed missing file requirement triggers an exact lookup in
+group digests. An excluded exact root must carry libsolv's matching
+`SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the typed architecture-excluded
+outcome; the same rule for an admitted root is fatal. A typed missing file requirement triggers an exact lookup in
 libsolv's independently reopened complete filelists and one re-solve before it
-may remain unresolved. Architecture rejection, conflicts, non-installable
-roots, unexpected rule classes, native identity ambiguity, and input or oracle
-drift fail the complete crawl. Diagnostic strings never establish an outcome.
+may remain unresolved. `SOLVER_RULE_INFARCH`, package conflicts, unexpected
+rule classes, native identity ambiguity, and input or oracle drift fail the
+complete crawl. Diagnostic strings never establish an outcome.
 
 Invoke the resolver helper with the exact RPM package bundle produced above:
 
@@ -407,8 +512,11 @@ failed candidate state.
 Required and pre-required groups participate in resolution; weak groups do
 not. Successful native transactions become exact closure package keys. A
 required group with no native target becomes an exact requiring-package key
-and canonical required-group digest. Available but unsatisfied targets,
-architecture rejection, conflicts, non-installable roots, native identity
+and canonical required-group digest. A policy-excluded exact root becomes the
+typed architecture-excluded outcome before apt-pkg resolution. The Ubuntu
+26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is likewise
+configured with only `APT::Architecture(s)=amd64`, while `Architecture: all`
+remains admitted. Available but unsatisfied targets, conflicts, native identity
 ambiguity, unsupported profile cardinality, and input or package-oracle drift
 fail the complete crawl. Diagnostic strings never establish an outcome.
 
@@ -435,7 +543,7 @@ executable and reads neither their databases nor Conary catalog rows.
 `produce_conary_resolution_candidate` is the candidate-side owner. It first
 independently reopens the exact package and native-resolution oracle bundles,
 requires the verified profile catalog to match every package-oracle fact, and
-requires the native oracle to use schema 1's exact target policy. It cannot
+requires the native oracle to use schema 2's exact target policy. It cannot
 resolve an unproved catalog or silently substitute another architecture.
 
 The producer replays the catalog into a private temporary current-schema
@@ -449,15 +557,27 @@ native version, architecture, provider, Boolean grouped-requirement, and
 negative-relation semantics. Optional and build groups remain outside the
 positive solve.
 
+Before constructing an exact SAT root, the producer applies the bound
+native-only rule to that package through `PackageSelector`. An excluded root is
+written as `architecture_excluded`, so the SAT invariant error for an exact
+root with no eligible candidate remains unreachable on that path. The SAT
+provider then applies repository-row admission once when each name-,
+canonical-, declared-capability-, file-, soname-, AppStream-, or exact-root-
+discovered row would become a solvable. A rejected provider never receives a
+solver ID or enters a provider index; an unknown token is a typed load error.
+An admitted root whose only provider is excluded therefore retains the
+ordinary typed unresolved required edge. Debian Multi-Arch dependency
+qualifiers remain match-time semantics over already-admitted solvables.
+
 Successful SAT selections map back to a strictly ordered set of catalog
 package keys. An unsatisfiable dependency maps Resolvo's typed conflict graph
 back to the exact persisted required or pre-required group; diagnostic text is
-never parsed. Architecture rejection, package conflict, a missing mapping, an
-untyped unsatisfiable result, or any selected identity outside the catalog is
-a hard crawl failure rather than an unresolved row.
+never parsed. Package conflict, a missing mapping, an untyped unsatisfiable
+result, or any selected identity outside the catalog is a hard crawl failure
+rather than an unresolved row.
 
 The producer writes one complete `NativeResolutionOracleV1` bundle using the
-`conary-sat` implementation identity and projection schema 1, durably closes
+`conary-sat` implementation identity and projection schema 2, durably closes
 it, independently reopens and cross-checks every package and group reference,
 and compares it with the pinned native bundle. Success therefore proves one
 canonical outcome for every exact catalog variant and returns the exact

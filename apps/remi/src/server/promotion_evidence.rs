@@ -10,7 +10,7 @@ use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapsh
 use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::repository::catalog::{
     CatalogPackageRecordV1, CatalogReader, NATIVE_PARITY_COMPARISON_SCHEMA_V1,
-    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1, NativeParityComparisonV1, NativeResolutionComparisonV1,
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NativeParityComparisonV1, NativeResolutionComparisonV1,
     ProfileRevisionV2, compare_native_parity_oracle, compare_native_resolution_oracle,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     verify_registered_profile_catalog_bundle_complete,
@@ -122,7 +122,7 @@ impl RemiPromotionProfileEvidenceV1 {
             "promotion package parity differs from its exact profile candidate"
         );
         ensure!(
-            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1
+            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2
                 && self.resolution_parity.profile == self.profile
                 && self.resolution_parity.profile_revision_sha256 == self.profile_revision_sha256
                 && self.resolution_parity.package_oracle_manifest_sha256
@@ -429,8 +429,9 @@ pub(crate) mod tests {
     use conary_core::repository::catalog::{
         CatalogPackageOriginV1, NATIVE_PARITY_PACKAGE_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
         NativeParityEcosystemV1, NativeParityImplementationV1, NativeParityOracleWriter,
-        NativeParityPackageV1, NativeResolutionInstalledStateV1, NativeResolutionOracleWriter,
-        NativeResolutionOutcomeV1, NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
+        NativeParityPackageV1, NativeResolutionArchitectureAdmissionV1,
+        NativeResolutionInstalledStateV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
+        NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
         NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1, NativeResolutionRootV1,
         write_native_parity_oracle_manifest, write_native_resolution_oracle_manifest,
     };
@@ -550,6 +551,7 @@ pub(crate) mod tests {
             },
             NativeResolutionPolicyV1 {
                 architecture: architecture(&revision.profile).to_string(),
+                architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
                 installed_state: NativeResolutionInstalledStateV1::Empty,
                 roots: NativeResolutionRootPolicyV1::EveryExactPackage,
                 positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
@@ -849,7 +851,7 @@ pub(crate) mod tests {
             catalog_size: 1,
             package_parity: comparison,
             resolution_parity: NativeResolutionComparisonV1 {
-                schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V1,
+                schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
                 profile: "fedora-44".to_string(),
                 profile_revision_sha256: "a".repeat(64),
                 package_oracle_manifest_sha256: "b".repeat(64),
@@ -859,6 +861,7 @@ pub(crate) mod tests {
                     roots: 1,
                     resolved_roots: 1,
                     unresolved_roots: 0,
+                    not_installable_roots: 0,
                     closure_package_references: 1,
                     unresolved_dependencies: 0,
                 },

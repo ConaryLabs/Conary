@@ -14,6 +14,7 @@ use super::{
     verify_native_parity_oracle_bundle, write_native_parity_oracle_manifest,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -35,7 +36,7 @@ mod tests;
 use ffi::{AptArchitectureQualifier, AptAtom, AptPackage, AptPackages, AptRelationKind};
 
 pub use resolution::{
-    DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V1, produce_debian_resolution_oracle,
+    DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2, produce_debian_resolution_oracle,
     produce_debian_resolution_survey,
 };
 
@@ -268,6 +269,7 @@ fn project_package(
     package: AptPackage,
 ) -> Result<NativeParityPackageV1> {
     validate_sha256(&package.sha256, &package.name)?;
+    require_known_package_architecture(VersionScheme::Debian, &package.architecture)?;
     let size = package.size.parse::<u64>().map_err(|error| {
         Error::ParseError(format!(
             "apt-pkg package '{}' has invalid Size '{}': {error}",

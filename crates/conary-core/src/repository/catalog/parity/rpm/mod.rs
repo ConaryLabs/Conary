@@ -14,6 +14,7 @@ use super::{
     verify_native_parity_oracle_bundle, write_native_parity_oracle_manifest,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -36,7 +37,7 @@ use ffi::{DependencyField, SolvDependency, SolvPackage, SolvPool};
 
 pub const RPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 pub use resolution::{
-    RPM_RESOLUTION_PROJECTION_SCHEMA_V3, produce_rpm_resolution_oracle,
+    RPM_RESOLUTION_PROJECTION_SCHEMA_V4, produce_rpm_resolution_oracle,
     produce_rpm_resolution_survey,
 };
 pub const PINNED_LIBSOLV_VERSION: &str = "0.7.36";
@@ -311,7 +312,9 @@ fn project_package(
         .source_snapshot;
     let name = package.name()?;
     let version = canonical_rpm_evr(&package.evr()?)?.to_string();
-    let architecture = Some(package.arch()?);
+    let architecture = package.arch()?;
+    require_known_package_architecture(VersionScheme::Rpm, &architecture)?;
+    let architecture = Some(architecture);
     let checksum = package.checksum()?;
     validate_sha256(&checksum, &name)?;
     let location = package.location()?;

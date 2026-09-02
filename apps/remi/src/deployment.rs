@@ -444,8 +444,25 @@ fn inspect_deployment_profiles(
             continue;
         };
         let inspection = authority
-            .inspect_active_profile(profile)
+            .inspect_active_profile_for_upgrade(profile)
             .with_context(|| format!("inspect active immutable profile '{profile}'"))?;
+        let inspection = match inspection {
+            crate::server::catalog_authority::ProfileRevisionInspection::Current(inspection) => {
+                inspection
+            }
+            crate::server::catalog_authority::ProfileRevisionInspection::ObsoleteSchema {
+                ..
+            } => {
+                profiles.push(DeploymentProfileState {
+                    profile: profile.clone(),
+                    configured_sources: *configured_sources,
+                    profile_revision_sha256: Some(pointer.profile_revision_sha256),
+                    packages: 0,
+                    converted_packages: 0,
+                });
+                continue;
+            }
+        };
         if inspection.pointer != pointer {
             bail!("active profile '{profile}' changed during deployment inspection");
         }
@@ -515,11 +532,14 @@ fn inspect_active_universe(
     let Some((manifest_sha256, sequence, manifest_json)) = active else {
         return Ok(None);
     };
-    let manifest =
-        serde_json::from_str::<conary_core::repository::universe::RemiUniverseManifestV2>(
-            &manifest_json,
-        )
-        .context("parse active Remi universe manifest")?;
+    let manifest = match crate::server::universe_revision_inspection::inspect_stored_universe_manifest_v2(
+        &manifest_sha256,
+        sequence,
+        &manifest_json,
+    )? {
+        crate::server::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => manifest,
+        crate::server::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => return Ok(None),
+    };
     manifest.validate().map_err(anyhow::Error::from)?;
     let canonical = conary_core::json::canonical_json(&manifest)
         .map_err(anyhow::Error::msg)

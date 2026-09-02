@@ -12,18 +12,18 @@ mod evidence;
 mod expression;
 mod loading;
 pub(crate) mod matching;
+mod repository;
 mod traits;
 pub mod types;
 
 use std::collections::{HashMap, HashSet};
 
-use crate::db::models::RepositoryProvide;
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::ProvideVersionRelation;
 use crate::repository::resolution_policy::{RequestScope, ResolutionPolicy};
 use crate::repository::versioning::{VersionScheme, validate_repo_version};
 use crate::resolver::identity::PackageIdentity;
-use crate::resolver::provides_index::{ProviderEntry, ProvidesIndex};
+use crate::resolver::provides_index::ProvidesIndex;
 use resolvo::{
     Condition, ConditionalRequirement, DenseIndex, NameId, SolvableId, StringId, VersionSetId,
     VersionSetUnionId,
@@ -31,9 +31,7 @@ use resolvo::{
 
 pub(crate) use loading::repository_expression_to_solver_for_architecture;
 use loading::{
-    find_repo_package_by_id, load_installed_dependency_requests, load_installed_relations,
-    load_repo_dependency_requests, load_repo_provided_capabilities, load_repo_relations,
-    relation_to_solver_dep,
+    load_installed_dependency_requests, load_installed_relations, relation_to_solver_dep,
 };
 pub(crate) use matching::constraint_matches_package;
 pub use types::{ConaryConstraint, SolverDep, SolverExpression, SolverRelation};
@@ -136,13 +134,16 @@ pub struct ConaryProvider<'db> {
 
 impl<'db> ConaryProvider<'db> {
     /// Create a new provider backed by the given database connection.
-    pub fn new(conn: &'db rusqlite::Connection) -> Self {
+    pub fn new(conn: &'db rusqlite::Connection) -> Result<Self> {
         Self::new_with_policy(conn, ResolutionPolicy::new())
     }
 
     /// Create a new provider with an explicit source-selection policy.
-    pub fn new_with_policy(conn: &'db rusqlite::Connection, policy: ResolutionPolicy) -> Self {
-        Self {
+    pub fn new_with_policy(
+        conn: &'db rusqlite::Connection,
+        policy: ResolutionPolicy,
+    ) -> Result<Self> {
+        Ok(Self {
             names: Vec::new(),
             name_to_id: HashMap::new(),
             solvables: Vec::new(),
@@ -172,9 +173,9 @@ impl<'db> ConaryProvider<'db> {
             provides_index: None,
             policy,
             root_request_names: HashSet::new(),
-            native_architecture: crate::repository::registry::detect_system_arch(),
+            native_architecture: crate::repository::registry::detect_system_arch()?,
             conn,
-        }
+        })
     }
 
     pub fn set_root_request_names(&mut self, names: impl IntoIterator<Item = String>) {
@@ -299,7 +300,7 @@ impl<'db> ConaryProvider<'db> {
     }
 
     /// Register a solvable (package candidate) and return its `SolvableId`.
-    pub fn add_solvable(&mut self, pkg: PackageIdentity) -> Result<SolvableId> {
+    fn add_solvable(&mut self, pkg: PackageIdentity) -> Result<SolvableId> {
         if pkg.repo_package_id.is_some()
             && pkg
                 .architecture
@@ -429,75 +430,7 @@ impl<'db> ConaryProvider<'db> {
             candidates.extend(virtual_providers);
 
             for pkg_with_repo in candidates {
-                let repository_package_id = pkg_with_repo.package.id.ok_or_else(|| {
-                    Error::MissingId(format!(
-                        "repository package '{}-{}' selected as a solver candidate",
-                        pkg_with_repo.package.name, pkg_with_repo.package.version
-                    ))
-                })?;
-                // O(1) duplicate check via loaded_repo_package_ids set.
-                if self
-                    .loaded_repo_package_ids
-                    .contains(&repository_package_id)
-                {
-                    continue;
-                }
-
-                let scheme = pkg_with_repo.package.version_scheme;
-
-                let _name_id = self.intern_name(&pkg_with_repo.package.name)?;
-
-                let provided_capabilities = load_repo_provided_capabilities(
-                    self.conn,
-                    &pkg_with_repo.package,
-                    &pkg_with_repo.repository,
-                )?;
-                let repository_id = pkg_with_repo.repository.id.ok_or_else(|| {
-                    Error::MissingId(format!(
-                        "repository '{}' selected as a solver candidate",
-                        pkg_with_repo.repository.name
-                    ))
-                })?;
-
-                let pkg = PackageIdentity {
-                    repo_package_id: Some(repository_package_id),
-                    name: pkg_with_repo.package.name.clone(),
-                    version: pkg_with_repo.package.version.clone(),
-                    package_release: (!pkg_with_repo.package.package_release.is_empty())
-                        .then(|| pkg_with_repo.package.package_release.clone()),
-                    architecture: pkg_with_repo.package.architecture.clone(),
-                    debian_multi_arch: pkg_with_repo.package.debian_multi_arch,
-                    version_scheme: scheme,
-                    repository_id: Some(repository_id),
-                    repository_name: pkg_with_repo.repository.name.clone(),
-                    repository_profile: crate::repository::selector::candidate_source_profile(
-                        &pkg_with_repo.package,
-                        &pkg_with_repo.repository,
-                    )?
-                    .map(str::to_string),
-                    repository_priority: pkg_with_repo.repository.priority,
-                    canonical_id: pkg_with_repo.package.canonical_id,
-                    canonical_name: None,
-                    installed_trove_id: None,
-                    installed_pinned: false,
-                    provided_capabilities,
-                };
-                let solvable_id = self.add_solvable(pkg)?;
-
-                let mut sub_deps = load_repo_dependency_requests(
-                    self.conn,
-                    &pkg_with_repo.package,
-                    &pkg_with_repo.repository,
-                )?;
-                let relations = load_repo_relations(self.conn, &pkg_with_repo.package)?;
-                sub_deps.extend(
-                    relations
-                        .iter()
-                        .map(relation_to_solver_dep)
-                        .collect::<Result<Vec<_>>>()?,
-                );
-                self.dependencies.insert(solvable_id.into_raw(), sub_deps);
-                self.relations.insert(solvable_id.into_raw(), relations);
+                self.load_repository_solvable(pkg_with_repo)?;
             }
         }
 
@@ -513,94 +446,6 @@ impl<'db> ConaryProvider<'db> {
     pub fn build_provides_index(&mut self) -> Result<()> {
         self.provides_index = Some(ProvidesIndex::build(self.conn)?);
         Ok(())
-    }
-
-    fn find_repo_providers(
-        &mut self,
-        capability: &str,
-    ) -> Result<Vec<crate::repository::selector::PackageWithRepo>> {
-        use crate::repository::selector::PackageWithRepo;
-
-        let mut providers = Vec::<PackageWithRepo>::new();
-        let entries = if let Some(index) = self.provides_index.as_mut() {
-            index.find_providers(capability)?
-        } else {
-            // Keep direct provider construction useful for callers that do
-            // not opt into the install builder. The normal SAT path always
-            // initializes the demand-driven index above.
-            RepositoryProvide::find_by_capability(self.conn, capability)?
-                .into_iter()
-                .map(|provide| ProviderEntry {
-                    repo_package_id: Some(provide.repository_package_id),
-                    installed_trove_id: None,
-                    canonical_id: None,
-                    provide_version: provide.version,
-                    version_relation: provide.version_relation,
-                    version_scheme: Some(provide.version_scheme),
-                })
-                .collect()
-        };
-
-        for entry in entries {
-            if let Some(pkg_id) = entry.repo_package_id {
-                let pkg = find_repo_package_by_id(self.conn, pkg_id)?.ok_or_else(|| {
-                    Error::ConfigError(format!(
-                        "repository provide '{capability}' references missing package row {pkg_id}"
-                    ))
-                })?;
-                let repo = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
-                    .ok_or_else(|| {
-                        Error::ConfigError(format!(
-                            "repository package '{}' references missing repository row {}",
-                            pkg.name, pkg.repository_id
-                        ))
-                    })?;
-                if repo.enabled {
-                    providers.push(PackageWithRepo {
-                        package: pkg,
-                        repository: repo,
-                    });
-                }
-                continue;
-            }
-
-            // AppStream entries have canonical_id but no direct repo package
-            // ID. Resolve the canonical package to enabled repository rows.
-            let Some(cid) = entry.canonical_id else {
-                continue;
-            };
-            let mut cid_stmt = self.conn.prepare(
-                "SELECT rp.id FROM resolved_repository_packages rp
-                 JOIN repositories r ON rp.repository_id = r.id
-                 WHERE rp.canonical_id = ?1 AND r.enabled = 1",
-            )?;
-            let pkg_ids = cid_stmt
-                .query_map([cid], |row| row.get(0))?
-                .collect::<rusqlite::Result<Vec<i64>>>()?;
-            for pkg_id in pkg_ids {
-                let pkg = find_repo_package_by_id(self.conn, pkg_id)?.ok_or_else(|| {
-                    Error::ConfigError(format!(
-                        "AppStream provider for canonical package {cid} references missing package row {pkg_id}"
-                    ))
-                })?;
-                let repo = crate::db::models::Repository::find_by_id(self.conn, pkg.repository_id)?
-                    .ok_or_else(|| {
-                        Error::ConfigError(format!(
-                            "repository package '{}' references missing repository row {}",
-                            pkg.name, pkg.repository_id
-                        ))
-                    })?;
-                let already = providers.iter().any(|p| p.package.id == pkg.id);
-                if !already && repo.enabled {
-                    providers.push(PackageWithRepo {
-                        package: pkg,
-                        repository: repo,
-                    });
-                }
-            }
-        }
-
-        Ok(providers)
     }
 
     /// Get the solvable package at a given index.

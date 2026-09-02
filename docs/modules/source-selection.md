@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 53
-summary: Document typed profile support tiers and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+last_updated: 2026-09-02
+revision: 58
+summary: Document profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -84,7 +84,8 @@ replatform may need to realign.
 
 The repository feed catalog makes
 `crates/conary-core/src/repository/supported_profiles/` the source of truth for
-configured feed IDs, package format, version scheme, and Remi route-family
+configured feed IDs, package format, version scheme, typed target machine
+architecture, and Remi route-family
 mapping. Fedora 44, Ubuntu 26.04, and Arch are the public feeds, not the only
 destination systems Conary supports. Solus is a candidate profile available to
 private refresh and conformance work without public route, universe, key, seed,
@@ -118,6 +119,46 @@ profile remains an optional feed preset during W10 and is copied into native
 package rows when present; it is not required for repository identity or
 refresh authority. The superseded
 `data/distros.toml` catalog was deleted in M4d.
+
+Host-native admission derives `NativeMachineIdentityV1` only from compile-time
+machine facts: `target_arch`, pointer width, endianness, and `target_abi` for
+32-bit ARM float ABI. The executable's target triple is retained only for an
+`UnsupportedNativeHostTarget` diagnostic; `target_env`, libc, and target OS do
+not enter machine identity. Thus GNU and musl executables built for the same
+x86_64 machine produce identical host identities, as do GNU and musl ARMv7
+hard-float executables.
+
+Package libc/ABI remains separate typed source-format authority. The
+supported-profile registry declares Ubuntu's dpkg `gnu` ABI and Fedora/Arch's
+implied glibc ABI. For RPM, Debian, and Arch, native-only admission derives the
+target machine solely from the selected profile's typed `target_architecture`
+and requires both package machine equality and package ABI equality with that
+profile target. The host identity separately validates that the selected
+profile is usable on this host; a different machine returns
+`ProfileArchitectureMismatch` and never defines another package admission set.
+Conary and Eopkg have no corresponding foreign-profile architecture authority,
+so their repository candidates retain their explicit scheme-owned machine
+matching and do not require a source profile. RPM and dpkg architecture tokens
+remain format-wide because their pinned upstream tables define those
+vocabularies. ALPM has no format-wide vocabulary:
+`pacman.conf(5)` configures `Architecture` as `auto`/`uname -m` or an explicit
+list, and libalpm compares package `%ARCH%` literally while always accepting
+`any`. Each ALPM profile therefore declares exactly its own machine token set
+plus `any`; a token outside that set is `UnknownArchitectureToken`, not a
+silent non-native filter.
+
+The SAT provider applies that repository-row admission exactly once, when a
+persisted row is promoted to a solvable. Excluded rows receive no `SolvableId`
+and enter neither the package-name index nor the capability-provider set;
+unknown architecture tokens fail that load with `UnknownArchitectureToken`.
+All repository discovery converges on this boundary: requested and transitive
+package-name searches, canonical-equivalent name expansion, exact persisted-ID
+root candidates, demand-driven declared providers (virtual, soname, file,
+path, binary, pkgconfig, pkgconfig32, COMAR, and generic), AppStream canonical
+provider expansion, and the atoms used by same-provider expressions. Exact
+root interning only constrains the already-admitted row by persisted ID. After
+load, per-match architecture logic is limited to Debian dependency and provide
+qualifier/Multi-Arch semantics; it does not repeat candidate admission.
 
 An accepted Remi conversion remains server-owned work until the typed job
 status reaches `ready` or `failed`. The client continues to observe `pending`
