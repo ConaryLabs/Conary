@@ -233,7 +233,7 @@ impl TargetCapabilityContractV1 {
                 supported: self.ccs_format_version,
             });
         }
-        if !PackageSelector::is_architecture_compatible(
+        if !PackageSelector::is_machine_architecture_compatible(
             authority.identity.version_scheme,
             authority.identity.architecture.as_deref(),
             &self.machine_architecture,

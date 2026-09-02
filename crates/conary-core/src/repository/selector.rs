@@ -84,7 +84,7 @@ impl PackageSelector {
     /// package ecosystem that owns them. For example, Debian `all`, Arch
     /// `any`, and RPM `noarch` are distinct signed tokens rather than generic
     /// aliases.
-    pub fn is_architecture_compatible(
+    pub fn is_machine_architecture_compatible(
         scheme: VersionScheme,
         pkg_arch: Option<&str>,
         system_arch: &str,
@@ -92,37 +92,33 @@ impl PackageSelector {
         let Some(architecture) = pkg_arch else {
             return false;
         };
-        match scheme {
-            VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
-                native_resolution_architecture_decision(scheme, architecture, system_arch)
-                    .is_admitted()
-            }
-            VersionScheme::Conary | VersionScheme::Eopkg => {
-                effective_machine_architecture(scheme, architecture, system_arch)
-                    == native_machine_architecture(system_arch)
-            }
-        }
+        effective_machine_architecture(scheme, architecture, system_arch)
+            == native_machine_architecture(system_arch)
+    }
+
+    /// Check package machine and ABI admission against its exact source profile.
+    pub fn is_architecture_compatible_for_profile(
+        profile: &crate::repository::supported_profiles::SupportedProfile,
+        pkg_arch: Option<&str>,
+        system_arch: &str,
+    ) -> bool {
+        let Some(architecture) = pkg_arch else {
+            return false;
+        };
+        native_resolution_architecture_decision(profile, architecture, system_arch).is_admitted()
     }
 
     /// Check source-native package admission against a typed host identity.
     pub fn is_architecture_compatible_with_identity(
-        scheme: VersionScheme,
+        profile: &crate::repository::supported_profiles::SupportedProfile,
         pkg_arch: Option<&str>,
         host: &NativeMachineIdentityV1,
     ) -> bool {
         let Some(architecture) = pkg_arch else {
             return false;
         };
-        match scheme {
-            VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
-                native_resolution_architecture_decision_for_identity(scheme, architecture, host)
-                    .is_admitted()
-            }
-            VersionScheme::Conary | VersionScheme::Eopkg => {
-                package_machine_architecture(scheme, architecture)
-                    == MachineArchitecture::Known(host.clone())
-            }
-        }
+        native_resolution_architecture_decision_for_identity(profile, architecture, host)
+            .is_admitted()
     }
 
     /// Search for packages by name with selection options
@@ -177,24 +173,6 @@ impl PackageSelector {
                 continue;
             }
 
-            // Filter by architecture
-            let architecture_compatible = if options.architecture.is_some() {
-                Self::is_architecture_compatible(scheme, Some(package_architecture), system_arch)
-            } else {
-                Self::is_architecture_compatible_with_identity(
-                    scheme,
-                    Some(package_architecture),
-                    &detected_identity,
-                )
-            };
-            if options.architecture_scope == ArchitectureScope::Native && !architecture_compatible {
-                debug!(
-                    "Skipping package {} {} with incompatible arch {:?}",
-                    pkg.name, pkg.version, pkg.architecture
-                );
-                continue;
-            }
-
             // Get repository information
             let repo = Repository::find_by_id(conn, pkg.repository_id)?.ok_or_else(|| {
                 Error::NotFound(format!(
@@ -215,6 +193,46 @@ impl PackageSelector {
                 debug!(
                     "Skipping package {} from disabled repository {}",
                     pkg.name, repo.name
+                );
+                continue;
+            }
+
+            // Foreign package admission is bound to the source profile's
+            // machine token and package ABI, never the executable's libc.
+            let architecture_compatible = match scheme {
+                VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
+                    let Some(profile) = repo.resolution_source_profile()? else {
+                        return Err(Error::ConfigError(format!(
+                            "repository '{}' has no source profile for native package admission",
+                            repo.name
+                        )));
+                    };
+                    if options.architecture.is_some() {
+                        Self::is_architecture_compatible_for_profile(
+                            profile,
+                            Some(package_architecture),
+                            system_arch,
+                        )
+                    } else {
+                        Self::is_architecture_compatible_with_identity(
+                            profile,
+                            Some(package_architecture),
+                            &detected_identity,
+                        )
+                    }
+                }
+                VersionScheme::Conary | VersionScheme::Eopkg => {
+                    Self::is_machine_architecture_compatible(
+                        scheme,
+                        Some(package_architecture),
+                        system_arch,
+                    )
+                }
+            };
+            if options.architecture_scope == ArchitectureScope::Native && !architecture_compatible {
+                debug!(
+                    "Skipping package {} {} with incompatible arch {:?}",
+                    pkg.name, pkg.version, pkg.architecture
                 );
                 continue;
             }
@@ -502,6 +520,9 @@ fn effective_machine_architecture(
 }
 
 fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {
+    if scheme == VersionScheme::Arch {
+        return architecture == "any";
+    }
     matches!(
         known_package_architecture(scheme, architecture),
         Some(KnownPackageArchitecture::Independent)
@@ -510,10 +531,12 @@ fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> boo
 
 fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
     match known_package_architecture(scheme, architecture) {
-        Some(KnownPackageArchitecture::Machine(class)) => MachineArchitecture::Known(class),
-        Some(KnownPackageArchitecture::Independent) | None => {
-            MachineArchitecture::Literal(architecture.to_string())
+        Some(KnownPackageArchitecture::Machine { identity, .. }) => {
+            MachineArchitecture::Known(identity)
         }
+        Some(KnownPackageArchitecture::Independent) | None => host_machine_identity(architecture)
+            .map(MachineArchitecture::Known)
+            .unwrap_or_else(|| MachineArchitecture::Literal(architecture.to_string())),
     }
 }
 

@@ -40,7 +40,7 @@ pub(crate) fn constraint_architecture_matches_package(
         ConaryConstraint::Requested(_)
         | ConaryConstraint::ExactRepositoryPackage(_)
         | ConaryConstraint::ProviderExpression { .. } => {
-            PackageSelector::is_architecture_compatible(
+            PackageSelector::is_machine_architecture_compatible(
                 package.version_scheme,
                 Some(package_architecture),
                 native_architecture,
@@ -160,11 +160,13 @@ fn debian_architecture_matches(
         RequirementArchitectureQualifier::Any => {
             provider_multi_arch == Some(DebianMultiArch::Allowed)
         }
-        RequirementArchitectureQualifier::Native => PackageSelector::is_architecture_compatible(
-            provider_scheme,
-            Some(provider_architecture),
-            native_architecture,
-        ),
+        RequirementArchitectureQualifier::Native => {
+            PackageSelector::is_machine_architecture_compatible(
+                provider_scheme,
+                Some(provider_architecture),
+                native_architecture,
+            )
+        }
         RequirementArchitectureQualifier::Exact(architecture) => package_architectures_match(
             provider_scheme,
             provider_architecture,
@@ -254,14 +256,16 @@ fn provide_architecture_matches_native_target(
     native_architecture: &str,
 ) -> bool {
     match provide_qualifier {
-        ProvideArchitectureQualifier::Implicit => PackageSelector::is_architecture_compatible(
-            package_scheme,
-            Some(package_architecture),
-            native_architecture,
-        ),
+        ProvideArchitectureQualifier::Implicit => {
+            PackageSelector::is_machine_architecture_compatible(
+                package_scheme,
+                Some(package_architecture),
+                native_architecture,
+            )
+        }
         ProvideArchitectureQualifier::Any => true,
         ProvideArchitectureQualifier::Exact(architecture) => {
-            PackageSelector::is_architecture_compatible(
+            PackageSelector::is_machine_architecture_compatible(
                 provide_scheme,
                 Some(architecture),
                 native_architecture,

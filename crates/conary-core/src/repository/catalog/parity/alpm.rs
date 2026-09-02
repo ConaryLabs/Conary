@@ -15,7 +15,7 @@ use super::{
     verify_native_parity_oracle_bundle, write_native_parity_oracle_manifest,
 };
 use crate::error::{Error, Result};
-use crate::repository::architecture::require_known_package_architecture;
+use crate::repository::architecture::require_known_package_architecture_for_profile;
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -297,7 +297,11 @@ fn project_package(
             "ALPM package '{name}-{version}' has no architecture authority"
         ))
     })?;
-    require_known_package_architecture(VersionScheme::Arch, architecture)?;
+    require_known_package_architecture_for_profile(
+        &profile.profile,
+        VersionScheme::Arch,
+        architecture,
+    )?;
     let filename = required_text(package.filename(), &name, "filename")?;
     if filename == "." || filename == ".." || filename.contains('/') || filename.contains('\\') {
         return Err(Error::ParseError(format!(

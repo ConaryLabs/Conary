@@ -10,7 +10,6 @@ use super::super::{
     CatalogRequirementGroupV1, CatalogScopeV1, ProfileRevisionV2, ProfileSourceMemberV2,
 };
 use crate::error::{Error, Result};
-use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::dependency_model::DebianMultiArch;
 use crate::repository::versioning::VersionScheme;
 
@@ -310,7 +309,11 @@ impl NativeParityPackageV1 {
                 self.name
             ))
         })?;
-        require_known_package_architecture(self.version_scheme, architecture)?;
+        crate::repository::architecture::require_known_package_architecture_for_profile(
+            profile,
+            self.version_scheme,
+            architecture,
+        )?;
         self.as_catalog_record().validate(&CatalogScopeV1::Profile {
             profile: profile.to_string(),
         })

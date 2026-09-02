@@ -204,13 +204,20 @@ impl CandidateResolutionProjection {
                 root.name, root.version
             ))
         })?;
+        let root_profile = root.source_profile.as_deref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "candidate repository package '{}-{}' has no source profile for native admission",
+                root.name, root.version
+            ))
+        })?;
         match policy
             .architecture_admission
             .admits(
+                root_profile,
                 crate::repository::versioning::resolve_package_version_scheme(&root),
                 root_architecture,
                 &policy.architecture,
-            )
+            )?
             .into_result()?
         {
             NativeResolutionArchitectureDecisionV1::Admitted => {}

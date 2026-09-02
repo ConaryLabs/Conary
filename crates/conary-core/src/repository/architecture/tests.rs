@@ -4,10 +4,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 
+const ARCH_PROFILE_SNAPSHOT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/architecture/arch-2026-08-02-architecture-authority.txt"
+));
+
 fn machine(scheme: VersionScheme, token: &str) -> NativeMachineIdentityV1 {
     match known_package_architecture(scheme, token) {
-        Some(KnownPackageArchitecture::Machine(identity)) => identity,
+        Some(KnownPackageArchitecture::Machine { identity, .. }) => identity,
         value => panic!("expected machine identity for {scheme:?} token '{token}', got {value:?}"),
+    }
+}
+
+fn profile_machine(profile_id: &str, token: &str) -> NativeMachineIdentityV1 {
+    let profile = profile_by_id(profile_id).unwrap();
+    match known_package_architecture_for_profile(profile, profile.version_scheme(), token) {
+        Some(KnownPackageArchitecture::Machine { identity, .. }) => identity,
+        value => panic!(
+            "expected machine identity for profile '{profile_id}' token '{token}', got {value:?}"
+        ),
     }
 }
 
@@ -83,13 +98,31 @@ fn every_pinned_dpkg_tuple_output_has_a_full_identity() {
 
 #[test]
 fn every_pinned_arch_package_architecture_is_known() {
-    let carch = data_lines(ARCH_TABLE)
+    let profile = profile_by_id("arch").unwrap();
+    let carch = data_lines(ARCH_PROFILE_SNAPSHOT)
         .find_map(|line| line.strip_prefix("CARCH="))
         .unwrap();
     assert_eq!(carch, "x86_64");
-    for token in data_lines(ARCH_TABLE).filter_map(|line| line.strip_prefix("PACKAGE_ARCH=")) {
-        assert!(known_package_architecture(VersionScheme::Arch, token).is_some());
+    for token in
+        data_lines(ARCH_PROFILE_SNAPSHOT).filter_map(|line| line.strip_prefix("PACKAGE_ARCH="))
+    {
+        assert!(
+            known_package_architecture_for_profile(profile, VersionScheme::Arch, token).is_some()
+        );
     }
+    assert!(known_package_architecture(VersionScheme::Arch, "x86_64").is_none());
+    assert!(
+        known_package_architecture_for_profile(profile, VersionScheme::Arch, "aarch64").is_none()
+    );
+    assert!(matches!(
+        require_known_package_architecture_for_profile(
+            "arch",
+            VersionScheme::Arch,
+            "aarch64"
+        ),
+        Err(Error::UnknownArchitectureToken { scheme, token })
+            if scheme == "arch" && token == "aarch64"
+    ));
 }
 
 #[test]
@@ -147,7 +180,7 @@ fn table_justified_cross_scheme_identities_are_equal() {
     }
     assert_eq!(
         machine(VersionScheme::Debian, "amd64"),
-        machine(VersionScheme::Arch, "x86_64")
+        profile_machine("arch", "x86_64")
     );
 }
 
@@ -180,8 +213,6 @@ fn target_facts(
         pointer_width,
         endianness,
         target_abi: abi.to_string(),
-        target_env: "gnu".to_string(),
-        target_os: "linux".to_string(),
     }
 }
 
@@ -279,7 +310,7 @@ fn supported_host_targets_equal_their_pinned_native_tokens() {
         assert_eq!(identity, machine(VersionScheme::Debian, debian), "{debian}");
         assert_eq!(identity, machine(VersionScheme::Rpm, rpm), "{rpm}");
         if let Some(arch) = arch {
-            assert_eq!(identity, machine(VersionScheme::Arch, arch), "{arch}");
+            assert_eq!(identity, profile_machine("arch", arch), "{arch}");
         }
         assert_eq!(
             native_token_for_machine_identity(VersionScheme::Debian, &identity).as_deref(),
@@ -290,6 +321,91 @@ fn supported_host_targets_equal_their_pinned_native_tokens() {
             Some(rpm)
         );
     }
+}
+
+#[test]
+fn executable_libc_does_not_change_host_machine_or_profile_admission() {
+    let gnu_x86_64 = target_facts(
+        "x86_64-unknown-linux-gnu",
+        "x86_64",
+        64,
+        NativeMachineEndiannessV1::Little,
+        "",
+    );
+    let musl_x86_64 = target_facts(
+        "x86_64-unknown-linux-musl",
+        "x86_64",
+        64,
+        NativeMachineEndiannessV1::Little,
+        "",
+    );
+    let gnu_identity = native_machine_identity_from_target_facts(&gnu_x86_64).unwrap();
+    let musl_identity = native_machine_identity_from_target_facts(&musl_x86_64).unwrap();
+    assert_eq!(gnu_identity, musl_identity);
+
+    for (profile_id, package_architecture) in [
+        ("ubuntu-26.04", "amd64"),
+        ("fedora-44", "x86_64"),
+        ("arch", "x86_64"),
+    ] {
+        let profile = profile_by_id(profile_id).unwrap();
+        for host in [&gnu_identity, &musl_identity] {
+            assert_eq!(
+                native_resolution_architecture_decision_for_identity(
+                    profile,
+                    package_architecture,
+                    host,
+                ),
+                NativeResolutionArchitectureDecisionV1::Admitted,
+                "{profile_id} under {host:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn arm_hard_float_host_identity_is_independent_of_executable_libc() {
+    let gnu = target_facts(
+        "armv7-unknown-linux-gnueabihf",
+        "arm",
+        32,
+        NativeMachineEndiannessV1::Little,
+        "eabihf",
+    );
+    let musl = target_facts(
+        "armv7-unknown-linux-musleabihf",
+        "arm",
+        32,
+        NativeMachineEndiannessV1::Little,
+        "eabihf",
+    );
+    assert_eq!(
+        native_machine_identity_from_target_facts(&gnu).unwrap(),
+        native_machine_identity_from_target_facts(&musl).unwrap()
+    );
+}
+
+#[test]
+fn package_libc_must_match_the_source_profile_even_when_the_machine_matches() {
+    let profile = profile_by_id("ubuntu-26.04").unwrap();
+    let host = native_machine_identity_from_target_facts(&target_facts(
+        "x86_64-unknown-linux-musl",
+        "x86_64",
+        64,
+        NativeMachineEndiannessV1::Little,
+        "",
+    ))
+    .unwrap();
+    assert_eq!(
+        native_resolution_architecture_decision_for_identity(profile, "musl-linux-amd64", &host,),
+        NativeResolutionArchitectureDecisionV1::Excluded {
+            identity: host.clone(),
+        }
+    );
+    assert_eq!(
+        native_resolution_architecture_decision_for_identity(profile, "amd64", &host),
+        NativeResolutionArchitectureDecisionV1::Admitted
+    );
 }
 
 #[test]
@@ -310,13 +426,14 @@ fn unsupported_host_target_names_its_exact_triple() {
 
 #[test]
 fn architecture_independent_tokens_resolve_for_supported_profiles() {
-    for (scheme, independent, native) in [
-        (VersionScheme::Rpm, "noarch", "x86_64"),
-        (VersionScheme::Debian, "all", "amd64"),
-        (VersionScheme::Arch, "any", "x86_64"),
+    for (profile_id, independent, native) in [
+        ("fedora-44", "noarch", "x86_64"),
+        ("ubuntu-26.04", "all", "amd64"),
+        ("arch", "any", "x86_64"),
     ] {
+        let profile = profile_by_id(profile_id).unwrap();
         assert_eq!(
-            native_resolution_architecture_decision(scheme, independent, native),
+            native_resolution_architecture_decision(profile, independent, native),
             NativeResolutionArchitectureDecisionV1::Admitted
         );
     }
@@ -324,16 +441,17 @@ fn architecture_independent_tokens_resolve_for_supported_profiles() {
 
 #[test]
 fn rpm_native_only_admits_exact_canonical_architecture_and_noarch() {
+    let profile = profile_by_id("fedora-44").unwrap();
     for token in ["x86_64", "noarch"] {
         assert_eq!(
-            native_resolution_architecture_decision(VersionScheme::Rpm, token, "x86_64"),
+            native_resolution_architecture_decision(profile, token, "x86_64"),
             NativeResolutionArchitectureDecisionV1::Admitted,
             "{token}"
         );
     }
     for token in ["amd64", "athlon", "x86_64_v3"] {
         assert_eq!(
-            native_resolution_architecture_decision(VersionScheme::Rpm, token, "x86_64"),
+            native_resolution_architecture_decision(profile, token, "x86_64"),
             NativeResolutionArchitectureDecisionV1::Excluded {
                 identity: machine(VersionScheme::Rpm, token),
             },
@@ -344,8 +462,9 @@ fn rpm_native_only_admits_exact_canonical_architecture_and_noarch() {
 
 #[test]
 fn debian_x32_is_known_and_non_native_for_amd64() {
+    let profile = profile_by_id("ubuntu-26.04").unwrap();
     assert_eq!(
-        native_resolution_architecture_decision(VersionScheme::Debian, "x32", "amd64"),
+        native_resolution_architecture_decision(profile, "x32", "amd64"),
         NativeResolutionArchitectureDecisionV1::Excluded {
             identity: machine(VersionScheme::Debian, "x32"),
         }
@@ -354,8 +473,9 @@ fn debian_x32_is_known_and_non_native_for_amd64() {
 
 #[test]
 fn unknown_architecture_is_neither_admitted_nor_excluded() {
+    let profile = profile_by_id("arch").unwrap();
     assert_eq!(
-        native_resolution_architecture_decision(VersionScheme::Arch, "future-carch", "x86_64"),
+        native_resolution_architecture_decision(profile, "future-carch", "x86_64"),
         NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
             scheme: VersionScheme::Arch,
             token: "future-carch".to_string(),
@@ -365,8 +485,9 @@ fn unknown_architecture_is_neither_admitted_nor_excluded() {
 
 #[test]
 fn independent_architecture_does_not_hide_an_unknown_target() {
+    let profile = profile_by_id("fedora-44").unwrap();
     assert_eq!(
-        native_resolution_architecture_decision(VersionScheme::Rpm, "noarch", "future-host"),
+        native_resolution_architecture_decision(profile, "noarch", "future-host"),
         NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
             scheme: VersionScheme::Rpm,
             token: "future-host".to_string(),

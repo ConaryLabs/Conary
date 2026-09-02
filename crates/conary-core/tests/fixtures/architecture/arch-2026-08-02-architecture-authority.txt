@@ -3,10 +3,19 @@
 # Installed package: pacman 7.1.0.r9.g54d9411-2.
 # Upstream file: etc/makepkg.conf.in at pacman commit 54d94116164b0b2202c6061c4a59c6f3e70820d8.
 # URL: https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/etc/makepkg.conf.in
+# pacman.conf(5) defines Architecture as `auto` (uname -m) or an explicit list
+# and always permits `any`; it does not publish a closed format-wide vocabulary:
+# https://man.archlinux.org/man/pacman.conf.5.en#Architecture
+# Pinned libalpm compares each package's `%ARCH%` literally with the configured
+# architecture strings (apart from `any`):
+# https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/trans.c#L69-106
 # The installed /etc/makepkg.conf substitutes the exact values below.
 CARCH=x86_64
 CHOST=x86_64-pc-linux-gnu
-# Exact %ARCH% values in the pinned 2026-08-02 core, extra, and multilib databases.
+# Exact `%ARCH%` values observed for the supported `arch` x86_64 profile in the
+# pinned 2026-08-02 core, extra, and multilib databases. The supported-profile
+# registry owns that profile's admitted tokens; this snapshot is not a
+# format-wide ALPM token table.
 # URLs:
 # https://archive.archlinux.org/repos/2026/08/02/core/os/x86_64/core.db
 # https://archive.archlinux.org/repos/2026/08/02/extra/os/x86_64/extra.db

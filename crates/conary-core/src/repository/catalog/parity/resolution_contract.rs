@@ -67,16 +67,31 @@ impl NativeResolutionArchitectureAdmissionV1 {
     #[must_use]
     pub fn admits(
         self,
+        source_profile: &str,
         scheme: VersionScheme,
         package_architecture: &str,
         native_architecture: &str,
-    ) -> NativeResolutionArchitectureDecisionV1 {
+    ) -> Result<NativeResolutionArchitectureDecisionV1> {
+        let profile = crate::repository::supported_profiles::profile_by_id(source_profile)
+            .ok_or_else(|| {
+                Error::ConfigError(format!(
+                    "native resolution names unsupported source profile '{source_profile}'"
+                ))
+            })?;
+        if profile.version_scheme() != scheme {
+            return Err(Error::ConfigError(format!(
+                "native resolution package scheme '{}' conflicts with source profile '{}' scheme '{}'",
+                scheme.as_str(),
+                profile.id(),
+                profile.version_scheme().as_str()
+            )));
+        }
         match self {
-            Self::NativeOnly => native_resolution_architecture_decision(
-                scheme,
+            Self::NativeOnly => Ok(native_resolution_architecture_decision(
+                profile,
                 package_architecture,
                 native_architecture,
-            ),
+            )),
         }
     }
 }

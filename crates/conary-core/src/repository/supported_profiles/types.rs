@@ -15,6 +15,9 @@ pub(super) struct ProfileDocument {
     pub display_name: String,
     pub release: String,
     pub target_architecture: ProfileTargetArchitecture,
+    pub target_package_abi: ProfileTargetPackageAbi,
+    #[serde(default)]
+    pub package_architecture_tokens: Vec<String>,
     pub support_tier: SupportTier,
     #[serde(default)]
     pub release_date: Option<String>,
@@ -22,6 +25,31 @@ pub(super) struct ProfileDocument {
     pub eol: Option<String>,
     pub members: Vec<ProfileSourceMemberContract>,
     pub identity: ProfileIdentityDocument,
+}
+
+/// Exact libc/ABI contract used to build one profile's binary packages.
+///
+/// The spelling follows the source format's authority: dpkg publishes `gnu`,
+/// while RPM and ALPM profiles declare their implied glibc contract.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileTargetPackageAbi {
+    Gnu,
+    Glibc,
+    Musl,
+    Uclibc,
+}
+
+impl ProfileTargetPackageAbi {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Gnu => "gnu",
+            Self::Glibc => "glibc",
+            Self::Musl => "musl",
+            Self::Uclibc => "uclibc",
+        }
+    }
 }
 
 /// Exact source-ecosystem machine architecture owned by one supported profile.
@@ -206,6 +234,18 @@ impl SupportedProfile {
     #[must_use]
     pub fn target_architecture(&self) -> ProfileTargetArchitecture {
         self.document.target_architecture
+    }
+
+    #[must_use]
+    pub fn target_package_abi(&self) -> ProfileTargetPackageAbi {
+        self.document.target_package_abi
+    }
+
+    /// Exact package architecture tokens admitted by a profile when its
+    /// source format does not publish a format-wide vocabulary.
+    #[must_use]
+    pub fn package_architecture_tokens(&self) -> &[String] {
+        &self.document.package_architecture_tokens
     }
 
     #[must_use]
