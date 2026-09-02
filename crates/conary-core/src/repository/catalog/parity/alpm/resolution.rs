@@ -353,12 +353,7 @@ fn resolve_exact_root(
     };
     match policy
         .architecture_admission
-        .admits(
-            &root.source_profile,
-            root.version_scheme,
-            root_architecture,
-            &policy.architecture,
-        )
+        .admits(&root.source_profile, root.version_scheme, root_architecture)
         .and_then(NativeResolutionArchitectureDecisionV1::into_result)
     {
         Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}

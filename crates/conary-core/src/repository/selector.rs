@@ -16,7 +16,8 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::{
     KnownPackageArchitecture, NativeMachineIdentityV1, NativeResolutionArchitectureDecisionV1,
     host_machine_identity, known_package_architecture, native_host_machine_identity,
-    native_resolution_architecture_decision, native_resolution_architecture_decision_for_identity,
+    native_resolution_architecture_decision, require_profile_host_architecture,
+    require_profile_host_architecture_token,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use crate::repository::versioning::{
@@ -114,30 +115,12 @@ impl PackageSelector {
     pub fn is_architecture_compatible_for_profile(
         profile: &crate::repository::supported_profiles::SupportedProfile,
         pkg_arch: Option<&str>,
-        system_arch: &str,
     ) -> Result<bool> {
         let Some(architecture) = pkg_arch else {
             return Ok(false);
         };
         Ok(matches!(
-            native_resolution_architecture_decision(profile, architecture, system_arch)
-                .into_result()?,
-            NativeResolutionArchitectureDecisionV1::Admitted
-        ))
-    }
-
-    /// Check source-native package admission against a typed host identity.
-    pub fn is_architecture_compatible_with_identity(
-        profile: &crate::repository::supported_profiles::SupportedProfile,
-        pkg_arch: Option<&str>,
-        host: &NativeMachineIdentityV1,
-    ) -> Result<bool> {
-        let Some(architecture) = pkg_arch else {
-            return Ok(false);
-        };
-        Ok(matches!(
-            native_resolution_architecture_decision_for_identity(profile, architecture, host)
-                .into_result()?,
+            native_resolution_architecture_decision(profile, architecture).into_result()?,
             NativeResolutionArchitectureDecisionV1::Admitted
         ))
     }
@@ -237,20 +220,22 @@ impl PackageSelector {
                                 ))
                             })?;
                     if options.architecture.is_some() {
-                        Self::is_architecture_compatible_for_profile(
-                            profile,
-                            Some(package_architecture),
-                            system_arch,
-                        )?
+                        require_profile_host_architecture_token(profile, system_arch)?;
                     } else {
-                        Self::is_architecture_compatible_with_identity(
+                        require_profile_host_architecture(
                             profile,
-                            Some(package_architecture),
                             &detected_identity,
-                        )?
+                            &detected_arch,
+                        )?;
                     }
+                    Self::is_architecture_compatible_for_profile(
+                        profile,
+                        Some(package_architecture),
+                    )?
                 }
                 VersionScheme::Conary | VersionScheme::Eopkg => {
+                    // These schemes do not have the typed foreign-profile
+                    // architecture authority owned by RPM, dpkg, and ALPM.
                     Self::is_machine_architecture_compatible(
                         scheme,
                         Some(package_architecture),

@@ -171,12 +171,48 @@ pub fn require_known_package_architecture_for_profile(
     })
 }
 
-/// Decide native-only admission without collapsing an unknown token to false.
+/// Validate that one selected profile can run on the requested host machine.
+///
+/// Host identity is checked once at the profile boundary. It never defines the
+/// package set admitted by that profile.
+pub fn require_profile_host_architecture(
+    profile: &SupportedProfile,
+    host_identity: &NativeMachineIdentityV1,
+    host_token: &str,
+) -> Result<()> {
+    let target_identity = profile_target_machine_identity(profile);
+    if *host_identity == target_identity {
+        return Ok(());
+    }
+    Err(Error::ProfileArchitectureMismatch {
+        profile: profile.id().to_string(),
+        expected: profile.target_architecture().as_str().to_string(),
+        actual: host_token.to_string(),
+    })
+}
+
+/// Validate a profile against an explicit host token and return its identity.
+pub fn require_profile_host_architecture_token(
+    profile: &SupportedProfile,
+    host_token: &str,
+) -> Result<NativeMachineIdentityV1> {
+    let host_identity =
+        host_machine_identity(host_token).ok_or_else(|| Error::UnknownArchitectureToken {
+            scheme: profile.version_scheme().as_str().to_string(),
+            token: host_token.to_string(),
+        })?;
+    require_profile_host_architecture(profile, &host_identity, host_token)?;
+    Ok(host_identity)
+}
+
+/// Decide profile-bound native admission without collapsing an unknown token.
+///
+/// The selected profile owns the target machine and package ABI. Host identity
+/// is deliberately absent from this signature.
 #[must_use]
 pub fn native_resolution_architecture_decision(
     profile: &SupportedProfile,
     package_token: &str,
-    target_token: &str,
 ) -> NativeResolutionArchitectureDecisionV1 {
     let scheme = profile.version_scheme();
     let Some(package) = known_package_architecture_for_profile(profile, scheme, package_token)
@@ -186,12 +222,7 @@ pub fn native_resolution_architecture_decision(
             token: package_token.to_string(),
         };
     };
-    let Some(target_identity) = host_machine_identity(target_token) else {
-        return NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
-            scheme,
-            token: target_token.to_string(),
-        };
-    };
+    let target_identity = profile_target_machine_identity(profile);
     let identity = match package {
         KnownPackageArchitecture::Independent => target_identity.clone(),
         KnownPackageArchitecture::Machine {
@@ -211,38 +242,14 @@ pub fn native_resolution_architecture_decision(
     }
 }
 
-/// Decide native-only admission against an already-derived host identity.
-#[must_use]
-pub fn native_resolution_architecture_decision_for_identity(
-    profile: &SupportedProfile,
-    package_token: &str,
-    target_identity: &NativeMachineIdentityV1,
-) -> NativeResolutionArchitectureDecisionV1 {
-    let scheme = profile.version_scheme();
-    let Some(package) = known_package_architecture_for_profile(profile, scheme, package_token)
-    else {
-        return NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken {
-            scheme,
-            token: package_token.to_string(),
-        };
-    };
-    let identity = match package {
-        KnownPackageArchitecture::Independent => target_identity.clone(),
-        KnownPackageArchitecture::Machine {
-            identity,
-            package_abi,
-        } => {
-            if package_abi != Some(profile.target_package_abi()) {
-                return NativeResolutionArchitectureDecisionV1::Excluded { identity };
-            }
-            identity
-        }
-    };
-    if identity == *target_identity {
-        NativeResolutionArchitectureDecisionV1::Admitted
-    } else {
-        NativeResolutionArchitectureDecisionV1::Excluded { identity }
-    }
+fn profile_target_machine_identity(profile: &SupportedProfile) -> NativeMachineIdentityV1 {
+    host_machine_identity(profile.target_architecture().as_str()).unwrap_or_else(|| {
+        panic!(
+            "supported profile '{}' has an unprojectable typed target architecture '{}'",
+            profile.id(),
+            profile.target_architecture().as_str()
+        )
+    })
 }
 
 /// Return the current compile target's exact facts.

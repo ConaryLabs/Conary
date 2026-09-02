@@ -419,12 +419,7 @@ fn resolve_exact_root(
     })?;
     let root_is_admitted = match policy
         .architecture_admission
-        .admits(
-            &root.source_profile,
-            root.version_scheme,
-            root_architecture,
-            &policy.architecture,
-        )
+        .admits(&root.source_profile, root.version_scheme, root_architecture)
         .and_then(NativeResolutionArchitectureDecisionV1::into_result)
     {
         Ok(NativeResolutionArchitectureDecisionV1::Admitted) => true,
@@ -564,12 +559,7 @@ fn architecture_excluded_outcome(
     })?;
     let admitted = match policy
         .architecture_admission
-        .admits(
-            &root.source_profile,
-            root.version_scheme,
-            architecture,
-            &policy.architecture,
-        )?
+        .admits(&root.source_profile, root.version_scheme, architecture)?
         .into_result()?
     {
         NativeResolutionArchitectureDecisionV1::Admitted => true,

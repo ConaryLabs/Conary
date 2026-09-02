@@ -1007,6 +1007,70 @@ fn ubuntu_sat_candidates_enforce_profile_abi_for_names_and_provides() {
 }
 
 #[test]
+fn conary_repository_without_a_source_profile_resolves_through_sat() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "conary-native".to_string(),
+        "https://conary.invalid".to_string(),
+    );
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "conary-fixture".to_string(),
+        "1.0.0".to_string(),
+        VersionScheme::Conary,
+        "sha256:conary-fixture".to_string(),
+        1,
+        "https://conary.invalid/conary-fixture.ccs".to_string(),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("conary-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert_eq!(result.install_order.len(), 1, "{result:?}");
+    assert_eq!(
+        result.install_order[0].version_scheme,
+        VersionScheme::Conary
+    );
+}
+
+#[test]
+fn eopkg_repository_candidate_uses_scheme_owned_machine_matching() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "solus-native".to_string(),
+        "https://solus.invalid".to_string(),
+    );
+    repository.source_profile = Some("solus".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let mut package = RepositoryPackage::new(
+        repository_id,
+        "eopkg-fixture".to_string(),
+        "1.0-1".to_string(),
+        VersionScheme::Eopkg,
+        "sha256:eopkg-fixture".to_string(),
+        1,
+        "https://solus.invalid/eopkg-fixture.eopkg".to_string(),
+    );
+    package.architecture = Some("x86_64".to_string());
+    package.insert(&conn).unwrap();
+
+    let result = solve_install(
+        &conn,
+        &[("eopkg-fixture".to_string(), VersionConstraint::Any)],
+    )
+    .unwrap();
+    assert!(result.conflict_message.is_none(), "{result:?}");
+    assert_eq!(result.install_order.len(), 1, "{result:?}");
+    assert_eq!(result.install_order[0].version_scheme, VersionScheme::Eopkg);
+}
+
+#[test]
 fn debian_explicit_any_provide_reaches_sat_as_architecture_authority() {
     use crate::repository::dependency_model::{
         DebianMultiArch, ProvideArchitectureQualifier, RepositoryRequirementKind,

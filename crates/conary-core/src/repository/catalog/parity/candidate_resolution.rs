@@ -216,7 +216,6 @@ impl CandidateResolutionProjection {
                 root_profile,
                 crate::repository::versioning::resolve_package_version_scheme(&root),
                 root_architecture,
-                &policy.architecture,
             )?
             .into_result()?
         {

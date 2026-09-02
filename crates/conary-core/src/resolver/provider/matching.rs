@@ -10,6 +10,7 @@
 
 use crate::repository::architecture::{
     NativeResolutionArchitectureDecisionV1, native_resolution_architecture_decision,
+    require_profile_host_architecture_token,
 };
 use crate::repository::dependency_model::{
     DebianMultiArch, ProvideArchitectureQualifier, ProvideVersionRelation,
@@ -153,12 +154,25 @@ fn repository_candidate_matches_native(
             native_architecture,
         ));
     }
-    let profile = repository_candidate_profile(package)?;
-    Ok(matches!(
-        native_resolution_architecture_decision(profile, architecture, native_architecture)
-            .into_result()?,
-        NativeResolutionArchitectureDecisionV1::Admitted
-    ))
+    match package.version_scheme {
+        VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
+            let profile = repository_candidate_profile(package)?;
+            require_profile_host_architecture_token(profile, native_architecture)?;
+            Ok(matches!(
+                native_resolution_architecture_decision(profile, architecture).into_result()?,
+                NativeResolutionArchitectureDecisionV1::Admitted
+            ))
+        }
+        VersionScheme::Conary | VersionScheme::Eopkg => {
+            // Conary and Eopkg do not have the typed foreign-profile
+            // architecture authority owned by RPM, dpkg, and ALPM.
+            Ok(PackageSelector::is_machine_architecture_compatible(
+                package.version_scheme,
+                Some(architecture),
+                native_architecture,
+            ))
+        }
+    }
 }
 
 fn repository_candidate_profile(
@@ -652,6 +666,30 @@ mod tests {
             architecture_qualifier: qualifier,
             depending_architecture: "amd64".to_string(),
         }
+    }
+
+    #[test]
+    fn repository_native_matching_rejects_a_host_outside_the_profile_target() {
+        let mut candidate = package("aarch64", DebianMultiArch::No);
+        candidate.version_scheme = VersionScheme::Rpm;
+        candidate.debian_multi_arch = None;
+        candidate.repository_name = "fedora".to_string();
+        candidate.repository_profile = Some("fedora-44".to_string());
+
+        let error = repository_candidate_matches_native(&candidate, "aarch64").unwrap_err();
+        assert!(matches!(
+            error,
+            Error::ProfileArchitectureMismatch {
+                profile,
+                expected,
+                actual,
+            } if profile == "fedora-44" && expected == "x86_64" && actual == "aarch64"
+        ));
+
+        candidate.architecture = Some("x86_64".to_string());
+        assert!(repository_candidate_matches_native(&candidate, "x86_64").unwrap());
+        candidate.architecture = Some("noarch".to_string());
+        assert!(repository_candidate_matches_native(&candidate, "x86_64").unwrap());
     }
 
     #[test]

@@ -69,7 +69,6 @@ impl NativeResolutionArchitectureAdmissionV1 {
         source_profile: &str,
         scheme: VersionScheme,
         package_architecture: &str,
-        native_architecture: &str,
     ) -> Result<NativeResolutionArchitectureDecisionV1> {
         let profile = crate::repository::supported_profiles::profile_by_id(source_profile)
             .ok_or_else(|| {
@@ -89,7 +88,6 @@ impl NativeResolutionArchitectureAdmissionV1 {
             Self::NativeOnly => Ok(native_resolution_architecture_decision(
                 profile,
                 package_architecture,
-                native_architecture,
             )),
         }
     }

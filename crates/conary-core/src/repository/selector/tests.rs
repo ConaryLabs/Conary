@@ -264,6 +264,67 @@ fn search_rejects_unknown_architecture_instead_of_selecting_older_version() {
 }
 
 #[test]
+fn fedora_selection_binds_packages_and_host_to_the_profile_target() {
+    let conn = test_db();
+    let mut repository = Repository::new(
+        "fedora-profile-target".to_string(),
+        "https://fedora.invalid".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+
+    for architecture in ["x86_64", "noarch", "aarch64"] {
+        let mut package = RepositoryPackage::new(
+            repository_id,
+            "profile-target-fixture".to_string(),
+            format!("1-{architecture}"),
+            VersionScheme::Rpm,
+            format!("sha256:{architecture}"),
+            1,
+            format!("https://fedora.invalid/profile-target-fixture.{architecture}.rpm"),
+        );
+        package.architecture = Some(architecture.to_string());
+        package.insert(&conn).unwrap();
+    }
+
+    let candidates = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            architecture: Some("x86_64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap();
+    let architectures = candidates
+        .iter()
+        .map(|candidate| candidate.package.architecture.as_deref().unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        architectures,
+        std::collections::BTreeSet::from(["noarch", "x86_64"])
+    );
+
+    let error = PackageSelector::search_packages(
+        &conn,
+        "profile-target-fixture",
+        &SelectionOptions {
+            architecture: Some("aarch64".to_string()),
+            ..SelectionOptions::default()
+        },
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        Error::ProfileArchitectureMismatch {
+            ref profile,
+            ref expected,
+            ref actual,
+        } if profile == "fedora-44" && expected == "x86_64" && actual == "aarch64"
+    ));
+}
+
+#[test]
 fn policy_repo_scope_filters_root_request() {
     let conn = test_db();
 
