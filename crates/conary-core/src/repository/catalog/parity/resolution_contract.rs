@@ -8,7 +8,9 @@ use super::super::contract::{validate_identity, validate_sha256};
 use super::super::{CatalogRequirementGroupV1, ProfileRevisionV2, ProfileSourceMemberV2};
 use super::contract::{NativeParityImplementationV1, NativeParityOracleV1};
 use crate::error::{Error, Result};
-use crate::repository::selector::PackageSelector;
+use crate::repository::architecture::{
+    NativeResolutionArchitectureDecisionV1, native_resolution_architecture_decision,
+};
 use crate::repository::versioning::VersionScheme;
 
 pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V2: u32 = 2;
@@ -66,11 +68,11 @@ impl NativeResolutionArchitectureAdmissionV1 {
     pub fn admits(
         self,
         scheme: VersionScheme,
-        package_architecture: Option<&str>,
+        package_architecture: &str,
         native_architecture: &str,
-    ) -> bool {
+    ) -> NativeResolutionArchitectureDecisionV1 {
         match self {
-            Self::NativeOnly => PackageSelector::is_architecture_compatible(
+            Self::NativeOnly => native_resolution_architecture_decision(
                 scheme,
                 package_architecture,
                 native_architecture,

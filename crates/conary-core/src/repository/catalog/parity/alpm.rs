@@ -15,6 +15,7 @@ use super::{
     verify_native_parity_oracle_bundle, write_native_parity_oracle_manifest,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -291,6 +292,12 @@ fn project_package(
 ) -> Result<NativeParityPackageV1> {
     let name = package.name().to_string();
     let version = package.version().to_string();
+    let architecture = package.arch().ok_or_else(|| {
+        Error::ConfigError(format!(
+            "ALPM package '{name}-{version}' has no architecture authority"
+        ))
+    })?;
+    require_known_package_architecture(VersionScheme::Arch, architecture)?;
     let filename = required_text(package.filename(), &name, "filename")?;
     if filename == "." || filename == ".." || filename.contains('/') || filename.contains('\\') {
         return Err(Error::ParseError(format!(
@@ -366,7 +373,7 @@ fn project_package(
         name,
         version,
         package_release: String::new(),
-        architecture: package.arch().map(str::to_string),
+        architecture: Some(architecture.to_string()),
         debian_multi_arch: None,
         checksum: format!("sha256:{checksum}"),
         size,

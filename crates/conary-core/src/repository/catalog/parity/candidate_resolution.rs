@@ -28,6 +28,7 @@ use crate::db::models::{
     RepositoryRequirementGroup,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::{CatalogPackageRecordV1, CatalogReader, ProfileRevisionV2};
 use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::resolver::sat::{SatExactResolution, solve_exact_repository_package_with_policy};
@@ -197,14 +198,30 @@ impl CandidateResolutionProjection {
                 "candidate resolver projection omits repository package {root_id}"
             ))
         })?;
-        if !policy.architecture_admission.admits(
-            crate::repository::versioning::resolve_package_version_scheme(&root),
-            root.architecture.as_deref(),
-            &policy.architecture,
-        ) {
-            return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            });
+        let root_architecture = root.architecture.as_deref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "candidate repository package '{}-{}' has no architecture authority",
+                root.name, root.version
+            ))
+        })?;
+        match policy
+            .architecture_admission
+            .admits(
+                crate::repository::versioning::resolve_package_version_scheme(&root),
+                root_architecture,
+                &policy.architecture,
+            )
+            .into_result()?
+        {
+            NativeResolutionArchitectureDecisionV1::Admitted => {}
+            NativeResolutionArchitectureDecisionV1::Excluded { .. } => {
+                return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+                });
+            }
+            NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. } => {
+                unreachable!("unknown admission decision returned from into_result")
+            }
         }
         let resolver_policy =
             ResolutionPolicy::new().with_primary_source_identity(self.source_identity.clone());

@@ -14,6 +14,7 @@ use super::{
     produce_debian_parity_oracle, stage_verified_packages, validate_inputs,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
@@ -230,14 +231,27 @@ fn resolve_exact_root(
             debian_unavailable(),
         ));
     };
-    if !policy.architecture_admission.admits(
-        root.version_scheme,
-        Some(root_architecture),
-        &policy.architecture,
-    ) {
-        return Ok(NativeResolutionOutcomeV1::NotInstallable {
-            reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-        });
+    match policy
+        .architecture_admission
+        .admits(root.version_scheme, root_architecture, &policy.architecture)
+        .into_result()
+    {
+        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
+        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
+            return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+            });
+        }
+        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+        Err(error) => {
+            return Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
+                debian_unavailable(),
+            ));
+        }
     }
     let native = apt
         .resolve(&root.name, &root.version, root_architecture)

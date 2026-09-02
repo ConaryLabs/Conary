@@ -14,6 +14,7 @@ use super::{
     verify_native_parity_oracle_bundle, write_native_parity_oracle_manifest,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -268,6 +269,7 @@ fn project_package(
     package: AptPackage,
 ) -> Result<NativeParityPackageV1> {
     validate_sha256(&package.sha256, &package.name)?;
+    require_known_package_architecture(VersionScheme::Debian, &package.architecture)?;
     let size = package.size.parse::<u64>().map_err(|error| {
         Error::ParseError(format!(
             "apt-pkg package '{}' has invalid Size '{}': {error}",

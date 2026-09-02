@@ -39,6 +39,9 @@ pub use debian::{
     produce_debian_resolution_survey,
 };
 
+pub use crate::repository::architecture::{
+    NativeMachineArchitectureClassV1, NativeResolutionArchitectureDecisionV1,
+};
 pub use candidate_resolution::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,
     produce_conary_resolution_candidate,

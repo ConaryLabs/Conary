@@ -243,6 +243,7 @@ pub enum NativeResolutionSurveyErrorReasonV1 {
     TransactionAddRootFailed,
     TransactionReleaseFailed,
     NativeArchitectureRejected,
+    UnknownArchitectureToken,
     NativePackageConflict,
     NativeSolverUnexpectedFailure,
 }
@@ -267,6 +268,7 @@ pub enum NativeResolutionSurveyErrorVariantV1 {
     HttpStatus,
     ConflictError,
     ProfileArchitectureMismatch,
+    UnknownArchitectureToken,
     AmbiguousPackageSelection,
     ChecksumMismatch,
     ParseError,
@@ -314,6 +316,7 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::HttpStatus { .. } => Self::HttpStatus,
             Error::ConflictError(_) => Self::ConflictError,
             Error::ProfileArchitectureMismatch { .. } => Self::ProfileArchitectureMismatch,
+            Error::UnknownArchitectureToken { .. } => Self::UnknownArchitectureToken,
             Error::AmbiguousPackageSelection { .. } => Self::AmbiguousPackageSelection,
             Error::ChecksumMismatch { .. } => Self::ChecksumMismatch,
             Error::ParseError(_) => Self::ParseError,

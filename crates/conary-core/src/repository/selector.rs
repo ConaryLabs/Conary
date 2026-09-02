@@ -13,6 +13,10 @@
 
 use crate::db::models::{Repository, RepositoryPackage};
 use crate::error::{Error, Result};
+use crate::repository::architecture::{
+    KnownPackageArchitecture, NativeMachineArchitectureClassV1, host_machine_class,
+    known_package_architecture, native_resolution_architecture_decision,
+};
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
 use crate::repository::versioning::{
     VersionScheme, compare_repo_package_versions, resolve_package_version_scheme,
@@ -84,10 +88,19 @@ impl PackageSelector {
         pkg_arch: Option<&str>,
         system_arch: &str,
     ) -> bool {
-        pkg_arch.is_some_and(|architecture| {
-            effective_machine_architecture(scheme, architecture, system_arch)
-                == native_machine_architecture(system_arch)
-        })
+        let Some(architecture) = pkg_arch else {
+            return false;
+        };
+        match scheme {
+            VersionScheme::Rpm | VersionScheme::Debian | VersionScheme::Arch => {
+                native_resolution_architecture_decision(scheme, architecture, system_arch)
+                    .is_admitted()
+            }
+            VersionScheme::Conary | VersionScheme::Eopkg => {
+                effective_machine_architecture(scheme, architecture, system_arch)
+                    == native_machine_architecture(system_arch)
+            }
+        }
     }
 
     /// Search for packages by name with selection options
@@ -444,21 +457,11 @@ pub fn package_architectures_match(
         == effective_machine_architecture(right_scheme, right_architecture, native_architecture)
 }
 
-/// Typed machine identity shared only by architecture compatibility checks.
-///
-/// The parser below encodes the source-owned tokens from dpkg's `cputable`,
-/// RPM's `rpmrc` architecture tables, and makepkg's `CARCH` contract. Unknown
-/// tokens retain exact identity and therefore only compare equal literally.
+/// Typed machine identity shared only by non-admission literal comparisons.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum MachineArchitecture {
-    X86_64,
-    X86_32,
-    Aarch64,
-    ArmV7HardFloat,
-    PowerPc64Le,
-    S390x,
-    RiscV64,
-    Exact(String),
+    Known(NativeMachineArchitectureClassV1),
+    Literal(String),
 }
 
 fn effective_machine_architecture(
@@ -473,52 +476,22 @@ fn effective_machine_architecture(
 }
 
 fn is_architecture_independent(scheme: VersionScheme, architecture: &str) -> bool {
-    matches!(
-        (scheme, architecture),
-        (VersionScheme::Conary | VersionScheme::Rpm, "noarch")
-            | (VersionScheme::Debian, "all")
-            | (VersionScheme::Arch, "any")
-    )
+    known_package_architecture(scheme, architecture) == Some(KnownPackageArchitecture::Independent)
 }
 
 fn package_machine_architecture(scheme: VersionScheme, architecture: &str) -> MachineArchitecture {
-    match (scheme, architecture) {
-        (VersionScheme::Debian, "amd64")
-        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "x86_64") => {
-            MachineArchitecture::X86_64
+    match known_package_architecture(scheme, architecture) {
+        Some(KnownPackageArchitecture::Machine(class)) => MachineArchitecture::Known(class),
+        Some(KnownPackageArchitecture::Independent) | None => {
+            MachineArchitecture::Literal(architecture.to_string())
         }
-        (VersionScheme::Debian, "i386")
-        | (VersionScheme::Rpm, "i386" | "i486" | "i586" | "i686")
-        | (VersionScheme::Arch | VersionScheme::Conary, "i686") => MachineArchitecture::X86_32,
-        (VersionScheme::Debian, "arm64")
-        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "aarch64") => {
-            MachineArchitecture::Aarch64
-        }
-        (VersionScheme::Debian, "armhf")
-        | (VersionScheme::Rpm, "armv7hl")
-        | (VersionScheme::Arch, "armv7h")
-        | (VersionScheme::Conary, "armv7") => MachineArchitecture::ArmV7HardFloat,
-        (VersionScheme::Debian, "ppc64el")
-        | (VersionScheme::Rpm | VersionScheme::Arch | VersionScheme::Conary, "ppc64le") => {
-            MachineArchitecture::PowerPc64Le
-        }
-        (_, "s390x") => MachineArchitecture::S390x,
-        (_, "riscv64") => MachineArchitecture::RiscV64,
-        (_, exact) => MachineArchitecture::Exact(exact.to_string()),
     }
 }
 
 fn native_machine_architecture(architecture: &str) -> MachineArchitecture {
-    match architecture {
-        "x86_64" | "amd64" => MachineArchitecture::X86_64,
-        "x86" | "i386" | "i686" => MachineArchitecture::X86_32,
-        "aarch64" | "arm64" => MachineArchitecture::Aarch64,
-        "arm" | "armv7" | "armhf" => MachineArchitecture::ArmV7HardFloat,
-        "powerpc64le" | "ppc64le" | "ppc64el" => MachineArchitecture::PowerPc64Le,
-        "s390x" => MachineArchitecture::S390x,
-        "riscv64" => MachineArchitecture::RiscV64,
-        exact => MachineArchitecture::Exact(exact.to_string()),
-    }
+    host_machine_class(architecture)
+        .map(MachineArchitecture::Known)
+        .unwrap_or_else(|| MachineArchitecture::Literal(architecture.to_string()))
 }
 
 #[cfg(test)]

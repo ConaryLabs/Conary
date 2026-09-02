@@ -10,6 +10,7 @@ use super::super::{
     CatalogRequirementGroupV1, CatalogScopeV1, ProfileRevisionV2, ProfileSourceMemberV2,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::require_known_package_architecture;
 use crate::repository::dependency_model::DebianMultiArch;
 use crate::repository::versioning::VersionScheme;
 
@@ -303,6 +304,13 @@ impl NativeParityPackageV1 {
                 implementation.ecosystem
             )));
         }
+        let architecture = self.architecture.as_deref().ok_or_else(|| {
+            Error::ConfigError(format!(
+                "native parity package '{}' has no architecture authority",
+                self.name
+            ))
+        })?;
+        require_known_package_architecture(self.version_scheme, architecture)?;
         self.as_catalog_record().validate(&CatalogScopeV1::Profile {
             profile: profile.to_string(),
         })

@@ -136,6 +136,10 @@ pub enum Error {
         actual: String,
     },
 
+    /// A package architecture is absent from the pinned table for its source scheme.
+    #[error("Unknown architecture token for {scheme}: '{token}'")]
+    UnknownArchitectureToken { scheme: String, token: String },
+
     /// Eligible package candidates remain tied without a comparable version
     /// contract or an explicit repository/priority winner.
     #[error(

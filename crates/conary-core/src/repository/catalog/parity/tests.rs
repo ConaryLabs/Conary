@@ -292,6 +292,30 @@ fn rpm_debian_and_alpm_complete_catalog_oracles_compare_exactly() {
 }
 
 #[test]
+fn package_oracle_rejects_unknown_architecture_before_writing_evidence() {
+    let candidate = candidate(NativeParityEcosystemV1::Debian);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join(NATIVE_PARITY_PACKAGE_FILE_NAME);
+    let mut writer = NativeParityOracleWriter::create(
+        &path,
+        &candidate.profile,
+        implementation(NativeParityEcosystemV1::Debian),
+    )
+    .unwrap();
+    let mut package = rows(&candidate).remove(0);
+    package.architecture = Some("future-dpkg-architecture".to_string());
+    let error = writer
+        .package(&package)
+        .expect_err("unknown architecture must fail the package oracle");
+    assert!(matches!(
+        error,
+        crate::Error::UnknownArchitectureToken { ref scheme, ref token }
+            if scheme == "debian" && token == "future-dpkg-architecture"
+    ));
+    assert_eq!(fs::metadata(path).unwrap().len(), 0);
+}
+
+#[test]
 fn payload_provider_grouped_negative_and_precedence_changes_are_typed() {
     let candidate = candidate(NativeParityEcosystemV1::Debian);
 

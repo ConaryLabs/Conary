@@ -15,6 +15,7 @@ use super::{
     validate_inputs,
 };
 use crate::error::{Error, Result};
+use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
@@ -404,11 +405,38 @@ fn resolve_exact_root(
     policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
-    let root_is_admitted = policy.architecture_admission.admits(
-        root.version_scheme,
-        root.architecture.as_deref(),
-        &policy.architecture,
-    );
+    let root_architecture = root.architecture.as_deref().ok_or_else(|| {
+        NativeRootResolutionError::new(
+            Error::ConflictError(format!(
+                "RPM package-oracle root '{}' has no architecture",
+                root.name
+            )),
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            NativeResolutionSurveyNativeExplanationV1::Rpm {
+                problems: Vec::new(),
+            },
+        )
+    })?;
+    let root_is_admitted = match policy
+        .architecture_admission
+        .admits(root.version_scheme, root_architecture, &policy.architecture)
+        .into_result()
+    {
+        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => true,
+        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => false,
+        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+        Err(error) => {
+            return Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
+                NativeResolutionSurveyNativeExplanationV1::Rpm {
+                    problems: Vec::new(),
+                },
+            ));
+        }
+    };
     let resolution = pool.solve(root_index).map_err(|error| {
         NativeRootResolutionError::new(
             error,
@@ -523,11 +551,23 @@ fn architecture_excluded_outcome(
     policy: &NativeResolutionPolicyV1,
     problems: &[SolvProblem],
 ) -> Result<Option<NativeResolutionOutcomeV1>> {
-    let admitted = policy.architecture_admission.admits(
-        root.version_scheme,
-        root.architecture.as_deref(),
-        &policy.architecture,
-    );
+    let architecture = root.architecture.as_deref().ok_or_else(|| {
+        Error::ConflictError(format!(
+            "RPM package-oracle root '{}' has no architecture",
+            root.name
+        ))
+    })?;
+    let admitted = match policy
+        .architecture_admission
+        .admits(root.version_scheme, architecture, &policy.architecture)
+        .into_result()?
+    {
+        NativeResolutionArchitectureDecisionV1::Admitted => true,
+        NativeResolutionArchitectureDecisionV1::Excluded { .. } => false,
+        NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. } => {
+            unreachable!("unknown admission decision returned from into_result")
+        }
+    };
     let has_not_installable = problems
         .iter()
         .flat_map(|problem| &problem.rules)
