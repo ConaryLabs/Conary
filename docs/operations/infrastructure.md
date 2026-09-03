@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 75
+revision: 76
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -316,7 +316,8 @@ workflow.
   host-key discovery is forbidden and the selected host must match the pin. The
   workflow checks out `github.workflow_sha`, installs that revision's helper
   through the existing `install-helper` action, then calls the new action. The
-  helper authenticates every archive member before private root-owned staging,
+  helper arms cleanup as soon as private root-owned staging exists,
+  authenticates every archive member there,
   stops Remi, reads the exact candidate revisions from the stopped deployment's
   own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
   output into root-owned staging while Remi remains stopped, and always restores
@@ -325,13 +326,14 @@ workflow.
   operator result only when the typed outcome records findings. The returned
   seven-day artifact contains only
   canonical survey JSON, a digest/size/binding manifest, and public verification
-  records, including the authenticated three-lane assembly. Raw Remi stderr
-  remains confined to mode-`0600` root-controlled
-  staging, is destroyed during helper cleanup, and is never written to SSH or
+  records, including the authenticated three-lane assembly. Raw deployment
+  inspection and survey stderr remain confined to mode-`0600` root-controlled
+  staging, are destroyed during helper cleanup, and are never written to SSH or
   workflow logs; public failures use typed helper messages. Per-file admission
   is derived from the already bounded transport size
   rather than an invented limit below the producer contract. The runner
-  independently requires those deployment, candidate,
+  independently enforces the complete typed Rust survey schemas, retention and
+  evidence accounting, and requires those deployment, candidate,
   architecture, and oracle bindings to equal its authenticated input record. The
   workflow has no refresh, conversion, proof, promotion, activation, or
   publication authority.

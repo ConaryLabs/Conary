@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 37
+revision: 38
 status: active
 ---
 
@@ -556,16 +556,22 @@ helper from its exact protected `github.workflow_sha` through the existing
 identity, and typed oracle transport path. The root-owned helper reads the exact
 candidate revisions from the stopped deployment's own pointers, uses the
 profile-bound architectures, and freezes the survey JSON under root ownership
-before restarting. It accepts status `101` only when the typed outcome records
+before restarting. Cleanup owns every exit from the instant root staging is
+created, and deployment-inspection and survey stderr remain in one mode-`0600`
+staging diagnostic that is never transported or logged. It accepts status `101`
+only when the typed outcome records
 at least one finding, polls `/health/ready` to a bounded successful result
 regardless of those findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
-workflow independently reopens that transport and compares every authority
-binding with its authenticated input verification, and its seven-day artifact
+workflow independently reopens that transport, enforces the complete typed Rust
+survey schemas and their cross-count, retention, evidence-budget, and mismatch
+relationships, compares every authority binding with its authenticated input
+verification, and its seven-day artifact
 also retains the authenticated three-lane assembly. Its per-file admission limit
 is the bounded transport size, not a smaller threshold unrelated to producer
-output. Raw Remi stderr remains confined to mode-`0600` root-controlled helper
-staging, is destroyed during helper cleanup, and is never emitted through SSH or
+output. Raw deployment-inspection and survey stderr remain confined to
+mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
+and are never emitted through SSH or
 workflow logs; public failures contain only a typed helper message. Neither side
 has promotion, activation, or publication authority.
 
