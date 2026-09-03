@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 148
+revision: 149
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -1104,8 +1104,10 @@ pinned-host-key SSH contract; pre-attestation exports are non-authority. It
 transfers one authenticated
 oracle archive, requires the helper from its exact protected
 `github.workflow_sha` to be byte-identical to the freshly fetched protected-main
-helper, stages it, then refetches protected main and repeats the digest check
-immediately before the existing `install-helper` action. It then invokes
+helper and the complete workflow revision to be that exact current main commit.
+It stages the helper, then refetches protected main and repeats both the commit
+and digest checks immediately before the existing `install-helper` action. It
+then invokes
 the production survey entry point:
 
 ```text
@@ -1114,9 +1116,9 @@ sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution \
   /tmp/remi-resolution-survey-oracles-<survey-id>.tar
 ```
 
-Once protected main advances the helper, including between input authentication
-and installation, rerunning an older workflow revision fails before root
-mutation; it cannot downgrade the root-owned entry point.
+Rerunning an older workflow revision fails before root mutation even when its
+helper bytes remain unchanged, so stale verifier code cannot certify evidence.
+Any protected-main advance during input authentication also fences the run.
 
 The helper obtains candidate revisions from the stopped deployment's current
 private-candidate pointers; they are deliberately absent from its argument
@@ -1135,7 +1137,8 @@ oracle binding to equal the authenticated input verification, and uploads its
 canonical JSON, exact digest/size/binding manifest, and count/histogram
 verification plus the authenticated three-lane assembly for seven days. The
 independent reader enforces every typed Rust survey field, outcome, histogram,
-retention bound, explanation byte count, and mismatch-evidence relationship.
+the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
+mismatch-evidence relationship.
 It also requires the candidate producer to be profile-ecosystem `conary-sat`
 projection schema 2; a merely well-formed implementation identity is rejected.
 File admission uses the bounded transport size, so

@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 40
+revision: 41
 status: active
 ---
 
@@ -551,8 +551,9 @@ export's typed operator attestation to bind that run's exact workflow commit to
 the protected pinned-host-key SSH contract.
 Pre-attestation exports are non-authority. The survey workflow requires the
 helper from its exact protected `github.workflow_sha` to be byte-identical to
-the helper at its freshly fetched protected `origin/main`, stages it, refetches
-protected main, repeats that equality immediately before the existing
+the helper at its freshly fetched protected `origin/main` and requires the
+complete workflow revision to equal that exact current-main commit. It stages
+the helper, refetches protected main, repeats both equalities immediately before the existing
 `install-helper` action, then calls the three-argument
 `conary-remi-deploy survey-resolution` action with the survey identity, export
 identity, and typed oracle transport path. The root-owned helper reads the exact
@@ -567,7 +568,8 @@ regardless of those findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
-relationships. It binds candidate implementation to the profile ecosystem,
+relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
+binds candidate implementation to the profile ecosystem,
 `conary-sat`, and projection schema 2, then compares every authority binding
 with its authenticated input
 verification, and its seven-day artifact
@@ -578,9 +580,10 @@ mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
 and are never emitted through SSH or
 workflow logs; public failures contain only a typed helper message. Neither side
 has promotion, activation, or publication authority.
-An older workflow rerun, or a helper-changing merge during input processing,
-fails before root mutation after protected main advances the helper, so it
-cannot leave the root entry point downgraded.
+An older workflow rerun fails before root mutation even when helper bytes are
+unchanged, and any protected-main advance during input processing fences the
+run. Stale verifier code therefore cannot certify evidence or leave the root
+entry point downgraded.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact
