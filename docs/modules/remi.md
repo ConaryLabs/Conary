@@ -985,7 +985,9 @@ version remains eligible when required by the protected exact root. After a
 failed solve, a broken required or pre-required group retained directly on that
 exact root becomes typed unresolved evidence when apt-pkg exposes no
 authenticated candidate satisfying any alternative. This covers absent names
-and names available only at incompatible versions; the exact-root identity,
+and names available only at incompatible versions. Every broken hard group on
+the retained root must meet that rule; a separate broken group with a
+satisfying candidate keeps the complete failure fatal. The exact-root identity,
 relation kind, and parser-owned native group text bind directly back to package
 oracle authority without textual normalization. Pinned apt-pkg 3.2.0 does not
 publicly expose solver3's typed reason graph, and rendered diagnostics are not

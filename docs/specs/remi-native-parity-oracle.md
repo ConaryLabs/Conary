@@ -641,7 +641,9 @@ root in apt-pkg's post-solver dependency cache. A broken root-level required or
 pre-required group becomes typed missing evidence only when apt-pkg exposes no
 authenticated candidate version satisfying any alternative, as decided by
 `DepIterator::IsSatisfied`. This covers both an absent target name and a target
-name available only at incompatible versions. Each `AptMissingRequirement`
+name available only at incompatible versions. Every broken hard group retained
+on the root must meet that rule; a separate broken group with a satisfying
+candidate keeps the complete failure fatal. Each `AptMissingRequirement`
 carries the exact-root identity, relation kind, and parser-owned native
 dependency text; the Rust boundary binds that text to the exact package-oracle
 group recorded by the same Debian parser, without textual normalization.

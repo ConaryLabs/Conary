@@ -860,7 +860,7 @@ fn resolution_producer_projects_direct_no_satisfying_candidates() {
 }
 
 #[test]
-fn transitive_no_candidate_remains_a_typed_native_solver_failure() {
+fn transitive_and_mixed_failures_remain_typed_native_solver_failures() {
     let directory = tempfile::tempdir().unwrap();
     let package_text = [
         resolution_stanza(
@@ -878,6 +878,15 @@ fn transitive_no_candidate_remains_a_typed_native_solver_failure() {
             "Depends: transitive-target (= 2)\n",
         ),
         resolution_stanza("transitive-target", "3", "amd64", 'c', ""),
+        resolution_stanza(
+            "mixed-root",
+            "1",
+            "amd64",
+            'd',
+            "Depends: absent-mixed-target (= 2), coexistence-target (= 1), coexistence-target (= 2)\n",
+        ),
+        resolution_stanza("coexistence-target", "1", "amd64", 'e', ""),
+        resolution_stanza("coexistence-target", "2", "amd64", 'f', ""),
     ]
     .concat();
     let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
@@ -892,12 +901,20 @@ fn transitive_no_candidate_remains_a_typed_native_solver_failure() {
             .contains("without a typed missing requirement"),
         "transitive failure must stay fatal without public solver3 reasons: {error}"
     );
+    let error = apt.resolve("mixed-root", "1", "amd64").unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "mixed no-candidate and available-target failure must stay fatal: {error}"
+    );
     drop(apt);
 
     let packages = vec![source];
     let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 3;
+    profile.counts.packages = 6;
     let package_output = directory.path().join("package-oracle");
     produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
         .unwrap();
@@ -909,10 +926,13 @@ fn transitive_no_candidate_remains_a_typed_native_solver_failure() {
         &directory.path().join("survey.json"),
     )
     .unwrap();
-    assert!(survey.failures.iter().any(|failure| {
-        failure.name == "transitive-root"
-            && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
-    }));
+    for root in ["transitive-root", "mixed-root"] {
+        assert!(survey.failures.iter().any(|failure| {
+            failure.name == root
+                && failure.error_kind.reason
+                    == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+        }));
+    }
 }
 
 #[test]

@@ -633,6 +633,7 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
     }
     std::size_t depends_ordinal = 0;
     std::size_t pre_depends_ordinal = 0;
+    bool has_unattributed_failure = false;
     for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
         pkgCache::DepIterator start;
         pkgCache::DepIterator end;
@@ -649,8 +650,15 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
             kind = DEPENDS;
             ordinal = depends_ordinal++;
         }
-        if (kind == 0 ||
-            (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall) {
+        bool const satisfied =
+            (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+        if (satisfied) {
+            continue;
+        }
+        if (kind == 0) {
+            if (end.IsCritical() || end.IsNegative()) {
+                has_unattributed_failure = true;
+            }
             continue;
         }
         bool has_satisfying_candidate = false;
@@ -668,6 +676,7 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
             }
         }
         if (has_satisfying_candidate) {
+            has_unattributed_failure = true;
             continue;
         }
         RelationGroup const *group = strong_group_at(*source, kind, ordinal);
@@ -678,6 +687,9 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
         }
         handle.missing.push_back(
             {{source->name, source->version, source->architecture}, kind, group->native_text});
+    }
+    if (has_unattributed_failure) {
+        handle.missing.clear();
     }
     return true;
 }
