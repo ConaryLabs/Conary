@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 90
+revision: 91
 summary: Route feature ownership through producer-bound native parity assembly, its protected production resolution survey, and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
@@ -29,7 +29,7 @@ Each ownership card uses these fields:
 - **Slug:** short unique kebab-case identifier; the first field of each card,
   used by `scripts/agent-context.sh` to select cards.
 - **Capability:** what user-facing or contributor-facing job this area owns.
-- **Start here:** owner files and canonical docs to read first.
+- **Start here:** at most eight owner hubs and owning docs to read first.
 - **Neighbor systems:** nearby systems that often need verification when
   behavior changes.
 - **Paths:** semicolon-separated, backtick-quoted glob patterns that route
@@ -55,13 +55,8 @@ supplied them.
 **Start here:** `crates/conary-core/src/db/schema.rs`;
 `crates/conary-core/src/db/rebuild.rs`;
 `apps/conary/src/commands/system/rebuild_database.rs`;
-`crates/conary-core/src/db/current_schema/`;
-`crates/conary-core/src/db/models/persisted_value.rs`;
-`crates/conary-core/src/db/models/trove/identity.rs`;
-`crates/conary-core/src/db/models/provide_entry.rs`;
-`crates/conary-core/src/db/models/trigger.rs`;
-`crates/conary-core/src/db/models/trigger_engine.rs`;
-`crates/conary-core/src/db/models/derived.rs`;
+`crates/conary-core/src/db/current_schema/mod.rs`;
+`crates/conary-core/src/db/models/mod.rs`;
 `docs/ARCHITECTURE.md`.
 
 **Neighbor systems:** CLI dispatch and destructive-mutation confirmation,
@@ -72,6 +67,7 @@ that persists a typed state.
 **Paths:** `crates/conary-core/src/db/schema.rs`;
 `crates/conary-core/src/db/rebuild.rs`;
 `apps/conary/src/commands/system/rebuild_database.rs`;
+`crates/conary-core/src/db/current_schema/*`;
 `crates/conary-core/src/db/models/mod.rs`;
 `crates/conary-core/src/db/models/persisted_value.rs`;
 `crates/conary-core/src/db/models/trove/identity.rs`;
@@ -155,89 +151,13 @@ proof.
 mutation flows for local package operations.
 
 **Start here:** `apps/conary/src/commands/install/mod.rs`;
-`apps/conary/src/commands/install/` for child modules;
-`apps/conary/src/commands/install/command.rs`;
-`apps/conary/src/commands/install/acquire.rs`;
-`apps/conary/src/commands/install/ccs_transaction.rs`;
-`apps/conary/src/commands/install/conversion.rs`;
-`apps/conary/src/commands/install/conversion/tests/`;
-`apps/conary/src/commands/install/ownership_mode.rs`;
-`apps/conary/src/commands/install/dep_resolution.rs`;
-`apps/conary/src/commands/install/validation.rs`;
-`apps/conary/src/commands/install/dependencies.rs`;
-`apps/conary/src/commands/install/execute.rs`;
-`apps/conary/src/commands/install/lifecycle.rs`;
-`apps/conary/src/commands/install/transaction.rs`;
-`apps/conary/src/commands/install/options.rs`;
-`apps/conary/src/commands/install/semantics.rs`;
-`apps/conary/src/commands/install/source_policy.rs`;
-`apps/conary/src/commands/install/native_lifecycle.rs`;
-`apps/conary/src/commands/install/native_events.rs`;
-`apps/conary/src/commands/install/native_events/preflight.rs`;
-`apps/conary/src/commands/install/native_events/transaction_state.rs`;
-`apps/conary/src/commands/install/native_events/debian_runtime.rs`;
-`apps/conary/src/commands/install/native_events/debian_runtime/admin_projection.rs`;
-`apps/conary/src/commands/install/native_events/debian_runtime/alternatives_state.rs`;
-`apps/conary/src/commands/install/native_events/debian_runtime/trigger_mutations.rs`;
-`apps/conary/src/commands/install/ccs_removal_hooks.rs`;
-`apps/conary/src/commands/install/inner.rs`;
-`apps/conary/src/commands/install/rollback_snapshot.rs`;
-`apps/conary/src/commands/install/shared_directory.rs`;
-`apps/conary/src/commands/install/config_files.rs`;
-`apps/conary/src/commands/install/config_files/tests.rs`;
-`apps/conary/src/commands/install/transaction/selected_root.rs`;
-`apps/conary/src/commands/install/batch.rs`;
-`apps/conary/src/commands/install/batch/config.rs`;
-`apps/conary/src/commands/install/batch/execution.rs`;
-`apps/conary/src/commands/install/batch/promises.rs`;
-`apps/conary/src/commands/install/batch/witness_universe.rs`;
-`apps/conary/src/commands/generation/selected_root.rs`;
-`apps/conary/src/commands/generation/config_transaction.rs`;
-`apps/conary/src/commands/generation/publication.rs`;
-`crates/conary-core/src/config_transaction.rs`;
-`crates/conary-core/src/db/current_schema/sql/package_manager.sql`;
-`crates/conary-core/src/db/models/trove.rs`;
-`crates/conary-core/src/db/models/provide_entry.rs`;
-`crates/conary-core/src/packages/installed_identity.rs`;
-`crates/conary-core/src/repository/versioning.rs`;
-`apps/conary/src/commands/install/prepare.rs`;
-`apps/conary/src/commands/install/resolve.rs`;
-`apps/conary/src/commands/install/restore.rs`;
-`apps/conary/src/commands/install/restore/`;
 `apps/conary/src/commands/update/mod.rs`;
-`apps/conary/src/commands/update/package.rs`;
-`apps/conary/src/commands/update/selection.rs`;
-`apps/conary/src/commands/update/adopted_authority.rs`;
-`apps/conary/src/commands/update/collection.rs`;
-`apps/conary/src/commands/update/pinning.rs`;
-`apps/conary/src/commands/update/delta_stats.rs`;
 `apps/conary/src/commands/remove.rs`;
-`apps/conary/src/commands/remove/command.rs`;
-`apps/conary/src/commands/remove/autoremove.rs`;
-`apps/conary/src/commands/remove/transaction.rs`;
-`apps/conary/src/commands/remove/ccs_hook.rs`;
-`apps/conary/src/commands/remove/native_graph.rs`;
-`apps/conary/src/commands/remove/payload_ownership.rs`;
-`apps/conary/src/commands/remove/types.rs`;
-`apps/conary/src/commands/installed_authority_snapshot.rs`;
-`apps/conary/src/commands/installed_authority_snapshot/`;
-`apps/conary/src/commands/rollback_system_authority.rs`;
-`apps/conary/src/commands/rollback_system_authority/`;
-`apps/conary/src/commands/system.rs`;
-`apps/conary/src/commands/system/rollback_command.rs`;
-`apps/conary/src/commands/system/rollback_restore.rs`;
-`apps/conary/src/commands/system/rollback_restore/`;
-`crates/conary-core/src/transaction/mod.rs`;
-`crates/conary-core/src/db/models/changeset.rs`;
-`crates/conary-core/src/db/models/payload_claim.rs`;
-`crates/conary-core/src/db/models/payload_claim/`;
-`crates/conary-core/src/db/models/package_payload_ownership.rs`;
-`crates/conary-core/src/db/models/package_payload_ownership/`;
-`crates/conary-core/src/filesystem/selected_root.rs`;
+`apps/conary/src/commands/generation/mod.rs`;
 `apps/conary/src/commands/live_root.rs`;
-`apps/conary/src/commands/live_root/recovery.rs`;
+`crates/conary-core/src/transaction/mod.rs`;
 `docs/specs/foreign-package-lifecycle-contracts.md`;
-`docs/modules/test-fixtures.md`; `docs/operations/daily-driver-ux-matrix.md`.
+`docs/modules/test-fixtures.md`.
 
 **Neighbor systems:** `crates/conary-core/src/transaction/`;
 `crates/conary-core/src/db/`; `crates/conary-core/src/scriptlet/mod.rs`;
@@ -354,19 +274,10 @@ package only after exact native-artifact re-resolution and payload equivalence.
 Adoption itself is not the foreign-package acquisition or cross-distro
 execution path; the verified resulting CCS enters that path separately.
 
-**Start here:** `apps/conary/src/cli/system.rs` ->
-`apps/conary/src/dispatch/system.rs` ->
-`apps/conary/src/commands/adopt/`;
+**Start here:** `apps/conary/src/cli/system.rs`;
+`apps/conary/src/dispatch/system.rs`;
 `apps/conary/src/commands/adopt/mod.rs`;
-`apps/conary/src/commands/adopt/system.rs`;
-`apps/conary/src/commands/adopt/packages.rs`;
-`apps/conary/src/commands/adopt/refresh.rs`;
-`apps/conary/src/commands/adopt/hooks.rs`;
-`apps/conary/src/commands/adopt/status.rs`;
-`apps/conary/src/commands/adopt/unadopt.rs`;
-`apps/conary/src/commands/adopt/native_handoff.rs`;
-`apps/conary/src/commands/adopt/convert.rs` and
-`apps/conary/src/commands/adopt/convert/tests/`;
+`apps/conary/src/commands/adopt/convert.rs`;
 `docs/modules/source-selection.md`; `docs/ARCHITECTURE.md`. Installed state
 alone is never lifecycle authority.
 
@@ -379,7 +290,9 @@ alone is never lifecycle authority.
 `crates/conary-core/src/generation/`; integration manifests under
 `apps/conary/tests/integration/remi/manifests/`.
 
-**Paths:** `apps/conary/src/commands/adopt/*`.
+**Paths:** `apps/conary/src/cli/system.rs`;
+`apps/conary/src/dispatch/system.rs`;
+`apps/conary/src/commands/adopt/*`.
 
 **Focused proof:** `cargo test -p conary --lib adopt::native_handoff`;
 `cargo test -p conary --lib adopt::unadopt`;
@@ -408,19 +321,8 @@ remote-diff declarative system model files while preserving package ownership
 convergence and reproducible planning behavior.
 
 **Start here:** `apps/conary/src/commands/model.rs`;
-`apps/conary/src/commands/model/context.rs`;
-`apps/conary/src/commands/model/presentation.rs`;
-`apps/conary/src/commands/model/diff.rs`;
 `apps/conary/src/commands/model/apply.rs`;
-`apps/conary/src/commands/model/apply/derived.rs`;
-`apps/conary/src/commands/model/check.rs`;
-`apps/conary/src/commands/model/snapshot.rs`;
-`apps/conary/src/commands/model/remote_diff.rs`;
-`apps/conary/src/commands/model/lock.rs`;
-`apps/conary/src/commands/model/publish.rs`;
-`crates/conary-core/src/model/parser.rs`;
-`crates/conary-core/src/model/parser/source_policy.rs`;
-`crates/conary-core/src/model/replatform.rs`;
+`crates/conary-core/src/model/mod.rs`;
 `docs/modules/source-selection.md`.
 
 **Neighbor systems:** install/remove execution, exact-source update selection,
@@ -456,44 +358,13 @@ providers through the SAT solver, and carry the selected relation graph into
 package transactions. Discover, preview, and transactionally take ownership of
 native repository declarations as drift-detected selected-root projections.
 
-**Start here:** `crates/conary-core/src/repository/trust.rs`;
-`crates/conary-core/src/repository/declarations/`;
-`docs/specs/native-repository-declarations.md`;
-`docs/specs/native-repository-trust-import.md`;
-`docs/specs/native-source-identity-policy.md`;
-`docs/specs/native-repository-takeover.md`;
-`crates/conary-core/src/repository/declarations/takeover.rs`;
+**Start here:** `crates/conary-core/src/repository/mod.rs`;
+`crates/conary-core/src/repository/trust.rs`;
+`crates/conary-core/src/repository/declarations/mod.rs`;
 `apps/conary/src/commands/repository_takeover.rs`;
-`crates/conary-core/src/repository/trust/openpgp.rs`;
-`crates/conary-core/src/repository/trust/openpgp/arch/`;
-`crates/conary-core/src/repository/parsers/`;
-`crates/conary-core/src/repository/parsers/sink.rs`;
-`crates/conary-core/src/repository/parsers/fedora/metalink.rs`;
-`crates/conary-core/src/repository/parsers/fedora/repomd.rs`;
-`crates/conary-core/src/repository/parsers/fedora/files.rs`;
-`crates/conary-core/src/repository/parsers/fedora/filelists.rs`;
-`crates/conary-core/src/repository/parsers/fedora/provides.rs`;
+`crates/conary-core/src/repository/parsers/mod.rs`;
 `crates/conary-core/src/repository/sync.rs`;
-`crates/conary-core/src/repository/sync/immutable_catalog.rs`;
-`crates/conary-core/src/repository/sync/projection_cache.rs`;
-`crates/conary-core/src/repository/download.rs`;
-`crates/conary-core/src/repository/rpm_dependency.rs`;
-`crates/conary-core/src/repository/requirement.rs`;
-`crates/conary-core/src/repository/package_relation.rs`;
-`crates/conary-core/src/repository/resolution_policy.rs`;
-`crates/conary-core/src/repository/selector.rs`;
-`crates/conary-core/src/repository/resolution.rs`;
-`crates/conary-core/src/repository/resolution/`;
-`crates/conary-core/src/resolver/requirements.rs`;
-`crates/conary-core/src/resolver/provider/`;
-`crates/conary-core/src/resolver/sat.rs`;
-`crates/conary-core/src/resolver/sat/`;
-`crates/conary-core/src/transaction/package_relations.rs`;
-`crates/conary-core/src/db/models/repository/source.rs`;
-`crates/conary-core/src/db/models/repository/source/`;
-`crates/conary-core/src/db/models/repository/`;
-`crates/conary-core/src/db/models/installed_requirement_atom.rs`;
-`crates/conary-core/src/db/models/installed_requirement_group.rs`;
+`crates/conary-core/src/resolver/mod.rs`;
 `docs/modules/source-selection.md`.
 
 **Neighbor systems:** static-repository TUF trust; install/update candidate
@@ -631,64 +502,14 @@ Native lane proof: run `cargo test -p conary-core --features native-rpm-oracle r
 next boot, recover publication debt, collect generations and local CAS objects,
 and export raw/qcow2/ISO carriers.
 
-**Start here:** `crates/conary-core/src/generation/builder.rs`;
-`crates/conary-core/src/db/backup.rs`;
-`crates/conary-core/src/db/generation_backup_chain.rs`;
-`crates/conary-core/src/db/generation_delta.rs`;
-`crates/conary-core/src/db/generation_snapshot.rs`;
+**Start here:** `crates/conary-core/src/generation/mod.rs`;
+`crates/conary-core/src/generation/builder.rs`;
 `crates/conary-core/src/generation/root_manifest.rs`;
-`crates/conary-core/src/generation/root_manifest/delta.rs`;
-`crates/conary-core/src/generation/root_manifest/scan.rs`;
-`crates/conary-core/src/generation/root_manifest/materialize.rs`;
-`crates/conary-core/src/generation/root_manifest/overlay/config_state.rs`;
-`crates/conary-core/src/generation/root_manifest/composefs.rs`;
-`crates/conary-core/src/generation/builder/create.rs`;
-`crates/conary-core/src/generation/builder/rebuild.rs`;
-`crates/conary-core/src/generation/builder/carrier_capabilities.rs`;
-`crates/conary-core/src/generation/builder/boot_assets.rs`;
-`crates/conary-core/src/generation/builder/boot_reuse.rs`;
-`crates/conary-core/src/generation/builder/initramfs.rs`;
-`crates/conary-core/src/generation/builder/kernel.rs`;
-`crates/conary-core/src/generation/builder/root_validation.rs`;
-`crates/conary-core/src/generation/builder/runtime_inputs.rs`;
 `crates/conary-core/src/generation/export.rs`;
-`crates/conary-core/src/generation/export/tests.rs`;
-`crates/conary-core/src/generation/artifact.rs`;
-`crates/conary-core/src/generation/artifact/cas.rs`;
-`crates/conary-core/src/generation/artifact/cas/tests.rs`;
-`crates/conary-core/src/generation/artifact/boot_reuse.rs`;
-`crates/conary-core/src/generation/artifact/tests.rs`;
-`crates/conary-core/src/ccs/hooks/capabilities.rs`;
-`crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs`;
-`crates/conary-core/src/generation/gc.rs`;
-`apps/conary/src/commands/generation/gc.rs`;
+`crates/conary-core/src/db/generation_snapshot.rs`;
 `crates/conary-core/src/boot_runtime.rs`;
-`crates/conary-core/src/boot_runtime/`;
-`crates/conary-core/src/activation/systemd.rs`;
-`crates/conary-core/src/activation/systemd/grammar.rs`;
-`crates/conary-core/src/activation/security_policy.rs`;
-`crates/conary-core/src/activation/security_policy/`;
-`crates/conary-core/src/scriptlet/activation_capture.rs`;
-`crates/conary-core/src/scriptlet/boot_runtime_capture.rs`;
-`crates/conary-core/src/config_transaction.rs`;
-`crates/conary-core/src/config_transaction/`;
-`crates/conary-core/src/db/models/generation_activation.rs`;
-`crates/conary-core/src/db/models/generation_publication.rs`;
-`crates/conary-core/src/transaction/recovery.rs`;
-`apps/conary/src/commands/generation/activation_intents.rs`;
-`packaging/systemd/conary-generation-activation.service`;
-`apps/conary/src/commands/generation/selected_root.rs`;
-`apps/conary/src/commands/generation/selected_root/config_state.rs`;
-`apps/conary/src/commands/generation/config_transaction.rs`;
-`apps/conary/src/commands/generation/publication.rs`;
-`apps/conary/src/commands/system.rs`;
-`apps/conary/src/commands/state.rs`;
-`apps/conary/src/commands/provenance.rs`;
-`apps/conary/src/commands/provenance/`;
-`packaging/dracut/90conary/module-setup.sh`;
-`packaging/dracut/90conary/conary-init.sh`;
-`packaging/dracut/90conary/conary-generator.sh`;
-`docs/roadmaps/development-roadmap.md`.
+`apps/conary/src/commands/generation/mod.rs`;
+`docs/ARCHITECTURE.md`.
 
 **Neighbor systems:** selected-root lifecycle execution, systemd and
 SELinux/AppArmor provider interfaces, transaction commit, SQLite generation
@@ -715,6 +536,8 @@ state, image building, bootstrap validation, conaryd route history.
 `apps/conary/src/commands/generation/*`;
 `packaging/systemd/conary-generation-activation.service`;
 `packaging/dracut/90conary/*`;
+`apps/conary/src/commands/system.rs`;
+`apps/conary/src/commands/state.rs`;
 `apps/conary/src/commands/provenance.rs`;
 `apps/conary/src/commands/provenance/*`.
 
@@ -784,64 +607,14 @@ missing, changed, or failing providers remain durable automatic retries.
 **Capability:** build native CCS packages, convert RPM, Debian, and Arch
 packages, install CCS packages, and preserve their exact lifecycle ABIs.
 
-**Start here:** `crates/conary-core/src/ccs/`;
-`crates/conary-core/src/payload.rs`;
-`crates/conary-core/src/ccs/budget.rs`;
-`crates/conary-core/src/ccs/v3/`;
-`crates/conary-core/src/ccs/v3/authoring.rs`;
-`crates/conary-core/src/ccs/v3/component_view.rs`;
-`crates/conary-core/src/ccs/v3/debug_projection.rs`;
-`crates/conary-core/src/repository/supported_profiles/`;
-`crates/conary-core/src/ccs/archive_reader.rs`;
-`crates/conary-core/src/ccs/package.rs`;
-`crates/conary-core/src/ccs/package/v3_projection.rs`;
-`crates/conary-core/src/ccs/convert/`;
-`crates/conary-core/src/ccs/convert/scriptlet_bundle.rs`;
-`crates/conary-core/src/ccs/convert/scriptlet_bundle/`;
-`crates/conary-core/src/ccs/native_export/`;
+**Start here:** `crates/conary-core/src/ccs/mod.rs`;
+`crates/conary-core/src/ccs/v3/mod.rs`;
+`crates/conary-core/src/ccs/convert/mod.rs`;
+`crates/conary-core/src/ccs/native_export/mod.rs`;
 `crates/conary-core/src/ccs/native_lifecycle.rs`;
-`crates/conary-core/src/ccs/native_lifecycle/`;
-`crates/conary-core/src/ccs/native_transaction.rs`;
-`crates/conary-core/src/ccs/native_transaction/`;
 `crates/conary-core/src/packages/native_abi.rs`;
-`crates/conary-core/src/packages/native_scriptlet_support.rs`;
-`crates/conary-core/src/packages/payload.rs`;
-`crates/conary-core/src/packages/payload/`;
-`crates/conary-core/src/filesystem/cas.rs`;
-`crates/conary-core/src/filesystem/cas/stream.rs`;
-`crates/conary-core/src/packages/rpm/payload.rs`;
-`crates/conary-core/src/packages/rpm/payload/header.rs`;
-`crates/conary-core/src/packages/rpm/payload/stream.rs`;
-`crates/conary-core/src/packages/rpm/scriptlets.rs`;
-`crates/conary-core/src/packages/rpm/scriptlets/runtime_context.rs`;
-`crates/conary-core/src/packages/deb/lifecycle_helpers.rs`;
-`crates/conary-core/src/packages/deb/lifecycle_helpers/`;
-`crates/conary-core/src/packages/deb/native.rs`;
-`crates/conary-core/src/packages/deb/triggers.rs`;
-`crates/conary-core/src/packages/arch/install_script.rs`;
-`crates/conary-core/src/packages/arch/alpm_hook.rs`;
-`crates/conary-core/src/scriptlet/`;
-`crates/conary-core/tests/native_abi.rs`;
-`apps/conary/src/commands/ccs/`;
-`apps/conary/src/commands/ccs/templates.rs`;
-`apps/conary/src/commands/ccs/lint.rs`;
-`apps/conary/src/commands/ccs/build.rs`;
-`apps/conary/src/commands/ccs/test.rs`;
-`apps/conary/src/commands/ccs/local_dev.rs`;
-`apps/conary/src/commands/ccs/install.rs`;
-`apps/conary/src/commands/ccs/install/command.rs`;
-`apps/conary/src/commands/ccs/install/dependency.rs`;
-`apps/conary/src/commands/ccs/install/component_selection.rs`;
-`apps/conary/src/commands/ccs/install/capability_declaration.rs`;
-`apps/conary/src/commands/ccs/payload_paths.rs`;
-`apps/conary/src/commands/install/payload_identity.rs`;
-`apps/conary/tests/rpm_named_ownership.rs`;
-`packaging/ccs/`;
-`docs/modules/ccs.md`;
-`docs/modules/test-fixtures.md`;
-`docs/specs/source-package-authority.md`;
-`docs/specs/foreign-package-lifecycle-contracts.md`;
-`docs/specs/static-repo-format-v1.md`.
+`apps/conary/src/commands/ccs/mod.rs`;
+`docs/modules/ccs.md`.
 
 **Neighbor systems:** install orchestration, Remi publication, repository
 metadata, scriptlet sandboxing (`crates/conary-core/src/scriptlet/mod.rs`,
@@ -944,52 +717,14 @@ static repositories, establish root trust, sync TUF-verified indexes, and
 install packages only when their CCS signatures chain to active package keys
 pinned by the repository.
 
-**Start here:** `docs/specs/static-repo-format-v1.md`;
-`docs/guides/first-package.md`;
-`docs/modules/recipe.md`;
-`docs/modules/remi.md`;
-`crates/conary-core/src/recipe/scaffold.rs`;
-`crates/conary-core/src/recipe/hermetic/`;
-`crates/conary-core/src/recipe/kitchen/`;
-`crates/conary-core/src/recipe/kitchen/package_output.rs`;
-`crates/conary-core/src/derivation/pipeline.rs`;
-`crates/conary-core/src/derivation/pipeline/tests.rs`;
+**Start here:** `crates/conary-core/src/recipe/mod.rs`;
+`crates/conary-core/src/derivation/mod.rs`;
 `crates/conary-core/src/container/mod.rs`;
-`crates/conary-core/src/container/execution.rs`;
-`crates/conary-core/src/container/execution/root_setup.rs`;
-`crates/conary-core/src/diagnostics/`;
-`apps/conary/src/commands/packaging_mcp/`;
-`crates/conary-core/src/db/models/try_session.rs`;
-`apps/conary/src/commands/new.rs`;
+`crates/conary-core/src/diagnostics/mod.rs`;
 `apps/conary/src/commands/publish.rs`;
-`apps/conary/src/commands/publish/artifact.rs`;
 `apps/conary/src/commands/cook.rs`;
-`apps/conary/src/commands/cook/foreign_package.rs`;
-`apps/conary/src/commands/record_mode/`;
-`apps/conary/src/commands/diagnostics.rs`;
-`apps/conary/src/commands/operation_records.rs`;
-`apps/conary/src/commands/hermetic_config.rs`;
-`apps/conary/src/commands/hermetic_state.rs`;
-`apps/conary/src/commands/try_session/`;
-`apps/conary/src/commands/try_session/session.rs`;
-`apps/conary/src/commands/try_session/session/watch_marker.rs`;
-`apps/conary/src/commands/try_session/watch.rs`;
-`apps/conary/src/commands/try_session/watch_source.rs`;
-`apps/conary/src/commands/repo_static.rs`;
-`crates/conary-core/src/db/current_schema/sql/repository.sql`;
-`crates/conary-core/src/recipe/recording/`;
-`apps/conary/tests/packaging_m1b.rs`;
-`apps/conary/tests/packaging_m2a.rs`;
-`apps/conary/tests/packaging_m3a.rs`;
-`apps/conary/tests/packaging_m3c.rs`;
-`apps/conary/tests/packaging_m3b.rs`;
-`apps/conary/tests/packaging_m3d.rs`;
-`crates/conary-agent-contract/src/{resource,catalog,result}.rs`;
-`crates/conary-mcp/src/`;
-`crates/conary-core/src/ccs/attestation.rs`;
-`crates/conary-core/src/repository/static_repo/`;
-`crates/conary-core/src/trust/`;
-`crates/conary-core/src/ccs/signing.rs`.
+`docs/specs/static-repo-format-v1.md`;
+`docs/modules/recipe.md`.
 
 **Neighbor systems:** CLI command routing and command-risk labels, exact recipe
 selection/materialization, recipe Kitchen source fetching and provenance, try
@@ -1065,7 +800,7 @@ a session; watch mode derives trust from its required cook key. The accepted
 signer is persisted with the session so refresh and keep can reverify copied
 bytes without self-trust or a policy-path dependency. Try rollback/keep decisions
 operate on the selected database/runtime and must preserve the one-active-session
-invariant. After M2a, `conary cook --isolated` and project-form
+invariant. `conary cook --isolated` and project-form
 `conary publish <target>` must use hermetic Kitchen execution before emitting
 `hardening_level = "hermetic"` and a signed build-attestation envelope.
 Artifact-form `conary publish <pkg.ccs> <target>` must pass
@@ -1089,44 +824,6 @@ keys are audit/history only.
 Recorded-draft recipes must keep refusing publication until validated —
 `publish_context.rs` and `publish_gate.rs` enforce that refusal — and Remi
 release uploads stay behind the trusted build-attestation signer policy.
-
-- Record-mode spike: start in `apps/conary/src/commands/record_mode/`, keep
-  `apps/conary/src/commands/cook.rs` as a thin router/validator helper, and put
-  reusable DTO/draft helpers under `crates/conary-core/src/recipe/recording/`.
-- Focused proof: `cargo test -p conary --lib commands::record_mode`,
-  `cargo test -p conary-core recipe::recording`, and
-  `cargo test -p conary --test packaging_m3d`.
-
-### M3a Packaging Diagnostics
-
-Start with `crates/conary-core/src/diagnostics/` for the shared diagnostic,
-event, redaction, and JSON schema contract. CLI rendering and operation-record
-glue live in `apps/conary/src/commands/diagnostics.rs`; command-specific report
-construction stays in `cook.rs` and `publish.rs`.
-
-### M3b Packaging MCP
-
-Start with `apps/conary/src/commands/packaging_mcp/` for local stdio MCP tools,
-agent projection, publish plan registry, and read-only operation-record/project
-inspection. Transport-neutral resource and catalog vocabulary lives in
-`crates/conary-agent-contract/src/{resource,catalog,result}.rs`; generic MCP
-helpers live in `crates/conary-mcp/src/`. Publish mutations remain owned by
-`apps/conary/src/commands/publish.rs`, with artifact-form execution in
-`apps/conary/src/commands/publish/artifact.rs`.
-
-### M3c Try Watch Mode
-
-Start with `apps/conary/src/commands/try_session/watch.rs` for watch lifecycle,
-event streaming, refresh retry behavior, and cancellation. Session
-start/refresh/keep/rollback orchestration lives in
-`apps/conary/src/commands/try_session/session.rs`; signed package verification
-and capability construction live in
-`apps/conary/src/commands/try_session/package_verification.rs`; durable watch-created
-identity lives in `session/watch_marker.rs`, and session tests live in
-`session/tests.rs`. Source-set discovery, identity hashing, and debounce live in
-`apps/conary/src/commands/try_session/watch_source.rs`; staged generation
-refresh remains behind the try-session API in `session.rs` and namespace
-switching helpers in `namespace.rs`.
 
 ## Canonical Package Map Authority
 
@@ -1221,37 +918,14 @@ This catalog is not a list of destination distros Conary supports.
 **Capability:** ingest, convert, publish, index, search, and serve CCS artifacts,
 release uploads, and static test fixtures through Remi.
 
-**Start here:** `apps/remi/src/server/release_publish.rs`;
-`apps/remi/src/deployment.rs`;
-`apps/remi/src/deployment/candidate_inspection.rs`;
-`apps/remi/src/server/signing_authority.rs`;
-`apps/remi/src/server/mod.rs`;
-`apps/remi/src/server/admin_service.rs`;
-`apps/remi/src/server/admin_service/refresh.rs`;
-`apps/remi/src/server/publication_coordinator.rs`;
-`apps/remi/src/server/publication_scheduler.rs`;
-`apps/remi/src/server/handlers/admin/refresh.rs`;
-`apps/remi/src/server/repository_manifest.rs`;
-`deploy/remi-repositories.toml`;
-`crates/conary-core/src/db/current_schema/sql/remi.sql`;
-`apps/remi/src/server/native_publish/`;
-`apps/remi/src/server/native_publish/verify.rs`;
-`apps/remi/src/server/publication.rs`;
-`apps/remi/src/server/promotion_proof.rs`;
-`apps/remi/src/server/promotion_evidence.rs`;
+**Start here:** `apps/remi/src/server/mod.rs`;
+`apps/remi/src/server/release_publish.rs`;
+`apps/remi/src/server/native_publish/mod.rs`;
 `apps/remi/src/server/conversion.rs`;
-`apps/remi/src/server/conversion/types.rs`;
-`apps/remi/src/server/conversion/workflow.rs`;
-`apps/remi/src/server/conversion/persistence.rs`;
-`apps/remi/src/server/conversion/lookup.rs`;
-`apps/remi/src/server/conversion/metadata.rs`;
-`apps/remi/src/server/conversion/storage.rs`;
-`apps/remi/src/server/conversion/recipe.rs`;
-`apps/remi/src/server/conversion/benchmark.rs`;
-`apps/remi/src/server/index_gen.rs`;
-`apps/remi/src/server/prewarm.rs`; `apps/remi/src/server/handlers/`;
-`deploy/remi-deploy-helper.sh`;
-`docs/modules/remi.md`; `docs/modules/test-fixtures.md`.
+`apps/remi/src/server/admin_service.rs`;
+`apps/remi/src/deployment.rs`;
+`deploy/remi-repositories.toml`;
+`docs/modules/remi.md`.
 
 **Neighbor systems:** CCS conversion metadata, repository client behavior,
 typed repository parser configuration, schema deployment transitions,
@@ -1307,18 +981,7 @@ unexpected authority before activation.
 package jobs, expose job state, and stream route lifecycle events.
 
 **Start here:** `apps/conaryd/src/daemon/mod.rs`;
-`apps/conaryd/src/daemon/config.rs`;
 `apps/conaryd/src/daemon/routes.rs`;
-`apps/conaryd/src/daemon/routes/router.rs`;
-`apps/conaryd/src/daemon/routes/auth.rs`;
-`apps/conaryd/src/daemon/routes/types.rs`;
-`apps/conaryd/src/daemon/routes/errors.rs`;
-`apps/conaryd/src/daemon/routes/db.rs`;
-`apps/conaryd/src/daemon/routes/sse.rs`;
-`apps/conaryd/src/daemon/routes/transactions.rs`;
-`apps/conaryd/src/daemon/routes/query.rs`;
-`apps/conaryd/src/daemon/routes/system.rs`;
-`apps/conaryd/src/daemon/routes/events.rs`;
 `apps/conaryd/src/daemon/jobs.rs`;
 `docs/modules/conaryd.md`.
 
@@ -1350,21 +1013,8 @@ SSE lifecycle, socket auth, and live-host mutation boundaries.
 run dry-run smoke checks, and support local QEMU validation.
 
 **Start here:** `apps/conary/src/commands/bootstrap/mod.rs`;
-`apps/conary/src/commands/bootstrap/setup.rs`;
-`apps/conary/src/commands/bootstrap/phases.rs`;
-`apps/conary/src/commands/bootstrap/image.rs`;
-`apps/conary/src/commands/bootstrap/run.rs`;
-`apps/conary/src/commands/bootstrap/run_record.rs`;
-`apps/conary/src/commands/bootstrap/run_artifact.rs`;
-`apps/conary/src/commands/bootstrap/seed.rs`;
-`apps/conary/src/commands/bootstrap/convergence.rs`;
-`apps/conary/src/commands/bootstrap/cleanup.rs`;
-`apps/conary/src/commands/bootstrap/types.rs`;
-`apps/conary/src/commands/bootstrap/state.rs`;
 `apps/conary-test/src/bootstrap.rs`;
-`crates/conary-core/src/bootstrap/image.rs`;
-`crates/conary-core/src/bootstrap/image/erofs_generation.rs`;
-`crates/conary-core/src/bootstrap/image/tests.rs`;
+`crates/conary-core/src/bootstrap/mod.rs`;
 `docs/modules/bootstrap.md`;
 `docs/operations/bootstrap-selfhosting-vm.md`;
 `docs/roadmaps/development-roadmap.md`.
@@ -1374,6 +1024,7 @@ container runtime availability, ignored local artifact paths.
 
 **Paths:** `apps/conary/src/commands/bootstrap/*`;
 `apps/conary-test/src/bootstrap.rs`;
+`crates/conary-core/src/bootstrap/mod.rs`;
 `crates/conary-core/src/bootstrap/image.rs`;
 `crates/conary-core/src/bootstrap/image/*`;
 `crates/conary-bootstrap/*`;
@@ -1410,25 +1061,10 @@ release authority, publish one immutable GitHub release, route serialized
 deployment, and prove installed or live behavior independently.
 
 **Start here:** `.github/workflows/release-build.yml`;
-`.github/workflows/merge-validation.yml`;
-`.github/workflows/cleanup-pr-caches.yml`;
 `.github/workflows/deploy-and-verify.yml`;
-`.github/workflows/build-remi-candidate.yml`;
-`.github/workflows/deploy-remi-candidate.yml`;
-`.github/workflows/release-artifact-proof.yml`;
-`.github/actions/setup-rust-workspace/action.yml`;
-`.github/actions/setup-remi-candidate-compiler-cache/action.yml`;
-`.github/actions/summarize-rust-cache/action.yml`;
-`scripts/ci-install-ubuntu-packages.sh`;
-`scripts/check-github-action-runtimes.sh`;
-`scripts/test-github-action-runtimes.sh`;
-`Cargo.toml`; workspace member `Cargo.toml` manifests; `Cargo.lock`;
 `scripts/release.sh`; `scripts/release-matrix.sh`;
-`scripts/remi-candidate-artifact.sh`; `scripts/timed-linker.sh`;
-`scripts/timed-rustc-wrapper.sh`; `scripts/test-remi-candidate-artifact.sh`;
-`scripts/check-release-matrix.sh`; `scripts/test-release-matrix.sh`;
-`scripts/sign-release.sh`; `crates/conary-core/examples/sign_hash.rs`;
-`apps/conary/tests/release_ccs_manifest.rs`;
+`scripts/remi-candidate-artifact.sh`;
+`scripts/sign-release.sh`;
 `docs/operations/release-artifact-matrix.md`;
 `docs/operations/infrastructure.md`.
 

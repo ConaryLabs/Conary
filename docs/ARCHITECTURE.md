@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 62
+revision: 63
 summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source and advisory authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier selection and security, generation GC, and service boundaries
 ---
 
@@ -130,7 +130,7 @@ crates/conary-core/      Core library crate
     |   +-- generation_backup_chain.rs Bounded self-contained base-plus-delta recovery authority
     |   +-- current_schema/ One schema split into package-manager, repository, and Remi ownership files
     |   +-- models/      ORM-style model structs
-    |   |   +-- try_session.rs M1b package try session state
+    |   |   +-- try_session.rs Package try session state
     +-- transaction/     Composefs-native transaction engine
     |   +-- mod.rs       TransactionEngine, state machine (resolve/fetch/commit/build/select)
     |   +-- package_relations.rs Typed source-ABI relation planning and validation
@@ -244,7 +244,7 @@ crates/conary-core/      Core library crate
     |   +-- format.rs    Recipe format types and build-stage definitions
     |   +-- parser.rs    TOML recipe parser
     |   +-- scaffold.rs  Exact named recipe scaffolding and deterministic materialization
-    |   +-- hermetic/    M2a unsigned hermetic evidence, policy, source identity, and diagnostics
+    |   +-- hermetic/    Unsigned hermetic evidence, policy, source identity, and diagnostics
     |   +-- kitchen/     Build environment (cook, fetch, offline build, provenance)
     |   +-- build graph  Multi-recipe build ordering
     |   +-- cache.rs     Build artifact cache
@@ -423,7 +423,7 @@ Client                        Remi Server
 
 ## Data Flow: Hermetic Recipe Cook And Project Publish
 
-M2a makes `conary cook --isolated` the hermetic recipe build path. The command
+`conary cook --isolated` is the hermetic recipe build path. The command
 loads the local hermetic builder config, refuses recipes with build dependencies
 until dependency content locks exist, prefetches sources, and then runs Kitchen
 with network disabled, pristine/no-host-mount execution, reproducibility
@@ -433,11 +433,11 @@ diagnostics. Marker-file and command-text ecosystem inference is not an
 authority boundary; the signed input identity and actual offline execution are.
 
 Project-form `conary publish <target>` uses the same hermetic Kitchen path
-before adding the resulting CCS package to a static repository. M2a records
+before adding the resulting CCS package to a static repository. The cook records
 unsigned hermetic evidence in CCS provenance, but it does not create signed
 build-attestation envelopes. Artifact-form
-`conary publish <pkg.ccs> <target>` still rejects until the M2b attestation and
-publish gates land.
+`conary publish <pkg.ccs> <target>` accepts only current signed artifacts that
+pass the build-attestation and publish gates.
 
 ## System Generations
 

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-27
-revision: 41
+last_updated: 2026-09-03
+revision: 42
 summary: Map fixture ownership, including stable boot-tool interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
 ---
 
@@ -217,13 +217,13 @@ Each fixture family should record:
   `apps/conary/tests/packaging_m4a.rs`; targeted unit fixtures in
   `crates/conary-core/src/ccs/{archive_reader,package,verify}.rs`.
 - **Consumes:** CCS v3 schema/reader/validation/identity tests, verifier tests,
-  static publish-gate tests, and M4a CLI install integration tests.
+  static publish-gate tests, and CLI install integration tests.
 - **Fast proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p conary --test packaging_m4a`.
 - **Medium proof:** `cargo test -p conary-core ccs::verify`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
 - **Slow proof:** No slow gate for fixture-map-only changes.
-- **Regeneration:** Hand-maintained Rust builders until M4b authoring emits
+- **Regeneration:** Hand-maintained Rust builders until local authoring emits
   native v3 packages directly.
 - **Safety notes:** v3 native fixtures are signed `format_version = 3`
   authority with complete file, component, dependency, provenance,
@@ -242,13 +242,13 @@ Each fixture family should record:
   and static publish rejection for local-dev/host-hardened artifacts.
 - **Fixture sources:** in-test project builder in
   `apps/conary/tests/packaging_m4b.rs`.
-- **Consumes:** M4b CLI smoke, signing guardrail, source-independent
+- **Consumes:** Local-authoring CLI smoke, signing guardrail, source-independent
   declarative lifecycle, typed dependency authoring, local-dev trust, and
   isolated dry-run tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4b`.
 - **Medium proof:** `cargo test -p conary-core ccs::v3`;
   `cargo test -p conary-core repository::static_repo::publish_gate`.
-- **Slow proof:** No slow gate for M4b fixture-map-only changes.
+- **Slow proof:** No slow gate for fixture-map-only changes.
 - **Regeneration:** Temporary source trees are generated during tests.
 - **Safety notes:** Local-dev keys are isolated with test HOME/XDG directories.
   Local-dev v3 artifacts are for local verify/test only and must remain
@@ -262,7 +262,7 @@ Each fixture family should record:
   debug projection: `crates/conary-core/src/ccs/v3/debug_projection.rs`;
   repository feed catalog:
   `crates/conary-core/src/repository/supported_profiles/`.
-- **Purpose:** M4e proof that config-only and lifecycle-bearing native packages
+- **Purpose:** Proves that config-only and lifecycle-bearing native packages
   author without a destination distro gate, debug TOML remains a checked
   projection of signed authority, and declarative lifecycle remains signed
   source-independent intent.
@@ -270,7 +270,7 @@ Each fixture family should record:
   `service` projects in `apps/conary/tests/packaging_m4b.rs` and
   `apps/conary/tests/packaging_m4e.rs`; debug projection unit fixtures in
   `crates/conary-core/src/ccs/v3/debug_projection.rs`.
-- **Consumes:** M4e CLI lint/build/verify/test corpus, arbitrary declarative
+- **Consumes:** CLI lint/build/verify/test corpus, arbitrary declarative
   lifecycle, and v3 reader/debug-projection consistency tests.
 - **Fast proof:** `cargo test -p conary --test packaging_m4e`;
   `cargo test -p conary-core ccs::v3::debug_projection`.
@@ -279,7 +279,7 @@ Each fixture family should record:
   `cargo test -p conary --test packaging_m4a`;
   `cargo test -p conary --test packaging_m4b`;
   `cargo test -p conary --test packaging_m4d`.
-- **Slow proof:** No slow gate for M4e fixture-map-only changes.
+- **Slow proof:** No slow gate for fixture-map-only changes.
 - **Regeneration:** Temporary source projects are generated during tests.
 - **Safety notes:** Repository feed IDs and route slugs are not destination
   compatibility authority. Debug TOML is never authoritative; it must match

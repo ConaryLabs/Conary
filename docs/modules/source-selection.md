@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 60
+revision: 61
 summary: Document distinct package-variant selection and host-architecture assertions, profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
 ---
 
@@ -117,8 +117,7 @@ accepted as source-identity aliases. Native repository sync instead consumes
 the exact persisted native source policy described below. A configured public
 profile remains an optional feed preset during W10 and is copied into native
 package rows when present; it is not required for repository identity or
-refresh authority. The superseded
-`data/distros.toml` catalog was deleted in M4d.
+refresh authority. The superseded `data/distros.toml` catalog is absent.
 
 Host-native admission derives `NativeMachineIdentityV1` only from compile-time
 machine facts: `target_arch`, pointer width, endianness, and `target_abi` for
