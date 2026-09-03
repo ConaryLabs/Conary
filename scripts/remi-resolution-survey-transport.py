@@ -38,6 +38,8 @@ IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_SURVEY_TRANSPORT_BYTES = 640 * 1024 * 1024
+SURVEY_RECORD_LIMIT = 5_000
+SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 NATIVE_ECOSYSTEMS = {"rpm", "debian", "alpm"}
@@ -1144,6 +1146,8 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
     }
     if (
         limits["total_failures"] != count_values["failed_roots"]
+        or limits["failure_record_limit"] != SURVEY_RECORD_LIMIT
+        or limits["evidence_byte_limit"] != SURVEY_EVIDENCE_BYTE_LIMIT
         or limits["retained_failures"] != len(failures)
         or limits["retained_failures"] > limits["total_failures"]
         or limits["retained_failures"] > limits["failure_record_limit"]
@@ -1230,6 +1234,7 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
     mismatches = survey["mismatches"]
     if (
         not isinstance(mismatches, list)
+        or limits["mismatch_record_limit"] != SURVEY_RECORD_LIMIT
         or limits["total_mismatches"] != mismatched
         or limits["retained_mismatches"] != len(mismatches)
         or limits["retained_mismatches"] > limits["total_mismatches"]

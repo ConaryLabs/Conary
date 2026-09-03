@@ -483,6 +483,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             )
 
         malformed = json.loads(canonical(comparison))
+        malformed["mismatch_record_limit"] = 5001
+        with self.assertRaisesRegex(ValueError, "retention counts"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json"
+            )
+
+        malformed = json.loads(canonical(comparison))
         malformed["schema_version"] = True
         with self.assertRaisesRegex(ValueError, "unsigned 64-bit integer"):
             TRANSPORT_TOOL.validate_comparison_survey(
@@ -678,6 +685,14 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("fixed Conary candidate producer", result.stderr)
+
+            malformed_candidate = json.loads(valid_candidate)
+            malformed_candidate["evidence_byte_limit"] = 67108865
+            survey_files[first_name] = canonical(malformed_candidate)
+            write_output()
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("retention or evidence counts", result.stderr)
             survey_files[first_name] = valid_candidate
             write_output()
 
