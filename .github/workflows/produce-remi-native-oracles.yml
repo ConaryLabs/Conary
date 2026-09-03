@@ -11,6 +11,11 @@ on:
         description: Full merged producer commit SHA; use the deployed commit by default
         required: true
         type: string
+      lanes:
+        description: Comma-separated non-empty subset of fedora-44,ubuntu-26.04,arch
+        required: false
+        default: fedora-44,ubuntu-26.04,arch
+        type: string
 
 permissions:
   actions: read
@@ -29,8 +34,12 @@ jobs:
     outputs:
       artifact_name: ${{ steps.authority.outputs.artifact_name }}
       deployed_commit: ${{ steps.authority.outputs.deployed_commit }}
+      deployment_run_id: ${{ steps.authority.outputs.deployment_run_id }}
       producer_commit: ${{ steps.producer.outputs.producer_commit }}
       export_id: ${{ steps.authority.outputs.export_id }}
+      transport_sha256: ${{ steps.authority.outputs.transport_sha256 }}
+      matrix: ${{ steps.selection.outputs.matrix }}
+      selected_lanes: ${{ steps.selection.outputs.selected_lanes }}
       fedora_candidate: ${{ steps.authority.outputs.fedora_candidate }}
       ubuntu_candidate: ${{ steps.authority.outputs.ubuntu_candidate }}
       arch_candidate: ${{ steps.authority.outputs.arch_candidate }}
@@ -53,9 +62,18 @@ jobs:
             echo "native-oracle production must be dispatched from main" >&2
             exit 1
           }
-          git fetch origin main
-          git merge-base --is-ancestor HEAD origin/main
-          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+      - name: Validate exact lane subset
+        id: selection
+        env:
+          LANES: ${{ inputs.lanes }}
+        run: |
+          set -euo pipefail
+          matrix="$(python3 scripts/native-oracle-lane-selection.py --lanes "$LANES")"
+          jq -e '.include | length > 0' <<< "$matrix" >/dev/null
+          {
+            echo "matrix=$matrix"
+            echo "selected_lanes=$LANES"
+          } >> "$GITHUB_OUTPUT"
       - name: Bind one successful exact native-oracle export
         id: source
         env:
@@ -122,6 +140,12 @@ jobs:
             .transport.size > 0
           ' "$verification" >/dev/null
           deployed_commit="$(jq -er '.deployment.commit_sha' "$inspection")"
+          deployment_run_id="${ARTIFACT_NAME#remi-native-oracle-input-}"
+          deployment_run_id="${deployment_run_id%-${EXPORT_RUN_ID}}"
+          [[ "$deployment_run_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "export artifact has no exact deployment run binding" >&2
+            exit 1
+          }
           fedora_candidate="$(jq -er '.candidates[] | select(.profile == "fedora-44") | .profile_revision_sha256' "$inspection")"
           ubuntu_candidate="$(jq -er '.candidates[] | select(.profile == "ubuntu-26.04") | .profile_revision_sha256' "$inspection")"
           arch_candidate="$(jq -er '.candidates[] | select(.profile == "arch") | .profile_revision_sha256' "$inspection")"
@@ -134,6 +158,7 @@ jobs:
           ' "$verification" >/dev/null
           git merge-base --is-ancestor "$deployed_commit" origin/main
           export_id="$(jq -er '.export_id' "$verification")"
+          transport_sha256="$(jq -er '.transport.sha256' "$verification")"
           python3 scripts/verify-native-oracle-input-transport.py \
             --transport "${transports[0]}" \
             --export-id "$export_id" \
@@ -146,7 +171,9 @@ jobs:
           {
             echo "artifact_name=$ARTIFACT_NAME"
             echo "deployed_commit=$deployed_commit"
+            echo "deployment_run_id=$deployment_run_id"
             echo "export_id=$export_id"
+            echo "transport_sha256=$transport_sha256"
             echo "fedora_candidate=$fedora_candidate"
             echo "ubuntu_candidate=$ubuntu_candidate"
             echo "arch_candidate=$arch_candidate"
@@ -158,14 +185,17 @@ jobs:
           PRODUCER_COMMIT: ${{ inputs.producer_commit }}
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$PRODUCER_COMMIT" || {
-            echo "producer_commit must descend from the deployed commit" >&2
-            exit 1
-          }
-          git merge-base --is-ancestor "$PRODUCER_COMMIT" origin/main || {
-            echo "producer_commit must already be merged into origin/main" >&2
-            exit 1
-          }
+          python3 scripts/verify-native-oracle-producer.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --deployed-commit "$DEPLOYED_COMMIT" \
+            --producer-commit "$PRODUCER_COMMIT" \
+            > "${RUNNER_TEMP}/producer-verification.json"
+          jq -e \
+            --arg deployed_commit "$DEPLOYED_COMMIT" \
+            --arg producer_commit "$PRODUCER_COMMIT" '
+              .deployed_commit == $deployed_commit and
+              .producer_commit == $producer_commit
+            ' "${RUNNER_TEMP}/producer-verification.json" >/dev/null
           echo "producer_commit=$PRODUCER_COMMIT" >> "$GITHUB_OUTPUT"
 
   produce:
@@ -178,26 +208,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - profile: fedora-44
-            architecture: x86_64
-            image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
-            feature: native-rpm-oracle
-            package_bin: conary-rpm-oracle
-            resolution_bin: conary-rpm-resolution-oracle
-          - profile: ubuntu-26.04
-            architecture: amd64
-            image: docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
-            feature: native-debian-oracle
-            package_bin: conary-debian-oracle
-            resolution_bin: conary-debian-resolution-oracle
-          - profile: arch
-            architecture: x86_64
-            image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
-            feature: native-alpm-oracle
-            package_bin: conary-alpm-oracle
-            resolution_bin: conary-alpm-resolution-oracle
+      matrix: ${{ fromJSON(needs.authorize.outputs.matrix) }}
     container:
       image: ${{ matrix.image }}
     steps:
@@ -281,11 +292,16 @@ jobs:
           --features "${{ matrix.feature }}"
           --bin "${{ matrix.package_bin }}"
           --bin "${{ matrix.resolution_bin }}"
-      - name: Produce and reopen complete native oracle lane
+      - name: Produce survey then strict native oracle lane
+        id: produce_lane
+        continue-on-error: true
         env:
           DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          DEPLOYMENT_RUN_ID: ${{ needs.authorize.outputs.deployment_run_id }}
           PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
+          EXPORT_RUN_ID: ${{ inputs.export_run_id }}
           EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
+          TRANSPORT_SHA256: ${{ needs.authorize.outputs.transport_sha256 }}
         run: |
           set -euo pipefail
           python3 operator/scripts/produce-native-oracle-lane.py \
@@ -295,37 +311,152 @@ jobs:
             --package-producer "${GITHUB_WORKSPACE}/producer/target/release/${{ matrix.package_bin }}" \
             --resolution-producer "${GITHUB_WORKSPACE}/producer/target/release/${{ matrix.resolution_bin }}" \
             --output-root "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}" \
+            --survey-output-root "${RUNNER_TEMP}/native-oracle-survey-${{ matrix.profile }}" \
+            --deployment-run-id "$DEPLOYMENT_RUN_ID" \
+            --export-run-id "$EXPORT_RUN_ID" \
             --export-id "$EXPORT_ID" \
+            --transport-sha256 "$TRANSPORT_SHA256" \
             --deployed-commit "$DEPLOYED_COMMIT" \
             --producer-commit "$PRODUCER_COMMIT" \
+            --lane-image "${{ matrix.image }}" \
             > "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}.json"
-          cmp \
-            "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}.json" \
-            <(jq -c . "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}/evidence.json")
-      - name: Require pinned native implementation identity
+      - name: Require bound sanitized survey evidence
+        id: validate_survey
+        if: ${{ always() }}
         env:
           DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          DEPLOYMENT_RUN_ID: ${{ needs.authorize.outputs.deployment_run_id }}
+          EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
+          EXPORT_RUN_ID: ${{ inputs.export_run_id }}
+          LANE_IMAGE: ${{ matrix.image }}
           PACKAGE_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.package_bin }}
           PROFILE: ${{ matrix.profile }}
           PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
           RESOLUTION_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.resolution_bin }}
+          TRANSPORT_SHA256: ${{ needs.authorize.outputs.transport_sha256 }}
         run: |
           set -euo pipefail
-          evidence="${RUNNER_TEMP}/native-oracles-${PROFILE}/evidence.json"
+          survey_root="${RUNNER_TEMP}/native-oracle-survey-${PROFILE}"
+          manifest="${survey_root}/manifest.json"
+          survey="${survey_root}/survey.json"
+          [[ "$(find "$survey_root" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)" == $'manifest.json\nsurvey.json' ]]
           package_sha256="$(sha256sum "$PACKAGE_PRODUCER" | cut -d ' ' -f 1)"
           resolution_sha256="$(sha256sum "$RESOLUTION_PRODUCER" | cut -d ' ' -f 1)"
+          survey_sha256="$(sha256sum "$survey" | cut -d ' ' -f 1)"
           jq -e \
             --arg deployed_commit "$DEPLOYED_COMMIT" \
+            --argjson deployment_run_id "$DEPLOYMENT_RUN_ID" \
+            --arg export_id "$EXPORT_ID" \
+            --argjson export_run_id "$EXPORT_RUN_ID" \
+            --arg lane_image "$LANE_IMAGE" \
             --arg package_name "${PACKAGE_PRODUCER##*/}" \
             --arg package_sha256 "$package_sha256" \
             --arg producer_commit "$PRODUCER_COMMIT" \
             --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
-            --arg resolution_sha256 "$resolution_sha256" '
-            .schema_version == 2 and
+            --arg resolution_sha256 "$resolution_sha256" \
+            --arg survey_sha256 "$survey_sha256" \
+            --arg transport_sha256 "$TRANSPORT_SHA256" '
+            .schema_version == 1 and
+            .artifact_type == "native-resolution-survey-diagnostics" and
+            .deployment_run_id == $deployment_run_id and
+            .export_run_id == $export_run_id and
+            .export_id == $export_id and
+            .transport_sha256 == $transport_sha256 and
             .deployed_commit == $deployed_commit and
             .producer_commit == $producer_commit and
             .producer_binaries.package == {name:$package_name,sha256:$package_sha256} and
             .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
+            .lane_image == $lane_image and
+            .package_oracle.schema_version == 1 and
+            .survey.schema_version == 2 and
+            .survey.sha256 == $survey_sha256 and
+            .survey.size > 0
+          ' "$manifest" >/dev/null
+          jq -e --arg profile "$PROFILE" --arg sha256 "$survey_sha256" '
+            .schema_version == 2 and
+            .profile == $profile and
+            (.counts.roots_walked | type == "number") and
+            (.counts.failed_roots | type == "number") and
+            .total_failures == .counts.failed_roots
+          ' "$survey" >/dev/null
+          case "$PROFILE" in
+            fedora-44)
+              jq -e '
+                .package_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"} and
+                .survey.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:4,version:"0.7.36"}
+              ' "$manifest" >/dev/null
+              ;;
+            ubuntu-26.04)
+              jq -e '
+                .package_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:1,version:"3.2.0"} and
+                .survey.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:2,version:"3.2.0"}
+              ' "$manifest" >/dev/null
+              ;;
+            arch)
+              jq -e '
+                .package_oracle.implementation.ecosystem == "alpm" and
+                .package_oracle.implementation.name == "libalpm" and
+                .package_oracle.implementation.projection_schema == 1 and
+                .package_oracle.implementation.version == .survey.implementation.version and
+                .survey.implementation.ecosystem == "alpm" and
+                .survey.implementation.name == "libalpm" and
+                .survey.implementation.projection_schema == 2
+              ' "$manifest" >/dev/null
+              ;;
+          esac
+      - name: Upload diagnostics-only native resolution survey
+        id: upload_survey
+        if: ${{ always() && steps.validate_survey.outcome == 'success' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-native-oracle-survey-${{ matrix.profile }}-${{ needs.authorize.outputs.export_id }}-${{ needs.authorize.outputs.producer_commit }}
+          path: ${{ runner.temp }}/native-oracle-survey-${{ matrix.profile }}
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 7
+      - name: Require pinned strict native implementation identity
+        id: validate_strict
+        if: ${{ steps.produce_lane.outcome == 'success' && steps.upload_survey.outcome == 'success' }}
+        env:
+          DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          DEPLOYMENT_RUN_ID: ${{ needs.authorize.outputs.deployment_run_id }}
+          EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
+          EXPORT_RUN_ID: ${{ inputs.export_run_id }}
+          LANE_IMAGE: ${{ matrix.image }}
+          PACKAGE_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.package_bin }}
+          PROFILE: ${{ matrix.profile }}
+          PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
+          RESOLUTION_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.resolution_bin }}
+          TRANSPORT_SHA256: ${{ needs.authorize.outputs.transport_sha256 }}
+        run: |
+          set -euo pipefail
+          evidence="${RUNNER_TEMP}/native-oracles-${PROFILE}/evidence.json"
+          cmp "${RUNNER_TEMP}/native-oracles-${PROFILE}.json" <(jq -c . "$evidence")
+          package_sha256="$(sha256sum "$PACKAGE_PRODUCER" | cut -d ' ' -f 1)"
+          resolution_sha256="$(sha256sum "$RESOLUTION_PRODUCER" | cut -d ' ' -f 1)"
+          jq -e \
+            --arg deployed_commit "$DEPLOYED_COMMIT" \
+            --argjson deployment_run_id "$DEPLOYMENT_RUN_ID" \
+            --arg export_id "$EXPORT_ID" \
+            --argjson export_run_id "$EXPORT_RUN_ID" \
+            --arg lane_image "$LANE_IMAGE" \
+            --arg package_name "${PACKAGE_PRODUCER##*/}" \
+            --arg package_sha256 "$package_sha256" \
+            --arg producer_commit "$PRODUCER_COMMIT" \
+            --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
+            --arg resolution_sha256 "$resolution_sha256" \
+            --arg transport_sha256 "$TRANSPORT_SHA256" '
+            .schema_version == 3 and
+            .artifact_type == "native-oracle-lane" and
+            .deployment_run_id == $deployment_run_id and
+            .export_run_id == $export_run_id and
+            .export_id == $export_id and
+            .transport_sha256 == $transport_sha256 and
+            .deployed_commit == $deployed_commit and
+            .producer_commit == $producer_commit and
+            .producer_binaries.package == {name:$package_name,sha256:$package_sha256} and
+            .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
+            .lane_image == $lane_image and
             .package_oracle.schema_version == 1 and
             .resolution_oracle.schema_version == 2
           ' "$evidence" >/dev/null
@@ -354,21 +485,24 @@ jobs:
               ' "$evidence" >/dev/null
               ;;
           esac
-      - name: Upload exact native oracle lane
-        id: upload
+      - name: Upload exact strict native oracle lane
+        id: upload_strict
+        if: ${{ steps.validate_strict.outcome == 'success' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
-          name: remi-native-oracles-${{ matrix.profile }}-${{ inputs.export_run_id }}-${{ github.run_id }}
+          name: remi-native-oracle-lane-${{ matrix.profile }}-${{ needs.authorize.outputs.export_id }}-${{ needs.authorize.outputs.producer_commit }}
           path: ${{ runner.temp }}/native-oracles-${{ matrix.profile }}
           if-no-files-found: error
           compression-level: 6
           retention-days: 7
       - name: Record exact native oracle identities
+        if: ${{ always() && steps.validate_survey.outcome == 'success' }}
         env:
-          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          STRICT_ARTIFACT_DIGEST: ${{ steps.upload_strict.outputs.artifact-digest }}
+          SURVEY_ARTIFACT_DIGEST: ${{ steps.upload_survey.outputs.artifact-digest }}
           PROFILE: ${{ matrix.profile }}
         run: |
-          evidence="${RUNNER_TEMP}/native-oracles-${PROFILE}/evidence.json"
+          survey_manifest="${RUNNER_TEMP}/native-oracle-survey-${PROFILE}/manifest.json"
           {
             echo "### Exact production native oracle: ${PROFILE}"
             echo
@@ -380,21 +514,233 @@ jobs:
               "- export_id: `\(.export_id)`\n" +
               "- profile_revision: `\(.profile_revision_sha256)`\n" +
               "- package_manifest: `\(.package_oracle.manifest_sha256)`\n" +
-              "- package_rows: `\(.package_oracle.artifact.counts.packages)`\n" +
-              "- resolution_manifest: `\(.resolution_oracle.manifest_sha256)`\n" +
-              "- resolution_roots: `\(.resolution_oracle.artifact.counts.roots)`\n" +
+              "- survey_failures: `\(.survey.total_failures)`\n" +
               "- implementation: `\(.package_oracle.implementation.name) \(.package_oracle.implementation.version)`"
-            ' "$evidence"
-            echo "- artifact_digest: \`$ARTIFACT_DIGEST\`"
+            ' "$survey_manifest"
+            echo "- survey_artifact_digest: \`$SURVEY_ARTIFACT_DIGEST\`"
+            if [[ -n "$STRICT_ARTIFACT_DIGEST" ]]; then
+              echo "- strict_artifact_digest: \`$STRICT_ARTIFACT_DIGEST\`"
+            else
+              echo "- strict_artifact: not produced"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Decide lane from strict result
+        if: ${{ always() }}
+        env:
+          STRICT_OUTCOME: ${{ steps.produce_lane.outcome }}
+          STRICT_UPLOAD: ${{ steps.upload_strict.outcome }}
+          STRICT_VALIDATION: ${{ steps.validate_strict.outcome }}
+          SURVEY_UPLOAD: ${{ steps.upload_survey.outcome }}
+          SURVEY_VALIDATION: ${{ steps.validate_survey.outcome }}
+        run: |
+          set -euo pipefail
+          test "$SURVEY_VALIDATION" = success
+          test "$SURVEY_UPLOAD" = success
+          test "$STRICT_OUTCOME" = success
+          test "$STRICT_VALIDATION" = success
+          test "$STRICT_UPLOAD" = success
+
+  assemble:
+    name: assemble exact three-lane native oracle set
+    if: ${{ always() }}
+    needs: [authorize, produce]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out protected assembly operator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download exact current or most recent retained lane artifacts
+        env:
+          EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
+          SELECTED_LANES: ${{ needs.authorize.outputs.selected_lanes }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          artifact_root="${RUNNER_TEMP}/native-oracle-lanes"
+          mkdir -p "$artifact_root"
+          artifact_metadata='{"artifacts":[],"schema_version":1}'
+          all_artifacts="$({
+            gh api --paginate \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100"
+          } | jq -sc '[.[].artifacts[]]')"
+
+          for profile in fedora-44 ubuntu-26.04 arch; do
+            prefix="remi-native-oracle-lane-${profile}-${EXPORT_ID}-"
+            if [[ ",${SELECTED_LANES}," == *",${profile},"* ]]; then
+              artifact="$(jq -cer \
+                --arg name "${prefix}${PRODUCER_COMMIT}" \
+                --argjson run_id "$GITHUB_RUN_ID" '
+                  [.[] | select(.expired == false and .name == $name and .workflow_run.id == $run_id)]
+                  | if length == 1 then .[0] else error("expected one exact current-run lane artifact") end
+                ' <<< "$all_artifacts")"
+            else
+              mapfile -t retained_candidates < <(jq -cer --arg prefix "$prefix" '
+                [.[] |
+                  select(.expired == false) |
+                  select(.name | startswith($prefix)) |
+                  select((.name | length) == (($prefix | length) + 40)) |
+                  select(.name | test("[0-9a-f]{40}$"))] |
+                sort_by(.created_at) | reverse |
+                .[]
+              ' <<< "$all_artifacts")
+              artifact=''
+              for candidate in "${retained_candidates[@]}"; do
+                retained_run_id="$(jq -er '.workflow_run.id' <<< "$candidate")"
+                retained_run="$(gh api \
+                  -H 'X-GitHub-Api-Version: 2026-03-10' \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${retained_run_id}")"
+                if ! jq -e \
+                  --arg repository "$GITHUB_REPOSITORY" \
+                  --argjson run_id "$retained_run_id" '
+                    .id == $run_id and
+                    .event == "workflow_dispatch" and
+                    .status == "completed" and
+                    .head_branch == "main" and
+                    .head_repository.full_name == $repository and
+                    .path == ".github/workflows/produce-remi-native-oracles.yml"
+                  ' <<< "$retained_run" >/dev/null; then
+                  continue
+                fi
+                retained_jobs="$({
+                  gh api --paginate \
+                    -H 'X-GitHub-Api-Version: 2026-03-10' \
+                    "repos/${GITHUB_REPOSITORY}/actions/runs/${retained_run_id}/jobs?filter=latest&per_page=100"
+                } | jq -sc '[.[].jobs[]]')"
+                if jq -e --arg job_name "native oracle (${profile})" '
+                  [.[] | select(.name == $job_name and .conclusion == "success")] |
+                  length == 1
+                ' <<< "$retained_jobs" >/dev/null; then
+                  artifact="$candidate"
+                  break
+                fi
+              done
+              [[ -n "$artifact" ]] || {
+                echo "no successful retained same-export lane artifact" >&2
+                exit 1
+              }
+            fi
+
+            artifact_id="$(jq -er '.id' <<< "$artifact")"
+            artifact_name="$(jq -er '.name' <<< "$artifact")"
+            artifact_run_id="$(jq -er '.workflow_run.id' <<< "$artifact")"
+            artifact_digest="$(jq -er '.digest' <<< "$artifact")"
+            [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+            [[ "$artifact_run_id" =~ ^[1-9][0-9]*$ ]]
+            [[ "$artifact_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            archive="${RUNNER_TEMP}/${artifact_id}.zip"
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+              > "$archive"
+            observed="sha256:$(sha256sum "$archive" | cut -d ' ' -f 1)"
+            [[ "$observed" == "$artifact_digest" ]] || {
+              echo "GitHub artifact digest changed during lane download" >&2
+              exit 1
+            }
+            destination="${artifact_root}/${profile}"
+            python3 - "$archive" "$destination" <<'PY'
+          import stat
+          import sys
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          destination.mkdir(mode=0o700)
+          with ZipFile(archive) as source:
+              seen = set()
+              for member in source.infolist():
+                  path = PurePosixPath(member.filename)
+                  mode = member.external_attr >> 16
+                  if (
+                      path.is_absolute()
+                      or not path.parts
+                      or ".." in path.parts
+                      or stat.S_ISLNK(mode)
+                      or path in seen
+                  ):
+                      raise SystemExit("unsafe native-oracle lane artifact member")
+                  seen.add(path)
+              source.extractall(destination)
+          PY
+            artifact_metadata="$(jq -c \
+              --argjson artifact_id "$artifact_id" \
+              --arg name "$artifact_name" \
+              --arg profile "$profile" \
+              --argjson run_id "$artifact_run_id" \
+              --arg sha256 "${artifact_digest#sha256:}" \
+              '.artifacts += [{artifact_id:$artifact_id,name:$name,profile:$profile,run_id:$run_id,sha256:$sha256}]' \
+              <<< "$artifact_metadata")"
+          done
+          jq -cSj . <<< "$artifact_metadata" > "${RUNNER_TEMP}/native-oracle-artifacts.json"
+      - name: Independently assemble exact bound lane evidence
+        env:
+          DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          DEPLOYMENT_RUN_ID: ${{ needs.authorize.outputs.deployment_run_id }}
+          EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
+          EXPORT_RUN_ID: ${{ inputs.export_run_id }}
+          TRANSPORT_SHA256: ${{ needs.authorize.outputs.transport_sha256 }}
+        run: |
+          set -euo pipefail
+          output_root="${RUNNER_TEMP}/native-oracle-set"
+          mkdir -p "$output_root"
+          python3 scripts/assemble-native-oracle-lanes.py \
+            --repository "$GITHUB_WORKSPACE" \
+            --main-ref origin/main \
+            --deployed-commit "$DEPLOYED_COMMIT" \
+            --deployment-run-id "$DEPLOYMENT_RUN_ID" \
+            --export-run-id "$EXPORT_RUN_ID" \
+            --export-id "$EXPORT_ID" \
+            --transport-sha256 "$TRANSPORT_SHA256" \
+            --artifact-metadata "${RUNNER_TEMP}/native-oracle-artifacts.json" \
+            --lane "fedora-44=${RUNNER_TEMP}/native-oracle-lanes/fedora-44" \
+            --lane "ubuntu-26.04=${RUNNER_TEMP}/native-oracle-lanes/ubuntu-26.04" \
+            --lane "arch=${RUNNER_TEMP}/native-oracle-lanes/arch" \
+            --output "${output_root}/evidence.json" \
+            > "${RUNNER_TEMP}/native-oracle-set.json"
+          cmp "${RUNNER_TEMP}/native-oracle-set.json" <(jq -c . "${output_root}/evidence.json")
+          jq -e \
+            --arg deployed_commit "$DEPLOYED_COMMIT" \
+            --arg export_id "$EXPORT_ID" \
+            --arg transport_sha256 "$TRANSPORT_SHA256" '
+              .schema_version == 1 and
+              .artifact_type == "native-oracle-three-lane-set" and
+              .deployed_commit == $deployed_commit and
+              .export_id == $export_id and
+              .transport_sha256 == $transport_sha256 and
+              [.lanes[].profile] == ["fedora-44", "ubuntu-26.04", "arch"] and
+              all(.lanes[];
+                (.producer_commit | test("^[0-9a-f]{40}$")) and
+                (.producer_binaries.package.sha256 | test("^[0-9a-f]{64}$")) and
+                (.producer_binaries.resolution.sha256 | test("^[0-9a-f]{64}$")) and
+                (.github_artifact.sha256 | test("^[0-9a-f]{64}$")) and
+                (.github_artifact.name | startswith("remi-native-oracle-lane-")))
+            ' "${output_root}/evidence.json" >/dev/null
+      - name: Upload assembled exact native oracle evidence
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-native-oracle-set-${{ needs.authorize.outputs.export_id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-oracle-set
+          if-no-files-found: error
+          compression-level: 6
+          retention-days: 7
 
   complete:
     name: native oracle production
     if: ${{ always() }}
-    needs: produce
+    needs: [produce, assemble]
     runs-on: ubuntu-latest
     steps:
-      - name: Require every pinned producer lane
+      - name: Require selected producers and exact three-lane assembly
         env:
+          ASSEMBLY_RESULT: ${{ needs.assemble.result }}
           PRODUCER_RESULT: ${{ needs.produce.result }}
-        run: test "$PRODUCER_RESULT" = success
+        run: |
+          test "$PRODUCER_RESULT" = success
+          test "$ASSEMBLY_RESULT" = success
