@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 64
+last_updated: 2026-09-04
+revision: 65
 summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -389,7 +389,7 @@ Current Group N QEMU evidence from 2026-05-21:
   Current installs materialize DB/CAS state when no generation exists and
   publish `/conary/current` through the same atomic package transaction.
 
-Group O QEMU export evidence:
+Current Group O QEMU export evidence from 2026-07-31:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
   passed 5 / failed 0 / skipped 0 / cancelled 0 against
@@ -448,7 +448,7 @@ Keep Group O in the release-candidate rotation because it is still the full
 boot/export proof for installed-runtime and supported-host generation
 artifacts.
 
-Group P ISO export evidence:
+Current Group P ISO export evidence from 2026-07-31:
 
 - `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`:
   passed `TISO01`, 1 passed / 0 failed / 0 skipped / 0 cancelled against
