@@ -1059,10 +1059,11 @@ All three oracle binaries and `remi resolution-survey` accept typed
 `--workers <n>`. The automatic value is bounded by Rust available parallelism,
 the cgroup-v2 CPU quota, root count, and memory capacity. Worker memory uses a
 1.5 GiB Fedora pool allowance, rounded above a retained 1,271,280 KiB
-one-worker root-walk RSS observation; the effective budget reserves 25% of
-detected cgroup/host memory and never exceeds 8 GiB. Native binaries write
-selected worker count, effective budget, retained pool allowance, and per-worker
-pool/cache load milliseconds to the required separate
+one-worker root-walk RSS observation; the effective budget subtracts
+`memory.current` from every bounded cgroup-v2 ancestor (or uses host
+`MemAvailable`), reserves 25% of the remaining memory, and never exceeds 8 GiB.
+Native binaries write selected worker count, effective budget, retained pool
+allowance, and per-worker pool/cache load milliseconds to the required separate
 `--implementation-evidence` JSON file. Remi writes equivalent per-profile
 candidate and comparison implementation files. Scheduling evidence therefore
 remains comparable without contaminating canonical survey or oracle bytes.

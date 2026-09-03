@@ -475,10 +475,11 @@ or process boundary.
 `--workers <positive-integer>` is a typed input on all three native resolution
 binaries and on `remi resolution-survey`. Omission selects the minimum of
 `available_parallelism()`, the cgroup-v2 CPU quota, root count, and memory
-capacity. Memory capacity reserves 25% of the detected cgroup/host ceiling,
-caps the worker-pool budget at 8 GiB, and divides it by the retained Fedora
-single-pool allowance of 1.5 GiB (rounded above the measured 1,271,280 KiB
-one-worker root-walk RSS observation). Native binaries require a separate
+capacity. Memory capacity subtracts `memory.current` from every bounded
+cgroup-v2 ancestor (or uses host `MemAvailable`), reserves 25% of that remaining
+capacity, caps the worker-pool budget at 8 GiB, and divides it by the retained
+Fedora single-pool allowance of 1.5 GiB (rounded above the measured 1,271,280
+KiB one-worker root-walk RSS observation). Native binaries require a separate
 `--implementation-evidence <FILE>` destination. Its create-only schema-1 JSON
 records the selected worker count, every worker's pool/cache load milliseconds,
 the effective memory budget, and the measured allowance; those run-dependent

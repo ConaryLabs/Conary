@@ -596,16 +596,17 @@ fn detected_cpu_limit() -> Result<usize> {
 }
 
 pub(crate) fn resolution_walk_memory_budget_bytes() -> Result<u64> {
-    let detected = detected_memory_limit()?.unwrap_or(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES);
-    Ok(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES.min(detected.saturating_mul(3) / 4))
+    let available =
+        detected_available_memory()?.unwrap_or(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES);
+    Ok(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES.min(available.saturating_mul(3) / 4))
 }
 
-fn detected_memory_limit() -> Result<Option<u64>> {
+fn detected_available_memory() -> Result<Option<u64>> {
     let cgroup = unified_cgroup_path(Path::new(PROC_SELF_CGROUP))?
-        .map(|path| cgroup_memory_limit(Path::new(CGROUP_ROOT), &path))
+        .map(|path| cgroup_available_memory(Path::new(CGROUP_ROOT), &path))
         .transpose()?
         .flatten();
-    let host = host_memory_bytes(Path::new(PROC_MEMINFO))?;
+    let host = host_available_memory_bytes(Path::new(PROC_MEMINFO))?;
     Ok(match (cgroup, host) {
         (Some(cgroup), Some(host)) => Some(cgroup.min(host)),
         (Some(cgroup), None) => Some(cgroup),
@@ -649,23 +650,31 @@ fn cgroup_cpu_limit(root: &Path, relative: &Path) -> Result<Option<usize>> {
     Ok(limit)
 }
 
-fn cgroup_memory_limit(root: &Path, relative: &Path) -> Result<Option<u64>> {
+fn cgroup_available_memory(root: &Path, relative: &Path) -> Result<Option<u64>> {
     let mut current = root.join(relative);
-    let mut limit = None;
+    let mut available = None;
     loop {
         let path = current.join("memory.max");
         match std::fs::read_to_string(&path) {
             Ok(contents) if contents.trim() == "max" => {}
             Ok(contents) => {
-                let value = contents.trim().parse::<u64>().map_err(|error| {
+                let limit = contents.trim().parse::<u64>().map_err(|error| {
                     Error::ConfigError(format!("parse cgroup memory.max: {error}"))
                 })?;
-                if value == 0 {
+                if limit == 0 {
                     return Err(Error::ConfigError(
                         "cgroup memory.max must be positive or max".to_string(),
                     ));
                 }
-                limit = Some(limit.map_or(value, |existing: u64| existing.min(value)));
+                let usage = std::fs::read_to_string(current.join("memory.current"))?
+                    .trim()
+                    .parse::<u64>()
+                    .map_err(|error| {
+                        Error::ConfigError(format!("parse cgroup memory.current: {error}"))
+                    })?;
+                let remaining = limit.saturating_sub(usage);
+                available =
+                    Some(available.map_or(remaining, |existing: u64| existing.min(remaining)));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error.into()),
@@ -674,33 +683,38 @@ fn cgroup_memory_limit(root: &Path, relative: &Path) -> Result<Option<u64>> {
             break;
         }
     }
-    Ok(limit)
+    Ok(available)
 }
 
-fn host_memory_bytes(meminfo: &Path) -> Result<Option<u64>> {
+fn host_available_memory_bytes(meminfo: &Path) -> Result<Option<u64>> {
     let contents = match std::fs::read_to_string(meminfo) {
         Ok(contents) => contents,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    let Some(line) = contents.lines().find(|line| line.starts_with("MemTotal:")) else {
+    let Some(line) = contents
+        .lines()
+        .find(|line| line.starts_with("MemAvailable:"))
+    else {
         return Err(Error::ConfigError(
-            "/proc/meminfo omits MemTotal".to_string(),
+            "/proc/meminfo omits MemAvailable".to_string(),
         ));
     };
     let mut fields = line.split_whitespace();
     let _label = fields.next();
     let kib = fields
         .next()
-        .ok_or_else(|| Error::ConfigError("MemTotal omits its value".to_string()))?
+        .ok_or_else(|| Error::ConfigError("MemAvailable omits its value".to_string()))?
         .parse::<u64>()
-        .map_err(|error| Error::ConfigError(format!("parse MemTotal: {error}")))?;
+        .map_err(|error| Error::ConfigError(format!("parse MemAvailable: {error}")))?;
     if fields.next() != Some("kB") || fields.next().is_some() {
-        return Err(Error::ConfigError("MemTotal must use kB units".to_string()));
+        return Err(Error::ConfigError(
+            "MemAvailable must use kB units".to_string(),
+        ));
     }
     kib.checked_mul(1024)
         .map(Some)
-        .ok_or_else(|| Error::ConfigError("MemTotal bytes exceed u64".to_string()))
+        .ok_or_else(|| Error::ConfigError("MemAvailable bytes exceed u64".to_string()))
 }
 
 fn parse_cpu_max(value: &str) -> Result<Option<usize>> {
@@ -817,29 +831,42 @@ mod tests {
     }
 
     #[test]
-    fn takes_tightest_cgroup_memory_ancestor() {
+    fn takes_tightest_remaining_cgroup_memory_ancestor() {
         let directory = tempfile::tempdir().unwrap();
         let child = directory.path().join("user.slice/test.scope");
         std::fs::create_dir_all(&child).unwrap();
         std::fs::write(directory.path().join("memory.max"), "8589934592\n").unwrap();
+        std::fs::write(directory.path().join("memory.current"), "1073741824\n").unwrap();
         std::fs::write(
             directory.path().join("user.slice/memory.max"),
             "4294967296\n",
         )
         .unwrap();
+        std::fs::write(
+            directory.path().join("user.slice/memory.current"),
+            "2147483648\n",
+        )
+        .unwrap();
         std::fs::write(child.join("memory.max"), "max\n").unwrap();
         assert_eq!(
-            cgroup_memory_limit(directory.path(), Path::new("user.slice/test.scope")).unwrap(),
-            Some(4 * 1024 * 1024 * 1024)
+            cgroup_available_memory(directory.path(), Path::new("user.slice/test.scope")).unwrap(),
+            Some(2 * 1024 * 1024 * 1024)
         );
     }
 
     #[test]
-    fn parses_host_memory_kib() {
+    fn parses_host_available_memory_kib() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("meminfo");
-        std::fs::write(&file, "MemTotal:       16384 kB\nMemFree: 1 kB\n").unwrap();
-        assert_eq!(host_memory_bytes(&file).unwrap(), Some(16 * 1024 * 1024));
+        std::fs::write(
+            &file,
+            "MemTotal: 16384 kB\nMemFree: 1 kB\nMemAvailable: 4096 kB\n",
+        )
+        .unwrap();
+        assert_eq!(
+            host_available_memory_bytes(&file).unwrap(),
+            Some(4 * 1024 * 1024)
+        );
     }
 
     #[test]
