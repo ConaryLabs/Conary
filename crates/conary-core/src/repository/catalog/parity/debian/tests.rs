@@ -111,125 +111,6 @@ fn resolution_stanza(
     )
 }
 
-fn missing_frontier_conflict_stanzas() -> String {
-    [
-        resolution_stanza(
-            "conflict-frontier-root",
-            "1",
-            "amd64",
-            'a',
-            "Depends: conflict-frontier-helper\n",
-        ),
-        resolution_stanza(
-            "conflict-frontier-helper",
-            "1",
-            "amd64",
-            'b',
-            "Depends: absent-frontier-target (= 2)\nConflicts: conflict-frontier-root\n",
-        ),
-        resolution_stanza(
-            "breaks-frontier-root",
-            "1",
-            "amd64",
-            'c',
-            "Depends: breaks-frontier-helper\n",
-        ),
-        resolution_stanza(
-            "breaks-frontier-helper",
-            "1",
-            "amd64",
-            'd',
-            "Depends: absent-frontier-target (= 2)\nBreaks: breaks-frontier-root\n",
-        ),
-        resolution_stanza(
-            "helper-conflict-root",
-            "1",
-            "amd64",
-            'e',
-            "Depends: first-frontier-helper\n",
-        ),
-        resolution_stanza(
-            "first-frontier-helper",
-            "1",
-            "amd64",
-            'f',
-            "Depends: second-frontier-helper\nConflicts: second-frontier-helper\n",
-        ),
-        resolution_stanza(
-            "second-frontier-helper",
-            "1",
-            "amd64",
-            '7',
-            "Depends: absent-frontier-target (= 2)\n",
-        ),
-        resolution_stanza("healthy-frontier", "1", "amd64", '8', ""),
-    ]
-    .concat()
-}
-
-fn sibling_frontier_stanzas() -> String {
-    [
-        resolution_stanza(
-            "sibling-conflict-root",
-            "1",
-            "amd64",
-            'a',
-            "Depends: sibling-conflict-helper-a, sibling-conflict-helper-b\n",
-        ),
-        resolution_stanza(
-            "sibling-conflict-helper-a",
-            "1",
-            "amd64",
-            'b',
-            "Conflicts: sibling-conflict-helper-b\n",
-        ),
-        resolution_stanza(
-            "sibling-conflict-helper-b",
-            "1",
-            "amd64",
-            'c',
-            "Depends: absent-sibling-target (= 2)\n",
-        ),
-        resolution_stanza(
-            "sibling-breaks-root",
-            "1",
-            "amd64",
-            'd',
-            "Depends: sibling-breaks-helper-a, sibling-breaks-helper-b\n",
-        ),
-        resolution_stanza(
-            "sibling-breaks-helper-a",
-            "1",
-            "amd64",
-            'e',
-            "Breaks: sibling-breaks-helper-b\n",
-        ),
-        resolution_stanza(
-            "sibling-breaks-helper-b",
-            "1",
-            "amd64",
-            'f',
-            "Depends: absent-sibling-target (= 2)\n",
-        ),
-        resolution_stanza(
-            "sibling-missing-root",
-            "1",
-            "amd64",
-            '1',
-            "Depends: sibling-missing-helper-a, sibling-missing-helper-b\n",
-        ),
-        resolution_stanza("sibling-missing-helper-a", "1", "amd64", '2', ""),
-        resolution_stanza(
-            "sibling-missing-helper-b",
-            "1",
-            "amd64",
-            '3',
-            "Depends: absent-sibling-target (= 2)\n",
-        ),
-    ]
-    .concat()
-}
-
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
     let packages_bytes = fs::read(packages).unwrap();
     let parser_config = RepositoryParserConfig::Deb {
@@ -880,7 +761,7 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
 }
 
 #[test]
-fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
+fn resolution_producer_projects_direct_no_satisfying_candidates() {
     let directory = tempfile::tempdir().unwrap();
     let package_text = [
         resolution_stanza(
@@ -898,21 +779,6 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
             'c',
             "Depends: absent-target (= 2)\n",
         ),
-        resolution_stanza(
-            "transitive-root",
-            "1",
-            "amd64",
-            'd',
-            "Depends: broken-helper\n",
-        ),
-        resolution_stanza(
-            "broken-helper",
-            "1",
-            "amd64",
-            'e',
-            "Depends: transitive-target (= 2)\n",
-        ),
-        resolution_stanza("transitive-target", "3", "amd64", 'f', ""),
     ]
     .concat();
     let packages = vec![write_resolution_packages(
@@ -922,7 +788,7 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
     )];
     let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 6;
+    profile.counts.packages = 3;
     let package_output = directory.path().join("package-oracle");
     produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
         .unwrap();
@@ -937,7 +803,7 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
     )
     .unwrap();
 
-    assert_eq!(manifest.artifact.counts.unresolved_roots, 4);
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 2);
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
     let mut package_by_name = std::collections::BTreeMap::new();
     package_reader
@@ -968,19 +834,14 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
             requirement_group_sha256: native_requirement_group_sha256(group).unwrap(),
         }
     };
-    for (root, requiring, native_text) in [
-        ("version-root", "version-root", "version-target (= 2)"),
-        ("absent-root", "absent-root", "absent-target (= 2)"),
-        (
-            "transitive-root",
-            "broken-helper",
-            "transitive-target (= 2)",
-        ),
+    for (root, native_text) in [
+        ("version-root", "version-target (= 2)"),
+        ("absent-root", "absent-target (= 2)"),
     ] {
         assert_eq!(
             outcomes[&package_by_name[root].package_key_sha256],
             NativeResolutionOutcomeV1::Unresolved {
-                dependencies: vec![expected_dependency(requiring, native_text)]
+                dependencies: vec![expected_dependency(root, native_text)]
             }
         );
     }
@@ -993,136 +854,53 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
         &directory.path().join("survey.json"),
     )
     .unwrap();
-    assert_eq!(survey.counts.roots_walked, 6);
-    assert_eq!(survey.counts.unresolved_roots, 4);
+    assert_eq!(survey.counts.roots_walked, 3);
+    assert_eq!(survey.counts.unresolved_roots, 2);
     assert_eq!(survey.counts.failed_roots, 0);
 }
 
 #[test]
-fn apt_pkg_missing_frontier_rejects_conflicts_and_breaks() {
+fn transitive_no_candidate_remains_a_typed_native_solver_failure() {
     let directory = tempfile::tempdir().unwrap();
-    let source = write_resolution_packages(
-        directory.path(),
-        "ubuntu-main",
-        &missing_frontier_conflict_stanzas(),
-    );
+    let package_text = [
+        resolution_stanza(
+            "transitive-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: broken-helper\n",
+        ),
+        resolution_stanza(
+            "broken-helper",
+            "1",
+            "amd64",
+            'b',
+            "Depends: transitive-target (= 2)\n",
+        ),
+        resolution_stanza("transitive-target", "3", "amd64", 'c', ""),
+    ]
+    .concat();
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
     let staged = directory.path().join("member-0_Packages.zst");
-    fs::copy(source, &staged).unwrap();
+    fs::copy(&source, &staged).unwrap();
     let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
-
-    for root in [
-        "conflict-frontier-root",
-        "breaks-frontier-root",
-        "helper-conflict-root",
-    ] {
-        let error = apt.resolve(root, "1", "amd64").unwrap_err();
-        assert!(matches!(error, Error::ConflictError(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("conflict on the missing-requirement frontier"),
-            "{root} must retain its native conflict classification: {error}"
-        );
-    }
-}
-
-#[test]
-fn resolution_survey_records_missing_frontier_conflicts_as_failures() {
-    let directory = tempfile::tempdir().unwrap();
-    let packages = vec![write_resolution_packages(
-        directory.path(),
-        "ubuntu-main",
-        &missing_frontier_conflict_stanzas(),
-    )];
-    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
-    let mut profile = profile(&snapshots);
-    profile.counts.packages = 8;
-    let package_output = directory.path().join("package-oracle");
-    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
-        .unwrap();
-
-    let survey = produce_debian_resolution_survey(
-        &profile,
-        &inputs(&snapshots, &packages),
-        &package_output,
-        "amd64",
-        &directory.path().join("survey.json"),
-    )
-    .unwrap();
-    let failures = survey
-        .failures
-        .iter()
-        .map(|failure| (failure.name.as_str(), failure.error_kind.reason))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for root in [
-        "conflict-frontier-root",
-        "breaks-frontier-root",
-        "helper-conflict-root",
-    ] {
-        assert_eq!(
-            failures.get(root),
-            Some(&NativeResolutionSurveyErrorReasonV1::NativeSolverFailed),
-            "{root} must be a typed survey failure"
-        );
-    }
-
-    let error = produce_debian_resolution_oracle(
-        &profile,
-        &inputs(&snapshots, &packages),
-        &package_output,
-        "amd64",
-        &directory.path().join("strict-resolution"),
-    )
-    .unwrap_err();
+    let error = apt.resolve("transitive-root", "1", "amd64").unwrap_err();
     assert!(matches!(error, Error::ConflictError(_)));
-}
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "transitive failure must stay fatal without public solver3 reasons: {error}"
+    );
+    drop(apt);
 
-#[test]
-fn apt_pkg_missing_frontier_accumulates_sibling_selections() {
-    let directory = tempfile::tempdir().unwrap();
-    let source =
-        write_resolution_packages(directory.path(), "ubuntu-main", &sibling_frontier_stanzas());
-    let staged = directory.path().join("member-0_Packages.zst");
-    fs::copy(source, &staged).unwrap();
-    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
-
-    for root in ["sibling-conflict-root", "sibling-breaks-root"] {
-        let error = apt.resolve(root, "1", "amd64").unwrap_err();
-        assert!(matches!(error, Error::ConflictError(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("conflict on the missing-requirement frontier"),
-            "{root} must retain its native sibling-conflict classification: {error}"
-        );
-    }
-
-    let AptResolutionOutcome::Unresolved(missing) =
-        apt.resolve("sibling-missing-root", "1", "amd64").unwrap()
-    else {
-        panic!("non-conflicting siblings must retain the terminal missing edge");
-    };
-    assert_eq!(missing.len(), 1);
-    assert_eq!(missing[0].requiring.name, "sibling-missing-helper-b");
-    assert_eq!(missing[0].kind, AptRelationKind::Depends);
-    assert_eq!(missing[0].native_text, "absent-sibling-target (= 2)");
-}
-
-#[test]
-fn resolution_survey_records_sibling_frontier_conflicts_as_failures() {
-    let directory = tempfile::tempdir().unwrap();
-    let packages = vec![write_resolution_packages(
-        directory.path(),
-        "ubuntu-main",
-        &sibling_frontier_stanzas(),
-    )];
+    let packages = vec![source];
     let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 9;
+    profile.counts.packages = 3;
     let package_output = directory.path().join("package-oracle");
     produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
         .unwrap();
-
     let survey = produce_debian_resolution_survey(
         &profile,
         &inputs(&snapshots, &packages),
@@ -1131,19 +909,10 @@ fn resolution_survey_records_sibling_frontier_conflicts_as_failures() {
         &directory.path().join("survey.json"),
     )
     .unwrap();
-    let failures = survey
-        .failures
-        .iter()
-        .map(|failure| (failure.name.as_str(), failure.error_kind.reason))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    for root in ["sibling-conflict-root", "sibling-breaks-root"] {
-        assert_eq!(
-            failures.get(root),
-            Some(&NativeResolutionSurveyErrorReasonV1::NativeSolverFailed),
-            "{root} must be a typed survey failure"
-        );
-    }
-    assert!(!failures.contains_key("sibling-missing-root"));
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "transitive-root"
+            && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+    }));
 }
 
 #[test]
