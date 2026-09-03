@@ -956,7 +956,7 @@ fn resolution_producer_projects_existing_name_with_only_wrong_version() {
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(
         &profile,
-        &inputs(&snapshots, &[metadata.clone()]),
+        &inputs(&snapshots, std::slice::from_ref(&metadata)),
         &package_output,
     )
     .unwrap();
