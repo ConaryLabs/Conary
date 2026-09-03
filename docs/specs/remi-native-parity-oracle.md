@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 33
+revision: 34
 status: active
 ---
 
@@ -497,8 +497,9 @@ before restarting. It polls `/health/ready` to a bounded successful result
 regardless of recorded findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport and compares every authority
-binding with its authenticated input verification. Neither side has promotion,
-activation, or publication authority.
+binding with its authenticated input verification. Its per-file admission limit
+is the bounded transport size, not a smaller threshold unrelated to producer
+output. Neither side has promotion, activation, or publication authority.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact

@@ -388,9 +388,9 @@ jobs:
           {
             echo "### Production resolution survey"
             echo
-            echo "- oracle run: `$ORACLE_RUN_ID`"
-            echo "- GitHub artifact: `$ARTIFACT_ID`"
-            echo "- GitHub artifact digest: `$ARTIFACT_DIGEST`"
+            echo "- oracle run: \`$ORACLE_RUN_ID\`"
+            echo "- GitHub artifact: \`$ARTIFACT_ID\`"
+            echo "- GitHub artifact digest: \`$ARTIFACT_DIGEST\`"
             jq -r '
               "- roots walked: `\(.counts.roots_walked)`\n" +
               "- candidate failures: `\(.counts.candidate_failures)`\n" +

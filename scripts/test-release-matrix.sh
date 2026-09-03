@@ -2003,6 +2003,32 @@ test_check_release_matrix_rejects_unbound_resolution_survey_output() {
         "resolution survey fixed helper, fail-closed SSH, and independent output verification"
 }
 
+test_check_release_matrix_rejects_executable_resolution_survey_summary() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            echo "- oracle run: \`$ORACLE_RUN_ID\`"' \
+        '            echo "- oracle run: `$ORACLE_RUN_ID`"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey escaped oracle run summary binding"
+}
+
+test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            data = read_tar_member(archive, member, metadata.st_size)' \
+        '            data = read_tar_member(archive, member, 96 * 1024 * 1024)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey file admission derives from the bounded transport size"
+}
+
 test_check_release_matrix_rejects_mutating_resolution_survey() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3212,6 +3238,8 @@ main() {
         test_check_release_matrix_requires_pinned_resolution_survey_host
         test_check_release_matrix_rejects_live_resolution_survey_host_discovery
         test_check_release_matrix_rejects_unbound_resolution_survey_output
+        test_check_release_matrix_rejects_executable_resolution_survey_summary
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
         test_check_release_matrix_rejects_mutating_resolution_survey
         test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_unserialized_site_deployment

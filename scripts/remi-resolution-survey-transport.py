@@ -27,7 +27,6 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
-MAX_SURVEY_FILE_BYTES = 96 * 1024 * 1024
 MAX_SURVEY_TRANSPORT_BYTES = 640 * 1024 * 1024
 
 
@@ -877,7 +876,7 @@ def verify_output(args: argparse.Namespace) -> None:
             member = members.get(name)
             if member is None or member.size != expected_size:
                 fail(f"survey file {name} is missing or changed size")
-            data = read_tar_member(archive, member, MAX_SURVEY_FILE_BYTES)
+            data = read_tar_member(archive, member, metadata.st_size)
             if sha256_bytes(data) != expected_sha256:
                 fail(f"survey file {name} changed digest")
             file_bytes[name] = data
