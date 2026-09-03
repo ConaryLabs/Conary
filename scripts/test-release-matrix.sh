@@ -309,6 +309,8 @@ create_release_policy_fixture() {
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
         "$repo/deploy/remi-postdeployment-fencing.jq"
+    cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" \
+        "$repo/deploy/remi-deploy-helper.sh"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
@@ -2242,6 +2244,19 @@ test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() 
         "resolution survey arbitrary aggregate output limit"
 }
 
+test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    local listing="${manifest}.listing"' \
+        $'    local transport_size\n    transport_size="$(stat -c \'%s\' "$transport")"\n    (( transport_size <= 32 * 1024 * 1024 * 1024 )) || die "oracle transport too large"\n\n    local listing="${manifest}.listing"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey arbitrary aggregate oracle input limit"
+}
+
 test_check_release_matrix_rejects_mutating_resolution_survey() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3510,6 +3525,7 @@ main() {
         test_check_release_matrix_rejects_executable_resolution_survey_summary
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey
         test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection

@@ -822,11 +822,6 @@ survey_validate_oracle_transport() {
     local transport="$3"
     local manifest="$4"
 
-    local transport_size
-    transport_size="$(stat -c '%s' "$transport")"
-    (( transport_size > 0 && transport_size <= 32 * 1024 * 1024 * 1024 )) ||
-        die "resolution-survey oracle transport size is outside its bounded contract"
-
     local listing="${manifest}.listing"
     if ! tar -tf "$transport" >"$listing"; then
         die "resolution-survey oracle transport is not an uncompressed tar archive"

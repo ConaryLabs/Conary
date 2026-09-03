@@ -1291,6 +1291,21 @@ test_resolution_survey_findings_restart_and_succeed() {
     ' "$verification" >/dev/null
 }
 
+test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap() {
+    local survey_id="survey-large-input-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local transport="/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    truncate -s $((32 * 1024 * 1024 * 1024 + 10240)) "$transport"
+
+    run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "$transport" >/dev/null
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "manifest-bound sparse survey transport did not complete in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+}
+
 test_resolution_survey_failure_sanitizes_diagnostic() {
     local survey_id="survey-failure-$$"
     local export_id="slice6-export-$$"
@@ -1950,6 +1965,7 @@ main() {
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
     test_resolution_survey_findings_restart_and_succeed
+    test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap
     test_resolution_survey_failure_sanitizes_diagnostic
     test_resolution_survey_inspection_failure_sanitizes_diagnostic
     test_resolution_survey_preflight_failure_cleans_staging

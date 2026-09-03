@@ -22,6 +22,7 @@ native_oracle_lane_assembler="scripts/assemble-native-oracle-lanes.py"
 native_oracle_lane_selector="scripts/native-oracle-lane-selection.py"
 native_oracle_producer_verifier="scripts/verify-native-oracle-producer.py"
 resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
+remi_deploy_helper="deploy/remi-deploy-helper.sh"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
@@ -529,6 +530,7 @@ require_match "$resolution_survey_transport" 'validate_lane\([\s\S]*schema_versi
 require_match "$resolution_survey_transport" 'reject_duplicate_key[\s\S]*tarfile\.open\(args\.transport, mode="r:"\)[\s\S]*survey transport repeats member[\s\S]*canonical_json\(manifest\) != manifest_bytes[\s\S]*changed digest[\s\S]*forbid_private_paths' 'resolution survey strict sanitized output transport verification'
 require_match "$resolution_survey_transport" 'read_tar_member\(archive, member, metadata\.st_size\)' 'resolution survey file admission derives from the actual transport extent'
 forbid_match "$resolution_survey_transport" 'MAX_SURVEY_TRANSPORT_BYTES|plain_file\(args\.transport, "survey transport",' 'resolution survey arbitrary aggregate output limit'
+forbid_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\) \{[\s\S]{0,500}transport_size' 'resolution survey arbitrary aggregate oracle input limit'
 require_match "$resolution_survey_transport" 'validate_input_evidence\([\s\S]*deployment != input_deployment[\s\S]*survey binding differs from authenticated input[\s\S]*--input-evidence' 'resolution survey output verifier exact authenticated input bindings'
 require_match "$resolution_survey_transport" 'validate_export_operator\([\s\S]*native-oracle-export-operator-v1\.json[\s\S]*workflow_commit_sha[\s\S]*export_run\["head_sha"\][\s\S]*protected-pinned-known-hosts-v1[\s\S]*attestation_sha256' 'resolution survey requires exact pinned export operator evidence'
 require_match "$native_oracle_lane_producer" 'producer_binary[\s\S]*must be a regular file, never a symlink[\s\S]*sha256_file[\s\S]*"schema_version": 3[\s\S]*"producer_commit"[\s\S]*"producer_binaries"' 'native-oracle lane exact producer commit and binary digest binding'
