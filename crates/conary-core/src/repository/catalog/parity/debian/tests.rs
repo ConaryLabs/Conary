@@ -151,6 +151,40 @@ fn versioned_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
     (directory, apt)
 }
 
+fn failing_virtual_provider_packages() -> String {
+    [
+        resolution_stanza(
+            "virtual-transitive-root",
+            "1",
+            "amd64",
+            'e',
+            "Depends: broken-virt (= 2), absent-transitive-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "broken-virtual-provider",
+            "1",
+            "amd64",
+            'f',
+            "Provides: broken-virt (= 2)\nDepends: absent-behind-provider (= 4)\n",
+        ),
+        resolution_stanza(
+            "virtual-conflict-root",
+            "1",
+            "amd64",
+            '1',
+            "Depends: conflicting-virt (= 2), absent-conflict-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "conflicting-virtual-provider",
+            "1",
+            "amd64",
+            '2',
+            "Provides: conflicting-virt (= 2)\nConflicts: virtual-conflict-root\n",
+        ),
+    ]
+    .concat()
+}
+
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
     let packages_bytes = fs::read(packages).unwrap();
     let parser_config = RepositoryParserConfig::Deb {
@@ -936,6 +970,86 @@ fn apt_pkg_projects_mismatched_versioned_virtual_provider_as_missing() {
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].requiring.name, "virtual-wrong-version-root");
     assert_eq!(missing[0].native_text, "virt (= 3)");
+}
+
+#[test]
+fn apt_pkg_keeps_failure_behind_virtual_provider_fatal() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("virtual-transitive-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a broken virtual provider must keep the native failure fatal: {error}"
+    );
+}
+
+#[test]
+fn apt_pkg_keeps_virtual_provider_conflict_fatal() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("virtual-conflict-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a conflicting virtual provider must keep the native failure fatal: {error}"
+    );
+}
+
+#[test]
+fn resolution_survey_records_virtual_provider_failures_as_native_solver_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    for root in ["virtual-transitive-root", "virtual-conflict-root"] {
+        assert!(survey.failures.iter().any(|failure| {
+            failure.name == root
+                && failure.error_kind.reason
+                    == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+        }));
+    }
 }
 
 #[test]

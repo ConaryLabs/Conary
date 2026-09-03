@@ -618,6 +618,74 @@ bool collect_resolved_closure(ResolutionHandle &handle, EvidenceDepCache &depend
     return true;
 }
 
+bool broken_hard_group_has_target(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
+                                  pkgCache::VerIterator const &version) {
+    for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+        pkgCache::DepIterator start;
+        pkgCache::DepIterator end;
+        cursor.GlobOr(start, end);
+        cursor = end;
+        ++cursor;
+        if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
+            continue;
+        }
+        bool const satisfied =
+            (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+        if (satisfied) {
+            continue;
+        }
+        for (pkgCache::DepIterator atom = start;; ++atom) {
+            std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+            for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                pkgCache::VerIterator target(*handle.cache, targets[index]);
+                if (handle.policy->GetPriority(target) > 0) {
+                    return true;
+                }
+            }
+            if (atom == end) {
+                break;
+            }
+        }
+    }
+    return false;
+}
+
+bool target_is_installable_with_root(ResolutionHandle &handle,
+                                     pkgCache::VerIterator const &root,
+                                     pkgCache::VerIterator const &target, bool &installable) {
+    // A failed solver3 run rolls its selections back. Ask apt's marker in an isolated cache
+    // whether this exact AllTargets() version survives beside the exact root. Missing-only root
+    // groups are evidence; any remaining target-backed break keeps the solver failure fatal.
+    EvidenceDepCache probe(handle.cache.get(), handle.policy.get());
+    if (!probe.Init(nullptr)) {
+        handle.error = apt_errors();
+        return false;
+    }
+    probe.SetCandidateVersion(target);
+    if (!probe.MarkInstall(target.ParentPkg(), true, 0, false, false)) {
+        installable = false;
+        return true;
+    }
+    pkgDepCache::StateCache &target_state = probe[target.ParentPkg()];
+    if (!target_state.Install() || target_state.InstBroken() ||
+        target_state.InstVerIter(*handle.cache) != target) {
+        installable = false;
+        return true;
+    }
+
+    probe.SetCandidateVersion(root);
+    probe.allow_exact_root(root.ParentPkg());
+    if (!probe.MarkInstall(root.ParentPkg(), true, 0, true, false)) {
+        installable = false;
+        return true;
+    }
+    pkgDepCache::StateCache &selected_state = probe[target.ParentPkg()];
+    installable = selected_state.Install() && !selected_state.InstBroken() &&
+                  selected_state.InstVerIter(*handle.cache) == target &&
+                  !broken_hard_group_has_target(handle, probe, root);
+    return true;
+}
+
 bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
                                  pkgCache::VerIterator const &root) {
     pkgDepCache::StateCache &state = dependency_cache[root.ParentPkg()];
@@ -666,15 +734,19 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
             continue;
         }
         bool has_satisfying_candidate = false;
-        bool has_direct_satisfying_candidate = false;
+        bool has_installable_candidate = false;
         for (pkgCache::DepIterator atom = start;; ++atom) {
             std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
             for (std::size_t index = 0; targets[index] != nullptr; ++index) {
                 pkgCache::VerIterator target(*handle.cache, targets[index]);
                 if (handle.policy->GetPriority(target) > 0) {
                     has_satisfying_candidate = true;
-                    if (target.ParentPkg() == atom.TargetPkg()) {
-                        has_direct_satisfying_candidate = true;
+                    bool installable = false;
+                    if (!target_is_installable_with_root(handle, root, target, installable)) {
+                        return false;
+                    }
+                    if (installable) {
+                        has_installable_candidate = true;
                     }
                 }
             }
@@ -683,7 +755,7 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
             }
         }
         if (has_satisfying_candidate) {
-            if (has_direct_satisfying_candidate) {
+            if (!has_installable_candidate) {
                 has_unattributed_failure = true;
             }
             continue;
@@ -731,7 +803,7 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
     }
     dependency_cache.SetCandidateVersion(root);
     dependency_cache.allow_exact_root(root.ParentPkg());
-    bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), false, 0, true, false);
+    bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), true, 0, true, false);
     dependency_cache.MarkProtected(root.ParentPkg());
     // Apt's "3.0" EDSP branch is in-process. Its only non-conflict false result is the
     // configured solver timeout; exceptions cross the outer C++ error boundary.
