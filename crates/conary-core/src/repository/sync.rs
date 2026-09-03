@@ -475,8 +475,8 @@ fn json_repository_sync_snapshot(
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let trusted_advisory_source =
-        trusted_json_advisory_source(repo, metadata.security_advisory_source.as_ref())?;
+    let advisory_source =
+        locally_authorized_json_advisory_source(repo, metadata.security_advisory_source.as_ref())?;
 
     let mut packages = Vec::new();
     let mut delta_rows = Vec::new();
@@ -516,9 +516,9 @@ fn json_repository_sync_snapshot(
         };
         repo_pkg.description = pkg_meta.description;
         if let (Some(source), Some(advisory)) =
-            (trusted_advisory_source, pkg_meta.security_advisory.as_ref())
+            (advisory_source, pkg_meta.security_advisory.as_ref())
         {
-            let normalized = apply_trusted_package_security_advisory(
+            let normalized = apply_locally_authorized_package_security_advisory(
                 &mut repo_pkg,
                 advisory,
                 &source.name,
@@ -586,17 +586,20 @@ async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositoryS
     json_repository_sync_snapshot(repo, metadata)
 }
 
-fn trusted_json_advisory_source<'a>(
+fn locally_authorized_json_advisory_source<'a>(
     repo: &Repository,
     source: Option<&'a SecurityAdvisorySourceMetadata>,
 ) -> Result<Option<&'a SecurityAdvisorySourceMetadata>> {
-    if !repo.security_advisory_support.is_supported() {
+    if !repo
+        .security_advisory_support
+        .authorizes_security_advisories()
+    {
         return Ok(None);
     }
 
     let source = source.ok_or_else(|| {
         Error::ConfigError(format!(
-            "Repository '{}' is marked as supported for security advisories but did not publish a trusted security advisory source",
+            "Repository '{}' is locally authorized for security advisories but did not publish a security advisory source",
             repo.name
         ))
     })?;
@@ -608,17 +611,10 @@ fn trusted_json_advisory_source<'a>(
         )));
     }
 
-    if !source.trust.eq_ignore_ascii_case("trusted") {
-        return Err(Error::ConfigError(format!(
-            "Repository '{}' published security advisory source '{}' with unsupported trust '{}'",
-            repo.name, source.name, source.trust
-        )));
-    }
-
     Ok(Some(source))
 }
 
-fn apply_trusted_package_security_advisory(
+fn apply_locally_authorized_package_security_advisory(
     package: &mut RepositoryPackage,
     advisory: &PackageSecurityAdvisoryMetadata,
     default_source: &str,
@@ -632,18 +628,11 @@ fn apply_trusted_package_security_advisory(
         )));
     }
 
-    let source_trust = advisory
+    let source_trust_claim = advisory
         .source_trust
         .as_deref()
         .unwrap_or(default_source_trust)
-        .trim()
-        .to_ascii_lowercase();
-    if source_trust != "trusted" {
-        return Err(Error::ConfigError(format!(
-            "Security advisory '{}' for package '{}' is not from a trusted source",
-            advisory.id, package.name
-        )));
-    }
+        .trim();
 
     if advisory.id.trim().is_empty() {
         return Err(Error::ConfigError(format!(
@@ -685,7 +674,7 @@ fn apply_trusted_package_security_advisory(
     Ok(serde_json::json!({
         "id": advisory.id.trim(),
         "source": source,
-        "source_trust": source_trust,
+        "source_trust": source_trust_claim,
         "severity": severity,
         "cves": cves,
         "fixed_version": fixed_version,

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-31
-revision: 61
-summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier selection and security, generation GC, and service boundaries
+last_updated: 2026-09-03
+revision: 62
+summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source and advisory authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier selection and security, generation GC, and service boundaries
 ---
 
 # Conary Architecture
@@ -706,7 +706,12 @@ The operational schema is split by ownership under
 `crates/conary-core/src/db/current_schema/sql/`: local package-manager state,
 repository/service state, and Remi conversion/administration state.
 
-Schema revision 55 is a rebuild-only hard cut. Remi's operational database
+Schema revision 56 is a rebuild-only hard cut. Repository
+`security_advisory_support = supported` now means explicit operator
+authorization to classify feed advisories as security updates; feed-authored
+`trust` and `source_trust` strings remain diagnostic only. Revision 55
+repository values predate that authority meaning and are rejected as typed
+rebuild state rather than inherited. Remi's operational database
 stores immutable-catalog resource metadata, ordered profile members, fenced
 active pointers, refresh runs, runtime sessions, and exact work/reader/
 conversion pins. Activated native package, provide, and requirement authority
@@ -788,7 +793,7 @@ portable fallback, and a full copy only when both faster providers are
 unavailable. Normal generation publication instead records a SQLite session
 changeset from before the package transaction through terminal publication.
 
-Schema revision 55 retains the immutable Remi source/profile resource graph and
+Schema revision 56 retains the immutable Remi source/profile resource graph and
 exact input-revision conversion pins, removes the false one-artifact-to-one-
 manifest constraint, binds each exact catalog to its host-local physical
 attestation, and keeps check/change/validation/publication facts separate.

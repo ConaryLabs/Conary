@@ -368,7 +368,7 @@ fn native_sync_does_not_rewrite_exact_conversion_revision_identity() {
 }
 
 #[test]
-fn test_json_contract_persists_trusted_advisory_metadata() {
+fn json_contract_local_policy_authorizes_advisory_metadata() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
 
@@ -385,7 +385,7 @@ fn test_json_contract_persists_trusted_advisory_metadata() {
         "version": "1",
         "security_advisory_source": {
             "name": "conary-json",
-            "trust": "trusted"
+            "trust": "feed-self-asserted"
         },
         "packages": [
             {
@@ -440,8 +440,55 @@ fn test_json_contract_persists_trusted_advisory_metadata() {
     );
     assert_eq!(
         package_metadata["security_advisory"]["source_trust"],
-        "trusted"
+        "feed-self-asserted"
     );
+}
+
+#[test]
+fn json_contract_feed_trust_claim_does_not_authorize_unmarked_repository() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+
+    let mut repo = Repository::new(
+        "untrusted-security-feed".to_string(),
+        "https://example.com/untrusted".to_string(),
+    );
+    repo.insert(&conn).unwrap();
+    let repo_id = repo.id.unwrap();
+
+    let metadata: JsonRepositoryMetadata = serde_json::from_value(json!({
+        "name": "untrusted-security-feed",
+        "version": "1",
+        "security_advisory_source": {
+            "name": "self-declared",
+            "trust": "trusted"
+        },
+        "packages": [{
+            "name": "openssl",
+            "version": "3.2.1-1.fc44",
+            "version_scheme": "rpm",
+            "architecture": "x86_64",
+            "description": "TLS toolkit",
+            "checksum": "sha256:openssl-fixed",
+            "size": 4096,
+            "download_url": "https://example.com/untrusted/openssl.ccs",
+            "requirements": [],
+            "security_advisory": {
+                "id": "SELF-2026-0001",
+                "source_trust": "trusted",
+                "fixed_version": "3.2.1-1.fc44"
+            }
+        }]
+    }))
+    .unwrap();
+
+    let snapshot = json_repository_sync_snapshot(&repo, metadata).unwrap();
+    persist_repository_sync_snapshot(&conn, &mut repo, snapshot).unwrap();
+
+    let stored = RepositoryPackage::find_by_repository(&conn, repo_id).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert!(!stored[0].is_security_update);
+    assert!(stored[0].metadata.is_none());
 }
 
 #[test]
@@ -502,7 +549,7 @@ fn json_contract_keeps_source_version_and_ccs_release_separate() {
 }
 
 #[test]
-fn test_json_contract_supported_repo_requires_trusted_advisory_source() {
+fn json_contract_authorized_repo_requires_advisory_source() {
     let mut repo = Repository::new(
         "fedora-security".to_string(),
         "https://example.com/fedora".to_string(),
@@ -539,7 +586,7 @@ fn test_json_contract_supported_repo_requires_trusted_advisory_source() {
     assert!(
         error
             .to_string()
-            .contains("trusted security advisory source"),
+            .contains("security advisory source"),
         "{error}"
     );
 }

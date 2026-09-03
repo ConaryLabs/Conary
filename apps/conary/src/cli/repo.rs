@@ -286,7 +286,7 @@ pub struct RepoAddArgs {
     )]
     pub pin_snapshot_sha256: Option<String>,
 
-    /// Whether this repository publishes security-advisory metadata
+    /// Whether the operator authorizes this repository's security advisories
     #[arg(long, value_enum, default_value_t = CliSecurityAdvisorySupport::Unknown)]
     pub security_advisories: CliSecurityAdvisorySupport,
 }
