@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 46
+revision: 47
 status: active
 ---
 
@@ -594,8 +594,11 @@ than indexing the complete candidate population. Remi returns bounded
 per-profile summaries to the helper, including the comparison candidate
 manifest digest, so transport construction never reparses a whole survey with
 `jq`. The workflow reader reconstructs the exact strict candidate root stream
-and manifest from streamed outcomes and the authenticated package manifest;
-the comparison digest must match even for zero mismatches. Raw deployment-inspection
+and manifest from streamed outcomes and the authenticated package manifest,
+and it requires those zero-failure roots and identities to cover the mapped
+authenticated package rows exactly. Nested closure and dependency vectors are
+streamed element by element, and copied survey files are discarded after each
+profile; the comparison digest must match even for zero mismatches. Raw deployment-inspection
 and survey stderr remain confined to
 mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
 and are never emitted through SSH or
