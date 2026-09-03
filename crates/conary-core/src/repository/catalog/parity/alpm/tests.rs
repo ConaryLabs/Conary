@@ -10,11 +10,10 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME,
     NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
-    NativeParityOracleWriter, NativeResolutionOutcomeV1, NativeResolutionSurveyAlpmResultV1,
-    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    NativeParityOracleWriter, NativeResolutionOutcomeV1, NativeUnresolvedDependencyV1,
+    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
     write_native_parity_oracle_manifest,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
@@ -732,7 +731,7 @@ fn resolution_producer_excludes_non_native_roots_and_types_conflicting_closure()
     .unwrap();
 
     let mismatched_output = directory.path().join("wrong-architecture");
-    let manifest = produce_alpm_resolution_oracle(
+    let error = produce_alpm_resolution_oracle(
         &wrong_profile,
         &inputs(&snapshots, &databases),
         &package_output,
@@ -754,7 +753,7 @@ fn resolution_producer_excludes_non_native_roots_and_types_conflicting_closure()
         &package_output,
     )
     .unwrap();
-    let error = produce_alpm_resolution_oracle(
+    let manifest = produce_alpm_resolution_oracle(
         &conflict_profile,
         &inputs(&snapshots, &databases),
         &package_output,
