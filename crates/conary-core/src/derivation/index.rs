@@ -7,7 +7,8 @@
 //! the build and reuse the stored output.
 
 use crate::error::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, Row};
+use std::io;
 
 /// A completed derivation record stored in the index.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +38,41 @@ pub struct DerivationRecord {
     pub provenance_cas_hash: Option<String>,
     /// Reproducibility status: None=unknown, Some(true)=reproducible, Some(false)=not.
     pub reproducible: Option<bool>,
+}
+
+impl DerivationRecord {
+    fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
+        let output_hash: String = row.get(1)?;
+        if output_hash.len() != 64
+            || !output_hash
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                1,
+                rusqlite::types::Type::Text,
+                Box::new(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "persisted derivation output_hash must be a 64-character lowercase hex digest",
+                )),
+            ));
+        }
+
+        Ok(Self {
+            derivation_id: row.get(0)?,
+            output_hash,
+            package_name: row.get(2)?,
+            package_version: row.get(3)?,
+            manifest_cas_hash: row.get(4)?,
+            stage: row.get(5)?,
+            build_env_hash: row.get(6)?,
+            built_at: row.get(7)?,
+            build_duration_secs: row.get::<_, i64>(8)? as u64,
+            trust_level: row.get(9)?,
+            provenance_cas_hash: row.get(10)?,
+            reproducible: row.get(11)?,
+        })
+    }
 }
 
 /// Human-readable name for a trust level value.
@@ -83,22 +119,7 @@ impl<'a> DerivationIndex<'a> {
              WHERE derivation_id = ?1",
         )?;
 
-        let result = stmt.query_row([derivation_id], |row| {
-            Ok(DerivationRecord {
-                derivation_id: row.get(0)?,
-                output_hash: row.get(1)?,
-                package_name: row.get(2)?,
-                package_version: row.get(3)?,
-                manifest_cas_hash: row.get(4)?,
-                stage: row.get(5)?,
-                build_env_hash: row.get(6)?,
-                built_at: row.get(7)?,
-                build_duration_secs: row.get::<_, i64>(8)? as u64,
-                trust_level: row.get(9)?,
-                provenance_cas_hash: row.get(10)?,
-                reproducible: row.get(11)?,
-            })
-        });
+        let result = stmt.query_row([derivation_id], DerivationRecord::from_row);
 
         match result {
             Ok(record) => Ok(Some(record)),
@@ -147,22 +168,7 @@ impl<'a> DerivationIndex<'a> {
              ORDER BY built_at DESC",
         )?;
 
-        let rows = stmt.query_map([name], |row| {
-            Ok(DerivationRecord {
-                derivation_id: row.get(0)?,
-                output_hash: row.get(1)?,
-                package_name: row.get(2)?,
-                package_version: row.get(3)?,
-                manifest_cas_hash: row.get(4)?,
-                stage: row.get(5)?,
-                build_env_hash: row.get(6)?,
-                built_at: row.get(7)?,
-                build_duration_secs: row.get::<_, i64>(8)? as u64,
-                trust_level: row.get(9)?,
-                provenance_cas_hash: row.get(10)?,
-                reproducible: row.get(11)?,
-            })
-        })?;
+        let rows = stmt.query_map([name], DerivationRecord::from_row)?;
 
         let mut records = Vec::new();
         for row in rows {
@@ -227,7 +233,7 @@ mod tests {
     fn sample_record(derivation_id: &str, package_name: &str) -> DerivationRecord {
         DerivationRecord {
             derivation_id: derivation_id.to_owned(),
-            output_hash: format!("out_{derivation_id}"),
+            output_hash: crate::hash::sha256(derivation_id.as_bytes()),
             package_name: package_name.to_owned(),
             package_version: "1.0.0".to_owned(),
             manifest_cas_hash: format!("manifest_{derivation_id}"),
@@ -304,12 +310,12 @@ mod tests {
         let mut record = sample_record("drv_dup", "gcc");
         idx.insert(&record).unwrap();
 
-        record.output_hash = "new_output_hash".to_owned();
+        record.output_hash = crate::hash::sha256(b"new output");
         record.build_duration_secs = 99;
         idx.insert(&record).unwrap();
 
         let found = idx.lookup("drv_dup").unwrap().expect("should exist");
-        assert_eq!(found.output_hash, "new_output_hash");
+        assert_eq!(found.output_hash, crate::hash::sha256(b"new output"));
         assert_eq!(found.build_duration_secs, 99);
     }
 
@@ -328,7 +334,7 @@ mod tests {
 
         let record = DerivationRecord {
             derivation_id: "drv_null".to_owned(),
-            output_hash: "out_null".to_owned(),
+            output_hash: crate::hash::sha256(b"null output"),
             package_name: "test-pkg".to_owned(),
             package_version: "2.0.0".to_owned(),
             manifest_cas_hash: "manifest_null".to_owned(),
@@ -345,6 +351,39 @@ mod tests {
         let found = idx.lookup("drv_null").unwrap().expect("should exist");
         assert_eq!(found.stage, None);
         assert_eq!(found.build_env_hash, None);
+    }
+
+    #[test]
+    fn lookup_rejects_malformed_persisted_output_hashes() {
+        let malformed = [
+            "short".to_string(),
+            "A".repeat(64),
+            format!("{}é", "a".repeat(62)),
+        ];
+
+        for (index, output_hash) in malformed.into_iter().enumerate() {
+            let conn = setup();
+            let derivation_id = format!("drv_bad_{index}");
+            conn.execute(
+                "INSERT INTO derivation_index
+                    (derivation_id, output_hash, package_name, package_version,
+                     manifest_cas_hash, built_at, build_duration_secs)
+                 VALUES (?1, ?2, 'bad', '1', 'manifest', '2026-09-03T00:00:00Z', 1)",
+                rusqlite::params![derivation_id, output_hash],
+            )
+            .unwrap();
+
+            let error = DerivationIndex::new(&conn)
+                .lookup(&derivation_id)
+                .expect_err("malformed persisted output hash must fail row decoding");
+
+            assert!(
+                error.to_string().contains(
+                    "persisted derivation output_hash must be a 64-character lowercase hex digest"
+                ),
+                "{error}"
+            );
+        }
     }
 
     #[test]

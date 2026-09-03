@@ -335,7 +335,10 @@ impl DerivationExecutor {
             info!(
                 "cache hit for {} (output_hash={})",
                 derivation_id,
-                &record.output_hash[..16],
+                record
+                    .output_hash
+                    .get(..16)
+                    .unwrap_or(record.output_hash.as_str()),
             );
             return Ok(ExecutionResult::CacheHit {
                 derivation_id,
@@ -626,9 +629,10 @@ install = "make install"
         let expected_id = DerivationId::compute(&inputs).unwrap();
 
         // Pre-insert a record so execute() finds it.
+        let output_hash = "a".repeat(64);
         let record = DerivationRecord {
             derivation_id: expected_id.as_str().to_owned(),
-            output_hash: "out_hash_123".to_owned(),
+            output_hash: output_hash.clone(),
             package_name: "glibc".to_owned(),
             package_version: "2.39".to_owned(),
             manifest_cas_hash: "manifest_hash_456".to_owned(),
@@ -666,7 +670,7 @@ install = "make install"
                 record: hit_record,
             } => {
                 assert_eq!(derivation_id, expected_id);
-                assert_eq!(hit_record.output_hash, "out_hash_123");
+                assert_eq!(hit_record.output_hash, output_hash);
                 assert_eq!(hit_record.package_name, "glibc");
                 assert_eq!(hit_record.manifest_cas_hash, "manifest_hash_456");
             }
