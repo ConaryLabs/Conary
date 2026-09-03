@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 89
+revision: 90
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -328,7 +328,11 @@ workflow.
   bytes to equal the helper at its freshly fetched protected `origin/main`, and
   requires the complete workflow revision itself to equal that current main
   commit. After staging the bytes it repeats the main fetch, exact-commit check,
-  and digest equality immediately before the root `install-helper` action.
+  and digest equality immediately before the root `install-helper` action. That
+  action independently resolves current protected main through GitHub's HTTPS
+  API, downloads the exact commit's helper from the protected repository, and
+  installs only those root-fetched bytes after matching the requested digest.
+  The SSH caller's staged file is comparison input, never installation authority.
   Historical reruns and any concurrent main advance therefore fail before host
   mutation instead of using stale workflow, verifier, or helper authority. The
   workflow then calls the new action. The

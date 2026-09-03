@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 51
+revision: 52
 status: active
 ---
 
@@ -563,7 +563,10 @@ helper from its exact protected `github.workflow_sha` to be byte-identical to
 the helper at its freshly fetched protected `origin/main` and requires the
 complete workflow revision to equal that exact current-main commit. It stages
 the helper, refetches protected main, repeats both equalities immediately before the existing
-`install-helper` action, then calls the three-argument
+`install-helper` action. The root helper independently resolves protected main
+through GitHub's HTTPS API, fetches that exact commit's helper, matches its
+digest, and installs those root-fetched bytes rather than caller-staged code.
+The workflow then calls the three-argument
 `conary-remi-deploy survey-resolution` action with the survey identity, export
 identity, and typed oracle transport path. The root-owned helper reads the exact
 candidate revisions from the stopped deployment's own pointers, uses the
