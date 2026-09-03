@@ -263,13 +263,13 @@ impl Drop for RepositoryRefreshPermit {
 }
 
 fn unix_timestamp() -> anyhow::Result<i64> {
-    Ok(i64::try_from(
+    i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| anyhow::anyhow!("system clock is before the Unix epoch: {error}"))?
             .as_secs(),
     )
-    .map_err(|_| anyhow::anyhow!("Unix timestamp exceeds i64"))?)
+    .map_err(|_| anyhow::anyhow!("Unix timestamp exceeds i64"))
 }
 
 #[cfg(test)]

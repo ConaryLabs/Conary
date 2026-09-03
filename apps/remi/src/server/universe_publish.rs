@@ -839,13 +839,18 @@ mod tests {
             .catalog_dir()
             .parent()
             .expect("fixture root");
-        let mut config = crate::server::ServerConfig::default();
-        config.db_path = fixture.catalogs.db_path().to_path_buf();
-        config.catalog_dir = fixture.catalogs.catalog_dir().to_path_buf();
-        config.catalog_candidate_dir = fixture.candidate_dir.clone();
-        config.chunk_dir = root.join("chunks");
-        config.cache_dir = root.join("cache");
-        config.release_publish.repository_keys_dir = Some(fixture.keys_root.clone());
+        let config = crate::server::ServerConfig {
+            db_path: fixture.catalogs.db_path().to_path_buf(),
+            catalog_dir: fixture.catalogs.catalog_dir().to_path_buf(),
+            catalog_candidate_dir: fixture.candidate_dir.clone(),
+            chunk_dir: root.join("chunks"),
+            cache_dir: root.join("cache"),
+            release_publish: crate::server::config::ReleasePublishSection {
+                repository_keys_dir: Some(fixture.keys_root.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         fs::create_dir_all(&config.chunk_dir).expect("create chunk root");
         fs::create_dir_all(&config.cache_dir).expect("create cache root");
 
