@@ -365,6 +365,7 @@ jobs:
             exit 1
           }
           helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
+          git fetch --no-tags origin main
           git show "origin/main:deploy/remi-deploy-helper.sh" > "$current_helper"
           [[ -s "$current_helper" && ! -L "$current_helper" ]] || {
             echo "protected main has no regular Remi deploy helper" >&2
@@ -401,6 +402,13 @@ jobs:
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
           remote_possible=1
           scp "${ssh_opts[@]}" "$helper" "${target}:${remote_helper}"
+          git fetch --no-tags origin main
+          git show "origin/main:deploy/remi-deploy-helper.sh" > "$current_helper"
+          preinstall_helper_sha256="$(sha256sum "$current_helper" | cut -d ' ' -f 1)"
+          [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {
+            echo "protected-main helper advanced before installation" >&2
+            exit 1
+          }
           # The helper digest and path are derived from the exact workflow authority.
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$target" \

@@ -2091,12 +2091,12 @@ test_check_release_matrix_rejects_resolution_survey_helper_downgrade() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          [[ "$helper_sha256" == "$current_helper_sha256" ]] || {' \
+        '          [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {' \
         '          [[ "$helper_sha256" == "$helper_sha256" ]] || {'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey refuses a historical protected-helper downgrade"
+        "resolution survey revalidates protected main immediately before helper installation"
 }
 
 test_check_release_matrix_requires_pinned_resolution_survey_host() {
