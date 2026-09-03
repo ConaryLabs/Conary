@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 29
+revision: 30
 status: active
 ---
 
@@ -592,10 +592,14 @@ relation kind, and parser-owned native dependency text; the Rust boundary binds
 that text to the exact package-oracle group recorded by the same Debian parser,
 without textual normalization. A branch with a viable authenticated closure
 does not become missing merely because candidate policy preferred a different
-version. A policy-excluded exact root becomes the typed architecture-excluded
-outcome before apt-pkg resolution. The Ubuntu 26.04 profile supplies only
-sixteen `binary-amd64` indexes; apt-pkg is likewise configured with only
-`APT::Architecture(s)=amd64`, while `Architecture: all` remains admitted.
+version. Before emitting a missing frontier, the producer checks every apt-pkg
+negative relation on the selected path; a conflict or break between the exact
+root and a helper, or between two non-root helpers, remains a fatal native
+solver classification. A policy-excluded exact root becomes the typed
+architecture-excluded outcome before apt-pkg resolution. The Ubuntu 26.04
+profile supplies only sixteen `binary-amd64` indexes; apt-pkg is likewise
+configured with only `APT::Architecture(s)=amd64`, while `Architecture: all`
+remains admitted.
 Conflicts, native identity ambiguity, unsupported profile cardinality, and
 input or package-oracle drift fail the complete crawl. Diagnostic strings never
 establish an outcome.

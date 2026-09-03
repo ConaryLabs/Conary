@@ -599,9 +599,51 @@ struct FrontierResult {
     std::vector<MissingRequirement> missing;
 };
 
+bool selected_frontier_has_conflict(
+    ResolutionHandle &handle,
+    std::map<std::string, pkgCache::VerIterator> const &selected) {
+    std::set<map_id_t> selected_ids;
+    for (auto const &[name, version] : selected) {
+        (void)name;
+        selected_ids.insert(version->ID);
+    }
+    for (auto const &[name, version] : selected) {
+        (void)name;
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+            if (!end.IsNegative()) {
+                continue;
+            }
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                    pkgCache::VerIterator target(*handle.cache, targets[index]);
+                    if (atom.IsSatisfied(target) &&
+                        selected_ids.find(target->ID) != selected_ids.end()) {
+                        handle.error =
+                            "apt-pkg found a conflict on the missing-requirement frontier for " +
+                            version.ParentPkg().FullName(false) + "=" + version.VerStr() +
+                            " against " + target.ParentPkg().FullName(false) + "=" +
+                            target.VerStr();
+                        return true;
+                    }
+                }
+                if (atom == end) {
+                    break;
+                }
+            }
+        }
+    }
+    return false;
+}
+
 FrontierResult collect_candidate_frontier(
     ResolutionHandle &handle, pkgCache::VerIterator const &version,
-    std::map<std::string, map_id_t> selected) {
+    std::map<std::string, pkgCache::VerIterator> selected) {
     Package const *source = find_source_package(handle, version);
     if (source == nullptr) {
         handle.error = "apt-pkg candidate package is absent from authenticated Packages inputs: " +
@@ -610,11 +652,14 @@ FrontierResult collect_candidate_frontier(
     }
     auto const selected_version = selected.find(source->name);
     if (selected_version != selected.end()) {
-        return {selected_version->second == version->ID ? FrontierStatus::Viable
-                                                       : FrontierStatus::Untyped,
+        return {selected_version->second == version ? FrontierStatus::Viable
+                                                    : FrontierStatus::Untyped,
                 {}};
     }
-    selected.emplace(source->name, version->ID);
+    selected.emplace(source->name, version);
+    if (selected_frontier_has_conflict(handle, selected)) {
+        return {FrontierStatus::Error, {}};
+    }
 
     FrontierResult result;
     bool found_untyped = false;

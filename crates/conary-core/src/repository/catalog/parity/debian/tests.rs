@@ -111,6 +111,62 @@ fn resolution_stanza(
     )
 }
 
+fn missing_frontier_conflict_stanzas() -> String {
+    [
+        resolution_stanza(
+            "conflict-frontier-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: conflict-frontier-helper\n",
+        ),
+        resolution_stanza(
+            "conflict-frontier-helper",
+            "1",
+            "amd64",
+            'b',
+            "Depends: absent-frontier-target (= 2)\nConflicts: conflict-frontier-root\n",
+        ),
+        resolution_stanza(
+            "breaks-frontier-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: breaks-frontier-helper\n",
+        ),
+        resolution_stanza(
+            "breaks-frontier-helper",
+            "1",
+            "amd64",
+            'd',
+            "Depends: absent-frontier-target (= 2)\nBreaks: breaks-frontier-root\n",
+        ),
+        resolution_stanza(
+            "helper-conflict-root",
+            "1",
+            "amd64",
+            'e',
+            "Depends: first-frontier-helper\n",
+        ),
+        resolution_stanza(
+            "first-frontier-helper",
+            "1",
+            "amd64",
+            'f',
+            "Depends: second-frontier-helper\nConflicts: second-frontier-helper\n",
+        ),
+        resolution_stanza(
+            "second-frontier-helper",
+            "1",
+            "amd64",
+            '7',
+            "Depends: absent-frontier-target (= 2)\n",
+        ),
+        resolution_stanza("healthy-frontier", "1", "amd64", '8', ""),
+    ]
+    .concat()
+}
+
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
     let packages_bytes = fs::read(packages).unwrap();
     let parser_config = RepositoryParserConfig::Deb {
@@ -877,6 +933,85 @@ fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
     assert_eq!(survey.counts.roots_walked, 6);
     assert_eq!(survey.counts.unresolved_roots, 4);
     assert_eq!(survey.counts.failed_roots, 0);
+}
+
+#[test]
+fn apt_pkg_missing_frontier_rejects_conflicts_and_breaks() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &missing_frontier_conflict_stanzas(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    for root in [
+        "conflict-frontier-root",
+        "breaks-frontier-root",
+        "helper-conflict-root",
+    ] {
+        let error = apt.resolve(root, "1", "amd64").unwrap_err();
+        assert!(matches!(error, Error::ConflictError(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("conflict on the missing-requirement frontier"),
+            "{root} must retain its native conflict classification: {error}"
+        );
+    }
+}
+
+#[test]
+fn resolution_survey_records_missing_frontier_conflicts_as_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &missing_frontier_conflict_stanzas(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 8;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    let failures = survey
+        .failures
+        .iter()
+        .map(|failure| (failure.name.as_str(), failure.error_kind.reason))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for root in [
+        "conflict-frontier-root",
+        "breaks-frontier-root",
+        "helper-conflict-root",
+    ] {
+        assert_eq!(
+            failures.get(root),
+            Some(&NativeResolutionSurveyErrorReasonV1::NativeSolverFailed),
+            "{root} must be a typed survey failure"
+        );
+    }
+
+    let error = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("strict-resolution"),
+    )
+    .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
 }
 
 #[test]
