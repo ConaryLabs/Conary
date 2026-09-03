@@ -151,6 +151,26 @@ fn versioned_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
     (directory, apt)
 }
 
+fn same_package_virtual_provider_packages() -> String {
+    [
+        resolution_stanza(
+            "same-package-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: same-package-virt (= 2), absent-same-package-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "same-package-root",
+            "2",
+            "amd64",
+            'd',
+            "Provides: same-package-virt (= 2)\n",
+        ),
+    ]
+    .concat()
+}
+
 fn failing_virtual_provider_packages() -> String {
     [
         resolution_stanza(
@@ -1026,6 +1046,58 @@ fn apt_pkg_projects_mismatched_versioned_virtual_provider_as_missing() {
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].requiring.name, "virtual-wrong-version-root");
     assert_eq!(missing[0].native_text, "virt (= 3)");
+}
+
+#[test]
+fn apt_pkg_rejects_same_package_virtual_provider_for_exact_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &same_package_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt.resolve("same-package-root", "1", "amd64").unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a virtual provider from another version of the exact root must stay fatal: {error}"
+    );
+}
+
+#[test]
+fn resolution_survey_records_same_package_provider_as_native_solver_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &same_package_virtual_provider_packages(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "same-package-root"
+            && failure.version == "1"
+            && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+    }));
 }
 
 #[test]

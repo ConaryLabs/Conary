@@ -638,6 +638,10 @@ bool group_has_policy_target(ResolutionHandle &handle, pkgCache::DepIterator con
 bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
                                           EvidenceDepCache &dependency_cache,
                                           pkgCache::VerIterator const &root) {
+    pkgDepCache::StateCache &root_state = dependency_cache[root.ParentPkg()];
+    if (!root_state.Install() || root_state.InstVerIter(*handle.cache) != root) {
+        return false;
+    }
     unsigned long const broken_count = dependency_cache.BrokenCount();
     unsigned long broken_marked_packages = 0;
     for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
@@ -691,19 +695,19 @@ bool target_is_installable_with_root(ResolutionHandle &handle,
         handle.error = apt_errors();
         return false;
     }
+    probe.SetCandidateVersion(root);
+    probe.allow_exact_root(root.ParentPkg());
+    if (!probe.MarkInstall(root.ParentPkg(), true, 0, true, false)) {
+        installable = false;
+        return true;
+    }
+    probe.MarkProtected(root.ParentPkg());
     probe.SetCandidateVersion(target);
     if (!probe.MarkInstall(target.ParentPkg(), true, 0, true, false)) {
         installable = false;
         return true;
     }
     probe.MarkProtected(target.ParentPkg());
-    probe.SetCandidateVersion(root);
-    probe.allow_exact_root(root.ParentPkg());
-    probe.MarkProtected(root.ParentPkg());
-    if (!probe.MarkInstall(root.ParentPkg(), true, 0, true, false)) {
-        installable = false;
-        return true;
-    }
     installable = probe_has_only_root_no_target_breaks(handle, probe, root);
     return true;
 }
