@@ -2365,8 +2365,8 @@ test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/remi-resolution-survey-transport.py" \
-        '            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 1' \
-        '            manifest["schema_version"] != 1'
+        '            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 2' \
+        '            manifest["schema_version"] != 2'
 
     assert_check_release_matrix_fails \
         "$repo" \
