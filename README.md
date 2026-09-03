@@ -152,9 +152,6 @@ first when the command supports it.
   advisory metadata support.
 - Native transaction-history import is not implemented.
 - Non-x86_64 generation boot assets are still reserved.
-- The 0.13 schema hard cut is not readable by the 0.12 CCS self-update parser;
-  install the 0.14 native package fresh instead of attempting that in-place
-  update.
 - SBOM/provenance sidecars are not published for the current preview suite.
 
 ## Common Commands
@@ -213,15 +210,6 @@ For the maintained architecture map, see
 
 Conary is a single-maintainer project, so the verification layer carries the
 weight that a team's review would otherwise carry.
-
-| | |
-| --- | --- |
-| First-party Rust | 447,093 lines across 1,225 files, 8-crate workspace, edition 2024, Rust 1.98.0+ |
-| Unit tests | 5,499 `#[test]` and `#[tokio::test]` functions |
-| Integration tests | 324 tests in 29 suites across 4 phases |
-| Test targets | Real Fedora 44, Ubuntu 26.04 LTS, and Arch VMs driven by `apps/conary-test` |
-| CI | 7 GitHub Actions workflows: merge validation, PR gate, release build, release-artifact proof, deploy-and-verify, site deploy, scheduled ops |
-| Lint gate | `cargo clippy --workspace --all-targets -- -D warnings` and `cargo fmt --check` |
 
 Two of those deserve specific mention:
 

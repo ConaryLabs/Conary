@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 62
+revision: 63
 summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -897,15 +897,11 @@ available. Review the generated bundle before attaching it. It does not copy
 
 ### Available Distros
 
-| Distro | Container | Base | `build_context` |
-|--------|-----------|------|-----------------|
-| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `static-binary` |
-| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
-| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
-| `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
-| `linux-mint-22.3` | `Containerfile.debian-derivative` | Linux Mint 22.3 release-owned root | `static-binary` |
-| `pop-os-24.04` | `Containerfile.debian-derivative` | Pop!_OS 24.04 release-owned root | `static-binary` |
-| `solus` | QEMU artifact | Solus 4.9 updated to current Polaris | `static-binary` |
+The current distro and image inventory is owned by
+`apps/conary/tests/integration/remi/config.toml` and its sibling `containers/`
+directory; this includes CachyOS and openSUSE Tumbleweed alongside the public,
+derivative, and QEMU lanes. Run `cargo run -p conary-test -- list` to validate
+the manifest inventory instead of copying another table here.
 
 `build_context` is a required typed distro capability in `config.toml` that
 selects which Conary binary an image receives. Distro names do not select this
