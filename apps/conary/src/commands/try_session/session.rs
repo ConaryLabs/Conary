@@ -673,16 +673,10 @@ fn verify_namespace_try_hook_effects(
 }
 
 fn maybe_force_try_keep_post_backup_failure(point: &str) -> Result<()> {
-    #[cfg(test)]
-    if let Ok(requested) = std::env::var("CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP")
+    if let Some(requested) = crate::test_hooks::get().try_keep_fail_after_backup()
         && (requested == point || requested == "1")
     {
         bail!("forced try keep failure after backup at {point}");
-    }
-
-    #[cfg(not(test))]
-    {
-        let _ = point;
     }
 
     Ok(())
@@ -717,8 +711,7 @@ fn restore_previous_current_generation_link(
 }
 
 fn restore_live_db_from_checkpoint(live_db_path: &Path, backup_path: &Path) -> Result<()> {
-    #[cfg(test)]
-    if std::env::var("CONARY_TEST_TRY_RESTORE_DB_FAIL").as_deref() == Ok("1") {
+    if crate::test_hooks::get().try_restore_db_fail() {
         bail!("forced try DB checkpoint restore failure");
     }
 
@@ -846,8 +839,7 @@ fn sync_try_db_parent_directory(path: &Path) -> Result<()> {
         .map_err(|error| anyhow::anyhow!(error))
         .with_context(|| format!("failed to sync parent directory for {}", path.display()))?;
 
-    #[cfg(test)]
-    if let Some(log_path) = std::env::var_os("CONARY_TEST_TRY_SYNC_PARENT_LOG") {
+    if let Some(log_path) = crate::test_hooks::get().try_sync_parent_log() {
         use std::io::Write as _;
 
         let mut log = std::fs::OpenOptions::new()
@@ -889,7 +881,7 @@ fn record_activated_try_boot(
 }
 
 pub(crate) fn current_boot_id() -> String {
-    if let Ok(value) = std::env::var("CONARY_TEST_BOOT_ID") {
+    if let Some(value) = crate::test_hooks::get().boot_id() {
         return value;
     }
     std::fs::read_to_string("/proc/sys/kernel/random/boot_id")

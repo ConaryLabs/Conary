@@ -23,8 +23,7 @@ pub async fn cmd_remove(
     info!("Removing package: {}", package_name);
     println!("Removing package: {}", package_name);
     std::io::stdout().flush()?;
-    if let Ok(delay_ms) = std::env::var("CONARY_TEST_HOLD_DURING_REMOVE_MS")
-        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+    if let Some(delay_ms) = crate::test_hooks::get().hold_during_remove_ms()
         && delay_ms > 0
     {
         std::thread::sleep(Duration::from_millis(delay_ms));

@@ -28,8 +28,8 @@ pub(crate) struct ActivationRunSummary {
 /// command line. Absence of a Conary generation is an exact successful no-op,
 /// allowing the boot service to remain installed on native boots.
 pub(crate) fn cmd_generation_activate(db_path: &str) -> Result<ActivationRunSummary> {
-    let cmdline_path = std::env::var_os("CONARY_TEST_PROC_CMDLINE_PATH")
-        .map(std::path::PathBuf::from)
+    let cmdline_path = crate::test_hooks::get()
+        .proc_cmdline_path()
         .unwrap_or_else(|| std::path::PathBuf::from("/proc/cmdline"));
     let cmdline = std::fs::read_to_string(&cmdline_path)
         .with_context(|| format!("failed to read {}", cmdline_path.display()))?;

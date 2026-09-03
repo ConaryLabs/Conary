@@ -14,7 +14,7 @@ use super::*;
 #[test]
 fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
     create_current_generation_link(&fixture.root, 1);
@@ -263,7 +263,10 @@ fn namespace_rollback_leaves_session_retryable_when_work_dir_removal_fails() -> 
         CcsManifest::new_minimal("try-rollback-workdir-fail", "1.0.0"),
     );
     let outcome = begin_namespace_try(&fixture, &package)?;
-    let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REMOVE_DIR_FAIL", &outcome.work_dir);
+    let _fail_guard = EnvVarGuard::set(
+        crate::test_hooks::names::TRY_REMOVE_DIR_FAIL,
+        &outcome.work_dir,
+    );
 
     let err = rollback_active_try_session(&fixture.db_path_string)
         .expect_err("rollback should fail before marking rolled_back when work dir cleanup fails");
@@ -332,7 +335,7 @@ fn watch_marker_write_failure_does_not_leave_active_session() {
         conary_core::ccs::manifest::CcsManifest::new_minimal("watch-demo", "1.0.0"),
     );
 
-    let _guard = EnvVarGuard::set("CONARY_TEST_TRY_WATCH_MARKER_FAIL", "1");
+    let _guard = EnvVarGuard::set(crate::test_hooks::names::TRY_WATCH_MARKER_FAIL, "1");
     let err = begin_try_session(TryStartRequest {
         db_path: &fixture.db_path_string,
         package_path: &package,
@@ -488,7 +491,7 @@ fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow
         }),
     })?;
     let _guard = EnvVarGuard::set(
-        "CONARY_TEST_FAIL_GENERATION_REBUILD",
+        crate::test_hooks::names::FAIL_GENERATION_REBUILD,
         "forced watch refresh generation failure",
     );
 
@@ -546,7 +549,10 @@ fn refresh_try_session_namespace_switch_failure_preserves_stable_files() -> anyh
     let stable_package_before = std::fs::read(&stable_package_path)?;
     let stable_db_before = std::fs::read(&stable_db_path)?;
     let namespace_before = std::fs::read_link(started.work_dir.join("namespace-root"))?;
-    let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH", "1");
+    let _fail_guard = EnvVarGuard::set(
+        crate::test_hooks::names::TRY_REFRESH_FAIL_NAMESPACE_SWITCH,
+        "1",
+    );
 
     let err = refresh_try_session(TryRefreshRequest {
         db_path: &fixture.db_path_string,
@@ -599,7 +605,7 @@ fn refresh_try_session_reports_committed_cleanup_failure_with_new_generation_act
         }),
     })?;
     let _cleanup_guard = EnvVarGuard::set(
-        "CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP",
+        crate::test_hooks::names::TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP,
         "forced cleanup failure",
     );
 
@@ -690,7 +696,7 @@ fn db_promotion_syncs_parent_after_quarantine_and_final_rename() -> anyhow::Resu
     std::fs::write(sqlite_sidecar_path(&live_db, "-wal"), b"wal")?;
     std::fs::write(sqlite_sidecar_path(&live_db, "-shm"), b"shm")?;
     std::fs::write(&copied_db, b"copy")?;
-    let _sync_guard = EnvVarGuard::set("CONARY_TEST_TRY_SYNC_PARENT_LOG", &sync_log);
+    let _sync_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_SYNC_PARENT_LOG, &sync_log);
 
     replace_live_db_with_session_copy(&live_db, &copied_db)?;
 
@@ -776,8 +782,10 @@ fn activated_keep_holds_runtime_lock_while_marking_kept() -> anyhow::Result<()> 
 fn namespace_keep_restores_live_db_after_post_backup_failure() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-    let _fail_guard =
-        EnvVarGuard::set("CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP", "after-db-promote");
+    let _fail_guard = EnvVarGuard::set(
+        crate::test_hooks::names::TRY_KEEP_FAIL_AFTER_BACKUP,
+        "after-db-promote",
+    );
     let fixture = TryRuntimeFixture::new();
     let package = fixture.write_package(
         "try-restore-live-db",
@@ -817,7 +825,7 @@ fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Res
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fail_guard = EnvVarGuard::set(
-        "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
+        crate::test_hooks::names::TRY_KEEP_FAIL_AFTER_BACKUP,
         "after-current-link",
     );
     let fixture = TryRuntimeFixture::new();
@@ -885,10 +893,10 @@ fn namespace_keep_restores_current_link_even_when_db_restore_fails() -> anyhow::
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let _fail_guard = EnvVarGuard::set(
-        "CONARY_TEST_TRY_KEEP_FAIL_AFTER_BACKUP",
+        crate::test_hooks::names::TRY_KEEP_FAIL_AFTER_BACKUP,
         "after-current-link",
     );
-    let _restore_fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_RESTORE_DB_FAIL", "1");
+    let _restore_fail_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_RESTORE_DB_FAIL, "1");
     let fixture = TryRuntimeFixture::new();
     create_current_generation_link(&fixture.root, 7);
     let package = fixture.write_package(

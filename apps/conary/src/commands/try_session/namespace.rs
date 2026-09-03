@@ -105,7 +105,7 @@ pub(super) fn promotable_try_hook_root(
         )
     })?;
     let cas = CasStore::new(runtime_root.objects_dir())?;
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+    if crate::test_hooks::get().skip_generation_mount() {
         if root.exists() {
             std::fs::remove_dir_all(&root)?;
         }
@@ -139,7 +139,7 @@ pub(super) fn expose_try_namespace_root(
     let namespace_root = work_dir.join("namespace-root");
     let lower_root = work_dir.join("generation-root");
     let overlay_workdir = work_dir.join("namespace-work");
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+    if crate::test_hooks::get().skip_generation_mount() {
         recreate_path_symlink(hook_upperdir, &namespace_root)?;
         return Ok(namespace_root);
     }
@@ -278,7 +278,7 @@ pub(super) fn expose_staged_try_namespace_root(
     let generation_root = work_dir.join(format!("generation-root-{try_generation_id}"));
     let namespace_workdir = work_dir.join(format!("namespace-work-{try_generation_id}"));
 
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+    if crate::test_hooks::get().skip_generation_mount() {
         recreate_path_symlink(hook_upperdir, &next_namespace_root)?;
     } else {
         expose_try_namespace_root_at_paths(
@@ -311,14 +311,12 @@ pub(super) struct NamespaceSwitch {
 impl NamespaceSwitch {
     pub(super) fn commit(self) -> Result<()> {
         let _committed_generation_id = self.exposure.generation_id;
-        #[cfg(test)]
-        if let Some(message) =
-            std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP")
+        if let Some(message) = crate::test_hooks::get().try_refresh_fail_namespace_commit_cleanup()
         {
             anyhow::bail!("{}", message.to_string_lossy());
         }
 
-        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        if crate::test_hooks::get().skip_generation_mount() {
             remove_path_if_exists(&self.exposure.previous_namespace_root)?;
             for path in self
                 .superseded_generation_roots
@@ -346,7 +344,7 @@ impl NamespaceSwitch {
     }
 
     pub(super) fn restore(self) -> Result<()> {
-        if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+        if crate::test_hooks::get().skip_generation_mount() {
             remove_path_if_exists(&self.exposure.stable_namespace_root)?;
             if self.exposure.previous_namespace_root.exists() {
                 std::fs::rename(
@@ -385,7 +383,7 @@ pub(super) fn switch_stable_namespace_root(
         work_dir.join("namespace-work"),
     ];
 
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+    if crate::test_hooks::get().skip_generation_mount() {
         remove_path_if_exists(&exposure.previous_namespace_root)?;
         if exposure.stable_namespace_root.exists() {
             std::fs::rename(
@@ -393,8 +391,7 @@ pub(super) fn switch_stable_namespace_root(
                 &exposure.previous_namespace_root,
             )?;
         }
-        #[cfg(test)]
-        if std::env::var_os("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH").is_some() {
+        if crate::test_hooks::get().try_refresh_fail_namespace_switch() {
             if exposure.previous_namespace_root.exists() {
                 let _ = std::fs::rename(
                     &exposure.previous_namespace_root,
@@ -440,7 +437,7 @@ pub(super) fn switch_stable_namespace_root(
 }
 
 pub(super) fn teardown_staged_namespace_exposure(exposure: &StagedNamespaceExposure) -> Result<()> {
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
+    if !crate::test_hooks::get().skip_generation_mount() {
         unmount_try_path_if_mounted(&exposure.next_namespace_root)?;
         unmount_try_path_if_mounted(&exposure.generation_root)?;
     }
@@ -521,8 +518,7 @@ fn try_path_is_mounted(path: &Path) -> Result<bool> {
 }
 
 fn read_try_mountinfo() -> Result<String> {
-    #[cfg(test)]
-    if let Some(path) = std::env::var_os("CONARY_TEST_TRY_MOUNTINFO_PATH") {
+    if let Some(path) = crate::test_hooks::get().try_mountinfo_path() {
         return std::fs::read_to_string(&path).with_context(|| {
             format!(
                 "failed to read try mountinfo {}",
@@ -568,9 +564,8 @@ fn decode_mountinfo_path(raw: &str) -> PathBuf {
 }
 
 fn run_try_unmount(path: &Path) -> Result<()> {
-    #[cfg(test)]
-    if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_UMOUNT_FAIL")
-        && Path::new(&fail_path) == path
+    if let Some(fail_path) = crate::test_hooks::get().try_umount_fail()
+        && fail_path == path
     {
         bail!(
             "forced try namespace unmount failure for {}",
@@ -578,8 +573,7 @@ fn run_try_unmount(path: &Path) -> Result<()> {
         );
     }
 
-    #[cfg(test)]
-    if let Some(log_path) = std::env::var_os("CONARY_TEST_TRY_UMOUNT_LOG") {
+    if let Some(log_path) = crate::test_hooks::get().try_umount_log() {
         use std::io::Write as _;
 
         let mut log = std::fs::OpenOptions::new()

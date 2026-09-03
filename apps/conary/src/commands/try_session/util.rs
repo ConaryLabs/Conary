@@ -1,15 +1,13 @@
 // apps/conary/src/commands/try_session/util.rs
 //! Private shared filesystem helpers for try-session modules.
 
-#[cfg(test)]
 use anyhow::bail;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 pub(super) fn remove_dir_if_exists(path: PathBuf) -> Result<()> {
-    #[cfg(test)]
-    if let Some(fail_path) = std::env::var_os("CONARY_TEST_TRY_REMOVE_DIR_FAIL")
-        && Path::new(&fail_path) == path
+    if let Some(fail_path) = crate::test_hooks::get().try_remove_dir_fail()
+        && fail_path == path
     {
         bail!(
             "forced try directory removal failure for {}",

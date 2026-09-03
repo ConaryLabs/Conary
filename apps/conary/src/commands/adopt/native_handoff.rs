@@ -57,9 +57,9 @@ struct NativeHandoffEnvironment {
 
 impl NativeHandoffEnvironment {
     fn detect() -> Result<Self> {
-        let fail_after_current_cleared = std::env::var("CONARY_TEST_NATIVE_HANDOFF_FAIL_AFTER")
-            .map(|value| value == "current-cleared")
-            .unwrap_or(false);
+        let fail_after_current_cleared = crate::test_hooks::get()
+            .native_handoff_fail_after()
+            .is_some_and(|value| value == "current-cleared");
 
         Ok(Self {
             package_manager: SystemPackageManager::detect()?,
