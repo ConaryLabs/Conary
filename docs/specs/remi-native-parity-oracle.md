@@ -448,9 +448,11 @@ therefore cannot contaminate a later solve.
 Every strict and survey root walk is parallel behind one bounded,
 sequence-numbered sink. Input dispatch follows package-oracle order and only
 the parent/calling thread updates writers, collectors, histograms, record caps,
-or the 64 MiB explanation budget. Results may finish out of order, but the sink
-does not observe root `n + 1` before root `n`; strict mode stops dispatch after
-the first failing canonical root, drains workers, and returns that failure.
+or the 64 MiB explanation budget. The next sequence goes to the first available
+worker, so an uneven solve cannot strand idle capacity behind a busy worker's
+private queue. Results may finish out of order, but the sink does not observe
+root `n + 1` before root `n`; strict mode stops dispatch after the first failing
+canonical root, drains workers, and returns that failure.
 Consequently worker scheduling cannot change `roots.jsonl`, manifest bytes or
 digests, survey JSON, counts, histograms, caps, or budget decisions.
 

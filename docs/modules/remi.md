@@ -1035,8 +1035,10 @@ Strict and survey producers dispatch exact roots to a bounded worker set and
 reassemble results by package-oracle sequence before touching the writer or
 collector. That single ordered sink keeps bundle bytes, manifest digests,
 survey counts and histograms, the 5,000-record cap, and the 64 MiB explanation
-budget identical to a one-worker run. A strict failure stops further dispatch,
-then returns the first failure in canonical order after draining workers.
+budget identical to a one-worker run. Each next root goes to the first worker
+that becomes available, preserving capacity when solve times are uneven. A
+strict failure stops further dispatch, then returns the first failure in
+canonical order after draining workers.
 
 RPM threads each own a libsolv pool loaded from the staged authenticated
 metadata; ALPM threads each own a private staged libalpm root and handle;
