@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 162
+revision: 163
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded deterministic parallel private diagnostics-only all-roots native and Conary resolution surveys with isolated solvers and recorded worker evidence, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -961,7 +961,10 @@ their own survey error kind. Native package managers retain provider-selection
 authority under their pinned architecture configuration, and Conary root and
 provider matching consumes the same checked full identities. Every
 package root has exactly one canonical resolved closure, typed unresolved set,
-or known-identity `architecture_excluded` outcome. Independent reopen uses a
+known-identity `architecture_excluded` outcome, or `conflicting_closure`
+outcome. The latter means the required closure cannot coexist or an obsoletes
+transaction displaces the exact root; it carries no cross-solver evidence set.
+Independent reopen uses a
 private disk-backed membership index for referenced package and required-group
 authority plus a bounded merge walk for complete root coverage. Comparison
 retains one native/candidate root pair and reports typed root, outcome, closure,
@@ -975,16 +978,18 @@ transaction packages and typed missing-dependency records. The RPM producer
 uses exact libsolv transaction and problem-rule IDs, applies profile precedence
 as native repository priority, excludes weak relations, and reopens complete
 filelists for typed file-provider resolution. Its resolution projection schema
-4 calls libsolv 0.7.36 `pool_setarchpolicy` with the single native architecture
+5 calls libsolv 0.7.36 `pool_setarchpolicy` with the single native architecture
 after `pool_setarch`; pinned libsolv still admits `noarch`, while cross-machine
 solvables are not installable and are absent from its provider index. An exact
 excluded root must report `SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the
 typed excluded outcome. The same rule for an admitted root is fatal.
 Native-only admission removes the former strict-priority multilib
-strict-plus-conflict shape, so the residual solve, ancillary `PKG_CONFLICTS`
-tolerance, and `INFARCH` tolerance are gone. Either policy rule is fatal if it
-ever appears. Ordinary same-architecture strict-priority blocked requirements
-still project their terminal unresolved edge.
+strict-plus-conflict shape. Any `PKG_CONFLICTS`, `PKG_SAME_NAME`,
+`PKG_OBSOLETES`, or implicit-obsoletes rule in any failed problem, and any
+successful transaction that omits its exact root, maps to
+`conflicting_closure`. Architecture-only `INFARCH` remains outside that class.
+Ordinary same-architecture strict-priority blocked requirements still project
+their terminal unresolved edge when no conflict-class rule exists.
 
 The Debian producer uses private
 volatile apt-pkg source indexes and empty installed state, projects profile
@@ -993,32 +998,36 @@ and forces each exact root through apt 3.0's complete-version solver with
 non-strict pinning. Native policy still prefers the highest-precedence
 dependency version that permits a complete transaction, while a shadowed lower
 version remains eligible when required by the protected exact root. After a
-failed solve, a broken required or pre-required group retained directly on that
-exact root becomes typed unresolved evidence when apt-pkg exposes no
-authenticated candidate satisfying any alternative. This covers absent names
-and names available only at incompatible versions. Every broken hard group on
-the retained root must meet that rule; a separate broken group with a
-satisfying candidate keeps the complete failure fatal. The exact-root identity,
-relation kind, and parser-owned native group text bind directly back to package
-oracle authority without textual normalization. Pinned apt-pkg 3.2.0 does not
+failed solve, apt-pkg scans every selected broken package in the root-reachable
+state. A rejected `Conflicts` or `Breaks` relation, or a selected version that
+cannot coexist with the required target, maps to `conflicting_closure`.
+Otherwise a required or pre-required group with no authenticated satisfying
+candidate maps to typed unresolved evidence. This covers pure missing chains,
+absent names, and names available only at incompatible versions. The exact
+requiring-package identity, relation kind, and parser-owned native group text
+bind directly back to package oracle authority without textual normalization.
+Pinned apt-pkg 3.2.0 does not
 publicly expose solver3's typed reason graph, and rendered diagnostics are not
-authority. Transitive no-candidate failures and other failures without a
-directly attributable root group therefore remain fatal native solver failures
-and become `NativeSolverFailed` records in survey mode.
+authority. A failed state with neither conflict-class nor typed missing
+authority remains a fatal `NativeSolverFailed` producer error.
 All three bind closures and missing groups back to exact package-oracle
 authority. Policy-excluded Debian and ALPM roots are typed before native
 solving; the configured Ubuntu profile contains sixteen `binary-amd64` indexes
 and the Arch profile contains three `/os/x86_64` databases, with `all` and `any`
-admitted respectively. Conflicts, identity or input drift, and unexpected
-native errors remain fatal. The
+admitted respectively. Libalpm conflicting-dependency or obsoletion preparation
+results and prepared transactions that omit the exact root map to
+`conflicting_closure`. Identity or input drift and unexpected native errors
+remain fatal. The
 producers write the canonical resolution bundle and fully reopen it before
 success.
 
-The resolution contract is schema 2; Conary candidate, Debian, and ALPM
-projections are schema 2; RPM is schema 4; comparison and survey are schema 2.
-There are no compatibility readers. Every retained native-resolution and
-Conary candidate bundle from the superseded schemas is invalid and must be
-regenerated before promotion proof.
+The resolution contract is schema 3; Conary candidate, Debian, and ALPM
+projections are schema 3; RPM is schema 5; comparison is schema 3. Survey
+envelopes retain their existing schemas while accepting the expanded outcome
+enumeration. There are no compatibility readers for the bumped contracts.
+Every retained native-resolution and Conary candidate bundle from the
+superseded schemas is invalid and must be regenerated before promotion proof;
+the package oracle is unchanged.
 
 The same three binaries expose a mutually exclusive `--survey <FILE>`
 diagnostic destination. Survey mode uses the identical per-root native solve
@@ -1114,6 +1123,13 @@ never parses resolvo's user-friendly diagnostic text. The 64 MiB canonical
 byte budget, first-exhaustion withholding behavior, create-only mode `0600`
 writer, counts, histogram, and truncation validation are shared with the
 native survey.
+
+For outcome production, a conflict edge or excluded node dominates an
+unresolved node. Resolvo can minimize a mixed failure to its missing edge, so
+the candidate producer repeatedly re-solves with only the already-attributed
+persisted missing groups discharged. A conflict exposed by that bounded typed
+probe becomes `conflicting_closure`; a conflict-free remainder preserves the
+original unresolved edges. A graph with neither typed class remains fatal.
 
 `NativeResolutionComparisonSurveyV1` schema 1 consumes independently reopened
 complete native and candidate bundles. It walks every root pair in canonical
@@ -1230,7 +1246,7 @@ Comparison counts must cover the exact zero-failure candidate root population;
 every retained mismatch root, identity, and candidate outcome must match that
 candidate survey.
 It also requires the candidate producer to be profile-ecosystem `conary-sat`
-projection schema 2; a merely well-formed implementation identity is rejected.
+projection schema 3; a merely well-formed implementation identity is rejected.
 Neither helper input admission nor runner output verification imposes an
 aggregate transport ceiling absent from the producer contract. Each still
 admits only a plain archive. Runner construction uses uncompressed GNU

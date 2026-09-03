@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 54
+revision: 55
 status: active
 ---
 
@@ -84,7 +84,7 @@ authority from producer implementation provenance. A merged descendant may fix
 producer-only behavior without forcing a semantically identical Remi deploy
 and export, while the exact export continues to own every candidate, source,
 and metadata byte. Merged provenance alone grants no schema latitude: package
-schema 1, resolution schema 2, and every ecosystem implementation/projection
+schema 1, resolution schema 3, and every ecosystem implementation/projection
 pin remain mandatory. A three-lane set may contain different producer
 commits per lane only when each is a merged descendant of the same deployed
 commit and every lane passes those identical pins; each lane records its own
@@ -127,7 +127,7 @@ All three lane records must bind the same export run, export identity,
 transport digest, deployment run, deployed commit, and input manifest. Each
 producer commit must separately satisfy deployed-to-producer-to-`origin/main`
 ancestry. Mixed descendant producer commits are accepted as decided above;
-package schema 1, resolution schema 2, lane images, implementation versions,
+package schema 1, resolution schema 3, lane images, implementation versions,
 and projection schemas remain identical per lane contract. Different exports,
 non-descendants, unmerged producers, digest drift, missing or duplicate lanes,
 and survey substitution fail closed. The assembled evidence records each
@@ -349,7 +349,7 @@ The resolution policy architecture must equal the bound profile revision's
 typed target architecture during manifest binding, comparison, and promotion
 proof validation.
 
-Schema 2 fixes the resolution policy rather than accepting solver flags or
+Schema 3 fixes the resolution policy rather than accepting solver flags or
 free-form policy: the installed state is empty, every exact package variant is
 requested as its exact root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
@@ -396,7 +396,31 @@ oracle. A row records exactly one outcome:
 - `not_installable { reason: architecture_excluded }`, when native-only policy
   excludes the exact root before Conary's SAT solver or a Debian/ALPM native
   solve is invoked, or when libsolv reports the matching exact-root
-  `SOLVER_RULE_PKG_NOT_INSTALLABLE` rule.
+  `SOLVER_RULE_PKG_NOT_INSTALLABLE` rule; or
+- `not_installable { reason: conflicting_closure }`, when the root-reachable
+  required closure contains a negative or exclusive relation that prevents
+  coexistence, or when an obsoletes transaction can complete only by
+  displacing the exact root. This outcome deliberately carries no evidence
+  set because the native solvers and Resolvo expose different evidence shapes;
+  full native evidence remains diagnostics-only survey material.
+
+Conflict-class failure dominates every other failed-state attribution. Each
+producer first looks for any negative or exclusive relation anywhere in the
+root-reachable failed closure. If found, including beside typed missing
+requirements, it emits `conflicting_closure`. Otherwise typed missing groups
+emit `unresolved` with the same exact edges as before. A failed solve with
+neither class remains a fatal producer error. Issue #814 records this decision:
+apt may hide a missing dependency below a conflict-rejected helper, libsolv may
+split missing and conflict facts across problems, and Resolvo may minimize its
+first graph to the missing edge. Missing-first precedence would therefore make
+solver diagnostics, rather than package semantics, authoritative.
+
+| Producer | Authoritative conflict-class mapping |
+| --- | --- |
+| libsolv | Any `PKG_CONFLICTS` (`0x105`), `PKG_SAME_NAME` (`0x106`), `PKG_OBSOLETES` (`0x107`), or implicit-obsoletes (`0x108`) rule in any failed problem; also a successful transaction that omits the exact root. Architecture-only `INFARCH` remains outside this class. |
+| apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
+| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, or a prepared transaction that omits the exact root. |
+| Conary/Resolvo | Any `ConflictEdge::Conflict` or `ConflictNode::Excluded` in the exact-root graph. When a minimized graph exposes missing first, the producer re-solves with those exact persisted missing groups discharged until it exposes a root-reachable conflict or proves the remainder conflict-free. |
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,
@@ -412,11 +436,13 @@ time and reports typed oracle-only root, candidate-only root, outcome,
 dependency-closure, unresolved-dependency, or not-installable-reason drift.
 Diagnostic strings and native solver error prose never establish the result.
 
-This schema is a hard cut. Resolution-oracle schema 1, RPM projection schema
-3, Conary candidate projection schema 1, Debian and ALPM projection schema 1,
-comparison schema 1, and survey schema 1 have no compatibility readers. Every
+This schema is a hard cut. Resolution-oracle schemas through 2, RPM projection
+schemas through 4, Conary candidate, Debian, and ALPM projection schemas through
+2, and comparison schemas through 2 have no compatibility readers. Every
 retained native-resolution and Conary candidate bundle is invalid and must be
-regenerated before comparison or promotion proof.
+regenerated before comparison or promotion proof. The package oracle is
+unchanged. Diagnostics survey envelopes remain at their existing schemas but
+their closed outcome enumeration accepts `conflicting_closure`.
 
 ### Diagnostics-only resolution survey
 
@@ -653,7 +679,7 @@ workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
 relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
 binds candidate implementation to the profile ecosystem, `conary-sat`, and
-projection schema 2. Comparison counts must cover the exact complete
+projection schema 3. Comparison counts must cover the exact complete
 zero-failure candidate root population, and every retained mismatch root,
 identity, and candidate outcome must come from that candidate survey. It then
 compares every authority binding with its authenticated input verification, and
@@ -852,7 +878,7 @@ executable and reads neither their databases nor Conary catalog rows.
 `produce_conary_resolution_candidate` is the candidate-side owner. It first
 independently reopens the exact package and native-resolution oracle bundles,
 requires the verified profile catalog to match every package-oracle fact, and
-requires the native oracle to use schema 2's exact target policy. It cannot
+requires the native oracle to use schema 3's exact target policy. It cannot
 resolve an unproved catalog or silently substitute another architecture.
 
 The producer replays the catalog into a private temporary current-schema
@@ -881,12 +907,15 @@ qualifiers remain match-time semantics over already-admitted solvables.
 Successful SAT selections map back to a strictly ordered set of catalog
 package keys. An unsatisfiable dependency maps Resolvo's typed conflict graph
 back to the exact persisted required or pre-required group; diagnostic text is
-never parsed. Package conflict, a missing mapping, an untyped unsatisfiable
-result, or any selected identity outside the catalog is a hard crawl failure
-rather than an unresolved row.
+never parsed. Conflict or excluded nodes are checked first and map to
+`conflicting_closure`. For a minimized missing-first graph, the bounded typed
+probe described above discharges only its exact persisted missing groups and
+re-solves to enforce conflict dominance. A missing mapping, an untyped
+unsatisfiable result, or any selected identity outside the catalog remains a
+hard crawl failure.
 
 The producer writes one complete `NativeResolutionOracleV1` bundle using the
-`conary-sat` implementation identity and projection schema 2, durably closes
+`conary-sat` implementation identity and projection schema 3, durably closes
 it, independently reopens and cross-checks every package and group reference,
 and compares it with the pinned native bundle. Success therefore proves one
 canonical outcome for every exact catalog variant and returns the exact
