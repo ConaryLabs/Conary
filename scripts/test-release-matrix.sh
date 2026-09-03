@@ -3502,6 +3502,17 @@ test_check_release_matrix_rejects_test_hooks_in_release_workflow() {
     assert_check_release_matrix_fails "$repo" "release-build test-hooks feature"
 }
 
+test_check_release_matrix_requires_ordinary_conary_hook_fence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose' \
+        '        run: echo "ordinary Conary hook fence removed"'
+
+    assert_check_release_matrix_fails "$repo" "release ordinary Conary test-hook fence"
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3944,6 +3955,7 @@ main() {
         test_check_release_matrix_requires_hosted_debian_resolution_binary
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_test_hooks_in_release_workflow
+        test_check_release_matrix_requires_ordinary_conary_hook_fence
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary

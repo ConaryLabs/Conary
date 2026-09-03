@@ -910,7 +910,9 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     );
     let command = tests.run.as_deref().expect("workspace shard dispatch");
     for predicate in [
-        "conary) cargo test -p conary --features test-hooks --verbose",
+        "conary)",
+        "cargo test -p conary --no-default-features --test test_hook_ownership --verbose",
+        "cargo test -p conary --features test-hooks --verbose",
         "conary-core-repository) cargo test -p conary-core --lib repository:: --verbose",
         "cargo test -p conary-core --lib --verbose -- --skip repository::",
         "conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose",
