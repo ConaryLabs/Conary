@@ -33,6 +33,31 @@ IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_SURVEY_TRANSPORT_BYTES = 640 * 1024 * 1024
+U32_MAX = 2**32 - 1
+U64_MAX = 2**64 - 1
+NATIVE_ECOSYSTEMS = {"rpm", "debian", "alpm"}
+NATIVE_ERROR_VARIANTS = (
+    "database", "io", "io_error", "init_error", "schema_rebuild_required", "missing_id",
+    "version_parse", "version_comparison", "hash_error", "config_error", "database_not_found",
+    "download_error", "repository_response_body", "durable_chunk_unavailable", "http_status",
+    "conflict_error", "profile_architecture_mismatch", "unknown_architecture_token",
+    "unsupported_native_host_target", "ambiguous_package_selection", "checksum_mismatch",
+    "parse_error", "budget", "catalog_scratch_capacity", "delta_error",
+    "gpg_verification_failed", "scriptlet_execution", "trigger_error", "already_exists",
+    "invalid_path", "path_traversal", "not_found", "recovery_failed", "timeout_error",
+    "resolution_error", "not_implemented", "json", "capability", "federation", "cancelled",
+    "internal_error", "trust_error", "pool_overflow",
+)
+CONARY_ERROR_REASONS = (
+    "exact_root_projection_failed", "architecture_admission_failed", "solver_failed",
+    "resolved_closure_projection_failed", "resolved_closure_omitted_root",
+    "unresolved_projection_failed",
+)
+OUTCOME_KINDS = ("resolved", "unresolved", "not_installable")
+MISMATCH_KINDS = (
+    "resolution_outcome", "dependency_closure", "unresolved_dependencies",
+    "not_installable_reason",
+)
 
 
 class ValidationError(ValueError):
@@ -106,8 +131,13 @@ def exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
 
 
 def exact_nonnegative_int(value: Any, label: str) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        fail(f"{label} must be a nonnegative integer")
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+        or value > U64_MAX
+    ):
+        fail(f"{label} must be one unsigned 64-bit integer")
     return value
 
 
@@ -115,6 +145,25 @@ def exact_positive_int(value: Any, label: str) -> int:
     value = exact_nonnegative_int(value, label)
     if value == 0:
         fail(f"{label} must be positive")
+    return value
+
+
+def exact_u32(value: Any, label: str, *, positive: bool = False) -> int:
+    value = exact_nonnegative_int(value, label)
+    if value > U32_MAX or (positive and value == 0):
+        fail(f"{label} must be one{' positive' if positive else ''} unsigned 32-bit integer")
+    return value
+
+
+def require_rust_identity(value: Any, label: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode()) > 255
+        or value.strip() != value
+        or any(ord(character) < 0x20 or ord(character) > 0x7E for character in value)
+    ):
+        fail(f"{label} must be 1 to 255 printable ASCII bytes without surrounding whitespace")
     return value
 
 
@@ -763,56 +812,443 @@ def read_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, maximum: 
     return data
 
 
-def validate_counts(value: Any, label: str, parts: tuple[str, ...], total: str) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        fail(f"{label} counts are malformed")
-    total_value = exact_nonnegative_int(value.get(total), f"{label}.{total}")
-    part_total = sum(exact_nonnegative_int(value.get(key), f"{label}.{key}") for key in parts)
-    if part_total != total_value:
-        fail(f"{label} counts are inconsistent")
+def require_optional_string(value: Any, label: str) -> str | None:
+    if value is not None and not isinstance(value, str):
+        fail(f"{label} must be a string or null")
     return value
 
 
-def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) -> None:
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        fail(f"{name} is not a Conary resolution survey schema 1 document")
-    counts = validate_counts(
-        value.get("counts"),
-        name,
-        ("resolved_roots", "unresolved_roots", "not_installable_roots", "failed_roots"),
-        "roots_walked",
+def validate_implementation(value: Any, label: str) -> None:
+    implementation = exact_object(
+        value, {"ecosystem", "name", "version", "projection_schema"}, label
     )
+    if implementation["ecosystem"] not in NATIVE_ECOSYSTEMS:
+        fail(f"{label}.ecosystem is unsupported")
+    require_rust_identity(implementation["name"], f"{label}.name")
+    require_rust_identity(implementation["version"], f"{label}.version")
+    exact_u32(implementation["projection_schema"], f"{label}.projection_schema", positive=True)
+
+
+def validate_policy(value: Any, architecture: str, label: str) -> None:
+    policy = exact_object(
+        value,
+        {
+            "architecture", "architecture_admission", "installed_state", "roots",
+            "positive_requirements", "provider_selection",
+        },
+        label,
+    )
+    require_rust_identity(policy["architecture"], f"{label}.architecture")
+    if policy != {
+        "architecture": architecture,
+        "architecture_admission": "native_only",
+        "installed_state": "empty",
+        "roots": "every_exact_package",
+        "positive_requirements": "required_only",
+        "provider_selection": "native_precedence",
+    }:
+        fail(f"{label} differs from the fixed native-resolution policy")
+
+
+def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
+    if not isinstance(value, dict):
+        fail(f"{label} must be a typed native-resolution outcome")
+    status = value.get("status")
+    if status == "resolved":
+        outcome = exact_object(value, {"status", "closure_package_keys_sha256"}, label)
+        closure = outcome["closure_package_keys_sha256"]
+        if not isinstance(closure, list) or not closure:
+            fail(f"{label} resolved closure must be nonempty")
+        for index, digest_value in enumerate(closure):
+            require_sha256(digest_value, f"{label} closure {index}")
+        if closure != sorted(set(closure)) or root_sha256 not in closure:
+            fail(f"{label} resolved closure is noncanonical or omits its root")
+    elif status == "unresolved":
+        outcome = exact_object(value, {"status", "dependencies"}, label)
+        dependencies = outcome["dependencies"]
+        if not isinstance(dependencies, list) or not dependencies:
+            fail(f"{label} unresolved dependencies must be nonempty")
+        keys: list[tuple[str, str]] = []
+        for index, item in enumerate(dependencies):
+            dependency = exact_object(
+                item,
+                {"requiring_package_key_sha256", "requirement_group_sha256"},
+                f"{label} dependency {index}",
+            )
+            keys.append(
+                (
+                    require_sha256(
+                        dependency["requiring_package_key_sha256"],
+                        f"{label} dependency {index} package",
+                    ),
+                    require_sha256(
+                        dependency["requirement_group_sha256"],
+                        f"{label} dependency {index} requirement",
+                    ),
+                )
+            )
+        if keys != sorted(set(keys)):
+            fail(f"{label} unresolved dependencies are noncanonical")
+    elif status == "not_installable":
+        outcome = exact_object(value, {"status", "reason"}, label)
+        if outcome["reason"] != "architecture_excluded":
+            fail(f"{label} not-installable reason is unsupported")
+    else:
+        fail(f"{label} has an unsupported outcome status")
+    return status
+
+
+def validate_error_kind(value: Any, label: str) -> tuple[int, int]:
+    kind = exact_object(value, {"error_variant", "reason"}, label)
+    try:
+        variant = NATIVE_ERROR_VARIANTS.index(kind["error_variant"])
+        reason = CONARY_ERROR_REASONS.index(kind["reason"])
+    except (ValueError, TypeError):
+        fail(f"{label} contains an unsupported error variant or reason")
+    return variant, reason
+
+
+def validate_solvable(value: Any, label: str) -> None:
+    solvable = exact_object(
+        value,
+        {
+            "package_key_sha256", "name", "version", "release", "architecture",
+            "repository_name", "source_profile",
+        },
+        label,
+    )
+    digest_value = solvable["package_key_sha256"]
+    if digest_value is not None:
+        require_sha256(digest_value, f"{label}.package_key_sha256")
+    for key in ("name", "version", "repository_name"):
+        if not isinstance(solvable[key], str):
+            fail(f"{label}.{key} must be a string")
+    for key in ("release", "architecture", "source_profile"):
+        require_optional_string(solvable[key], f"{label}.{key}")
+
+
+def validate_version_set(value: Any, label: str) -> None:
+    version_set = exact_object(value, {"name", "constraint"}, label)
+    if not all(isinstance(version_set[key], str) for key in version_set):
+        fail(f"{label} fields must be strings")
+
+
+def validate_explanation(value: Any, label: str) -> tuple[bool, int]:
+    if not isinstance(value, dict):
+        fail(f"{label} must be a typed native explanation")
+    source = value.get("source")
+    if source == "withheld":
+        explanation = exact_object(value, {"source", "reason"}, label)
+        if explanation["reason"] not in {
+            "evidence_budget_exhausted", "conflict_graph_unavailable"
+        }:
+            fail(f"{label} has an unsupported withholding reason")
+        return explanation["reason"] == "evidence_budget_exhausted", len(canonical_json(value))
+    if source != "resolvo_conflict_graph":
+        fail(f"{label} has an unsupported explanation source")
+    explanation = exact_object(
+        value, {"source", "unresolved_edges", "conflict_edges", "excluded_nodes"}, label
+    )
+    for collection in ("unresolved_edges", "conflict_edges", "excluded_nodes"):
+        if not isinstance(explanation[collection], list):
+            fail(f"{label}.{collection} must be an array")
+    for index, item in enumerate(explanation["unresolved_edges"]):
+        edge = exact_object(
+            item, {"requiring", "requirement", "version_sets"}, f"{label} unresolved edge {index}"
+        )
+        validate_solvable(edge["requiring"], f"{label} unresolved edge {index} requiring")
+        if not isinstance(edge["requirement"], str) or not isinstance(edge["version_sets"], list):
+            fail(f"{label} unresolved edge {index} fields are malformed")
+        for set_index, version_set in enumerate(edge["version_sets"]):
+            validate_version_set(version_set, f"{label} unresolved edge {index} set {set_index}")
+    for index, item in enumerate(explanation["conflict_edges"]):
+        edge = exact_object(item, {"from", "to", "conflict"}, f"{label} conflict edge {index}")
+        validate_solvable(edge["from"], f"{label} conflict edge {index} from")
+        validate_solvable(edge["to"], f"{label} conflict edge {index} to")
+        conflict = edge["conflict"]
+        if not isinstance(conflict, dict):
+            fail(f"{label} conflict edge {index} kind is malformed")
+        if conflict.get("kind") in {"locked", "forbid_multiple_instances"}:
+            exact_object(conflict, {"kind"}, f"{label} conflict edge {index} kind")
+        elif conflict.get("kind") == "constrains":
+            exact_object(conflict, {"kind", "version_set"}, f"{label} conflict edge {index} kind")
+            validate_version_set(conflict["version_set"], f"{label} conflict edge {index} set")
+        else:
+            fail(f"{label} conflict edge {index} kind is unsupported")
+    for index, item in enumerate(explanation["excluded_nodes"]):
+        node = exact_object(item, {"solvable", "reason", "message"}, f"{label} excluded node {index}")
+        validate_solvable(node["solvable"], f"{label} excluded node {index} solvable")
+        if node["reason"] != "missing_dependency_authority" or not isinstance(node["message"], str):
+            fail(f"{label} excluded node {index} fields are malformed")
+    return False, len(canonical_json(value))
+
+
+def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) -> None:
+    survey = exact_object(
+        value,
+        {
+            "schema_version", "profile", "profile_revision_sha256",
+            "package_oracle_manifest_sha256", "implementation", "policy",
+            "target_architecture", "counts", "outcomes", "failure_record_limit",
+            "total_failures", "retained_failures", "truncated", "evidence_byte_limit",
+            "retained_evidence_bytes", "retained_explanations", "withheld_explanations",
+            "truncated_evidence", "failures",
+        },
+        name,
+    )
+    architecture = profile["target_architecture"]
     if (
-        value.get("profile") != profile["profile"]
-        or value.get("profile_revision_sha256") != profile["profile_revision_sha256"]
-        or value.get("package_oracle_manifest_sha256")
+        survey["schema_version"] != 1
+        or survey["profile"] != profile["profile"]
+        or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
+        or survey["package_oracle_manifest_sha256"]
         != profile["package_oracle_manifest_sha256"]
-        or value.get("target_architecture") != profile["target_architecture"]
-        or value.get("policy", {}).get("architecture") != profile["target_architecture"]
-        or value.get("total_failures") != counts["failed_roots"]
-        or not isinstance(counts.get("error_kinds"), list)
+        or survey["target_architecture"] != architecture
     ):
-        fail(f"{name} binding or failure counts drifted")
+        fail(f"{name} identity or oracle binding drifted")
+    require_rust_identity(survey["profile"], f"{name}.profile")
+    require_sha256(survey["profile_revision_sha256"], f"{name}.profile_revision_sha256")
+    require_sha256(
+        survey["package_oracle_manifest_sha256"], f"{name}.package_oracle_manifest_sha256"
+    )
+    require_rust_identity(survey["target_architecture"], f"{name}.target_architecture")
+    validate_implementation(survey["implementation"], f"{name}.implementation")
+    validate_policy(survey["policy"], architecture, f"{name}.policy")
+
+    counts = exact_object(
+        survey["counts"],
+        {
+            "roots_walked", "resolved_roots", "unresolved_roots", "not_installable_roots",
+            "failed_roots", "error_kinds",
+        },
+        f"{name}.counts",
+    )
+    count_values = {
+        key: exact_nonnegative_int(counts[key], f"{name}.counts.{key}")
+        for key in (
+            "roots_walked", "resolved_roots", "unresolved_roots", "not_installable_roots",
+            "failed_roots",
+        )
+    }
+    if sum(count_values[key] for key in count_values if key != "roots_walked") != count_values["roots_walked"]:
+        fail(f"{name} root counts are inconsistent")
+    if not isinstance(counts["error_kinds"], list):
+        fail(f"{name} error histogram must be an array")
+    histogram_total = 0
+    histogram_keys: list[tuple[int, int]] = []
+    for index, item in enumerate(counts["error_kinds"]):
+        entry = exact_object(item, {"kind", "count"}, f"{name} error histogram {index}")
+        histogram_keys.append(validate_error_kind(entry["kind"], f"{name} error histogram {index} kind"))
+        histogram_total += exact_nonnegative_int(entry["count"], f"{name} error histogram {index} count")
+    if histogram_total > U64_MAX or histogram_total != count_values["failed_roots"]:
+        fail(f"{name} error histogram disagrees with failures")
+    if histogram_keys != sorted(set(histogram_keys)):
+        fail(f"{name} error histogram is noncanonical")
+
+    outcomes = survey["outcomes"]
+    failures = survey["failures"]
+    if not isinstance(outcomes, list) or not isinstance(failures, list):
+        fail(f"{name} root records must be arrays")
+    successful = (
+        count_values["resolved_roots"] + count_values["unresolved_roots"]
+        + count_values["not_installable_roots"]
+    )
+    if len(outcomes) != successful:
+        fail(f"{name} successful root records disagree with counts")
+    outcome_keys: list[str] = []
+    typed_counts = dict.fromkeys(OUTCOME_KINDS, 0)
+    for index, item in enumerate(outcomes):
+        outcome = exact_object(
+            item,
+            {"root_package_key_sha256", "name", "version", "release", "architecture", "outcome"},
+            f"{name} outcome {index}",
+        )
+        root_sha256 = require_sha256(outcome["root_package_key_sha256"], f"{name} outcome {index} root")
+        outcome_keys.append(root_sha256)
+        for key in ("name", "version", "release"):
+            require_rust_identity(outcome[key], f"{name} outcome {index}.{key}")
+        require_optional_string(outcome["architecture"], f"{name} outcome {index}.architecture")
+        kind = validate_native_outcome(outcome["outcome"], root_sha256, f"{name} outcome {index}.outcome")
+        typed_counts[kind] += 1
+    if outcome_keys != sorted(set(outcome_keys)):
+        fail(f"{name} successful roots are noncanonical")
+    if typed_counts != {
+        "resolved": count_values["resolved_roots"],
+        "unresolved": count_values["unresolved_roots"],
+        "not_installable": count_values["not_installable_roots"],
+    }:
+        fail(f"{name} typed outcomes disagree with counts")
+
+    failure_keys: list[str] = []
+    retained_bytes = 0
+    retained_explanations = 0
+    withheld_explanations = 0
+    withholding_started = False
+    for index, item in enumerate(failures):
+        failure = exact_object(
+            item,
+            {
+                "root_package_key_sha256", "name", "version", "release", "architecture",
+                "error_kind", "error_message", "native_explanation",
+            },
+            f"{name} failure {index}",
+        )
+        failure_keys.append(require_sha256(failure["root_package_key_sha256"], f"{name} failure {index} root"))
+        for key in ("name", "version", "release"):
+            require_rust_identity(failure[key], f"{name} failure {index}.{key}")
+        require_optional_string(failure["architecture"], f"{name} failure {index}.architecture")
+        validate_error_kind(failure["error_kind"], f"{name} failure {index}.error_kind")
+        if not isinstance(failure["error_message"], str) or not failure["error_message"]:
+            fail(f"{name} failure {index} error message is empty or malformed")
+        withheld, size = validate_explanation(
+            failure["native_explanation"], f"{name} failure {index}.native_explanation"
+        )
+        if withheld:
+            withholding_started = True
+            withheld_explanations += 1
+        else:
+            if withholding_started:
+                fail(f"{name} retained evidence after withholding began")
+            retained_explanations += 1
+            retained_bytes += size
+    if failure_keys != sorted(set(failure_keys)) or set(failure_keys) & set(outcome_keys):
+        fail(f"{name} failure roots are noncanonical or overlap successful roots")
+    limits = {
+        key: exact_nonnegative_int(survey[key], f"{name}.{key}")
+        for key in (
+            "failure_record_limit", "total_failures", "retained_failures",
+            "evidence_byte_limit", "retained_evidence_bytes", "retained_explanations",
+            "withheld_explanations",
+        )
+    }
+    if (
+        limits["total_failures"] != count_values["failed_roots"]
+        or limits["retained_failures"] != len(failures)
+        or limits["retained_failures"] > limits["total_failures"]
+        or limits["retained_failures"] > limits["failure_record_limit"]
+        or not isinstance(survey["truncated"], bool)
+        or survey["truncated"] != (limits["retained_failures"] < limits["total_failures"])
+        or retained_bytes > limits["evidence_byte_limit"]
+        or limits["retained_evidence_bytes"] != retained_bytes
+        or limits["retained_explanations"] != retained_explanations
+        or limits["withheld_explanations"] != withheld_explanations
+        or retained_explanations + withheld_explanations != limits["retained_failures"]
+        or not isinstance(survey["truncated_evidence"], bool)
+        or survey["truncated_evidence"] != (withheld_explanations > 0)
+    ):
+        fail(f"{name} retention or evidence counts are inconsistent")
 
 
 def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -> None:
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        fail(f"{name} is not a native resolution comparison survey schema 1 document")
-    counts = validate_counts(
-        value.get("counts"), name, ("matching_roots", "mismatched_roots"), "roots_walked"
+    survey = exact_object(
+        value,
+        {
+            "schema_version", "profile", "profile_revision_sha256",
+            "package_oracle_manifest_sha256", "oracle_manifest_sha256",
+            "candidate_manifest_sha256", "counts", "mismatch_record_limit",
+            "total_mismatches", "retained_mismatches", "truncated", "mismatches",
+        },
+        name,
     )
     if (
-        value.get("profile") != profile["profile"]
-        or value.get("profile_revision_sha256") != profile["profile_revision_sha256"]
-        or value.get("package_oracle_manifest_sha256")
-        != profile["package_oracle_manifest_sha256"]
-        or value.get("oracle_manifest_sha256")
-        != profile["native_resolution_manifest_sha256"]
-        or value.get("total_mismatches") != counts["mismatched_roots"]
-        or not isinstance(counts.get("mismatch_kinds"), list)
-        or not isinstance(counts.get("outcome_kind_pairs"), list)
+        survey["schema_version"] != 1
+        or survey["profile"] != profile["profile"]
+        or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
+        or survey["package_oracle_manifest_sha256"] != profile["package_oracle_manifest_sha256"]
+        or survey["oracle_manifest_sha256"] != profile["native_resolution_manifest_sha256"]
     ):
-        fail(f"{name} binding or mismatch counts drifted")
+        fail(f"{name} identity or oracle binding drifted")
+    require_rust_identity(survey["profile"], f"{name}.profile")
+    for key in (
+        "profile_revision_sha256", "package_oracle_manifest_sha256",
+        "oracle_manifest_sha256", "candidate_manifest_sha256",
+    ):
+        require_sha256(survey[key], f"{name}.{key}")
+    counts = exact_object(
+        survey["counts"],
+        {"roots_walked", "matching_roots", "mismatched_roots", "mismatch_kinds", "outcome_kind_pairs"},
+        f"{name}.counts",
+    )
+    roots = exact_nonnegative_int(counts["roots_walked"], f"{name}.counts.roots_walked")
+    matching = exact_nonnegative_int(counts["matching_roots"], f"{name}.counts.matching_roots")
+    mismatched = exact_nonnegative_int(counts["mismatched_roots"], f"{name}.counts.mismatched_roots")
+    if matching + mismatched > U64_MAX or matching + mismatched != roots:
+        fail(f"{name} root counts are inconsistent")
+    mismatch_keys: list[int] = []
+    mismatch_total = 0
+    if not isinstance(counts["mismatch_kinds"], list):
+        fail(f"{name} mismatch histogram must be an array")
+    for index, item in enumerate(counts["mismatch_kinds"]):
+        entry = exact_object(item, {"kind", "count"}, f"{name} mismatch histogram {index}")
+        try:
+            mismatch_keys.append(MISMATCH_KINDS.index(entry["kind"]))
+        except (ValueError, TypeError):
+            fail(f"{name} mismatch histogram {index} kind is unsupported")
+        mismatch_total += exact_nonnegative_int(entry["count"], f"{name} mismatch histogram {index} count")
+    if mismatch_total > U64_MAX or mismatch_total != mismatched or mismatch_keys != sorted(set(mismatch_keys)):
+        fail(f"{name} mismatch histogram is inconsistent")
+    pair_keys: list[tuple[int, int]] = []
+    pair_total = 0
+    if not isinstance(counts["outcome_kind_pairs"], list):
+        fail(f"{name} outcome-pair histogram must be an array")
+    for index, item in enumerate(counts["outcome_kind_pairs"]):
+        entry = exact_object(item, {"pair", "count"}, f"{name} outcome histogram {index}")
+        pair = exact_object(entry["pair"], {"oracle", "candidate"}, f"{name} outcome histogram {index} pair")
+        try:
+            pair_keys.append((OUTCOME_KINDS.index(pair["oracle"]), OUTCOME_KINDS.index(pair["candidate"])))
+        except (ValueError, TypeError):
+            fail(f"{name} outcome histogram {index} pair is unsupported")
+        pair_total += exact_nonnegative_int(entry["count"], f"{name} outcome histogram {index} count")
+    if pair_total > U64_MAX or pair_total != mismatched or pair_keys != sorted(set(pair_keys)):
+        fail(f"{name} outcome-pair histogram is inconsistent")
+
+    limits = {
+        key: exact_nonnegative_int(survey[key], f"{name}.{key}")
+        for key in ("mismatch_record_limit", "total_mismatches", "retained_mismatches")
+    }
+    mismatches = survey["mismatches"]
+    if (
+        not isinstance(mismatches, list)
+        or limits["total_mismatches"] != mismatched
+        or limits["retained_mismatches"] != len(mismatches)
+        or limits["retained_mismatches"] > limits["total_mismatches"]
+        or limits["retained_mismatches"] > limits["mismatch_record_limit"]
+        or not isinstance(survey["truncated"], bool)
+        or survey["truncated"] != (limits["retained_mismatches"] < limits["total_mismatches"])
+    ):
+        fail(f"{name} mismatch retention counts are inconsistent")
+    for index, item in enumerate(mismatches):
+        mismatch = exact_object(item, {"root", "kind", "oracle", "candidate"}, f"{name} mismatch {index}")
+        root = exact_object(
+            mismatch["root"],
+            {"package_key_sha256", "name", "version", "release", "architecture"},
+            f"{name} mismatch {index} root",
+        )
+        root_sha256 = require_sha256(root["package_key_sha256"], f"{name} mismatch {index} root digest")
+        for key in ("name", "version", "release"):
+            require_rust_identity(root[key], f"{name} mismatch {index} root.{key}")
+        require_optional_string(root["architecture"], f"{name} mismatch {index} root.architecture")
+        typed: dict[str, tuple[str, dict[str, Any]]] = {}
+        for side, manifest_key in (("oracle", "oracle_manifest_sha256"), ("candidate", "candidate_manifest_sha256")):
+            evidence = exact_object(mismatch[side], {"manifest_sha256", "outcome"}, f"{name} mismatch {index} {side}")
+            if evidence["manifest_sha256"] != survey[manifest_key]:
+                fail(f"{name} mismatch {index} {side} manifest binding drifted")
+            typed[side] = (
+                validate_native_outcome(evidence["outcome"], root_sha256, f"{name} mismatch {index} {side}.outcome"),
+                evidence["outcome"],
+            )
+        if typed["oracle"][1] == typed["candidate"][1]:
+            fail(f"{name} mismatch {index} retains equal outcomes")
+        if typed["oracle"][0] != typed["candidate"][0]:
+            expected_kind = "resolution_outcome"
+        elif typed["oracle"][0] == "resolved":
+            expected_kind = "dependency_closure"
+        elif typed["oracle"][0] == "unresolved":
+            expected_kind = "unresolved_dependencies"
+        else:
+            expected_kind = "not_installable_reason"
+        if mismatch["kind"] != expected_kind:
+            fail(f"{name} mismatch {index} kind disagrees with its evidence")
 
 
 def forbid_private_paths(value: Any, label: str) -> None:

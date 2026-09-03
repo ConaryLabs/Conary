@@ -6,9 +6,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -16,6 +18,11 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOL = REPO_ROOT / "scripts" / "remi-resolution-survey-transport.py"
+sys.dont_write_bytecode = True
+TOOL_SPEC = importlib.util.spec_from_file_location("remi_resolution_survey_transport", TOOL)
+assert TOOL_SPEC is not None and TOOL_SPEC.loader is not None
+TRANSPORT_TOOL = importlib.util.module_from_spec(TOOL_SPEC)
+TOOL_SPEC.loader.exec_module(TRANSPORT_TOOL)
 PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
 ARCHITECTURES = {"fedora-44": "x86_64", "ubuntu-26.04": "amd64", "arch": "x86_64"}
 ORACLE_RUN_ID = "300"
@@ -314,30 +321,166 @@ class TransportFixture:
 
 
 def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict[str, object]:
+    architecture = ARCHITECTURES[profile]
+    outcome_root = "1" * 64
+    failure_root = "2" * 64
+    error_kind = {"error_variant": "config_error", "reason": "solver_failed"}
     counts = {
         "roots_walked": 2,
         "resolved_roots": 1,
         "unresolved_roots": 0,
         "not_installable_roots": 0,
         "failed_roots": 1,
-        "error_kinds": [{"kind": {"error_variant": "config_error", "reason": "solver_failed"}, "count": 1}],
+        "error_kinds": [{"kind": error_kind, "count": 1}],
     }
     return {
         "schema_version": 1,
         "profile": profile,
         "profile_revision_sha256": revision,
         "package_oracle_manifest_sha256": package_manifest,
-        "implementation": {},
-        "policy": {"architecture": ARCHITECTURES[profile]},
-        "target_architecture": ARCHITECTURES[profile],
+        "implementation": {
+            "ecosystem": "rpm",
+            "name": "conary",
+            "version": "1",
+            "projection_schema": 1,
+        },
+        "policy": {
+            "architecture": architecture,
+            "architecture_admission": "native_only",
+            "installed_state": "empty",
+            "roots": "every_exact_package",
+            "positive_requirements": "required_only",
+            "provider_selection": "native_precedence",
+        },
+        "target_architecture": architecture,
         "counts": counts,
-        "outcomes": [],
+        "outcomes": [
+            {
+                "root_package_key_sha256": outcome_root,
+                "name": "example",
+                "version": "1:2.0~rc1",
+                "release": "1.fc44",
+                "architecture": architecture,
+                "outcome": {
+                    "status": "resolved",
+                    "closure_package_keys_sha256": [outcome_root],
+                },
+            }
+        ],
+        "failure_record_limit": 5000,
         "total_failures": 1,
-        "failures": [],
+        "retained_failures": 1,
+        "truncated": False,
+        "evidence_byte_limit": 67108864,
+        "retained_evidence_bytes": 0,
+        "retained_explanations": 0,
+        "withheld_explanations": 1,
+        "truncated_evidence": True,
+        "failures": [
+            {
+                "root_package_key_sha256": failure_root,
+                "name": "broken-example",
+                "version": "1",
+                "release": "1",
+                "architecture": architecture,
+                "error_kind": error_kind,
+                "error_message": "solver failed",
+                "native_explanation": {
+                    "source": "withheld",
+                    "reason": "evidence_budget_exhausted",
+                },
+            }
+        ],
     }
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_complete_comparison_schema_and_mismatch_evidence(self) -> None:
+        root_sha256 = "7" * 64
+        oracle_manifest = "8" * 64
+        candidate_manifest = "9" * 64
+        profile = {
+            "profile": "fedora-44",
+            "profile_revision_sha256": "1" * 64,
+            "target_architecture": "x86_64",
+            "package_oracle_manifest_sha256": "2" * 64,
+            "native_resolution_manifest_sha256": oracle_manifest,
+        }
+        resolved = {
+            "status": "resolved",
+            "closure_package_keys_sha256": [root_sha256],
+        }
+        unresolved = {
+            "status": "unresolved",
+            "dependencies": [
+                {
+                    "requiring_package_key_sha256": root_sha256,
+                    "requirement_group_sha256": "a" * 64,
+                }
+            ],
+        }
+        comparison = {
+            "schema_version": 1,
+            "profile": profile["profile"],
+            "profile_revision_sha256": profile["profile_revision_sha256"],
+            "package_oracle_manifest_sha256": profile[
+                "package_oracle_manifest_sha256"
+            ],
+            "oracle_manifest_sha256": oracle_manifest,
+            "candidate_manifest_sha256": candidate_manifest,
+            "counts": {
+                "roots_walked": 1,
+                "matching_roots": 0,
+                "mismatched_roots": 1,
+                "mismatch_kinds": [{"kind": "resolution_outcome", "count": 1}],
+                "outcome_kind_pairs": [
+                    {
+                        "pair": {"oracle": "resolved", "candidate": "unresolved"},
+                        "count": 1,
+                    }
+                ],
+            },
+            "mismatch_record_limit": 5000,
+            "total_mismatches": 1,
+            "retained_mismatches": 1,
+            "truncated": False,
+            "mismatches": [
+                {
+                    "root": {
+                        "package_key_sha256": root_sha256,
+                        "name": "example",
+                        "version": "1:2.0~rc1",
+                        "release": "1.fc44",
+                        "architecture": "x86_64",
+                    },
+                    "kind": "resolution_outcome",
+                    "oracle": {
+                        "manifest_sha256": oracle_manifest,
+                        "outcome": resolved,
+                    },
+                    "candidate": {
+                        "manifest_sha256": candidate_manifest,
+                        "outcome": unresolved,
+                    },
+                }
+            ],
+        }
+        TRANSPORT_TOOL.validate_comparison_survey(comparison, profile, "comparison.json")
+
+        malformed = json.loads(canonical(comparison))
+        malformed["mismatches"][0]["candidate"]["outcome"] = resolved
+        with self.assertRaisesRegex(ValueError, "equal outcomes"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json"
+            )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["retained_mismatches"] = 0
+        with self.assertRaisesRegex(ValueError, "retention counts"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json"
+            )
+
     def test_build_input_binds_all_runs_and_oracle_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
@@ -464,13 +607,21 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             }
             output = root / "survey.tar"
             manifest_path = root / "manifest.json"
-            write_json(manifest_path, manifest)
-            for name, data in survey_files.items():
-                (root / name).write_bytes(data)
-            with tarfile.open(output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-                archive.add(manifest_path, arcname="manifest.json")
-                for name in sorted(survey_files):
-                    archive.add(root / name, arcname=name)
+
+            def write_output() -> None:
+                manifest["files"] = [
+                    {"path": name, "sha256": digest(data), "size": len(data)}
+                    for name, data in sorted(survey_files.items())
+                ]
+                write_json(manifest_path, manifest)
+                for file_name, file_data in survey_files.items():
+                    (root / file_name).write_bytes(file_data)
+                with tarfile.open(output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                    archive.add(manifest_path, arcname="manifest.json")
+                    for file_name in sorted(survey_files):
+                        archive.add(root / file_name, arcname=file_name)
+
+            write_output()
             verification = root / "verification.json"
             command = [
                 "python3",
@@ -492,6 +643,27 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(verification.read_bytes())["counts"]["candidate_failures"], 3
             )
+
+            first_name = sorted(survey_files)[0]
+            valid_candidate = survey_files[first_name]
+            malformed_candidate = json.loads(valid_candidate)
+            del malformed_candidate["failure_record_limit"]
+            survey_files[first_name] = canonical(malformed_candidate)
+            write_output()
+            verification.unlink(missing_ok=True)
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fields differ from the exact schema", result.stderr)
+
+            malformed_candidate = json.loads(valid_candidate)
+            malformed_candidate["counts"]["error_kinds"][0]["count"] = 2
+            survey_files[first_name] = canonical(malformed_candidate)
+            write_output()
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("histogram disagrees with failures", result.stderr)
+            survey_files[first_name] = valid_candidate
+            write_output()
 
             input_evidence_bytes = fixture.evidence.read_bytes()
             wrong_input = json.loads(input_evidence_bytes)
