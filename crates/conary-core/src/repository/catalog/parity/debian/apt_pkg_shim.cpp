@@ -638,15 +638,21 @@ bool group_has_policy_target(ResolutionHandle &handle, pkgCache::DepIterator con
 bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
                                           EvidenceDepCache &dependency_cache,
                                           pkgCache::VerIterator const &root) {
+    unsigned long const broken_count = dependency_cache.BrokenCount();
+    unsigned long broken_marked_packages = 0;
     for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
         pkgDepCache::StateCache &state = dependency_cache[package];
         if (!state.Install()) {
             continue;
         }
+        if (state.InstBroken()) {
+            ++broken_marked_packages;
+        }
         pkgCache::VerIterator version = state.InstVerIter(*handle.cache);
         if (version.end()) {
             return false;
         }
+        bool found_broken_dependency = false;
         for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
             pkgCache::DepIterator start;
             pkgCache::DepIterator end;
@@ -658,6 +664,7 @@ bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
             if (satisfied || (!end.IsCritical() && !end.IsNegative())) {
                 continue;
             }
+            found_broken_dependency = true;
             bool const root_no_target =
                 version == root &&
                 (end->Type == pkgCache::Dep::Depends || end->Type == pkgCache::Dep::PreDepends) &&
@@ -666,8 +673,11 @@ bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
                 return false;
             }
         }
+        if (state.InstBroken() && !found_broken_dependency) {
+            return false;
+        }
     }
-    return true;
+    return broken_marked_packages == broken_count;
 }
 
 bool target_is_installable_with_root(ResolutionHandle &handle,
