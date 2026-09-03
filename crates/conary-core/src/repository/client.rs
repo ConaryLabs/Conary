@@ -15,12 +15,14 @@ use reqwest::Client;
 use reqwest::header;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+mod public_network;
 mod stream;
+pub(crate) use public_network::is_file_or_local_reference;
+pub use public_network::{require_public_repository_ip, validate_url_scheme};
 use stream::{ContentRange, ResponseStreamOptions, content_range, stream_response_to_file};
 
 /// Exact identity accumulated while response chunks are written.
@@ -126,74 +128,12 @@ pub(crate) async fn read_response_bytes_with_limit(
     Ok(body)
 }
 
-/// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
-///
-/// Rejects file://, gopher://, and other non-HTTP schemes to prevent SSRF.
-pub fn validate_url_scheme(url: &str) -> Result<()> {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        Ok(())
-    } else {
-        Err(Error::ConfigError(format!(
-            "URL must use http:// or https:// scheme: {}",
-            url
-        )))
-    }
-}
-
-pub fn require_public_repository_ip(ip: IpAddr) -> Result<()> {
-    let forbidden = match ip {
-        IpAddr::V4(ip) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return require_public_repository_ip(IpAddr::V4(mapped));
-            }
-            let first = ip.segments()[0];
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-        }
-    };
-    if forbidden {
-        return Err(Error::ConfigError(format!(
-            "repository URL resolved to private or link-local address {ip}"
-        )));
-    }
-    Ok(())
-}
-
-pub(crate) fn is_file_or_local_reference(url_or_path: &str) -> bool {
-    url_or_path.starts_with("file://") || !has_url_scheme(url_or_path)
-}
-
-fn has_url_scheme(input: &str) -> bool {
-    let Some(colon_index) = input.find(':') else {
-        return false;
-    };
-
-    let scheme = &input[..colon_index];
-    let mut bytes = scheme.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-
-    first.is_ascii_alphabetic()
-        && bytes.all(|byte| {
-            matches!(
-                byte,
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'
-            )
-        })
-}
-
 fn local_path_from_reference(url_or_path: &str) -> Option<PathBuf> {
     if let Some(path) = url_or_path.strip_prefix("file://") {
         return Some(PathBuf::from(path));
     }
 
-    if has_url_scheme(url_or_path) {
+    if public_network::has_url_scheme(url_or_path) {
         return None;
     }
 
@@ -436,33 +376,7 @@ impl RepositoryClient {
         if !self.public_network_only {
             return Ok(self.client.clone());
         }
-        let parsed = url::Url::parse(url)
-            .map_err(|error| Error::ConfigError(format!("invalid repository URL: {error}")))?;
-        let host = parsed
-            .host_str()
-            .ok_or_else(|| Error::ConfigError("repository URL has no host".to_string()))?;
-        let port = parsed
-            .port_or_known_default()
-            .ok_or_else(|| Error::ConfigError("repository URL has no port".to_string()))?;
-        let addrs = tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|error| Error::DownloadError(format!("failed to resolve '{host}': {error}")))?
-            .collect::<Vec<SocketAddr>>();
-        if addrs.is_empty() {
-            return Err(Error::DownloadError(format!(
-                "DNS resolution for '{host}' returned no addresses"
-            )));
-        }
-        for addr in &addrs {
-            require_public_repository_ip(addr.ip())?;
-        }
-        Client::builder()
-            .connect_timeout(self.timeouts.connect)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .resolve_to_addrs(host, &addrs)
-            .build()
-            .map_err(|error| Error::InitError(http_client_builder_error_message(error)))
+        public_network::pinned_client_for_url(url, &self.timeouts).await
     }
 
     /// Set a custom retry config (builder pattern)
