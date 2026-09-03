@@ -3513,6 +3513,19 @@ test_check_release_matrix_requires_ordinary_conary_hook_fence() {
     assert_check_release_matrix_fails "$repo" "release ordinary Conary test-hook fence"
 }
 
+test_check_release_matrix_rejects_published_binary_as_hook_runner() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-artifact-proof.yml" \
+        '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks' \
+        '          CONARY_BIN: /usr/bin/conary'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published native package fence and separate test-hook lifecycle proof"
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3956,6 +3969,7 @@ main() {
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
         test_check_release_matrix_rejects_test_hooks_in_release_workflow
         test_check_release_matrix_requires_ordinary_conary_hook_fence
+        test_check_release_matrix_rejects_published_binary_as_hook_runner
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary

@@ -1027,9 +1027,26 @@ fn release_artifact_workflow_installs_every_published_native_package() {
             .is_some_and(|run| run.contains("--native-package"))
     );
 
+    let ordinary_fence = named_step(&job.steps, "Prove the published binary rejects test hooks");
+    let ordinary_fence_script = ordinary_fence
+        .run
+        .as_deref()
+        .expect("published binary fence script");
+    for required in [
+        "/usr/bin/conary --version",
+        "CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/bin/conary --version",
+        "test-hook environment variables are disabled",
+        "/usr/libexec/conary-test/conary-test-hooks --version",
+    ] {
+        assert!(
+            ordinary_fence_script.contains(required),
+            "published binary fence must contain {required}"
+        );
+    }
+
     let lifecycle = named_step(
         &job.steps,
-        "Run Cartesian lifecycle parity with the published binary",
+        "Run Cartesian lifecycle parity with the test-hook binary",
     );
     assert!(
         lifecycle
@@ -1043,6 +1060,10 @@ fn release_artifact_workflow_installs_every_published_native_package() {
             .get("CONARY_TEST_REUSE_IMAGE")
             .map(String::as_str),
         Some("1")
+    );
+    assert_eq!(
+        lifecycle.env.get("CONARY_BIN").map(String::as_str),
+        Some("/usr/libexec/conary-test/conary-test-hooks")
     );
 
     let gate: GateJob = parse_job(&workflow, RELEASE_ARTIFACT_GATE_ID);

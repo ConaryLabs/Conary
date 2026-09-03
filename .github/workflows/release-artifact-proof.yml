@@ -225,9 +225,24 @@ jobs:
           images build
           --distro "${{ matrix.distro }}"
           --native-package "${{ steps.release.outputs.native_package }}"
-      - name: Run Cartesian lifecycle parity with the published binary
+      - name: Prove the published binary rejects test hooks
+        run: |
+          set -euo pipefail
+          image="conary-test-${{ matrix.distro }}:latest"
+          docker run --rm "$image" /bin/bash -euo pipefail -c '
+            /usr/bin/conary --version
+            test -x /usr/libexec/conary-test/conary-test-hooks
+            if CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/bin/conary --version > /tmp/ordinary.out 2> /tmp/ordinary.err; then
+              echo "published Conary binary accepted a test hook" >&2
+              exit 1
+            fi
+            grep -F "test-hook environment variables are disabled" /tmp/ordinary.err
+            CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/libexec/conary-test/conary-test-hooks --version
+          '
+      - name: Run Cartesian lifecycle parity with the test-hook binary
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
+          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks
         run: >-
           cargo run -p conary-test --
           run
