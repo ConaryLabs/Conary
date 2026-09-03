@@ -453,7 +453,7 @@ for index in 0 1 2; do
             --arg artifact "$candidate_artifact_sha256" \
             --argjson size "$candidate_artifact_size" '
             {
-              schema_version:2,
+              schema_version:3,
               profile:$candidate.profile,
               profile_revision_sha256:$candidate.profile_revision_sha256,
               profile_logical_digest_sha256:$package[0].profile_logical_digest_sha256,
@@ -622,7 +622,7 @@ make_survey_oracle_transport() {
             --arg sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
             --argjson size "$(stat -c '%s' "$resolution_artifact")" '
             {
-              schema_version:2,
+              schema_version:3,
               profile:$profile,
               profile_revision_sha256:$revision,
               profile_logical_digest_sha256:("1" * 64),
