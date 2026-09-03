@@ -7,6 +7,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ROOT="${CONARY_REMI_DEPLOY_ROOT:-}"
 SKIP_RESTART="${CONARY_REMI_DEPLOY_SKIP_RESTART:-0}"
 HEALTH_URL="${CONARY_REMI_DEPLOY_HEALTH_URL:-http://localhost:8081/health}"
+SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"
 SITE_HOME_URL="${CONARY_REMI_DEPLOY_SITE_HOME_URL:-https://conary.io/}"
 SITE_INSTALLER_URL="${CONARY_REMI_DEPLOY_SITE_INSTALLER_URL:-https://conary.io/install-conary-preview.sh}"
 SITE_ORIGIN_RESOLVE="${CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE:-conary.io:443:127.0.0.1}"
@@ -778,14 +779,19 @@ survey_start_and_probe() {
         echo "remi deploy helper: failed to restart Remi after resolution survey" >&2
         return 1
     fi
-    if [[ -z "$ROOT" ]]; then
-        sleep 2
-    fi
-    if ! curl -fsS --max-time 30 "$HEALTH_URL" >/dev/null; then
-        echo "remi deploy helper: Remi readiness check failed after resolution survey" >&2
-        return 1
-    fi
-    SURVEY_REMI_STOPPED=0
+    local readiness_attempts_remaining=30
+    while (( readiness_attempts_remaining > 0 )); do
+        if curl -fsS --max-time 2 "$SURVEY_READINESS_URL" >/dev/null 2>&1; then
+            SURVEY_REMI_STOPPED=0
+            return 0
+        fi
+        readiness_attempts_remaining=$((readiness_attempts_remaining - 1))
+        if (( readiness_attempts_remaining > 0 )) && [[ -z "$ROOT" ]]; then
+            sleep 1
+        fi
+    done
+    echo "remi deploy helper: Remi readiness check failed after resolution survey" >&2
+    return 1
 }
 
 survey_restore_and_exit() {

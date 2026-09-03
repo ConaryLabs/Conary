@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 32
+revision: 33
 status: active
 ---
 
@@ -493,8 +493,8 @@ helper from its exact protected `github.workflow_sha` through the existing
 identity, and typed oracle transport path. The root-owned helper reads the exact
 candidate revisions from the stopped deployment's own pointers, uses the
 profile-bound architectures, and freezes the survey JSON under root ownership
-before restarting. It
-restores readiness regardless of recorded findings, and returns only survey JSON
+before restarting. It polls `/health/ready` to a bounded successful result
+regardless of recorded findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport and compares every authority
 binding with its authenticated input verification. Neither side has promotion,

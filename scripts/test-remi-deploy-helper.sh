@@ -633,7 +633,7 @@ run_survey_helper() {
 
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=0 \
-    CONARY_REMI_DEPLOY_HEALTH_URL="file://${fake_root}/health" \
+    CONARY_REMI_DEPLOY_SURVEY_READINESS_URL="file://${fake_root}/health" \
     CONARY_REMI_DEPLOY_TEST_SYSTEMCTL="${fake_root}/fake-systemctl" \
     CONARY_FAKE_SERVICE_STATE="${fake_root}/service-state" \
     CONARY_FAKE_SERVICE_LOG="${fake_root}/service-log" \
@@ -1164,6 +1164,11 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     local export_id="slice6-export-$$"
     local fake_root="${tmpdir}/root-${survey_id}"
     local output transport verification
+    # shellcheck disable=SC2016
+    grep -F 'SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"' \
+        "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
+    grep -F 'local readiness_attempts_remaining=30' "$helper" >/dev/null ||
+        fail "resolution survey lost its bounded readiness poll"
     make_survey_fixture "$fake_root" "$survey_id" "$export_id"
 
     output="$(CONARY_FAKE_MUTATE_SURVEY_ON_START="${fake_root}/conary/evidence/resolution-surveys/${survey_id}/fedora-44.candidate-resolution-survey.json" \
