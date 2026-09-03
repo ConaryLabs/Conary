@@ -5,8 +5,6 @@
 //! - Configurable failure threshold before opening
 //! - Jitter-based cooldown to prevent synchronized retry storms
 //! - Half-open state for gradual recovery
-//!
-//! Based on recommendations from GPT 5.2 and Gemini 3 Pro experts.
 
 use super::peer::PeerId;
 use dashmap::DashMap;
@@ -142,11 +140,7 @@ impl CircuitBreaker {
     ///
     /// Jitter is re-randomised on every call, including re-opens from
     /// HalfOpen after a failed probe.  This spreads out retry storms when
-    /// many peers fail simultaneously. (fix 11.3)
-    ///
-    /// TODO(round2): Apply exponential backoff on successive re-opens so
-    /// that persistent peer failures do not continue to probe at the same
-    /// base rate.
+    /// many peers fail simultaneously.
     fn open(&mut self) {
         debug!("Circuit breaker opening (failures: {})", self.failure_count);
         self.state = CircuitState::Open;

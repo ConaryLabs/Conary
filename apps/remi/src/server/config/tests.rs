@@ -285,6 +285,17 @@ forgejo_token = "secret"
 }
 
 #[test]
+fn federation_section_rejects_removed_security_options() {
+    for field in ["cert_path", "key_path", "ca_path", "signing_key"] {
+        let source = format!("[federation]\n{field} = \"/ignored/security-option\"\n");
+        let error = toml::from_str::<RemiConfig>(&source)
+            .expect_err("removed federation security option must be rejected")
+            .to_string();
+        assert!(error.contains(field), "{error}");
+    }
+}
+
+#[test]
 fn retired_eviction_policy_is_rejected() {
     for (field, value) in [
         ("eviction_threshold", "1.5"),

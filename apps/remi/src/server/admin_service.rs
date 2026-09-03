@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
+#[cfg(feature = "dormant-federation")]
 use conary_core::db::models::federation_peer::FederationPeer;
 use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryOwnership};
 use conary_core::repository::{
@@ -23,6 +24,7 @@ use conary_core::repository::{
 };
 use rusqlite::TransactionBehavior;
 
+#[cfg(feature = "dormant-federation")]
 use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
@@ -430,6 +432,7 @@ pub async fn delete_token(state: &Arc<RwLock<ServerState>>, id: i64) -> Result<b
 // ---------------------------------------------------------------------------
 
 /// Input for adding a new federation peer.
+#[cfg(feature = "dormant-federation")]
 pub struct AddPeerInput {
     pub endpoint: String,
     pub tier: Option<String>,
@@ -438,6 +441,7 @@ pub struct AddPeerInput {
 }
 
 /// List all federation peers.
+#[cfg(feature = "dormant-federation")]
 pub async fn list_peers(
     state: &Arc<RwLock<ServerState>>,
 ) -> Result<Vec<FederationPeer>, ServiceError> {
@@ -454,6 +458,7 @@ pub async fn list_peers(
 /// Validates the endpoint URL and tier, derives the peer ID, and inserts via
 /// the `federation_peer` model. HTTPS peers must include a pinned TLS
 /// certificate fingerprint so the stored peer ID is certificate-bound.
+#[cfg(feature = "dormant-federation")]
 pub async fn add_peer(
     state: &Arc<RwLock<ServerState>>,
     input: AddPeerInput,
@@ -520,6 +525,7 @@ pub async fn add_peer(
 }
 
 /// Delete a federation peer by ID.  Returns `true` if a row was deleted.
+#[cfg(feature = "dormant-federation")]
 pub async fn delete_peer(state: &Arc<RwLock<ServerState>>, id: &str) -> Result<bool, ServiceError> {
     let db = db_path(state).await;
     let id_owned = id.to_string();
@@ -531,6 +537,7 @@ pub async fn delete_peer(state: &Arc<RwLock<ServerState>>, id: &str) -> Result<b
 }
 
 /// Get a single federation peer by ID.
+#[cfg(feature = "dormant-federation")]
 pub async fn get_peer(
     state: &Arc<RwLock<ServerState>>,
     id: &str,

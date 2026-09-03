@@ -2,7 +2,7 @@
 //! MCP (Model Context Protocol) server for LLM agent integration.
 //!
 //! Exposes Remi admin operations as MCP tools so that LLM agents can manage
-//! tokens, repositories, federation peers, audit data,
+//! tokens, repositories, audit data,
 //! test harness state, chunk garbage collection, and canonical mappings
 //! through a standardised protocol.
 //!
@@ -30,7 +30,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::server::ServerState;
-use crate::server::admin_service::{self, AddPeerInput, ChunkGcReport, ServiceError};
+#[cfg(feature = "dormant-federation")]
+use crate::server::admin_service::AddPeerInput;
+use crate::server::admin_service::{self, ChunkGcReport, ServiceError};
 use crate::server::r2_durability::{DEFAULT_BACKFILL_CONCURRENCY, R2DurabilityMode};
 
 /// Map a [`ServiceError`] to the appropriate [`McpError`] variant.
@@ -69,11 +71,19 @@ pub struct RemiMcpServer {
 }
 
 impl RemiMcpServer {
+    fn assembled_tool_router() -> ToolRouter<Self> {
+        let mut tool_router = Self::tool_router();
+        tool_router.merge(Self::operations_tool_router());
+        #[cfg(feature = "dormant-federation")]
+        tool_router.merge(Self::federation_tool_router());
+        tool_router
+    }
+
     /// Create a new MCP server backed by the given shared state.
     pub fn new(state: Arc<RwLock<ServerState>>) -> Self {
         Self {
             state,
-            tool_router: Self::tool_router(),
+            tool_router: Self::assembled_tool_router(),
         }
     }
 }
@@ -108,6 +118,7 @@ pub struct RepoNameParams {
 
 /// Parameters for adding a federation peer.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[cfg(feature = "dormant-federation")]
 pub struct AddPeerParams {
     /// HTTP(S) endpoint URL of the peer.
     pub endpoint: String,
@@ -121,6 +132,7 @@ pub struct AddPeerParams {
 
 /// Parameters for operations on a specific peer.
 #[derive(Debug, Deserialize, JsonSchema)]
+#[cfg(feature = "dormant-federation")]
 pub struct PeerIdParams {
     /// Peer ID (endpoint hash for HTTP peers, TLS fingerprint for HTTPS peers).
     pub peer_id: String,
@@ -371,11 +383,11 @@ impl RemiMcpServer {
             )),
         }
     }
+}
 
-    // -----------------------------------------------------------------------
-    // Federation peer management (delegates to admin_service)
-    // -----------------------------------------------------------------------
-
+#[cfg(feature = "dormant-federation")]
+#[tool_router(router = federation_tool_router)]
+impl RemiMcpServer {
     /// List all federation peers with health information.
     #[tool(
         description = "List all federation peers with endpoint, tier, last seen, success rate, and enabled status."
@@ -467,7 +479,10 @@ impl RemiMcpServer {
             ))
         }
     }
+}
 
+#[tool_router(router = operations_tool_router)]
+impl RemiMcpServer {
     // -----------------------------------------------------------------------
     // Audit log (delegates to admin_service)
     // -----------------------------------------------------------------------
@@ -744,7 +759,7 @@ impl ServerHandler for RemiMcpServer {
             "remi-mcp",
             env!("CARGO_PKG_VERSION"),
             "Remi MCP server -- manage admin tokens, list and inspect \
-             repositories, manage federation peers, query and purge \
+             repositories, query and purge \
              the admin audit log, inspect test run data and health, \
              garbage collect chunks, and maintain canonical mappings.",
         )
@@ -839,7 +854,7 @@ mod tests {
 
     #[test]
     fn mcp_tool_catalog_records_context_budget_debt() {
-        let tools = RemiMcpServer::tool_router().list_all();
+        let tools = RemiMcpServer::assembled_tool_router().list_all();
         assert!(
             tools.len() <= 20,
             "Remi has {} MCP tools; split read-only/admin/mutation surfaces or document progressive discovery before adding more",
@@ -849,7 +864,7 @@ mod tests {
 
     #[test]
     fn high_risk_tools_are_named_for_confirmation_review() {
-        let tools = RemiMcpServer::tool_router().list_all();
+        let tools = RemiMcpServer::assembled_tool_router().list_all();
         let names: Vec<String> = tools.iter().map(|tool| tool.name.to_string()).collect();
         assert!(names.iter().any(|name| name.contains("token")));
         assert!(names.iter().any(|name| name.contains("audit")));
@@ -857,8 +872,19 @@ mod tests {
 
     #[test]
     fn high_risk_tool_descriptions_require_contract_confirmation() {
-        let tools = RemiMcpServer::tool_router().list_all();
-        for name in [
+        let tools = RemiMcpServer::assembled_tool_router().list_all();
+        #[cfg(not(feature = "dormant-federation"))]
+        let high_risk = [
+            "create_token",
+            "delete_token",
+            "purge_audit_log",
+            "chunk_gc",
+            "r2_durability",
+            "canonical_rebuild",
+            "canonical_fetch",
+        ];
+        #[cfg(feature = "dormant-federation")]
+        let high_risk = [
             "create_token",
             "delete_token",
             "add_peer",
@@ -868,7 +894,8 @@ mod tests {
             "r2_durability",
             "canonical_rebuild",
             "canonical_fetch",
-        ] {
+        ];
+        for name in high_risk {
             let tool = tools
                 .iter()
                 .find(|tool| tool.name.as_ref() == name)
@@ -887,12 +914,17 @@ mod tests {
 
     #[test]
     fn test_mcp_tool_list_excludes_legacy_ci_bridge_tools() {
-        let router = RemiMcpServer::tool_router();
+        let router = RemiMcpServer::assembled_tool_router();
         let tool_names: Vec<String> = router
             .list_all()
             .into_iter()
             .map(|tool| tool.name.to_string())
             .collect();
+
+        #[cfg(not(feature = "dormant-federation"))]
+        for dormant in ["list_peers", "add_peer", "delete_peer"] {
+            assert!(!tool_names.iter().any(|name| name == dormant));
+        }
 
         for forbidden in [
             "ci_list_workflows",

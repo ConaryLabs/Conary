@@ -60,87 +60,44 @@ impl TierAllowlists {
 /// - Port wildcard: `https://host:*` matches any port
 /// - Subdomain wildcard: `https://*.domain.com:port`
 fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
-    // Exact match
     if endpoint == pattern {
         return true;
     }
 
-    // Port wildcard: pattern ends with ":*"
-    if let Some(prefix) = pattern.strip_suffix(":*") {
-        // Check if endpoint starts with the prefix and has a port
-        if let Some(rest) = endpoint.strip_prefix(prefix) {
-            // rest should be ":" followed by digits
-            return rest.starts_with(':') && rest[1..].chars().all(|c| c.is_ascii_digit());
-        }
-    }
+    let Ok(endpoint) = url::Url::parse(endpoint) else {
+        return false;
+    };
+    let port_wildcard = pattern.ends_with(":*");
+    let pattern_without_port = pattern.strip_suffix(":*").unwrap_or(pattern);
+    let subdomain_wildcard = pattern_without_port.contains("://*.");
+    let parseable_pattern = if subdomain_wildcard {
+        pattern_without_port.replacen("://*.", "://wildcard.", 1)
+    } else {
+        pattern_without_port.to_string()
+    };
+    let Ok(pattern) = url::Url::parse(&parseable_pattern) else {
+        return false;
+    };
 
-    // Subdomain wildcard: pattern contains "*."
-    if pattern.contains("*.") {
-        // Check for combined subdomain + port wildcard: "https://*.domain:*"
-        let has_port_wildcard = pattern.ends_with(":*");
-        let pattern_for_parsing = if has_port_wildcard {
-            pattern.strip_suffix(":*").unwrap_or(pattern)
-        } else {
-            pattern
+    if endpoint.scheme() != pattern.scheme() {
+        return false;
+    }
+    let (Some(endpoint_host), Some(pattern_host)) = (endpoint.host_str(), pattern.host_str())
+    else {
+        return false;
+    };
+    let host_matches = if subdomain_wildcard {
+        let Some(base) = pattern_host.strip_prefix("wildcard.") else {
+            return false;
         };
-
-        // Parse pattern into scheme://[*.]host:port format
-        let pattern_without_wildcard = pattern_for_parsing.replace("*.", "");
-
-        // Extract the domain part from both
-        if let (Some(endpoint_domain), Some(pattern_domain)) = (
-            extract_domain(endpoint),
-            extract_domain(&pattern_without_wildcard),
-        ) {
-            // Check if endpoint's domain has at least one subdomain level
-            // beyond the pattern's base domain. A bare domain (e.g. "conary.io")
-            // must NOT match "*.conary.io" -- the wildcard requires a subdomain.
-            if endpoint_domain.ends_with(&format!(".{}", pattern_domain)) {
-                // Also verify scheme matches
-                let endpoint_scheme = endpoint.split("://").next().unwrap_or("");
-                let pattern_scheme = pattern.split("://").next().unwrap_or("");
-                if endpoint_scheme == pattern_scheme {
-                    // Port wildcard means any port is OK
-                    if has_port_wildcard {
-                        return true;
-                    }
-                    // Check port (using defaults for implicit ports)
-                    let endpoint_port = extract_port_with_default(endpoint);
-                    let pattern_port = extract_port_with_default(&pattern_without_wildcard);
-                    return endpoint_port == pattern_port;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-/// Extract domain from URL (without port)
-fn extract_domain(url: &str) -> Option<String> {
-    let without_scheme = url.split("://").nth(1)?;
-    let host_port = without_scheme.split('/').next()?;
-    let host = host_port.split(':').next()?;
-    Some(host.to_string())
-}
-
-/// Extract port from URL, returning default port if not specified
-fn extract_port_with_default(url: &str) -> Option<String> {
-    let scheme = url.split("://").next()?;
-    let without_scheme = url.split("://").nth(1)?;
-    let host_port = without_scheme.split('/').next()?;
-
-    // Check for explicit port
-    if let Some(port) = host_port.split(':').nth(1) {
-        return Some(port.to_string());
-    }
-
-    // Return default port based on scheme
-    match scheme {
-        "https" => Some("443".to_string()),
-        "http" => Some("80".to_string()),
-        _ => None,
-    }
+        endpoint_host
+            .strip_suffix(base)
+            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+    } else {
+        endpoint_host == pattern_host
+    };
+    host_matches
+        && (port_wildcard || endpoint.port_or_known_default() == pattern.port_or_known_default())
 }
 
 /// Federation configuration

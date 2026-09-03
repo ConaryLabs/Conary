@@ -4,9 +4,6 @@
 //! Rendezvous hashing provides deterministic peer selection without requiring
 //! global state synchronization. Given a chunk hash and a set of peers, any
 //! node will independently compute the same K candidate peers.
-//!
-//! This approach was recommended by both GPT 5.2 and Gemini 3 Pro experts
-//! over Bloom filters, which have O(N²) dissemination complexity.
 
 use super::config::{PeerTier, TierAllowlists};
 use super::peer::Peer;
@@ -68,8 +65,7 @@ impl RendezvousRouter {
 
     /// Compute the weight for a (chunk, peer) pair
     ///
-    /// Uses FNV-1a for speed. For even better performance at scale,
-    /// consider BLAKE3 (as recommended by Gemini 3 Pro).
+    /// Uses FNV-1a for speed.
     fn compute_weight(&self, chunk_hash: &str, peer_id: &str) -> u64 {
         // Combine chunk hash and peer ID
         let combined = format!("{}:{}", chunk_hash, peer_id);

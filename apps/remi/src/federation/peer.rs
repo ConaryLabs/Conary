@@ -104,7 +104,7 @@ fn normalize_tls_fingerprint(raw: &str) -> Result<String> {
         .unwrap_or(fingerprint)
         .to_ascii_lowercase();
 
-    if fingerprint.len() != 64 || !fingerprint.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if !conary_core::hash::is_canonical_sha256(&fingerprint) {
         return Err(Error::ConfigError(format!(
             "Invalid TLS fingerprint '{}': expected 64 hex characters",
             raw
