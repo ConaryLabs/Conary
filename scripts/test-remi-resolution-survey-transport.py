@@ -951,6 +951,25 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 self.assertIn("unsigned 64-bit integer", result.stderr)
             manifest["schema_version"] = 1
 
+            for malformed_count in (False, 0.0):
+                manifest["counts"]["comparison_profiles"] = malformed_count
+                write_output()
+                verification.unlink(missing_ok=True)
+                result = subprocess.run(
+                    command, text=True, capture_output=True, check=False
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsigned 64-bit integer", result.stderr)
+            manifest["counts"]["comparison_profiles"] = 0
+
+            profiles[0]["candidate"]["total_failures"] = True
+            write_output()
+            verification.unlink(missing_ok=True)
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unsigned 64-bit integer", result.stderr)
+            profiles[0]["candidate"]["total_failures"] = 1
+
             malformed_candidate = json.loads(valid_candidate)
             del malformed_candidate["failure_record_limit"]
             survey_files[first_name] = canonical(malformed_candidate)

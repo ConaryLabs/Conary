@@ -1360,15 +1360,11 @@ survey_resolution() {
         die "sanitized resolution-survey manifest contains a private path"
     fi
 
-    local transport_stage="${SURVEY_STAGING}/transport"
-    mkdir -m 0700 "$transport_stage"
-    install -m 0600 "$survey_manifest" "${transport_stage}/manifest.json"
-    while IFS= read -r candidate_file; do
-        install -m 0600 "$candidate_file" "${transport_stage}/$(basename "$candidate_file")"
-    done < <(find "$output" -mindepth 1 -maxdepth 1 -type f -printf '%p\n' | sort)
     SURVEY_TRANSPORT_NEXT="$(mktemp "/tmp/remi-resolution-survey-${survey_id}.XXXXXX")"
     mapfile -t transport_members < <(jq -r '.files[].path' "$survey_manifest")
-    tar -cf "$SURVEY_TRANSPORT_NEXT" -C "$transport_stage" manifest.json "${transport_members[@]}"
+    tar -cf "$SURVEY_TRANSPORT_NEXT" \
+        -C "$SURVEY_STAGING" manifest.json \
+        -C "$output" "${transport_members[@]}"
     chmod 0600 "$SURVEY_TRANSPORT_NEXT"
     if [[ -z "$ROOT" ]]; then
         chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$SURVEY_TRANSPORT_NEXT"

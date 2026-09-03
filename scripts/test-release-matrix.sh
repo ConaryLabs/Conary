@@ -2466,6 +2466,32 @@ test_check_release_matrix_rejects_unrecomputed_native_comparison() {
         "resolution survey recomputes comparison authority from authenticated native roots"
 }
 
+test_check_release_matrix_rejects_untyped_survey_aggregate_counts() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        exact_nonnegative_int(value, f"survey counts.{key}")' \
+        '        pass'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey aggregate manifest counts retain exact integer types"
+}
+
+test_check_release_matrix_rejects_duplicate_survey_transport_copy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '        -C "$output" "${transport_members[@]}"' \
+        '        -C "$SURVEY_STAGING" "${transport_members[@]}"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey archives the frozen root-owned snapshot without another full copy"
+}
+
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3776,6 +3802,8 @@ main() {
         test_check_release_matrix_rejects_retained_survey_profile_copies
         test_check_release_matrix_rejects_post_findings_package_coverage
         test_check_release_matrix_rejects_unrecomputed_native_comparison
+        test_check_release_matrix_rejects_untyped_survey_aggregate_counts
+        test_check_release_matrix_rejects_duplicate_survey_transport_copy
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

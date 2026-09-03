@@ -2687,10 +2687,15 @@ def verify_staged_output(
         ) as candidate_value:
             validate_candidate_survey(candidate_value, profile, candidate["file"])
             if (
-                candidate.get("counts") != candidate_value["counts"]
-                or candidate.get("total_failures") != candidate_value["total_failures"]
-                or candidate.get("error_histogram")
-                != candidate_value["counts"]["error_kinds"]
+                canonical_json(candidate.get("counts"))
+                != canonical_json(candidate_value["counts"])
+                or exact_nonnegative_int(
+                    candidate.get("total_failures"),
+                    f"{profile_name} candidate summary total_failures",
+                )
+                != candidate_value["total_failures"]
+                or canonical_json(candidate.get("error_histogram"))
+                != canonical_json(candidate_value["counts"]["error_kinds"])
             ):
                 fail(f"{profile_name} candidate summary differs from its survey")
             roots_walked += candidate_value["counts"]["roots_walked"]
@@ -2776,15 +2781,19 @@ def verify_staged_output(
                     comparison_name,
                 )
                 if (
-                    comparison.get("counts") != comparison_value["counts"]
-                    or comparison.get("total_mismatches")
+                    canonical_json(comparison.get("counts"))
+                    != canonical_json(comparison_value["counts"])
+                    or exact_nonnegative_int(
+                        comparison.get("total_mismatches"),
+                        f"{profile_name} comparison summary total_mismatches",
+                    )
                     != comparison_value["total_mismatches"]
                     or comparison.get("candidate_manifest_sha256")
                     != comparison_value["candidate_manifest_sha256"]
-                    or comparison.get("mismatch_histogram")
-                    != comparison_value["counts"]["mismatch_kinds"]
-                    or comparison.get("outcome_histogram")
-                    != comparison_value["counts"]["outcome_kind_pairs"]
+                    or canonical_json(comparison.get("mismatch_histogram"))
+                    != canonical_json(comparison_value["counts"]["mismatch_kinds"])
+                    or canonical_json(comparison.get("outcome_histogram"))
+                    != canonical_json(comparison_value["counts"]["outcome_kind_pairs"])
                 ):
                     fail(f"{profile_name} comparison summary differs from its survey")
                 comparison_profiles += 1
@@ -2806,6 +2815,8 @@ def verify_staged_output(
         },
         "survey counts",
     )
+    for key, value in counts.items():
+        exact_nonnegative_int(value, f"survey counts.{key}")
     if counts != {
         "profiles": 3,
         "roots_walked": roots_walked,

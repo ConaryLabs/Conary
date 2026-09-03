@@ -1348,6 +1348,15 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
         "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
     grep -F 'local readiness_attempts_remaining=30' "$helper" >/dev/null ||
         fail "resolution survey lost its bounded readiness poll"
+    if grep -F 'transport_stage' "$helper" >/dev/null; then
+        fail "resolution survey duplicates its frozen output before archiving"
+    fi
+    # shellcheck disable=SC2016
+    grep -F -- '-C "$SURVEY_STAGING" manifest.json' "$helper" >/dev/null ||
+        fail "resolution survey does not archive its root-owned manifest directly"
+    # shellcheck disable=SC2016
+    grep -F -- '-C "$output" "${transport_members[@]}"' "$helper" >/dev/null ||
+        fail "resolution survey does not archive its frozen survey files directly"
     make_survey_fixture "$fake_root" "$survey_id" "$export_id"
 
     output="$(CONARY_FAKE_MUTATE_SURVEY_ON_START="${fake_root}/conary/evidence/resolution-surveys/${survey_id}/fedora-44.candidate-resolution-survey.json" \
