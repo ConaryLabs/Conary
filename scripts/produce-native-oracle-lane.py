@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -22,18 +23,24 @@ LANES = {
     "fedora-44": {
         "ecosystem": "rpm",
         "implementation": "libsolv",
+        "package_binary": "conary-rpm-oracle",
+        "resolution_binary": "conary-rpm-resolution-oracle",
         "roles": ("rpm_primary", "rpm_filelists"),
         "flags": ("--primary", "--filelists"),
     },
     "ubuntu-26.04": {
         "ecosystem": "debian",
         "implementation": "apt-pkg",
+        "package_binary": "conary-debian-oracle",
+        "resolution_binary": "conary-debian-resolution-oracle",
         "roles": ("debian_packages",),
         "flags": ("--packages",),
     },
     "arch": {
         "ecosystem": "alpm",
         "implementation": "libalpm",
+        "package_binary": "conary-alpm-oracle",
+        "resolution_binary": "conary-alpm-resolution-oracle",
         "roles": ("arch_database",),
         "flags": ("--database",),
     },
@@ -42,6 +49,8 @@ SHA256_LENGTH = 64
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 2
+NATIVE_RESOLUTION_SURVEY_SCHEMA = 2
+NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
 
 
 def canonical_json(value: Any) -> bytes:
@@ -74,8 +83,10 @@ def plain_directory(path: Path, label: str) -> None:
         raise ValueError(f"{label} must be a directory, never a symlink")
 
 
-def load_canonical(path: Path, label: str) -> tuple[Any, bytes]:
-    data = plain_file(path, label, MAX_MANIFEST_BYTES)
+def load_canonical(
+    path: Path, label: str, maximum: int = MAX_MANIFEST_BYTES
+) -> tuple[Any, bytes]:
+    data = plain_file(path, label, maximum)
     value = json.loads(data, object_pairs_hook=reject_duplicate_key)
     if canonical_json(value) != data:
         raise ValueError(f"{label} is not canonical JSON")
@@ -118,6 +129,17 @@ def sha256_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def producer_binary(path: Path, expected_name: str, label: str) -> dict[str, str]:
+    if path.name != expected_name:
+        raise ValueError(f"{label} must be named {expected_name}")
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} must be a regular file, never a symlink")
+    if not os.access(path, os.X_OK):
+        raise ValueError(f"{label} must be executable")
+    return {"name": expected_name, "sha256": sha256_file(path)}
 
 
 def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -213,6 +235,114 @@ def invoke(command: list[str], label: str) -> None:
         raise RuntimeError(f"{label} failed with exit status {result.returncode}")
 
 
+def resolution_survey_evidence(
+    path: Path,
+    profile: dict[str, Any],
+    lane: dict[str, Any],
+    package_manifest_sha256: str,
+) -> dict[str, Any]:
+    survey, survey_bytes = load_canonical(
+        path,
+        "native resolution survey",
+        NATIVE_RESOLUTION_SURVEY_MAX_BYTES,
+    )
+    survey = require_keys(
+        survey,
+        {
+            "schema_version",
+            "profile",
+            "profile_revision_sha256",
+            "package_oracle_manifest_sha256",
+            "implementation",
+            "policy",
+            "target_architecture",
+            "counts",
+            "failure_record_limit",
+            "total_failures",
+            "retained_failures",
+            "truncated",
+            "evidence_byte_limit",
+            "retained_evidence_bytes",
+            "retained_explanations",
+            "withheld_explanations",
+            "truncated_evidence",
+            "failures",
+        },
+        "native resolution survey",
+    )
+    if len(survey_bytes) > NATIVE_RESOLUTION_SURVEY_MAX_BYTES:
+        raise ValueError("native resolution survey exceeds its byte limit")
+    if survey["schema_version"] != NATIVE_RESOLUTION_SURVEY_SCHEMA:
+        raise ValueError(
+            f"native resolution survey schema must be {NATIVE_RESOLUTION_SURVEY_SCHEMA}"
+        )
+    if (
+        survey["profile"] != profile["revision"]["profile"]
+        or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
+        or survey["package_oracle_manifest_sha256"] != package_manifest_sha256
+        or survey["target_architecture"]
+        != profile["revision"]["target_architecture"]
+    ):
+        raise ValueError("native resolution survey binding drifted")
+    implementation = survey["implementation"]
+    if (
+        not isinstance(implementation, dict)
+        or implementation.get("ecosystem") != lane["ecosystem"]
+        or implementation.get("name") != lane["implementation"]
+    ):
+        raise ValueError("native resolution survey implementation drifted")
+    policy = survey["policy"]
+    if (
+        not isinstance(policy, dict)
+        or policy.get("architecture") != survey["target_architecture"]
+    ):
+        raise ValueError("native resolution survey architecture policy drifted")
+    counts = survey["counts"]
+    failures = survey["failures"]
+    if (
+        not isinstance(counts, dict)
+        or not isinstance(failures, list)
+        or survey["total_failures"] != counts.get("failed_roots")
+        or survey["retained_failures"] != len(failures)
+        or survey["retained_failures"] > survey["total_failures"]
+        or survey["truncated"]
+        != (survey["retained_failures"] < survey["total_failures"])
+    ):
+        raise ValueError("native resolution survey counts drifted")
+    return {
+        "schema_version": survey["schema_version"],
+        "sha256": sha256(survey_bytes),
+        "size": len(survey_bytes),
+        "implementation": implementation,
+        "counts": counts,
+        "total_failures": survey["total_failures"],
+        "retained_failures": survey["retained_failures"],
+        "truncated": survey["truncated"],
+        "truncated_evidence": survey["truncated_evidence"],
+    }
+
+
+def write_resolution_survey(
+    command: list[str],
+    survey_path: Path,
+    profile: dict[str, Any],
+    lane: dict[str, Any],
+    package_manifest_sha256: str,
+) -> dict[str, Any]:
+    result = subprocess.run(command, check=False)
+    survey = resolution_survey_evidence(
+        survey_path,
+        profile,
+        lane,
+        package_manifest_sha256,
+    )
+    if (result.returncode == 0) != (survey["total_failures"] == 0):
+        raise RuntimeError(
+            "native resolution survey exit status disagrees with its failure inventory"
+        )
+    return survey
+
+
 def oracle_evidence(
     directory: Path,
     artifact_name: str,
@@ -266,19 +396,33 @@ def oracle_evidence(
 def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     input_root = arguments.input_root.resolve()
     output_root = arguments.output_root.resolve()
+    survey_output_root = arguments.survey_output_root.resolve()
     lane = LANES[arguments.profile]
+    package_binary = producer_binary(
+        arguments.package_producer,
+        lane["package_binary"],
+        "native package producer",
+    )
+    resolution_binary = producer_binary(
+        arguments.resolution_producer,
+        lane["resolution_binary"],
+        "native resolution producer",
+    )
     manifest, profile, input_manifest_sha256 = validate_input(input_root, arguments.profile)
     target_architecture = profile["revision"]["target_architecture"]
     if arguments.architecture != target_architecture:
         raise ValueError(
             f"{arguments.profile} architecture must match profile authority {target_architecture}"
         )
-    if output_root.exists():
+    if output_root.exists() or survey_output_root.exists():
         raise ValueError("native-oracle lane output already exists")
     output_root.parent.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(mode=0o700)
+    survey_output_root.parent.mkdir(parents=True, exist_ok=True)
+    survey_output_root.mkdir(mode=0o700)
     package_output = output_root / "package-oracle"
     resolution_output = output_root / "resolution-oracle"
+    survey_path = survey_output_root / "survey.json"
 
     with tempfile.TemporaryDirectory(prefix="native-oracle-lane-", dir=output_root.parent) as temporary:
         staging = Path(temporary)
@@ -303,6 +447,50 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
                 resolution_command.extend((flag, str(objects_by_role[role])))
         package_command.extend(("--output", str(package_output)))
         invoke(package_command, "native package-fact producer")
+        package = oracle_evidence(
+            package_output,
+            "packages.jsonl",
+            profile,
+            lane,
+            "native package oracle",
+            NATIVE_PACKAGE_ORACLE_SCHEMA,
+        )
+        survey_command = resolution_command + [
+            "--package-oracle", str(package_output),
+            "--architecture", arguments.architecture,
+            "--survey", str(survey_path),
+        ]
+        survey = write_resolution_survey(
+            survey_command,
+            survey_path,
+            profile,
+            lane,
+            package["manifest_sha256"],
+        )
+        survey_manifest = {
+            "schema_version": 1,
+            "artifact_type": "native-resolution-survey-diagnostics",
+            "deployment_run_id": arguments.deployment_run_id,
+            "export_run_id": arguments.export_run_id,
+            "export_id": arguments.export_id,
+            "transport_sha256": arguments.transport_sha256,
+            "deployed_commit": arguments.deployed_commit,
+            "producer_commit": arguments.producer_commit,
+            "producer_binaries": {
+                "package": package_binary,
+                "resolution": resolution_binary,
+            },
+            "lane_image": arguments.lane_image,
+            "input_manifest_sha256": input_manifest_sha256,
+            "profile": arguments.profile,
+            "profile_revision_sha256": profile["profile_revision_sha256"],
+            "target_architecture": target_architecture,
+            "package_oracle": package,
+            "survey": survey,
+        }
+        (survey_output_root / "manifest.json").write_bytes(
+            canonical_json(survey_manifest)
+        )
         resolution_command.extend((
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
@@ -310,14 +498,17 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         ))
         invoke(resolution_command, "native resolution producer")
 
-    package = oracle_evidence(
-        package_output,
-        "packages.jsonl",
-        profile,
-        lane,
-        "native package oracle",
-        NATIVE_PACKAGE_ORACLE_SCHEMA,
-    )
+    if package_binary != producer_binary(
+        arguments.package_producer,
+        lane["package_binary"],
+        "native package producer",
+    ) or resolution_binary != producer_binary(
+        arguments.resolution_producer,
+        lane["resolution_binary"],
+        "native resolution producer",
+    ):
+        raise ValueError("native producer binary changed during lane production")
+
     resolution = oracle_evidence(
         resolution_output,
         "roots.jsonl",
@@ -328,9 +519,19 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         package["manifest_sha256"],
     )
     evidence = {
-        "schema_version": 1,
+        "schema_version": 3,
+        "artifact_type": "native-oracle-lane",
+        "deployment_run_id": arguments.deployment_run_id,
+        "export_run_id": arguments.export_run_id,
         "export_id": arguments.export_id,
+        "transport_sha256": arguments.transport_sha256,
         "deployed_commit": arguments.deployed_commit,
+        "producer_commit": arguments.producer_commit,
+        "producer_binaries": {
+            "package": package_binary,
+            "resolution": resolution_binary,
+        },
+        "lane_image": arguments.lane_image,
         "input_manifest_sha256": input_manifest_sha256,
         "profile": arguments.profile,
         "profile_revision_sha256": profile["profile_revision_sha256"],
@@ -351,10 +552,22 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--package-producer", type=Path, required=True)
     parser.add_argument("--resolution-producer", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--survey-output-root", type=Path, required=True)
+    parser.add_argument("--deployment-run-id", type=int, required=True)
+    parser.add_argument("--export-run-id", type=int, required=True)
     parser.add_argument("--export-id", required=True)
+    parser.add_argument("--transport-sha256", required=True)
     parser.add_argument("--deployed-commit", required=True)
+    parser.add_argument("--producer-commit", required=True)
+    parser.add_argument("--lane-image", required=True)
     arguments = parser.parse_args()
     require_commit(arguments.deployed_commit, "deployed commit")
+    require_commit(arguments.producer_commit, "producer commit")
+    if arguments.deployment_run_id <= 0 or arguments.export_run_id <= 0:
+        raise ValueError("deployment and export run IDs must be positive integers")
+    require_sha256(arguments.transport_sha256, "transport digest")
+    if re.fullmatch(r"[^@\s]+@sha256:[0-9a-f]{64}", arguments.lane_image) is None:
+        raise ValueError("lane image must be an exact SHA-256 OCI reference")
     if re.fullmatch(r"[a-z0-9][a-z0-9.-]*", arguments.export_id) is None:
         raise ValueError("export ID must be a lowercase public identity")
     return arguments

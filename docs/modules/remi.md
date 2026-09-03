@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 144
+revision: 145
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -886,16 +886,27 @@ lifecycle and CLI release tests. They do not satisfy this complete-candidate
 contract.
 
 Protected production uses `produce-remi-native-oracles` with one exact
-successful native-input export run. Authorization independently reopens that
-transport and its deployment evidence, while each native lane builds producer
-binaries from the exact deployed merged commit. The checked-in lane adapter
+successful native-input export run and one explicit full producer commit,
+which operators set to the deployed commit unless intentionally selecting a
+newer producer. Authorization independently reopens that transport and its
+deployment evidence, requires deployed-to-producer-to-`origin/main` ancestry,
+and each native lane builds from the exact clean producer tree. The checked-in lane adapter
 derives source order and object paths only from canonical profile members,
 source-snapshot digests, authenticated object roles, and the digest-addressed
 inventory. Fedora runs with pinned libsolv 0.7.36, Ubuntu with apt-pkg 3.2.0,
 and Arch with the pinned archive/libalpm image. Each lane retains the complete
 package and resolution bundles plus sanitized manifest, artifact, count,
-implementation, candidate, export, and commit bindings for seven days. It has
+implementation, candidate, export, deployed/producer commit, and both producer
+binary SHA-256 bindings for seven days. It has
 no repository refresh, conversion, proof, activation, or pointer authority.
+Every selected lane uploads a separately typed diagnostics-only resolution
+survey before strict resolution decides lane success. The optional closed
+`lanes` subset defaults to all three profiles; assembly fills unselected lanes
+from the newest successful strict artifact for the same export, verifies its
+GitHub archive and internal digests, and accepts mixed producer commits only
+when each is a merged descendant of the common deployed commit under the same
+schema and implementation pins. Exactly one strict Fedora, Ubuntu, and Arch
+lane is mandatory, and survey artifacts are never assembly authority.
 
 `NativeResolutionOracleV1` is the separate resolver-owned contract for native
 solver closure and unresolved-dependency evidence. It binds the exact profile
@@ -1081,10 +1092,13 @@ contain no input paths, credentials, process environment, or host identity.
 Production operators dispatch `.github/workflows/survey-remi-resolution.yml`
 from protected `main` with `oracle_run_id` naming one successful
 `produce-remi-native-oracles` run. The workflow derives the common export run
-from the Fedora, Ubuntu, and Arch lane artifact names, derives the deployment
-run from that export artifact, and requires the lane evidence, export manifest,
-deployment inspection, installed binary digest, exact candidates, oracle
-manifests, and typed architectures to agree. The export must also carry the
+and deployment run from its canonical assembled three-lane evidence. For each
+Fedora, Ubuntu, and Arch lane, including a retained same-export lane from an
+earlier successful producer run, it reopens the recorded workflow and successful
+producer job, verifies the API-bound artifact archive digest before safe
+extraction, and requires the lane evidence, producer provenance, export
+manifest, deployment inspection, installed binary digest, exact candidates,
+oracle manifests, and typed architectures to agree. The export must also carry the
 typed operator attestation binding its exact workflow commit to the protected
 pinned-host-key SSH contract; pre-attestation exports are non-authority. It
 transfers one authenticated
@@ -1113,13 +1127,14 @@ only when the typed outcome reports at least one finding, and requires a bounded
 reopens that archive, requires every deployment, candidate, architecture, and
 oracle binding to equal the authenticated input verification, and uploads its
 canonical JSON, exact digest/size/binding manifest, and count/histogram
-verification for seven days. File admission uses the bounded transport size, so
+verification plus the authenticated three-lane assembly for seven days. File
+admission uses the bounded transport size, so
 it does not reject a valid full-catalog document at an unrelated smaller
 threshold. Raw Remi stderr remains only in mode-`0600` root-controlled staging,
 is destroyed during helper cleanup, and is never copied to SSH or workflow logs;
 public failures are typed helper messages. The Markdown summary escapes all
-shell-interpolated code spans. This
-path cannot promote, activate, or publish anything.
+shell-interpolated code spans. This path cannot promote, activate, or publish
+anything.
 
 Conary separately replays the exact verified profile catalog into a
 private temporary resolver projection, resolves every exact package key

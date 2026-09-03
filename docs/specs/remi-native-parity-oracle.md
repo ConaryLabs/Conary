@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
+summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 36
+revision: 37
 status: active
 ---
 
@@ -47,18 +47,77 @@ operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
 apt-pkg implementation remains the sole native fact and resolution authority.
 
 The protected production producer accepts only one successful exact export
-run. It independently reopens the transport and deployment evidence, requires
-the artifact-owned deployed commit to be merged, and checks out that commit as
-producer source separately from the protected workflow/operator checkout.
+run. It independently reopens the transport and deployment evidence and
+requires the artifact-owned deployed commit to be merged. Dispatch also names
+one explicit full `producer_commit`; operators use the deployed commit by
+default and name a newer commit only for an intended producer advance. The
+workflow fetches `origin/main`, requires the producer commit to descend from
+the deployed commit and already be an ancestor of `origin/main`, then checks
+out that exact clean tree separately from the protected workflow/operator
+checkout. Floating branches, workflow heads, malformed SHAs, unmerged commits,
+non-descendants, and dirty producer trees are inadmissible.
+`scripts/verify-native-oracle-producer.py` owns this exact reusable full-SHA,
+fetch, and two-direction ancestry predicate for protected native-oracle and
+resolution-survey producers; workflows may not fork a weaker local version.
 Three pinned container lanes derive every member and object argument from the
 canonical input contract: Fedora 44 uses libsolv 0.7.36, Ubuntu 26.04 uses
 apt-pkg 3.2.0, and Arch uses the pinned archive/libalpm image. A lane succeeds
 only after both its package-fact producer and exact-architecture resolution
 producer complete their strict output reopen. Short-lived sanitized evidence
 binds both manifests and artifacts to the input manifest, profile revision,
-export identity, implementation version, architecture, and deployed commit.
+export identity, implementation version, architecture, deployed commit,
+producer commit, and independently recomputed SHA-256 digests of both producer
+binaries.
 The operation is read-only and carries no refresh, conversion, proof,
 activation, or public-pointer authority.
+
+The accepted producer-binding decision deliberately separates immutable input
+authority from producer implementation provenance. A merged descendant may fix
+producer-only behavior without forcing a semantically identical Remi deploy
+and export, while the exact export continues to own every candidate, source,
+and metadata byte. Merged provenance alone grants no schema latitude: package
+schema 1, resolution schema 2, and every ecosystem implementation/projection
+pin remain mandatory. A three-lane set may contain different producer
+commits per lane only when each is a merged descendant of the same deployed
+commit and every lane passes those identical pins; each lane records its own
+commit and binary digests.
+
+Every selected production lane produces diagnostics before deciding strict
+authority. It reopens one exact staged export, creates and reopens the package
+oracle once, runs the resolution producer with `--survey`, validates and
+uploads the canonical survey plus a separate binding manifest, and only then
+runs strict resolution against that same package oracle. Survey findings cause
+the survey process to return non-zero after writing; the lane adapter accepts
+that status only when it agrees with the validated failure inventory. A strict
+failure still fails the lane and emits no strict lane artifact, but it cannot
+discard an already validated survey. Survey artifacts are named separately,
+carry the export/deployment/producer/image/schema/implementation/binary-digest
+bindings, and remain diagnostics-only. Their type can never satisfy assembly,
+comparison, promotion, activation, or publication.
+
+Dispatch input `lanes` is an optional comma-separated, non-empty,
+duplicate-free subset of `fedora-44,ubuntu-26.04,arch`; its default is that
+complete canonical set. Each successful strict artifact is named by exact
+export identity, lane, and producer commit. Assembly always requires exactly
+one strict artifact for each canonical lane. A selected lane must come from
+the current run. For each unselected lane, assembly queries Actions artifacts
+and chooses the newest unexpired artifact with the exact export/lane prefix,
+then requires its exact producer job to have succeeded in a completed
+protected-main production run. It verifies the API-recorded SHA-256 of the
+downloaded archive before safe extraction and independently reopens every
+canonical evidence, manifest, and artifact digest.
+
+All three lane records must bind the same export run, export identity,
+transport digest, deployment run, deployed commit, and input manifest. Each
+producer commit must separately satisfy deployed-to-producer-to-`origin/main`
+ancestry. Mixed descendant producer commits are accepted as decided above;
+package schema 1, resolution schema 2, lane images, implementation versions,
+and projection schemas remain identical per lane contract. Different exports,
+non-descendants, unmerged producers, digest drift, missing or duplicate lanes,
+and survey substitution fail closed. The assembled evidence records each
+source workflow artifact ID/run/name/archive digest, lane evidence digest,
+producer commit, both producer binary digests, and both strict oracle binding
+records.
 
 `NativeParityOracleV1` is the sole parity manifest authority. It binds the
 exact profile revision digest, profile logical digest, ordered source members,
@@ -482,10 +541,14 @@ identity.
 
 The protected production consumer is `.github/workflows/survey-remi-resolution.yml`.
 Its single `oracle_run_id` selects one successful three-lane
-`produce-remi-native-oracles` run. The workflow derives and reopens the exact
-export and deployment runs, authenticates the lane files into one manifest-bound
-transport, and requires the export's typed operator attestation to bind that
-run's exact workflow commit to the protected pinned-host-key SSH contract.
+`produce-remi-native-oracles` run. The workflow authenticates that run's
+assembled three-lane artifact, derives and reopens the exact export and
+deployment runs, then verifies the API metadata, successful producer job, and
+archive digest for each referenced strict lane. Retained same-export lanes from
+earlier successful runs remain valid only through those bindings. It
+authenticates the lane files into one manifest-bound transport and requires the
+export's typed operator attestation to bind that run's exact workflow commit to
+the protected pinned-host-key SSH contract.
 Pre-attestation exports are non-authority. The survey workflow installs the
 helper from its exact protected `github.workflow_sha` through the existing
 `install-helper` action, then calls the three-argument
@@ -498,7 +561,8 @@ at least one finding, polls `/health/ready` to a bounded successful result
 regardless of those findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport and compares every authority
-binding with its authenticated input verification. Its per-file admission limit
+binding with its authenticated input verification, and its seven-day artifact
+also retains the authenticated three-lane assembly. Its per-file admission limit
 is the bounded transport size, not a smaller threshold unrelated to producer
 output. Raw Remi stderr remains confined to mode-`0600` root-controlled helper
 staging, is destroyed during helper cleanup, and is never emitted through SSH or

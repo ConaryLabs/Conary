@@ -24,6 +24,16 @@ DEPLOYMENT_RUN_ID = "100"
 EXPORT_ID = "slice6-100-200-1"
 DEPLOYED_COMMIT = "d" * 40
 BINARY_SHA256 = "e" * 64
+PRODUCER_COMMITS = {
+    "fedora-44": "4" * 40,
+    "ubuntu-26.04": "5" * 40,
+    "arch": "6" * 40,
+}
+PRODUCER_BINARIES = {
+    "fedora-44": ("conary-rpm-oracle", "conary-rpm-resolution-oracle"),
+    "ubuntu-26.04": ("conary-debian-oracle", "conary-debian-resolution-oracle"),
+    "arch": ("conary-alpm-oracle", "conary-alpm-resolution-oracle"),
+}
 
 
 def canonical(value: object) -> bytes:
@@ -68,6 +78,7 @@ class TransportFixture:
         }
         self.oracle_run = root / "oracle-run.json"
         self.oracle_artifacts = root / "oracle-artifacts.json"
+        self.assembly_evidence = root / "assembly-evidence.json"
         self.export_run = root / "export-run.json"
         self.export_artifacts = root / "export-artifacts.json"
         self.deployment_run = root / "deployment-run.json"
@@ -86,9 +97,10 @@ class TransportFixture:
             self.oracle_artifacts,
             artifact_metadata(
                 [
-                    f"remi-native-oracles-{profile}-{EXPORT_RUN_ID}-{ORACLE_RUN_ID}"
+                    f"remi-native-oracle-lane-{profile}-{EXPORT_ID}-{PRODUCER_COMMITS[profile]}"
                     for profile in PROFILES
                 ]
+                + [f"remi-native-oracle-set-{EXPORT_ID}-{ORACLE_RUN_ID}"]
             ),
         )
         write_json(
@@ -148,7 +160,8 @@ class TransportFixture:
                 ],
             },
         )
-        for profile in PROFILES:
+        assembled_lanes = []
+        for index, profile in enumerate(PROFILES, start=1):
             lane = self.root / profile
             package_root = lane / "package-oracle"
             resolution_root = lane / "resolution-oracle"
@@ -184,10 +197,22 @@ class TransportFixture:
             }
             resolution_manifest_bytes = canonical(resolution_manifest)
             (resolution_root / "manifest.json").write_bytes(resolution_manifest_bytes)
+            package_binary, resolution_binary = PRODUCER_BINARIES[profile]
+            producer_binaries = {
+                "package": {"name": package_binary, "sha256": str(index) * 64},
+                "resolution": {"name": resolution_binary, "sha256": str(index + 3) * 64},
+            }
             evidence = {
-                "schema_version": 1,
+                "schema_version": 3,
+                "artifact_type": "native-oracle-lane",
+                "deployment_run_id": int(DEPLOYMENT_RUN_ID),
+                "export_run_id": int(EXPORT_RUN_ID),
                 "export_id": EXPORT_ID,
+                "transport_sha256": "0" * 64,
                 "deployed_commit": DEPLOYED_COMMIT,
+                "producer_commit": PRODUCER_COMMITS[profile],
+                "producer_binaries": producer_binaries,
+                "lane_image": f"example.invalid/{profile}@sha256:{str(index + 6) * 64}",
                 "input_manifest_sha256": self.input_manifest_sha256,
                 "profile": profile,
                 "profile_revision_sha256": self.candidates[profile],
@@ -214,7 +239,43 @@ class TransportFixture:
                 },
             }
             write_json(lane / "evidence.json", evidence)
+            assembled_lanes.append(
+                {
+                    "profile": profile,
+                    "profile_revision_sha256": self.candidates[profile],
+                    "target_architecture": ARCHITECTURES[profile],
+                    "lane_image": evidence["lane_image"],
+                    "producer_commit": PRODUCER_COMMITS[profile],
+                    "producer_binaries": producer_binaries,
+                    "lane_evidence_sha256": digest(canonical(evidence)),
+                    "package_oracle": evidence["package_oracle"],
+                    "resolution_oracle": evidence["resolution_oracle"],
+                    "github_artifact": {
+                        "artifact_id": index,
+                        "run_id": int(ORACLE_RUN_ID),
+                        "name": (
+                            f"remi-native-oracle-lane-{profile}-{EXPORT_ID}-"
+                            f"{PRODUCER_COMMITS[profile]}"
+                        ),
+                        "sha256": str(index + 6) * 64,
+                    },
+                }
+            )
             self.lanes[profile] = lane
+        write_json(
+            self.assembly_evidence,
+            {
+                "schema_version": 1,
+                "artifact_type": "native-oracle-three-lane-set",
+                "deployment_run_id": int(DEPLOYMENT_RUN_ID),
+                "export_run_id": int(EXPORT_RUN_ID),
+                "export_id": EXPORT_ID,
+                "transport_sha256": "0" * 64,
+                "deployed_commit": DEPLOYED_COMMIT,
+                "input_manifest_sha256": self.input_manifest_sha256,
+                "lanes": assembled_lanes,
+            },
+        )
 
     def command(self) -> list[str]:
         command = [
@@ -231,6 +292,8 @@ class TransportFixture:
             str(self.oracle_run),
             "--oracle-artifacts",
             str(self.oracle_artifacts),
+            "--assembly-evidence",
+            str(self.assembly_evidence),
             "--export-run-id",
             EXPORT_RUN_ID,
             "--export-run",
@@ -329,6 +392,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("bindings disagree", result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            assembly = json.loads(fixture.assembly_evidence.read_bytes())
+            assembly["lanes"][0]["lane_evidence_sha256"] = "0" * 64
+            write_json(fixture.assembly_evidence, assembly)
+            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("authenticated three-lane assembly", result.stderr)
 
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))

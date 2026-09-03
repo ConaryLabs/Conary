@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 74
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 75
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -265,30 +265,51 @@ workflow.
   public-sanitized verification record, operator attestation, and source
   deployment inspection; it grants no native-oracle production, conversion,
   proof, or activation authority.
+- The required `producer_commit` input to `produce-remi-native-oracles` is one
+  full lowercase 40-hex SHA. Pass the deployed commit by default; name a newer
+  producer only deliberately. Authorization fetches `origin/main`, requires
+  deployed-to-producer-to-main ancestry, and each lane requires that exact
+  clean checkout before building and recording both producer binary digests.
+- The optional `lanes` input to `produce-remi-native-oracles` defaults to
+  `fedora-44,ubuntu-26.04,arch` and accepts only a non-empty duplicate-free
+  subset of those exact comma-separated names. Selected lanes run in this
+  dispatch; assembly retrieves an unselected lane only from the newest
+  successful same-export strict artifact, verifies the GitHub archive digest,
+  and still requires one bound artifact for every canonical lane.
 - The protected `produce-remi-native-oracles` workflow consumes only one
   successful exact export run. Its production-environment authorization
   independently reopens the exported transport and schema-3 deployment
   inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
   requires the artifact-owned deployed commit to remain merged into `main`.
-  Each lane checks out that exact deployed producer source, never the newer
-  workflow head, then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
+  Each lane checks out that exact clean producer source, never a workflow head,
+  then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
   Arch image with libsolv 0.7.36, apt-pkg 3.2.0, or the archived libalpm state.
   `produce-native-oracle-lane.py` revalidates canonical input JSON, profile and
   source digests, exact typed metadata roles, complete object inventory, size,
   and SHA-256 before deriving producer arguments. It invokes the matching
-  package-fact producer followed by its exact-architecture resolution producer;
-  both operations completely reopen their output contracts before success.
+  package-fact producer once, runs and uploads the diagnostics-only resolution
+  survey, and then runs the exact-architecture strict resolution producer;
+  all completed outputs are independently reopened. A strict failure still
+  fails the lane after the survey upload and emits no strict artifact.
   Seven-day lane artifacts contain only the two canonical oracle bundles and
   public-sanitized evidence binding their manifests, artifacts, counts,
-  implementation versions, candidate revision, export identity, and deployed
-  commit. The workflow has read-only GitHub permissions and no refresh,
+  implementation versions, candidate revision, export identity,
+  deployed/producer commits, and SHA-256 digests of both producer binaries.
+  The workflow has read-only GitHub permissions and no refresh,
   conversion, proof, activation, SSH, or pointer-mutation authority.
+  Final assembly accepts only strict lane artifacts from the same export and
+  common deployed commit. Different per-lane producer commits are allowed only
+  when each is a merged descendant and all schema/implementation pins match;
+  missing lanes, digest drift, and survey substitution fail closed.
 - The protected `survey-remi-resolution` workflow consumes one successful
   `produce-remi-native-oracles` run and resolves its exact export and deployment
-  runs from the three canonical lane artifact names. It independently reopens
-  every package and resolution oracle, requires their deployment commit,
-  binary, candidate revision, export manifest, and typed architecture bindings
-  to agree, and rejects export runs without the exact pinned-SSH operator
+  runs from its canonical assembled three-lane evidence. It independently
+  authenticates the assembled artifact archive and every referenced strict lane
+  archive, including a retained same-export lane from an earlier successful
+  producer run, before reopening every package and resolution oracle. Their
+  deployment commit, producer ancestry and binary digests, candidate revision,
+  export manifest, and typed architecture bindings must agree. The workflow
+  rejects export runs without the exact pinned-SSH operator
   attestation before it invokes the root-owned survey action
   `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
   production environment supplies an exact `REMI_SSH_KNOWN_HOSTS` pin; live
@@ -304,7 +325,8 @@ workflow.
   operator result only when the typed outcome records findings. The returned
   seven-day artifact contains only
   canonical survey JSON, a digest/size/binding manifest, and public verification
-  records. Raw Remi stderr remains confined to mode-`0600` root-controlled
+  records, including the authenticated three-lane assembly. Raw Remi stderr
+  remains confined to mode-`0600` root-controlled
   staging, is destroyed during helper cleanup, and is never written to SSH or
   workflow logs; public failures use typed helper messages. Per-file admission
   is derived from the already bounded transport size

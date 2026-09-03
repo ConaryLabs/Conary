@@ -22,6 +22,11 @@ PROFILE_ARCHITECTURES = {
     "ubuntu-26.04": "amd64",
     "arch": "x86_64",
 }
+PROFILE_PRODUCER_BINARIES = {
+    "fedora-44": ("conary-rpm-oracle", "conary-rpm-resolution-oracle"),
+    "ubuntu-26.04": ("conary-debian-oracle", "conary-debian-resolution-oracle"),
+    "arch": ("conary-alpm-oracle", "conary-alpm-resolution-oracle"),
+}
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
@@ -103,6 +108,13 @@ def exact_object(value: Any, keys: set[str], label: str) -> dict[str, Any]:
 def exact_nonnegative_int(value: Any, label: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         fail(f"{label} must be a nonnegative integer")
+    return value
+
+
+def exact_positive_int(value: Any, label: str) -> int:
+    value = exact_nonnegative_int(value, label)
+    if value == 0:
+        fail(f"{label} must be positive")
     return value
 
 
@@ -239,10 +251,14 @@ def validate_artifact_binding(
 def validate_lane(
     root: Path,
     profile: str,
+    assembly_lane: dict[str, Any],
     export_id: str,
     deployed_commit: str,
     input_manifest_sha256: str,
     candidate_sha256: str,
+    deployment_run_id: int,
+    export_run_id: int,
+    transport_sha256: str,
 ) -> tuple[dict[str, Any], list[tuple[str, Path]]]:
     plain_directory(root, f"{profile} lane")
     if sorted(path.name for path in root.iterdir()) != [
@@ -251,13 +267,22 @@ def validate_lane(
         "resolution-oracle",
     ]:
         fail(f"{profile} lane has missing or unexpected entries")
-    evidence_value, _ = load_json(root / "evidence.json", f"{profile} lane evidence", canonical=True)
+    evidence_value, evidence_bytes = load_json(
+        root / "evidence.json", f"{profile} lane evidence", canonical=True
+    )
     evidence = exact_object(
         evidence_value,
         {
             "schema_version",
+            "artifact_type",
+            "deployment_run_id",
+            "export_run_id",
             "export_id",
+            "transport_sha256",
             "deployed_commit",
+            "producer_commit",
+            "producer_binaries",
+            "lane_image",
             "input_manifest_sha256",
             "profile",
             "profile_revision_sha256",
@@ -268,9 +293,25 @@ def validate_lane(
         f"{profile} lane evidence",
     )
     architecture = PROFILE_ARCHITECTURES[profile]
+    producer_commit = require_commit(evidence.get("producer_commit"), f"{profile} producer commit")
+    binaries = exact_object(
+        evidence.get("producer_binaries"), {"package", "resolution"}, f"{profile} producers"
+    )
+    package_binary, resolution_binary = PROFILE_PRODUCER_BINARIES[profile]
+    for kind, expected_name in (("package", package_binary), ("resolution", resolution_binary)):
+        binary = exact_object(
+            binaries.get(kind), {"name", "sha256"}, f"{profile} {kind} producer"
+        )
+        if binary["name"] != expected_name:
+            fail(f"{profile} {kind} producer name drifted")
+        require_sha256(binary["sha256"], f"{profile} {kind} producer digest")
     if (
-        evidence["schema_version"] != 1
+        evidence["schema_version"] != 3
+        or evidence["artifact_type"] != "native-oracle-lane"
+        or evidence["deployment_run_id"] != deployment_run_id
+        or evidence["export_run_id"] != export_run_id
         or evidence["export_id"] != export_id
+        or evidence["transport_sha256"] != transport_sha256
         or evidence["deployed_commit"] != deployed_commit
         or evidence["input_manifest_sha256"] != input_manifest_sha256
         or evidence["profile"] != profile
@@ -278,6 +319,44 @@ def validate_lane(
         or evidence["target_architecture"] != architecture
     ):
         fail(f"{profile} lane differs from its export and deployment authority")
+
+    expected_assembly_keys = {
+        "profile",
+        "profile_revision_sha256",
+        "target_architecture",
+        "lane_image",
+        "producer_commit",
+        "producer_binaries",
+        "lane_evidence_sha256",
+        "package_oracle",
+        "resolution_oracle",
+        "github_artifact",
+    }
+    assembly_lane = exact_object(
+        assembly_lane, expected_assembly_keys, f"{profile} assembled lane"
+    )
+    github_artifact = exact_object(
+        assembly_lane["github_artifact"],
+        {"artifact_id", "run_id", "name", "sha256"},
+        f"{profile} assembled GitHub artifact",
+    )
+    exact_positive_int(github_artifact["artifact_id"], f"{profile} artifact id")
+    exact_positive_int(github_artifact["run_id"], f"{profile} artifact run id")
+    require_sha256(github_artifact["sha256"], f"{profile} artifact digest")
+    if github_artifact["name"] != f"remi-native-oracle-lane-{profile}-{export_id}-{producer_commit}":
+        fail(f"{profile} assembled artifact name drifted")
+    if (
+        assembly_lane["profile"] != profile
+        or assembly_lane["profile_revision_sha256"] != candidate_sha256
+        or assembly_lane["target_architecture"] != architecture
+        or assembly_lane["lane_image"] != evidence["lane_image"]
+        or assembly_lane["producer_commit"] != producer_commit
+        or assembly_lane["producer_binaries"] != binaries
+        or assembly_lane["lane_evidence_sha256"] != sha256_bytes(evidence_bytes)
+        or assembly_lane["package_oracle"] != evidence["package_oracle"]
+        or assembly_lane["resolution_oracle"] != evidence["resolution_oracle"]
+    ):
+        fail(f"{profile} lane differs from the authenticated three-lane assembly")
 
     package_root = root / "package-oracle"
     resolution_root = root / "resolution-oracle"
@@ -422,23 +501,53 @@ def build_input(args: argparse.Namespace) -> None:
     )
     oracle_artifacts, _ = load_json(args.oracle_artifacts, "oracle artifact metadata")
     oracle_names = unexpired_artifact_names(oracle_artifacts, "oracle run")
-    patterns = {
-        profile: re.compile(
-            rf"^remi-native-oracles-{re.escape(profile)}-([1-9][0-9]*)-{oracle_id}$"
-        )
-        for profile in PUBLIC_PROFILES
-    }
-    export_ids: list[str] = []
-    for profile in PUBLIC_PROFILES:
-        matches = [match for name in oracle_names if (match := patterns[profile].fullmatch(name))]
-        if len(matches) != 1:
-            fail(f"oracle run must retain exactly one {profile} lane artifact")
-        export_ids.append(matches[0].group(1))
-    if len(set(export_ids)) != 1 or len(oracle_names) != 3:
-        fail("oracle lane artifacts do not bind one exact export run")
-    export_id_run = int(export_ids[0])
+    assembly_value, assembly_bytes = load_json(
+        args.assembly_evidence, "native-oracle three-lane assembly", canonical=True
+    )
+    assembly = exact_object(
+        assembly_value,
+        {
+            "schema_version",
+            "artifact_type",
+            "deployment_run_id",
+            "export_run_id",
+            "export_id",
+            "transport_sha256",
+            "deployed_commit",
+            "input_manifest_sha256",
+            "lanes",
+        },
+        "native-oracle three-lane assembly",
+    )
+    export_id = require_identity(assembly.get("export_id"), "assembled export identity")
+    export_id_run = exact_positive_int(assembly.get("export_run_id"), "assembled export run")
+    deployment_id = exact_positive_int(
+        assembly.get("deployment_run_id"), "assembled deployment run"
+    )
+    assembled_deployed_commit = require_commit(
+        assembly.get("deployed_commit"), "assembled deployed commit"
+    )
+    assembled_transport_sha256 = require_sha256(
+        assembly.get("transport_sha256"), "assembled export transport"
+    )
+    assembled_input_manifest_sha256 = require_sha256(
+        assembly.get("input_manifest_sha256"), "assembled input manifest"
+    )
+    assembled_lanes = assembly.get("lanes")
+    if (
+        assembly["schema_version"] != 1
+        or assembly["artifact_type"] != "native-oracle-three-lane-set"
+        or not isinstance(assembled_lanes, list)
+        or len(assembled_lanes) != len(PUBLIC_PROFILES)
+        or [item.get("profile") for item in assembled_lanes if isinstance(item, dict)]
+        != list(PUBLIC_PROFILES)
+    ):
+        fail("oracle run does not provide one canonical assembled three-lane set")
+    assembly_artifact_name = f"remi-native-oracle-set-{export_id}-{oracle_id}"
+    if oracle_names.count(assembly_artifact_name) != 1:
+        fail("oracle run must retain its exact assembled three-lane artifact")
     if export_id_run != require_run_id(args.export_run_id, "export run id"):
-        fail("requested export run differs from the oracle artifact binding")
+        fail("requested export run differs from the oracle assembly binding")
 
     export_run, _ = load_json(args.export_run, "export run metadata")
     validate_run(
@@ -456,7 +565,9 @@ def build_input(args: argparse.Namespace) -> None:
     export_matches = [match for name in export_names if (match := export_pattern.fullmatch(name))]
     if len(export_matches) != 1 or len(export_names) != 1:
         fail("export run must retain exactly one exact native-oracle handoff")
-    deployment_id = int(export_matches[0].group(1))
+    export_deployment_id = int(export_matches[0].group(1))
+    if export_deployment_id != deployment_id:
+        fail("oracle assembly deployment differs from the export artifact binding")
     if deployment_id != require_run_id(args.deployment_run_id, "deployment run id"):
         fail("requested deployment run differs from the export artifact binding")
 
@@ -497,13 +608,24 @@ def build_input(args: argparse.Namespace) -> None:
         or verification.get("schema_version") != 1
     ):
         fail("export evidence does not prove a complete private-candidate deployment")
-    export_id = require_identity(verification.get("export_id"), "export identity")
+    verified_export_id = require_identity(verification.get("export_id"), "export identity")
+    if verified_export_id != export_id:
+        fail("oracle assembly export identity differs from export verification")
     export_operator = validate_export_operator(
         export_root, export_run, export_id_run, export_id
     )
     input_manifest_sha256 = require_sha256(
         verification.get("manifest", {}).get("sha256"), "export input manifest"
     )
+    export_transport_sha256 = require_sha256(
+        verification.get("transport", {}).get("sha256"), "export transport"
+    )
+    if (
+        deployed_commit != assembled_deployed_commit
+        or input_manifest_sha256 != assembled_input_manifest_sha256
+        or export_transport_sha256 != assembled_transport_sha256
+    ):
+        fail("oracle assembly differs from authenticated export or deployment evidence")
     candidates = inspection.get("candidates")
     verified_profiles = verification.get("profiles")
     if (
@@ -530,14 +652,19 @@ def build_input(args: argparse.Namespace) -> None:
         fail("lanes must be supplied once in canonical Fedora, Ubuntu, Arch order")
     profiles: list[dict[str, Any]] = []
     files: list[tuple[str, Path]] = []
+    assembly_by_profile = {item["profile"]: item for item in assembled_lanes}
     for profile in PUBLIC_PROFILES:
         profile_binding, profile_files = validate_lane(
             lane_arguments[profile],
             profile,
+            assembly_by_profile[profile],
             export_id,
             deployed_commit,
             input_manifest_sha256,
             candidate_digests[profile],
+            deployment_id,
+            export_id_run,
+            export_transport_sha256,
         )
         profiles.append(profile_binding)
         files.extend(profile_files)
@@ -588,6 +715,7 @@ def build_input(args: argparse.Namespace) -> None:
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": manifest["workflow_runs"],
+        "oracle_assembly": {"sha256": sha256_bytes(assembly_bytes)},
         "export_operator": export_operator,
         "deployment": manifest["deployment"],
         "profiles": [
@@ -712,6 +840,7 @@ def validate_input_evidence(
             "survey_id",
             "export_id",
             "workflow_runs",
+            "oracle_assembly",
             "export_operator",
             "deployment",
             "profiles",
@@ -732,6 +861,10 @@ def validate_input_evidence(
     for name, run_id in workflow_runs.items():
         if exact_nonnegative_int(run_id, f"input {name} run") == 0:
             fail(f"input {name} run must be positive")
+    oracle_assembly = exact_object(
+        evidence["oracle_assembly"], {"sha256"}, "input oracle assembly"
+    )
+    require_sha256(oracle_assembly["sha256"], "input oracle assembly digest")
     export_operator = exact_object(
         evidence["export_operator"],
         {
@@ -1045,6 +1178,7 @@ def parse_args() -> argparse.Namespace:
     build.add_argument("--oracle-run-id", required=True)
     build.add_argument("--oracle-run", required=True, type=Path)
     build.add_argument("--oracle-artifacts", required=True, type=Path)
+    build.add_argument("--assembly-evidence", required=True, type=Path)
     build.add_argument("--export-run-id", required=True)
     build.add_argument("--export-run", required=True, type=Path)
     build.add_argument("--export-artifacts", required=True, type=Path)

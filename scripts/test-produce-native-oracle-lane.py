@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -19,6 +20,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCER = REPO_ROOT / "scripts" / "produce-native-oracle-lane.py"
 COMMIT = "a" * 40
+PRODUCER_COMMIT = "b" * 40
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
@@ -33,6 +35,7 @@ def digest(value: object) -> str:
 FAKE_PRODUCER = r'''#!/usr/bin/env python3
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -44,8 +47,6 @@ def one(flag):
     return args[args.index(flag) + 1]
 
 profile = json.loads(Path(one("--profile-manifest")).read_bytes())
-output = Path(one("--output"))
-output.mkdir()
 name = Path(sys.argv[0]).name
 if "rpm" in name:
     ecosystem, implementation, version = "rpm", "libsolv", "0.7.36"
@@ -55,6 +56,8 @@ else:
     ecosystem, implementation, version = "alpm", "libalpm", "15.0.0"
 revision_sha = hashlib.sha256(canonical(profile)).hexdigest()
 if "--package-oracle" not in args:
+    output = Path(one("--output"))
+    output.mkdir()
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": 1, "version": version}
     artifact = output / "packages.jsonl"
     artifact.write_bytes(b"")
@@ -70,15 +73,43 @@ if "--package-oracle" not in args:
 else:
     resolution_projection = {"rpm": 4, "debian": 2, "alpm": 2}[ecosystem]
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
+    policy = {"architecture": one("--architecture"), "architecture_admission": "native_only", "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"}
+    package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
+    if "--survey" in args:
+        survey = {
+            "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 0, "resolved_roots": 0, "roots_walked": 0, "unresolved_roots": 0},
+            "evidence_byte_limit": 67108864,
+            "failure_record_limit": 5000,
+            "failures": [],
+            "implementation": impl,
+            "package_oracle_manifest_sha256": hashlib.sha256(package_manifest).hexdigest(),
+            "policy": policy,
+            "profile": profile["profile"],
+            "profile_revision_sha256": revision_sha,
+            "retained_evidence_bytes": 0,
+            "retained_explanations": 0,
+            "retained_failures": 0,
+            "schema_version": 2,
+            "target_architecture": one("--architecture"),
+            "total_failures": 0,
+            "truncated": False,
+            "truncated_evidence": False,
+            "withheld_explanations": 0,
+        }
+        Path(one("--survey")).write_bytes(canonical(survey))
+        sys.exit(0)
+    if os.environ.get("FAKE_STRICT_FAIL") == "1":
+        sys.exit(17)
+    output = Path(one("--output"))
+    output.mkdir()
     artifact = output / "roots.jsonl"
     artifact.write_bytes(b"")
-    package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
     manifest = {
         "artifact": {"counts": {"closure_package_references": 0, "resolved_roots": 0, "roots": 0, "unresolved_dependencies": 0, "unresolved_roots": 0}, "sha256": hashlib.sha256(b"").hexdigest(), "size": 0},
         "implementation": impl,
         "members": profile["members"],
         "package_oracle_manifest_sha256": hashlib.sha256(package_manifest).hexdigest(),
-        "policy": {"architecture": one("--architecture"), "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"},
+        "policy": policy,
         "profile": profile["profile"],
         "profile_logical_digest_sha256": "b" * 64,
         "profile_revision_sha256": revision_sha,
@@ -165,12 +196,20 @@ class NativeOracleLaneTests(unittest.TestCase):
     def write_manifest(self) -> None:
         (self.input / "manifest.json").write_bytes(canonical(self.manifest))
 
-    def run_lane(self, profile: str = "fedora-44", architecture: str = "x86_64") -> subprocess.CompletedProcess[str]:
+    def run_lane(
+        self,
+        profile: str = "fedora-44",
+        architecture: str = "x86_64",
+        producer_commit: str = PRODUCER_COMMIT,
+        strict_failure: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
         package = self.root / f"conary-{ecosystem}-oracle"
         resolution = self.root / f"conary-{ecosystem}-resolution-oracle"
-        package.symlink_to(self.fake)
-        resolution.symlink_to(self.fake)
+        package.write_text(FAKE_PRODUCER)
+        resolution.write_text(FAKE_PRODUCER)
+        package.chmod(package.stat().st_mode | stat.S_IXUSR)
+        resolution.chmod(resolution.stat().st_mode | stat.S_IXUSR)
         return subprocess.run(
             [
                 sys.executable,
@@ -181,12 +220,19 @@ class NativeOracleLaneTests(unittest.TestCase):
                 "--package-producer", str(package),
                 "--resolution-producer", str(resolution),
                 "--output-root", str(self.root / f"output-{profile}"),
+                "--survey-output-root", str(self.root / f"survey-{profile}"),
+                "--deployment-run-id", "123",
+                "--export-run-id", "456",
                 "--export-id", "slice6-test",
+                "--transport-sha256", "c" * 64,
                 "--deployed-commit", COMMIT,
+                "--producer-commit", producer_commit,
+                "--lane-image", "example.invalid/native@sha256:" + "d" * 64,
             ],
             text=True,
             capture_output=True,
             check=False,
+            env={**os.environ, "FAKE_STRICT_FAIL": "1" if strict_failure else "0"},
         )
 
     def test_produces_exact_package_and_resolution_evidence(self) -> None:
@@ -194,6 +240,21 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
+        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["artifact_type"], "native-oracle-lane")
+        self.assertEqual(evidence["deployment_run_id"], 123)
+        self.assertEqual(evidence["export_run_id"], 456)
+        self.assertEqual(evidence["transport_sha256"], "c" * 64)
+        self.assertEqual(evidence["deployed_commit"], COMMIT)
+        self.assertEqual(evidence["producer_commit"], PRODUCER_COMMIT)
+        self.assertEqual(
+            evidence["producer_binaries"]["package"]["sha256"],
+            hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
+        )
+        self.assertEqual(
+            evidence["producer_binaries"]["resolution"]["sha256"],
+            hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
+        )
         self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
         self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
@@ -203,6 +264,13 @@ class NativeOracleLaneTests(unittest.TestCase):
             (self.root / "output-fedora-44" / "evidence.json").read_bytes(),
             canonical(evidence),
         )
+        survey_root = self.root / "survey-fedora-44"
+        survey = json.loads((survey_root / "survey.json").read_bytes())
+        manifest = json.loads((survey_root / "manifest.json").read_bytes())
+        self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
+        self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
+        self.assertEqual(manifest["survey"]["sha256"], digest(survey))
+        self.assertEqual(manifest["survey"]["schema_version"], 2)
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:
         for profile, architecture, projection_schema in (
@@ -256,6 +324,54 @@ class NativeOracleLaneTests(unittest.TestCase):
         result = self.run_lane(architecture="amd64")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("architecture must match profile authority x86_64", result.stderr)
+
+    def test_retains_survey_when_strict_resolution_fails(self) -> None:
+        result = self.run_lane(strict_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native resolution producer failed with exit status 17", result.stderr)
+        survey_root = self.root / "survey-fedora-44"
+        self.assertTrue((survey_root / "survey.json").is_file())
+        manifest = json.loads((survey_root / "manifest.json").read_bytes())
+        self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
+        self.assertFalse((self.root / "output-fedora-44" / "evidence.json").exists())
+
+    def test_rejects_malformed_producer_commit(self) -> None:
+        result = self.run_lane(producer_commit="main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("producer commit must be a full lowercase commit digest", result.stderr)
+
+    def test_rejects_symlinked_producer_binary(self) -> None:
+        ecosystem = "rpm"
+        package = self.root / f"conary-{ecosystem}-oracle"
+        resolution = self.root / f"conary-{ecosystem}-resolution-oracle"
+        package.symlink_to(self.fake)
+        resolution.write_text(FAKE_PRODUCER)
+        resolution.chmod(resolution.stat().st_mode | stat.S_IXUSR)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PRODUCER),
+                "--input-root", str(self.input),
+                "--profile", "fedora-44",
+                "--architecture", "x86_64",
+                "--package-producer", str(package),
+                "--resolution-producer", str(resolution),
+                "--output-root", str(self.root / "output-symlink"),
+                "--survey-output-root", str(self.root / "survey-symlink"),
+                "--deployment-run-id", "123",
+                "--export-run-id", "456",
+                "--export-id", "slice6-test",
+                "--transport-sha256", "c" * 64,
+                "--deployed-commit", COMMIT,
+                "--producer-commit", PRODUCER_COMMIT,
+                "--lane-image", "example.invalid/native@sha256:" + "d" * 64,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be a regular file, never a symlink", result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 87
-summary: Route feature ownership through native parity, its protected production resolution survey, and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 90
+summary: Route feature ownership through producer-bound native parity assembly, its protected production resolution survey, and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -580,6 +580,12 @@ release schema bindings.
 `crates/conary-core/tests/fixtures/architecture/*`;
 `crates/conary-core/src/repository/catalog/parity/*`;
 `crates/conary-core/src/bin/conary-*-oracle.rs`;
+`scripts/assemble-native-oracle-lanes.py`;
+`scripts/test-assemble-native-oracle-lanes.py`;
+`scripts/native-oracle-lane-selection.py`;
+`scripts/test-native-oracle-lane-selection.py`;
+`scripts/verify-native-oracle-producer.py`;
+`scripts/test-verify-native-oracle-producer.py`;
 `scripts/produce-native-oracle-lane.py`;
 `scripts/test-produce-native-oracle-lane.py`;
 `scripts/verify-native-oracle-input-transport.py`;
@@ -598,6 +604,9 @@ release schema bindings.
 
 **Focused proof:** `cargo test -p conary-core repository::architecture`;
 `cargo test -p conary-core repository::catalog::parity`;
+`python3 scripts/test-assemble-native-oracle-lanes.py`;
+`python3 scripts/test-native-oracle-lane-selection.py`;
+`python3 scripts/test-verify-native-oracle-producer.py`;
 `python3 scripts/test-produce-native-oracle-lane.py`;
 `python3 scripts/test-remi-resolution-survey-transport.py`;
 `bash scripts/check-release-matrix.sh`.

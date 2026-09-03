@@ -539,6 +539,7 @@ make_survey_oracle_transport() {
           survey_id:$input[0].survey_id,
           export_id:$input[0].export_id,
           workflow_runs:$input[0].workflow_runs,
+          oracle_assembly:{sha256:("9" * 64)},
           export_operator:{
             schema_version:1,
             workflow_commit_sha:("a" * 40),

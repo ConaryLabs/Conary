@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       oracle_run_id:
-        description: Successful produce-remi-native-oracles run owning all three exact lanes
+        description: Successful produce-remi-native-oracles run owning an exact assembled three-lane set
         required: true
         type: string
 
@@ -58,7 +58,7 @@ jobs:
             exit 1
           }
 
-      - name: Resolve exact oracle export and deployment chain
+      - name: Resolve and download exact assembled oracle lanes
         id: source
         env:
           ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
@@ -79,31 +79,139 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/runs/${ORACLE_RUN_ID}/artifacts" \
             > oracle-artifacts.json
 
-          export_ids=()
-          for profile in fedora-44 ubuntu-26.04 arch; do
-            artifact_name="$(jq -er \
-              --arg profile "$profile" --arg run_id "$ORACLE_RUN_ID" '
-              [.artifacts[]
-                | select(.expired == false)
-                | select(.name | test("^remi-native-oracles-" + $profile + "-[1-9][0-9]*-" + $run_id + "$"))
-                | .name]
-              | if length == 1 then .[0] else error("expected one exact lane artifact") end
-            ' oracle-artifacts.json)"
-            export_run_id="${artifact_name#remi-native-oracles-${profile}-}"
-            export_run_id="${export_run_id%-${ORACLE_RUN_ID}}"
-            [[ "$export_run_id" =~ ^[1-9][0-9]*$ ]] || {
-              echo "oracle lane artifact does not bind one export run" >&2
-              exit 1
-            }
-            export_ids+=("$export_run_id")
-            echo "${profile//[.-]/_}_artifact=$artifact_name" >> "$GITHUB_OUTPUT"
-          done
-          [[ "${export_ids[0]}" == "${export_ids[1]}" \
-            && "${export_ids[0]}" == "${export_ids[2]}" ]] || {
-            echo "oracle lanes do not bind the same export run" >&2
+          set_artifact="$(jq -cer --arg run_id "$ORACLE_RUN_ID" '
+            [.artifacts[]
+              | select(.expired == false)
+              | select(.name | test("^remi-native-oracle-set-[a-z0-9][a-z0-9._-]{0,127}-" + $run_id + "$"))]
+            | if length == 1 then .[0] else error("expected one exact assembled oracle artifact") end
+          ' oracle-artifacts.json)"
+          set_id="$(jq -er .id <<<"$set_artifact")"
+          set_digest="$(jq -er .digest <<<"$set_artifact")"
+          [[ "$set_id" =~ ^[1-9][0-9]*$ && "$set_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          set_archive="$RUNNER_TEMP/native-oracle-set.zip"
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/artifacts/${set_id}/zip" \
+            > "$set_archive"
+          [[ "sha256:$(sha256sum "$set_archive" | cut -d ' ' -f 1)" == "$set_digest" ]] || {
+            echo "assembled oracle artifact digest changed during download" >&2
             exit 1
           }
-          export_run_id="${export_ids[0]}"
+          python3 - "$set_archive" "$RUNNER_TEMP/oracle-set" <<'PY'
+          import stat
+          import sys
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          destination.mkdir(mode=0o700)
+          with ZipFile(archive) as source:
+              members = source.infolist()
+              if [member.filename for member in members] != ["evidence.json"]:
+                  raise SystemExit("assembled oracle artifact members drifted")
+              member = members[0]
+              path = PurePosixPath(member.filename)
+              mode = member.external_attr >> 16
+              if path.is_absolute() or ".." in path.parts or stat.S_ISLNK(mode):
+                  raise SystemExit("unsafe assembled oracle artifact member")
+              source.extractall(destination)
+          PY
+          assembly="$RUNNER_TEMP/oracle-set/evidence.json"
+          export_run_id="$(jq -er .export_run_id "$assembly")"
+          deployment_run_id="$(jq -er .deployment_run_id "$assembly")"
+          [[ "$export_run_id" =~ ^[1-9][0-9]*$ \
+            && "$deployment_run_id" =~ ^[1-9][0-9]*$ ]]
+
+          mkdir -m 0700 "$RUNNER_TEMP/oracles"
+          for profile in fedora-44 ubuntu-26.04 arch; do
+            lane="$(jq -cer --arg profile "$profile" '
+              [.lanes[] | select(.profile == $profile)]
+              | if length == 1 then .[0] else error("assembled lane is missing or repeated") end
+            ' "$assembly")"
+            artifact_id="$(jq -er .github_artifact.artifact_id <<<"$lane")"
+            artifact_name="$(jq -er .github_artifact.name <<<"$lane")"
+            artifact_run_id="$(jq -er .github_artifact.run_id <<<"$lane")"
+            artifact_sha256="$(jq -er .github_artifact.sha256 <<<"$lane")"
+            producer_commit="$(jq -er .producer_commit <<<"$lane")"
+            [[ "$artifact_id" =~ ^[1-9][0-9]*$ \
+              && "$artifact_run_id" =~ ^[1-9][0-9]*$ \
+              && "$artifact_sha256" =~ ^[0-9a-f]{64}$ \
+              && "$producer_commit" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$artifact_name" == \
+              "remi-native-oracle-lane-${profile}-$(jq -r .export_id "$assembly")-${producer_commit}" ]]
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}" \
+              > "lane-artifact-${profile}.json"
+            jq -e \
+              --argjson artifact_id "$artifact_id" \
+              --arg name "$artifact_name" \
+              --argjson run_id "$artifact_run_id" \
+              --arg sha256 "sha256:${artifact_sha256}" '
+                .id == $artifact_id and
+                .expired == false and
+                .name == $name and
+                .workflow_run.id == $run_id and
+                .digest == $sha256
+              ' "lane-artifact-${profile}.json" >/dev/null
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}" \
+              > "lane-run-${profile}.json"
+            jq -e \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --argjson run_id "$artifact_run_id" '
+                .id == $run_id and
+                .event == "workflow_dispatch" and
+                .status == "completed" and
+                .head_branch == "main" and
+                .head_repository.full_name == $repository and
+                .path == ".github/workflows/produce-remi-native-oracles.yml"
+              ' "lane-run-${profile}.json" >/dev/null
+            gh api --paginate \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${artifact_run_id}/jobs?filter=latest&per_page=100" \
+              | jq -sc '[.[].jobs[]]' > "lane-jobs-${profile}.json"
+            jq -e --arg job_name "native oracle (${profile})" '
+              [.[] | select(.name == $job_name and .conclusion == "success")] | length == 1
+            ' "lane-jobs-${profile}.json" >/dev/null
+            lane_archive="$RUNNER_TEMP/native-oracle-lane-${profile}.zip"
+            gh api \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
+              > "$lane_archive"
+            [[ "$(sha256sum "$lane_archive" | cut -d ' ' -f 1)" == "$artifact_sha256" ]] || {
+              echo "${profile} lane artifact digest changed during download" >&2
+              exit 1
+            }
+            python3 - "$lane_archive" "$RUNNER_TEMP/oracles/$profile" <<'PY'
+          import stat
+          import sys
+          from pathlib import Path, PurePosixPath
+          from zipfile import ZipFile
+
+          archive = Path(sys.argv[1])
+          destination = Path(sys.argv[2])
+          destination.mkdir(mode=0o700)
+          with ZipFile(archive) as source:
+              seen = set()
+              for member in source.infolist():
+                  path = PurePosixPath(member.filename)
+                  mode = member.external_attr >> 16
+                  if (
+                      path.is_absolute()
+                      or not path.parts
+                      or ".." in path.parts
+                      or path in seen
+                      or stat.S_ISLNK(mode)
+                  ):
+                      raise SystemExit("unsafe native-oracle lane artifact member")
+                  seen.add(path)
+              source.extractall(destination)
+          PY
+          done
+
           gh api \
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/${GITHUB_REPOSITORY}/actions/runs/${export_run_id}" \
@@ -119,9 +227,9 @@ jobs:
               | .name]
             | if length == 1 then .[0] else error("expected one exact export artifact") end
           ' export-artifacts.json)"
-          deployment_run_id="${export_artifact#remi-native-oracle-input-}"
-          deployment_run_id="${deployment_run_id%-${export_run_id}}"
-          [[ "$deployment_run_id" =~ ^[1-9][0-9]*$ ]] || {
+          export_deployment_run_id="${export_artifact#remi-native-oracle-input-}"
+          export_deployment_run_id="${export_deployment_run_id%-${export_run_id}}"
+          [[ "$export_deployment_run_id" == "$deployment_run_id" ]] || {
             echo "export artifact does not bind one deployment run" >&2
             exit 1
           }
@@ -134,30 +242,6 @@ jobs:
             echo "deployment_run_id=$deployment_run_id"
             echo "export_artifact=$export_artifact"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Download exact Fedora oracle lane
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ steps.source.outputs.fedora_44_artifact }}
-          path: ${{ runner.temp }}/oracles/fedora-44
-          run-id: ${{ inputs.oracle_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Download exact Ubuntu oracle lane
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ steps.source.outputs.ubuntu_26_04_artifact }}
-          path: ${{ runner.temp }}/oracles/ubuntu-26.04
-          run-id: ${{ inputs.oracle_run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Download exact Arch oracle lane
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ steps.source.outputs.arch_artifact }}
-          path: ${{ runner.temp }}/oracles/arch
-          run-id: ${{ inputs.oracle_run_id }}
-          github-token: ${{ github.token }}
 
       - name: Download exact export and deployment evidence
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -184,6 +268,7 @@ jobs:
             --oracle-run-id "$ORACLE_RUN_ID" \
             --oracle-run oracle-run.json \
             --oracle-artifacts oracle-artifacts.json \
+            --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \
             --export-run-id "$EXPORT_RUN_ID" \
             --export-run export-run.json \
             --export-artifacts export-artifacts.json \
@@ -196,11 +281,24 @@ jobs:
             --output "$transport" \
             --evidence resolution-survey-input-verification.json \
             >/dev/null
+          install -m 0600 \
+            "$RUNNER_TEMP/oracle-set/evidence.json" \
+            resolution-survey-oracle-set.json
           deployed_commit="$(jq -r .deployment.commit_sha resolution-survey-input-verification.json)"
           git merge-base --is-ancestor "$deployed_commit" origin/main || {
             echo "surveyed Remi deployment must remain merged into origin/main" >&2
             exit 1
           }
+          while IFS= read -r producer_commit; do
+            git merge-base --is-ancestor "$deployed_commit" "$producer_commit" || {
+              echo "oracle producer must descend from the deployed commit" >&2
+              exit 1
+            }
+            git merge-base --is-ancestor "$producer_commit" origin/main || {
+              echo "oracle producer must remain merged into origin/main" >&2
+              exit 1
+            }
+          done < <(jq -r '.lanes[].producer_commit' "$RUNNER_TEMP/oracle-set/evidence.json")
           {
             echo "survey_id=$survey_id"
             echo "export_id=$(jq -r .export_id resolution-survey-input-verification.json)"
@@ -373,6 +471,7 @@ jobs:
             ${{ steps.survey.outputs.transport }}
             resolution-survey-verification.json
             resolution-survey-input-verification.json
+            resolution-survey-oracle-set.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
