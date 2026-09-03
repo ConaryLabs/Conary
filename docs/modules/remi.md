@@ -1145,6 +1145,9 @@ verification plus the authenticated three-lane assembly for seven days. The
 independent reader enforces every typed Rust survey field, outcome, histogram,
 the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
 mismatch-evidence relationship.
+Comparison counts must cover the exact zero-failure candidate root population;
+every retained mismatch root, identity, and candidate outcome must match that
+candidate survey.
 It also requires the candidate producer to be profile-ecosystem `conary-sat`
 projection schema 2; a merely well-formed implementation identity is rejected.
 Neither helper input admission nor runner output verification imposes an

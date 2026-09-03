@@ -352,7 +352,9 @@ workflow.
   independently enforces the complete typed Rust survey schemas, retention and
   evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and
-  requires those deployment, candidate,
+  exact comparison coverage of the complete zero-failure candidate root set.
+  Every retained mismatch root, identity, and candidate outcome must occur in
+  that candidate survey. The runner also requires the deployment, candidate,
   architecture, and oracle bindings to equal its authenticated input record. The
   workflow has no refresh, conversion, proof, promotion, activation, or
   publication authority.

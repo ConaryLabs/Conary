@@ -578,10 +578,12 @@ plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
 relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
-binds candidate implementation to the profile ecosystem,
-`conary-sat`, and projection schema 2, then compares every authority binding
-with its authenticated input
-verification, and its seven-day artifact
+binds candidate implementation to the profile ecosystem, `conary-sat`, and
+projection schema 2. Comparison counts must cover the exact complete
+zero-failure candidate root population, and every retained mismatch root,
+identity, and candidate outcome must come from that candidate survey. It then
+compares every authority binding with its authenticated input verification, and
+its seven-day artifact
 also retains the authenticated three-lane assembly. Neither helper input
 admission nor runner output verification imposes an aggregate transport limit
 absent from the producer contract; member reads remain confined to each actual
