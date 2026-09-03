@@ -655,7 +655,9 @@ strings. Diagnostic text is not parsed into authority. Consequently a failure
 that cannot be attributed from a broken hard dependency on the retained exact
 root remains a fatal native solver classification. This includes transitive
 no-candidate dependencies as well as conflict-, break-, policy-, or
-version-coexistence failures. A policy-excluded exact root becomes the typed
+version-coexistence failures. Solver timeout attribution uses a steady
+monotonic duration and always remains a fatal `NativeSolverFailed` survey
+record. A policy-excluded exact root becomes the typed
 architecture-excluded outcome before apt-pkg resolution. The
 Ubuntu 26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is
 likewise configured with only `APT::Architecture(s)=amd64`, while

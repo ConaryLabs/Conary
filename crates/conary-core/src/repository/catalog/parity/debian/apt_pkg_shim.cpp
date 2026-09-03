@@ -17,9 +17,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <ctime>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -34,6 +34,9 @@
 #include <vector>
 
 namespace {
+
+static_assert(std::chrono::steady_clock::is_steady,
+              "apt-pkg solver timeout attribution requires a steady clock");
 
 thread_local std::string last_error;
 
@@ -727,12 +730,13 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
     dependency_cache.MarkProtected(root.ParentPkg());
     // Apt's "3.0" EDSP branch is in-process. Its only non-conflict false result is the
     // configured solver timeout; exceptions cross the outer C++ error boundary.
-    std::time_t const solve_started = std::time(nullptr);
+    auto const solve_started = std::chrono::steady_clock::now();
     bool const resolved = marked && EDSP::ResolveExternal(
         "3.0", dependency_cache, EDSP::Request::FORBID_REMOVE, nullptr);
-    std::time_t const solve_elapsed = std::time(nullptr) - solve_started;
+    auto const solve_elapsed = std::chrono::steady_clock::now() - solve_started;
     int const solve_timeout = _config->FindI("APT::Solver::Timeout", 10);
-    bool const timed_out = marked && !resolved && solve_elapsed >= solve_timeout;
+    bool const timed_out =
+        marked && !resolved && solve_elapsed >= std::chrono::seconds(solve_timeout);
     std::string const solver_errors = apt_errors();
     if (resolved && dependency_cache.BrokenCount() == 0) {
         if (!collect_resolved_closure(handle, dependency_cache, root)) {
@@ -743,8 +747,15 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
         }
         return true;
     }
-    if (!marked || timed_out) {
+    if (!marked) {
         handle.error = "apt-pkg solver3 did not complete the exact-root solve";
+        if (!solver_errors.empty()) {
+            handle.error.append(": ").append(solver_errors);
+        }
+        return false;
+    }
+    if (timed_out) {
+        handle.error = "apt-pkg solver3 timed out before completing the exact-root solve";
         if (!solver_errors.empty()) {
             handle.error.append(": ").append(solver_errors);
         }
