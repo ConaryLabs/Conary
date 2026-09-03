@@ -41,6 +41,7 @@ PRODUCER_BINARIES = {
     "ubuntu-26.04": ("conary-debian-oracle", "conary-debian-resolution-oracle"),
     "arch": ("conary-alpm-oracle", "conary-alpm-resolution-oracle"),
 }
+ECOSYSTEMS = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}
 
 
 def canonical(value: object) -> bytes:
@@ -339,10 +340,10 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
         "profile_revision_sha256": revision,
         "package_oracle_manifest_sha256": package_manifest,
         "implementation": {
-            "ecosystem": "rpm",
-            "name": "conary",
+            "ecosystem": ECOSYSTEMS[profile],
+            "name": "conary-sat",
             "version": "1",
-            "projection_schema": 1,
+            "projection_schema": 2,
         },
         "policy": {
             "architecture": architecture,
@@ -669,6 +670,14 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("histogram disagrees with failures", result.stderr)
+
+            malformed_candidate = json.loads(valid_candidate)
+            malformed_candidate["implementation"]["ecosystem"] = "rpm"
+            survey_files[first_name] = canonical(malformed_candidate)
+            write_output()
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("fixed Conary candidate producer", result.stderr)
             survey_files[first_name] = valid_candidate
             write_output()
 

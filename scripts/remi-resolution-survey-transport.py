@@ -22,6 +22,11 @@ PROFILE_ARCHITECTURES = {
     "ubuntu-26.04": "amd64",
     "arch": "x86_64",
 }
+PROFILE_ECOSYSTEMS = {
+    "fedora-44": "rpm",
+    "ubuntu-26.04": "debian",
+    "arch": "alpm",
+}
 PROFILE_PRODUCER_BINARIES = {
     "fedora-44": ("conary-rpm-oracle", "conary-rpm-resolution-oracle"),
     "ubuntu-26.04": ("conary-debian-oracle", "conary-debian-resolution-oracle"),
@@ -826,7 +831,7 @@ def require_optional_string(value: Any, label: str) -> str | None:
     return value
 
 
-def validate_implementation(value: Any, label: str) -> None:
+def validate_implementation(value: Any, profile: str, label: str) -> None:
     implementation = exact_object(
         value, {"ecosystem", "name", "version", "projection_schema"}, label
     )
@@ -835,6 +840,12 @@ def validate_implementation(value: Any, label: str) -> None:
     require_rust_identity(implementation["name"], f"{label}.name")
     require_rust_identity(implementation["version"], f"{label}.version")
     exact_u32(implementation["projection_schema"], f"{label}.projection_schema", positive=True)
+    if (
+        implementation["ecosystem"] != PROFILE_ECOSYSTEMS[profile]
+        or implementation["name"] != "conary-sat"
+        or implementation["projection_schema"] != 2
+    ):
+        fail(f"{label} differs from the fixed Conary candidate producer")
 
 
 def validate_policy(value: Any, architecture: str, label: str) -> None:
@@ -1020,7 +1031,9 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         survey["package_oracle_manifest_sha256"], f"{name}.package_oracle_manifest_sha256"
     )
     require_rust_identity(survey["target_architecture"], f"{name}.target_architecture")
-    validate_implementation(survey["implementation"], f"{name}.implementation")
+    validate_implementation(
+        survey["implementation"], survey["profile"], f"{name}.implementation"
+    )
     validate_policy(survey["policy"], architecture, f"{name}.policy")
 
     counts = exact_object(

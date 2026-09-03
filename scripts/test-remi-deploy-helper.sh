@@ -349,6 +349,12 @@ for index in 0 1 2; do
     profile="${candidates[$index]%%=*}"
     revision="${candidates[$index]#*=}"
     architecture="${architectures[$index]#*=}"
+    case "$profile" in
+        fedora-44) ecosystem=rpm ;;
+        ubuntu-26.04) ecosystem=debian ;;
+        arch) ecosystem=alpm ;;
+        *) exit 2 ;;
+    esac
     package_root="${packages[$index]#*=}"
     resolution_root="${resolutions[$index]#*=}"
     package_manifest_sha256="$(sha256sum "$package_root/manifest.json" | cut -d ' ' -f 1)"
@@ -360,14 +366,20 @@ for index in 0 1 2; do
     fi
     candidate="$(jq -cnS \
         --arg profile "$profile" --arg revision "$revision" \
-        --arg architecture "$architecture" --arg package "$package_manifest_sha256" \
+        --arg architecture "$architecture" --arg ecosystem "$ecosystem" \
+        --arg package "$package_manifest_sha256" \
         --argjson failures "$failures" '
         {
           schema_version:1,
           profile:$profile,
           profile_revision_sha256:$revision,
           package_oracle_manifest_sha256:$package,
-          implementation:{ecosystem:"rpm",name:"conary",version:"1",projection_schema:1},
+          implementation:{
+            ecosystem:$ecosystem,
+            name:"conary-sat",
+            version:"1",
+            projection_schema:2
+          },
           policy:{
             architecture:$architecture,
             architecture_admission:"native_only",
