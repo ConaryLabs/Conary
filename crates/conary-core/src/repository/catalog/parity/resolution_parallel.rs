@@ -301,6 +301,12 @@ where
     std::thread::scope(|scope| {
         let worker_count = workers.get();
         let channel_capacity = worker_count;
+        let max_in_flight = worker_count
+            .checked_mul(2)
+            .and_then(|capacity| u64::try_from(capacity).ok())
+            .ok_or_else(|| {
+                Error::ConfigError("resolution in-flight capacity exceeds u64".to_string())
+            })?;
         let explanation_byte_limit = Arc::new(AtomicU64::new(explanation_byte_limit));
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
@@ -404,6 +410,16 @@ where
         let mut next_sequence = 0_u64;
         let mut dispatched = 0_u64;
         let walk = package_oracle.for_each_package(|root| {
+            while dispatched.saturating_sub(next_sequence) >= max_in_flight {
+                receive_and_emit(
+                    &result_receiver,
+                    &mut pending,
+                    &mut available_workers,
+                    &mut next_sequence,
+                    explanation_byte_limit.as_ref(),
+                    &mut emit,
+                )?;
+            }
             while available_workers.is_empty() {
                 receive_and_emit(
                     &result_receiver,
