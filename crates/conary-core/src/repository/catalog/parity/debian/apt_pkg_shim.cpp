@@ -773,10 +773,11 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
                     }
                     if (installable) {
                         has_installable_candidate = true;
+                        break;
                     }
                 }
             }
-            if (atom == end) {
+            if (has_installable_candidate || atom == end) {
                 break;
             }
         }

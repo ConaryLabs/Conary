@@ -151,6 +151,31 @@ fn versioned_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
     (directory, apt)
 }
 
+fn many_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut package_text = resolution_stanza(
+        "many-provider-root",
+        "1",
+        "amd64",
+        'e',
+        "Depends: crowded-virt (= 2), absent-many-provider-sibling (= 9)\n",
+    );
+    for index in 0..64 {
+        package_text.push_str(&resolution_stanza(
+            &format!("crowded-provider-{index:02}"),
+            "1",
+            "amd64",
+            char::from_digit(index % 16, 16).unwrap(),
+            "Provides: crowded-virt (= 2)\n",
+        ));
+    }
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let apt = AptResolution::open(&[staged], "amd64").unwrap();
+    (directory, apt)
+}
+
 fn same_package_virtual_provider_packages() -> String {
     [
         resolution_stanza(
@@ -1021,6 +1046,19 @@ fn apt_pkg_keeps_only_missing_sibling_with_matching_versioned_provider() {
     assert_eq!(missing.len(), 1);
     assert_eq!(missing[0].requiring.name, "virtual-missing-sibling-root");
     assert_eq!(missing[0].native_text, "absent-virtual-sibling (= 9)");
+}
+
+#[test]
+fn apt_pkg_keeps_missing_outcome_with_many_virtual_providers() {
+    let (_directory, mut apt) = many_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) =
+        apt.resolve("many-provider-root", "1", "amd64").unwrap()
+    else {
+        panic!("many viable virtual providers must leave only the missing sibling");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "many-provider-root");
+    assert_eq!(missing[0].native_text, "absent-many-provider-sibling (= 9)");
 }
 
 #[test]
