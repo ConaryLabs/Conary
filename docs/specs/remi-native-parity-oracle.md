@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 50
+revision: 51
 status: active
 ---
 
@@ -609,6 +609,9 @@ restoration, so transport construction does not allocate another survey-sized
 staging copy. Authenticated oracle members are materialized in private
 root-owned staging on the `/conary/evidence` capacity domain, leaving `/tmp`
 to hold only the caller-owned ingress transport and sanitized egress archive.
+Runner assembly removes each authenticated artifact ZIP after extraction and
+consumes each extracted lane member after writing it to the transport, avoiding
+a three-copy unbounded full-catalog working set.
 Raw deployment-inspection
 and survey stderr remain confined to
 mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,

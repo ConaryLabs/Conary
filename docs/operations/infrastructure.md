@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 88
+revision: 89
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -376,7 +376,9 @@ workflow.
   count encodings. The helper archives its frozen root-owned survey snapshot
   directly rather than allocating another full staging copy, and materializes
   the authenticated unbounded oracle members in private root-owned staging on
-  the `/conary/evidence` capacity domain instead of `/tmp`. The workflow has no refresh,
+  the `/conary/evidence` capacity domain instead of `/tmp`. On the runner, each
+  authenticated artifact ZIP is removed after extraction and each extracted
+  lane member is removed after it enters the transport. The workflow has no refresh,
   conversion, proof, promotion, activation, or publication authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
