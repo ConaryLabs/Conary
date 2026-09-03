@@ -887,6 +887,27 @@ def copy_tar_member(
         fail(f"survey file {member.name} changed digest")
 
 
+def copy_declared_survey_member(
+    transport: Path,
+    name: str,
+    destination: Path,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    try:
+        archive = tarfile.open(transport, mode="r:")
+    except (OSError, tarfile.TarError) as error:
+        fail(f"survey transport cannot be reopened: {error}")
+    with archive:
+        try:
+            member = archive.getmember(name)
+        except KeyError:
+            fail(f"survey file {name} disappeared while reopening its transport")
+        copy_tar_member(
+            archive, member, destination, expected_size, expected_sha256
+        )
+
+
 def scan_json_string_end(data: mmap.mmap, start: int, label: str) -> int:
     if start >= len(data) or data[start] != ord('"'):
         fail(f"{label} expected a JSON string")
@@ -1002,10 +1023,134 @@ class StreamingJsonArray:
                 self.data, start, end, f"{self.label} element {index}"
             )
 
+    def objects(self, stream_spec: dict[str, Any]) -> Iterator["StreamingJsonObject"]:
+        for start, end, index in self.spans():
+            yield StreamingJsonObject(
+                self.data,
+                start,
+                end,
+                f"{self.label} element {index}",
+                stream_spec,
+            )
+
     def __len__(self) -> int:
         if self._length is None:
             self._length = sum(1 for _ in self.spans())
         return self._length
+
+
+class StreamingJsonObject:
+    """Canonical JSON object with selected nested values left as mapped views."""
+
+    def __init__(
+        self,
+        data: mmap.mmap,
+        start: int,
+        end: int,
+        label: str,
+        stream_spec: dict[str, Any],
+    ) -> None:
+        self.data = data
+        self.start = start
+        self.end = end
+        self.label = label
+        self.spans: dict[str, tuple[int, int]] = {}
+        self.value = self.parse(stream_spec)
+
+    def parse(self, stream_spec: dict[str, Any]) -> dict[str, Any]:
+        if self.start >= self.end or self.data[self.start] != ord("{"):
+            fail(f"{self.label} must be one canonical JSON object")
+        position = self.start + 1
+        result: dict[str, Any] = {}
+        previous_key: str | None = None
+        if position < self.end and self.data[position] == ord("}"):
+            if position + 1 != self.end:
+                fail(f"{self.label} has trailing JSON data")
+            return result
+        while position < self.end:
+            key_end = scan_json_string_end(self.data, position, self.label)
+            key = decode_canonical_fragment(
+                self.data, position, key_end, f"{self.label} key"
+            )
+            if not isinstance(key, str) or (
+                previous_key is not None and key <= previous_key
+            ):
+                fail(f"{self.label} keys are repeated or noncanonical")
+            previous_key = key
+            if key_end >= self.end or self.data[key_end] != ord(":"):
+                fail(f"{self.label} has a malformed object member")
+            value_start = key_end + 1
+            value_end = scan_json_value_end(
+                self.data, value_start, f"{self.label}.{key}"
+            )
+            self.spans[key] = (value_start, value_end)
+            specification = stream_spec.get(key)
+            if specification == "array":
+                if self.data[value_start] != ord("["):
+                    fail(f"{self.label}.{key} must be an array")
+                result[key] = StreamingJsonArray(
+                    self.data, value_start, value_end, f"{self.label}.{key}"
+                )
+            elif isinstance(specification, dict):
+                result[key] = StreamingJsonObject(
+                    self.data,
+                    value_start,
+                    value_end,
+                    f"{self.label}.{key}",
+                    specification,
+                ).value
+            elif specification == "skip":
+                result[key] = None
+            else:
+                result[key] = decode_canonical_fragment(
+                    self.data, value_start, value_end, f"{self.label}.{key}"
+                )
+            if value_end >= self.end:
+                fail(f"{self.label} has an unterminated JSON object")
+            delimiter = self.data[value_end]
+            if delimiter == ord("}"):
+                if value_end + 1 != self.end:
+                    fail(f"{self.label} has trailing JSON data")
+                return result
+            if delimiter != ord(",") or value_end + 1 >= self.end:
+                fail(f"{self.label} has an invalid JSON object delimiter")
+            position = value_end + 1
+        fail(f"{self.label} has an unterminated JSON object")
+
+
+class StreamingJsonLines:
+    """Canonical JSON-lines records over one authenticated mapped extent."""
+
+    def __init__(
+        self, data: mmap.mmap, start: int, size: int, label: str
+    ) -> None:
+        self.data = data
+        self.start = start
+        self.end = start + size
+        self.label = label
+        if start < 0 or size <= 0 or self.end > len(data):
+            fail(f"{label} lies outside its authenticated archive")
+
+    def objects(self, stream_spec: dict[str, Any]) -> Iterator[StreamingJsonObject]:
+        position = self.start
+        index = 0
+        while position < self.end:
+            newline = self.data.find(b"\n", position, self.end)
+            if newline < 0 or newline == position:
+                fail(f"{self.label} has an empty or unterminated row")
+            if scan_json_value_end(
+                self.data, position, f"{self.label} row {index}"
+            ) != newline:
+                fail(f"{self.label} row {index} is not one canonical JSON value")
+            yield StreamingJsonObject(
+                self.data,
+                position,
+                newline,
+                f"{self.label} row {index}",
+                stream_spec,
+            )
+            position = newline + 1
+            index += 1
 
 
 class StreamingJsonDocument:
@@ -1018,54 +1163,16 @@ class StreamingJsonDocument:
             if os.fstat(self.stream.fileno()).st_size == 0:
                 fail(f"{label} is empty")
             self.mapping = mmap.mmap(self.stream.fileno(), 0, access=mmap.ACCESS_READ)
-            self.value = self.parse_object(label, streamed_keys)
+            self.value = StreamingJsonObject(
+                self.mapping,
+                0,
+                len(self.mapping),
+                label,
+                {key: "array" for key in streamed_keys},
+            ).value
         except BaseException:
             self.close()
             raise
-
-    def parse_object(self, label: str, streamed_keys: set[str]) -> dict[str, Any]:
-        assert self.mapping is not None
-        data = self.mapping
-        if data[0] != ord("{"):
-            fail(f"{label} must be one canonical JSON object")
-        position = 1
-        result: dict[str, Any] = {}
-        previous_key: str | None = None
-        if position < len(data) and data[position] == ord("}"):
-            if len(data) != 2:
-                fail(f"{label} has trailing JSON data")
-            return result
-        while position < len(data):
-            key_end = scan_json_string_end(data, position, label)
-            key = decode_canonical_fragment(data, position, key_end, f"{label} key")
-            if not isinstance(key, str) or (previous_key is not None and key <= previous_key):
-                fail(f"{label} keys are repeated or noncanonical")
-            previous_key = key
-            if key_end >= len(data) or data[key_end] != ord(":"):
-                fail(f"{label} has a malformed object member")
-            value_start = key_end + 1
-            value_end = scan_json_value_end(data, value_start, f"{label}.{key}")
-            if key in streamed_keys:
-                if data[value_start] != ord("["):
-                    fail(f"{label}.{key} must be an array")
-                result[key] = StreamingJsonArray(
-                    data, value_start, value_end, f"{label}.{key}"
-                )
-            else:
-                result[key] = decode_canonical_fragment(
-                    data, value_start, value_end, f"{label}.{key}"
-                )
-            if value_end >= len(data):
-                fail(f"{label} has an unterminated JSON object")
-            delimiter = data[value_end]
-            if delimiter == ord("}"):
-                if value_end + 1 != len(data):
-                    fail(f"{label} has trailing JSON data")
-                return result
-            if delimiter != ord(",") or value_end + 1 >= len(data):
-                fail(f"{label} has an invalid JSON object delimiter")
-            position = value_end + 1
-        fail(f"{label} has an unterminated JSON object")
 
     def close(self) -> None:
         if self.mapping is not None:
@@ -1124,6 +1231,28 @@ def validate_policy(value: Any, architecture: str, label: str) -> None:
         fail(f"{label} differs from the fixed native-resolution policy")
 
 
+NATIVE_OUTCOME_STREAM_SPEC = {
+    "closure_package_keys_sha256": "array",
+    "dependencies": "array",
+}
+CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}
+COMPARISON_MISMATCH_STREAM_SPEC = {
+    "oracle": {"outcome": NATIVE_OUTCOME_STREAM_SPEC},
+    "candidate": {"outcome": NATIVE_OUTCOME_STREAM_SPEC},
+}
+
+
+def stream_objects(
+    value: list[Any] | StreamingJsonArray,
+    stream_spec: dict[str, Any],
+) -> Iterator[dict[str, Any]]:
+    if isinstance(value, StreamingJsonArray):
+        for item in value.objects(stream_spec):
+            yield item.value
+    else:
+        yield from value
+
+
 def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
     if not isinstance(value, dict):
         fail(f"{label} must be a typed native-resolution outcome")
@@ -1131,38 +1260,43 @@ def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
     if status == "resolved":
         outcome = exact_object(value, {"status", "closure_package_keys_sha256"}, label)
         closure = outcome["closure_package_keys_sha256"]
-        if not isinstance(closure, list) or not closure:
+        if not isinstance(closure, (list, StreamingJsonArray)) or len(closure) == 0:
             fail(f"{label} resolved closure must be nonempty")
+        previous = ""
+        contains_root = False
         for index, digest_value in enumerate(closure):
-            require_sha256(digest_value, f"{label} closure {index}")
-        if closure != sorted(set(closure)) or root_sha256 not in closure:
+            digest_value = require_sha256(digest_value, f"{label} closure {index}")
+            if digest_value <= previous:
+                fail(f"{label} resolved closure is noncanonical or omits its root")
+            previous = digest_value
+            contains_root = contains_root or digest_value == root_sha256
+        if not contains_root:
             fail(f"{label} resolved closure is noncanonical or omits its root")
     elif status == "unresolved":
         outcome = exact_object(value, {"status", "dependencies"}, label)
         dependencies = outcome["dependencies"]
-        if not isinstance(dependencies, list) or not dependencies:
+        if not isinstance(dependencies, (list, StreamingJsonArray)) or len(dependencies) == 0:
             fail(f"{label} unresolved dependencies must be nonempty")
-        keys: list[tuple[str, str]] = []
+        previous_key: tuple[str, str] | None = None
         for index, item in enumerate(dependencies):
             dependency = exact_object(
                 item,
                 {"requiring_package_key_sha256", "requirement_group_sha256"},
                 f"{label} dependency {index}",
             )
-            keys.append(
-                (
-                    require_sha256(
-                        dependency["requiring_package_key_sha256"],
-                        f"{label} dependency {index} package",
-                    ),
-                    require_sha256(
-                        dependency["requirement_group_sha256"],
-                        f"{label} dependency {index} requirement",
-                    ),
-                )
+            key = (
+                require_sha256(
+                    dependency["requiring_package_key_sha256"],
+                    f"{label} dependency {index} package",
+                ),
+                require_sha256(
+                    dependency["requirement_group_sha256"],
+                    f"{label} dependency {index} requirement",
+                ),
             )
-        if keys != sorted(set(keys)):
-            fail(f"{label} unresolved dependencies are noncanonical")
+            if previous_key is not None and key <= previous_key:
+                fail(f"{label} unresolved dependencies are noncanonical")
+            previous_key = key
     elif status == "not_installable":
         outcome = exact_object(value, {"status", "reason"}, label)
         if outcome["reason"] != "architecture_excluded":
@@ -1170,6 +1304,47 @@ def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
     else:
         fail(f"{label} has an unsupported outcome status")
     return status
+
+
+def update_native_outcome_digest(digest: Any, outcome: dict[str, Any]) -> None:
+    status = outcome["status"]
+    if status == "resolved":
+        digest.update(b'{"closure_package_keys_sha256":[')
+        for index, value in enumerate(outcome["closure_package_keys_sha256"]):
+            if index:
+                digest.update(b",")
+            digest.update(canonical_json(value))
+        digest.update(b'],"status":"resolved"}')
+    elif status == "unresolved":
+        digest.update(b'{"dependencies":[')
+        for index, value in enumerate(outcome["dependencies"]):
+            if index:
+                digest.update(b",")
+            digest.update(canonical_json(value))
+        digest.update(b'],"status":"unresolved"}')
+    else:
+        digest.update(b'{"reason":"architecture_excluded","status":"not_installable"}')
+
+
+def native_outcome_sha256(outcome: dict[str, Any]) -> str:
+    digest = hashlib.sha256()
+    update_native_outcome_digest(digest, outcome)
+    return digest.hexdigest()
+
+
+class SizedSha256:
+    def __init__(self) -> None:
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def update(self, value: bytes) -> None:
+        self.digest.update(value)
+        self.size += len(value)
+        if self.size > U64_MAX:
+            fail("reconstructed candidate artifact exceeds u64")
+
+    def hexdigest(self) -> str:
+        return self.digest.hexdigest()
 
 
 def validate_error_kind(value: Any, label: str) -> tuple[int, int]:
@@ -1352,7 +1527,7 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         fail(f"{name} successful root records disagree with counts")
     previous_outcome_key = ""
     typed_counts = dict.fromkeys(OUTCOME_KINDS, 0)
-    for index, item in enumerate(outcomes):
+    for index, item in enumerate(stream_objects(outcomes, CANDIDATE_ROOT_STREAM_SPEC)):
         outcome = exact_object(
             item,
             {"root_package_key_sha256", "name", "version", "release", "architecture", "outcome"},
@@ -1410,7 +1585,8 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         fail(f"{name} failure roots are noncanonical or overlap successful roots")
     failure_key_set = set(failure_keys)
     if any(
-        item["root_package_key_sha256"] in failure_key_set for item in outcomes
+        item["root_package_key_sha256"] in failure_key_set
+        for item in stream_objects(outcomes, CANDIDATE_ROOT_STREAM_SPEC)
     ):
         fail(f"{name} failure roots are noncanonical or overlap successful roots")
     if (
@@ -1435,20 +1611,18 @@ def reconstruct_candidate_manifest_sha256(
 ) -> str:
     if candidate_survey["total_failures"] != 0:
         fail(f"{name} cannot reconstruct an incomplete candidate manifest")
-    artifact_digest = hashlib.sha256()
-    artifact_size = 0
+    artifact = SizedSha256()
     closure_package_references = 0
     unresolved_dependencies = 0
-    for item in candidate_survey["outcomes"]:
-        root = {
-            "root_package_key_sha256": item["root_package_key_sha256"],
-            "outcome": item["outcome"],
-        }
-        row = canonical_json(root) + b"\n"
-        artifact_digest.update(row)
-        artifact_size += len(row)
-        if artifact_size > U64_MAX:
-            fail(f"{name} reconstructed candidate artifact exceeds u64")
+    for item in stream_objects(
+        candidate_survey["outcomes"], CANDIDATE_ROOT_STREAM_SPEC
+    ):
+        artifact.update(b'{"outcome":')
+        update_native_outcome_digest(artifact, item["outcome"])
+        artifact.update(b',"root_package_key_sha256":')
+        root_bytes = canonical_json(item["root_package_key_sha256"])
+        artifact.update(root_bytes)
+        artifact.update(b"}\n")
         if item["outcome"]["status"] == "resolved":
             closure_package_references += len(
                 item["outcome"]["closure_package_keys_sha256"]
@@ -1490,8 +1664,8 @@ def reconstruct_candidate_manifest_sha256(
         "implementation": candidate_survey["implementation"],
         "policy": candidate_survey["policy"],
         "artifact": {
-            "sha256": artifact_digest.hexdigest(),
-            "size": artifact_size,
+            "sha256": artifact.hexdigest(),
+            "size": artifact.size,
             "counts": artifact_counts,
         },
     }
@@ -1591,7 +1765,9 @@ def validate_comparison_survey(
         fail(f"{name} mismatch retention counts are inconsistent")
     retained_root_keys: list[str] = []
     retained_candidate_bindings: dict[str, tuple[str, str]] = {}
-    for index, item in enumerate(mismatches):
+    for index, item in enumerate(
+        stream_objects(mismatches, COMPARISON_MISMATCH_STREAM_SPEC)
+    ):
         mismatch = exact_object(item, {"root", "kind", "oracle", "candidate"}, f"{name} mismatch {index}")
         root = exact_object(
             mismatch["root"],
@@ -1612,7 +1788,9 @@ def validate_comparison_survey(
                 validate_native_outcome(evidence["outcome"], root_sha256, f"{name} mismatch {index} {side}.outcome"),
                 evidence["outcome"],
             )
-        if typed["oracle"][1] == typed["candidate"][1]:
+        oracle_outcome_sha256 = native_outcome_sha256(typed["oracle"][1])
+        candidate_outcome_sha256 = native_outcome_sha256(typed["candidate"][1])
+        if oracle_outcome_sha256 == candidate_outcome_sha256:
             fail(f"{name} mismatch {index} retains equal outcomes")
         retained_candidate_bindings[root_sha256] = (
             sha256_bytes(
@@ -1625,7 +1803,7 @@ def validate_comparison_survey(
                     }
                 )
             ),
-            sha256_bytes(canonical_json(typed["candidate"][1])),
+            candidate_outcome_sha256,
         )
         if typed["oracle"][0] != typed["candidate"][0]:
             expected_kind = "resolution_outcome"
@@ -1640,7 +1818,9 @@ def validate_comparison_survey(
     if retained_root_keys != sorted(set(retained_root_keys)):
         fail(f"{name} retained mismatch roots are noncanonical")
     matched_roots: set[str] = set()
-    for candidate_root in candidate_survey["outcomes"]:
+    for candidate_root in stream_objects(
+        candidate_survey["outcomes"], CANDIDATE_ROOT_STREAM_SPEC
+    ):
         root_sha256 = candidate_root["root_package_key_sha256"]
         binding = retained_candidate_bindings.get(root_sha256)
         if binding is None:
@@ -1658,7 +1838,7 @@ def validate_comparison_survey(
             )
         ):
             fail(f"{name} mismatch root differs from the candidate survey")
-        if outcome_sha256 != sha256_bytes(canonical_json(candidate_root["outcome"])):
+        if outcome_sha256 != native_outcome_sha256(candidate_root["outcome"]):
             fail(f"{name} mismatch candidate outcome differs from its survey")
     if matched_roots != set(retained_candidate_bindings):
         fail(f"{name} mismatch root differs from the candidate survey")
@@ -1676,6 +1856,18 @@ def forbid_private_paths(value: Any, label: str) -> None:
         marker in value for marker in ("/conary/", "/etc/conary/", "/tmp/", "/data/")
     ):
         fail(f"{label} contains a private host path")
+
+
+def forbid_private_path_bytes(path: Path, label: str) -> None:
+    markers = (b"/conary/", b"/etc/conary/", b"/tmp/", b"/data/")
+    overlap = max(map(len, markers)) - 1
+    previous = b""
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            window = previous + chunk
+            if any(marker in window for marker in markers):
+                fail(f"{label} contains a private host path")
+            previous = window[-overlap:]
 
 
 def validate_input_evidence(
@@ -1805,7 +1997,7 @@ def load_input_package_manifests(
     expected_manifest_sha256: str,
     expected_transport: dict[str, Any],
     profiles: list[dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
     metadata = plain_file(path, "authenticated oracle transport")
     if (
         metadata.st_size != expected_transport["size"]
@@ -1839,6 +2031,7 @@ def load_input_package_manifests(
             fail("oracle transport manifest differs from authenticated input evidence")
         expected_names = {"manifest.json"}
         package_manifests: dict[str, dict[str, Any]] = {}
+        package_artifacts: dict[str, dict[str, Any]] = {}
         for profile in profiles:
             profile_name = profile["profile"]
             package_name = f"{profile_name}/package-oracle/manifest.json"
@@ -1882,10 +2075,133 @@ def load_input_package_manifests(
                 or implementation.get("ecosystem") != PROFILE_ECOSYSTEMS[profile_name]
             ):
                 fail(f"{profile_name} package implementation binding drifted")
+            artifact = exact_object(
+                package.get("artifact"),
+                {"sha256", "size", "counts"},
+                f"{profile_name} package artifact",
+            )
+            artifact_sha256 = require_sha256(
+                artifact["sha256"], f"{profile_name} package artifact digest"
+            )
+            artifact_size = exact_nonnegative_int(
+                artifact["size"], f"{profile_name} package artifact size"
+            )
+            artifact_counts = exact_object(
+                artifact["counts"],
+                {"packages", "provides", "requirement_groups", "requirement_atoms"},
+                f"{profile_name} package artifact counts",
+            )
+            package_count = exact_nonnegative_int(
+                artifact_counts["packages"], f"{profile_name} package count"
+            )
+            artifact_name = f"{profile_name}/package-oracle/packages.jsonl"
+            artifact_member = members.get(artifact_name)
+            if (
+                artifact_member is None
+                or not artifact_member.isreg()
+                or artifact_member.size != artifact_size
+            ):
+                fail(f"{profile_name} package artifact differs from its manifest")
+            artifact_stream = archive.extractfile(artifact_member)
+            if artifact_stream is None:
+                fail(f"{profile_name} package artifact cannot be read")
+            artifact_digest = hashlib.sha256()
+            copied = 0
+            while chunk := artifact_stream.read(1024 * 1024):
+                copied += len(chunk)
+                if copied > artifact_size:
+                    fail(f"{profile_name} package artifact exceeded its manifest size")
+                artifact_digest.update(chunk)
+            if copied != artifact_size or artifact_digest.hexdigest() != artifact_sha256:
+                fail(f"{profile_name} package artifact differs from its manifest")
             package_manifests[profile_name] = package
+            package_artifacts[profile_name] = {
+                "offset": artifact_member.offset_data,
+                "size": artifact_size,
+                "packages": package_count,
+            }
         if set(members) != expected_names:
             fail("oracle transport contains missing or unexpected members")
-    return package_manifests
+    return package_manifests, package_artifacts
+
+
+PACKAGE_ROW_FIELDS = {
+    "package_key_sha256",
+    "member_ordinal",
+    "source_identity",
+    "repository_identity",
+    "source_snapshot_sha256",
+    "source_profile",
+    "name",
+    "version",
+    "package_release",
+    "architecture",
+    "debian_multi_arch",
+    "checksum",
+    "size",
+    "download_url",
+    "version_scheme",
+    "provides",
+    "requirement_groups",
+}
+PACKAGE_ROW_SKIP_SPEC = {
+    key: "skip"
+    for key in PACKAGE_ROW_FIELDS
+    if key
+    not in {"package_key_sha256", "name", "version", "package_release", "architecture"}
+}
+
+
+def validate_candidate_package_coverage(
+    oracle_transport: Path,
+    package_artifact: dict[str, Any],
+    candidate_survey: dict[str, Any],
+    label: str,
+) -> None:
+    candidate_outcomes = iter(
+        stream_objects(candidate_survey["outcomes"], CANDIDATE_ROOT_STREAM_SPEC)
+    )
+    with oracle_transport.open("rb") as stream:
+        mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+        try:
+            package_rows = StreamingJsonLines(
+                mapping,
+                package_artifact["offset"],
+                package_artifact["size"],
+                f"{label} authenticated package oracle",
+            ).objects(PACKAGE_ROW_SKIP_SPEC)
+            packages_seen = 0
+            for package_view in package_rows:
+                package = exact_object(
+                    package_view.value,
+                    PACKAGE_ROW_FIELDS,
+                    f"{label} package row {packages_seen}",
+                )
+                try:
+                    candidate = next(candidate_outcomes)
+                except StopIteration:
+                    fail(f"{label} omits authenticated package roots")
+                expected = {
+                    "root_package_key_sha256": package["package_key_sha256"],
+                    "name": package["name"],
+                    "version": package["version"],
+                    "release": package["package_release"],
+                    "architecture": package["architecture"],
+                }
+                actual = {key: candidate[key] for key in expected}
+                if actual != expected:
+                    fail(f"{label} root differs from its authenticated package oracle")
+                packages_seen += 1
+            try:
+                next(candidate_outcomes)
+            except StopIteration:
+                pass
+            else:
+                fail(f"{label} contains roots absent from the authenticated package oracle")
+            if packages_seen != package_artifact["packages"]:
+                fail(f"{label} package root count differs from its authenticated manifest")
+        finally:
+            mapping.close()
 
 
 def verify_staged_output(
@@ -1896,6 +2212,7 @@ def verify_staged_output(
     input_deployment: dict[str, Any],
     input_profiles: list[dict[str, Any]],
     package_manifests: dict[str, dict[str, Any]],
+    package_artifacts: dict[str, dict[str, Any]],
 ) -> None:
     metadata = plain_file(args.transport, "survey transport")
     try:
@@ -1957,7 +2274,7 @@ def verify_staged_output(
         if not isinstance(files, list):
             fail("survey manifest file inventory must be an array")
         expected_names = {"manifest.json"}
-        file_paths: dict[str, Path] = {}
+        file_entries: dict[str, tuple[int, str]] = {}
         previous_name = ""
         for index, item in enumerate(files):
             item = exact_object(item, {"path", "sha256", "size"}, f"survey file {index}")
@@ -1971,11 +2288,7 @@ def verify_staged_output(
             member = members.get(name)
             if member is None or member.size != expected_size:
                 fail(f"survey file {name} is missing or changed size")
-            destination = staging / name
-            copy_tar_member(
-                archive, member, destination, expected_size, expected_sha256
-            )
-            file_paths[name] = destination
+            file_entries[name] = (expected_size, expected_sha256)
         if set(members) != expected_names:
             fail("survey transport contains missing or unexpected members")
 
@@ -2030,17 +2343,26 @@ def verify_staged_output(
         expected_candidate_name = f"{profile_name}.candidate-resolution-survey.json"
         if (
             candidate.get("file") != expected_candidate_name
-            or expected_candidate_name not in file_paths
+            or expected_candidate_name not in file_entries
         ):
             fail(f"{profile_name} candidate survey file binding is missing")
         referenced_files.add(candidate["file"])
+        candidate_path = staging / candidate["file"]
+        candidate_size, candidate_sha256 = file_entries[candidate["file"]]
+        copy_declared_survey_member(
+            args.transport,
+            candidate["file"],
+            candidate_path,
+            candidate_size,
+            candidate_sha256,
+        )
+        forbid_private_path_bytes(candidate_path, candidate["file"])
         with StreamingJsonDocument(
-            file_paths[candidate["file"]],
+            candidate_path,
             f"{profile_name} candidate survey",
             {"outcomes", "failures"},
         ) as candidate_value:
             validate_candidate_survey(candidate_value, profile, candidate["file"])
-            forbid_private_paths(candidate_value, candidate["file"])
             if (
                 candidate.get("counts") != candidate_value["counts"]
                 or candidate.get("total_failures") != candidate_value["total_failures"]
@@ -2055,6 +2377,7 @@ def verify_staged_output(
             if comparison is None:
                 if candidate_value["total_failures"] == 0:
                     fail(f"{profile_name} omitted comparison without candidate failures")
+                candidate_path.unlink()
                 continue
             if candidate_value["total_failures"] != 0 or not isinstance(comparison, dict):
                 fail(f"{profile_name} retained comparison for an incomplete candidate")
@@ -2075,6 +2398,12 @@ def verify_staged_output(
                 package_manifests[profile_name],
                 candidate["file"],
             )
+            validate_candidate_package_coverage(
+                args.oracle_transport,
+                package_artifacts[profile_name],
+                candidate_value,
+                candidate["file"],
+            )
             if (
                 require_sha256(
                     comparison["candidate_manifest_sha256"],
@@ -2089,12 +2418,22 @@ def verify_staged_output(
             )
             if (
                 comparison_name != expected_comparison_name
-                or comparison_name not in file_paths
+                or comparison_name not in file_entries
             ):
                 fail(f"{profile_name} comparison survey file binding is missing")
             referenced_files.add(comparison_name)
+            comparison_path = staging / comparison_name
+            comparison_size, comparison_sha256 = file_entries[comparison_name]
+            copy_declared_survey_member(
+                args.transport,
+                comparison_name,
+                comparison_path,
+                comparison_size,
+                comparison_sha256,
+            )
+            forbid_private_path_bytes(comparison_path, comparison_name)
             with StreamingJsonDocument(
-                file_paths[comparison_name],
+                comparison_path,
                 f"{profile_name} comparison survey",
                 {"mismatches"},
             ) as comparison_value:
@@ -2105,7 +2444,6 @@ def verify_staged_output(
                     candidate_value,
                     expected_candidate_manifest_sha256,
                 )
-                forbid_private_paths(comparison_value, comparison_name)
                 if (
                     comparison.get("counts") != comparison_value["counts"]
                     or comparison.get("total_mismatches")
@@ -2120,8 +2458,10 @@ def verify_staged_output(
                     fail(f"{profile_name} comparison summary differs from its survey")
                 comparison_profiles += 1
                 comparison_mismatches += comparison_value["total_mismatches"]
+            comparison_path.unlink()
+        candidate_path.unlink()
 
-    if referenced_files != set(file_paths):
+    if referenced_files != set(file_entries):
         fail("survey manifest file inventory contains an unbound JSON document")
 
     counts = exact_object(
@@ -2170,7 +2510,7 @@ def verify_output(args: argparse.Namespace) -> None:
     ) = validate_input_evidence(
         args.input_evidence, survey_id, export_id
     )
-    package_manifests = load_input_package_manifests(
+    package_manifests, package_artifacts = load_input_package_manifests(
         args.oracle_transport,
         input_manifest_sha256,
         input_transport,
@@ -2187,6 +2527,7 @@ def verify_output(args: argparse.Namespace) -> None:
             input_deployment,
             input_profiles,
             package_manifests,
+            package_artifacts,
         )
 
 

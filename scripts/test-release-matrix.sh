@@ -2339,7 +2339,7 @@ test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        file_paths: dict[str, Path] = {}' \
+        '        file_entries: dict[str, tuple[int, str]] = {}' \
         '        file_bytes: dict[str, bytes] = {}'
 
     assert_check_release_matrix_fails \
@@ -2383,7 +2383,7 @@ test_check_release_matrix_rejects_unbound_comparison_candidate_manifest() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey comparison binds its reconstructed candidate manifest"
+        "resolution survey comparison binds its streamed reconstructed candidate manifest"
 }
 
 test_check_release_matrix_rejects_unreopened_survey_oracle_transport() {
@@ -2397,6 +2397,45 @@ test_check_release_matrix_rejects_unreopened_survey_oracle_transport() {
     assert_check_release_matrix_fails \
         "$repo" \
         "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
+test_check_release_matrix_rejects_unbound_candidate_package_roots() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '                if actual != expected:' \
+        '                if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey candidate roots exactly cover the authenticated package oracle"
+}
+
+test_check_release_matrix_rejects_flat_nested_outcome_decode() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        'CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}' \
+        'CANDIDATE_ROOT_STREAM_SPEC = {}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey verifier streams canonical root records and nested outcomes without whole-document buffering"
+}
+
+test_check_release_matrix_rejects_retained_survey_profile_copies() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            comparison_path.unlink()' \
+        '            pass'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey verification stages and deletes one profile at a time"
 }
 
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
@@ -3704,6 +3743,9 @@ main() {
         test_check_release_matrix_rejects_nonportable_helper_summary_jq
         test_check_release_matrix_rejects_unbound_comparison_candidate_manifest
         test_check_release_matrix_rejects_unreopened_survey_oracle_transport
+        test_check_release_matrix_rejects_unbound_candidate_package_roots
+        test_check_release_matrix_rejects_flat_nested_outcome_decode
+        test_check_release_matrix_rejects_retained_survey_profile_copies
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

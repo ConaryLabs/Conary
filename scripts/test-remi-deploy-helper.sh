@@ -543,7 +543,29 @@ make_survey_oracle_transport() {
         mkdir -p "$package_root" "$resolution_root"
         package_artifact="${package_root}/packages.jsonl"
         resolution_artifact="${resolution_root}/roots.jsonl"
-        printf '%s package\n' "$profile" >"$package_artifact"
+        jq -cnS \
+            --arg profile "$profile" --arg architecture "$architecture" \
+            --arg ecosystem "$ecosystem" '
+            {
+              architecture:$architecture,
+              checksum:("8" * 64),
+              debian_multi_arch:null,
+              download_url:"https://example.invalid/package",
+              member_ordinal:0,
+              name:"example",
+              package_key_sha256:("e" * 64),
+              package_release:"1",
+              provides:[],
+              repository_identity:"repository",
+              requirement_groups:[],
+              size:1,
+              source_identity:"source",
+              source_profile:$profile,
+              source_snapshot_sha256:("7" * 64),
+              version:"1",
+              version_scheme:$ecosystem
+            }
+        ' >"$package_artifact"
         printf '%s resolution\n' "$profile" >"$resolution_artifact"
         package_manifest="$(jq -cnS \
             --arg profile "$profile" --arg revision "$revision" \
@@ -557,7 +579,11 @@ make_survey_oracle_transport() {
               profile_logical_digest_sha256:("1" * 64),
               members:[],
               implementation:{ecosystem:$ecosystem,name:"fixture",version:"1",projection_schema:1},
-              artifact:{sha256:$sha256,size:$size,counts:{packages:1}}
+              artifact:{
+                sha256:$sha256,
+                size:$size,
+                counts:{packages:1,provides:0,requirement_groups:0,requirement_atoms:0}
+              }
             }
         ')"
         printf '%s' "$package_manifest" >"$package_root/manifest.json"

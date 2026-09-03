@@ -175,7 +175,27 @@ class TransportFixture:
             resolution_root = lane / "resolution-oracle"
             package_root.mkdir(parents=True)
             resolution_root.mkdir()
-            package_artifact = f"{profile} package rows\n".encode()
+            package_artifact = canonical(
+                {
+                    "package_key_sha256": "1" * 64,
+                    "member_ordinal": 0,
+                    "source_identity": "source",
+                    "repository_identity": "repository",
+                    "source_snapshot_sha256": "7" * 64,
+                    "source_profile": profile,
+                    "name": "example",
+                    "version": "1:2.0~rc1",
+                    "package_release": "1.fc44",
+                    "architecture": ARCHITECTURES[profile],
+                    "debian_multi_arch": None,
+                    "checksum": "8" * 64,
+                    "size": 1,
+                    "download_url": "https://example.invalid/package",
+                    "version_scheme": ECOSYSTEMS[profile],
+                    "provides": [],
+                    "requirement_groups": [],
+                }
+            ) + b"\n"
             resolution_artifact = f"{profile} resolution rows\n".encode()
             (package_root / "packages.jsonl").write_bytes(package_artifact)
             (resolution_root / "roots.jsonl").write_bytes(resolution_artifact)
@@ -194,7 +214,12 @@ class TransportFixture:
                 "artifact": {
                     "sha256": digest(package_artifact),
                     "size": len(package_artifact),
-                    "counts": {"packages": 1},
+                    "counts": {
+                        "packages": 1,
+                        "provides": 0,
+                        "requirement_groups": 0,
+                        "requirement_atoms": 0,
+                    },
                 },
             }
             package_manifest_bytes = canonical(package_manifest)
@@ -240,7 +265,7 @@ class TransportFixture:
                         "name": "packages.jsonl",
                         "sha256": digest(package_artifact),
                         "size": len(package_artifact),
-                        "counts": {"packages": 1},
+                        "counts": package_manifest["artifact"]["counts"],
                     },
                 },
                 "resolution_oracle": {
@@ -640,6 +665,58 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("repeats key", result.stderr)
 
+    def test_candidate_roots_match_authenticated_package_rows(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            subprocess.run(fixture.command(), check=True, capture_output=True)
+            evidence = json.loads(fixture.evidence.read_bytes())
+            _manifests, artifacts = TRANSPORT_TOOL.load_input_package_manifests(
+                fixture.transport,
+                evidence["manifest_sha256"],
+                evidence["transport"],
+                evidence["profiles"],
+            )
+            profile = evidence["profiles"][0]
+            candidate = candidate_survey(
+                profile["profile"],
+                profile["profile_revision_sha256"],
+                profile["package_oracle_manifest_sha256"],
+            )
+            candidate["counts"] = {
+                "roots_walked": 1,
+                "resolved_roots": 1,
+                "unresolved_roots": 0,
+                "not_installable_roots": 0,
+                "failed_roots": 0,
+                "error_kinds": [],
+            }
+            candidate.update(
+                {
+                    "total_failures": 0,
+                    "retained_failures": 0,
+                    "truncated": False,
+                    "withheld_explanations": 0,
+                    "failures": [],
+                }
+            )
+            TRANSPORT_TOOL.validate_candidate_package_coverage(
+                fixture.transport,
+                artifacts[profile["profile"]],
+                candidate,
+                "candidate.json",
+            )
+            candidate["outcomes"][0]["root_package_key_sha256"] = "9" * 64
+            candidate["outcomes"][0]["outcome"][
+                "closure_package_keys_sha256"
+            ] = ["9" * 64]
+            with self.assertRaisesRegex(ValueError, "authenticated package oracle"):
+                TRANSPORT_TOOL.validate_candidate_package_coverage(
+                    fixture.transport,
+                    artifacts[profile["profile"]],
+                    candidate,
+                    "candidate.json",
+                )
+
     def test_verify_output_reopens_manifest_files_and_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -746,6 +823,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 )
                 self.assertEqual(len(streamed_candidate["outcomes"]), 1)
                 self.assertEqual(len(list(streamed_candidate["failures"])), 1)
+                streamed_root = next(
+                    streamed_candidate["outcomes"].objects(
+                        TRANSPORT_TOOL.CANDIDATE_ROOT_STREAM_SPEC
+                    )
+                ).value
+                self.assertIsInstance(
+                    streamed_root["outcome"]["closure_package_keys_sha256"],
+                    TRANSPORT_TOOL.StreamingJsonArray,
+                )
 
             for malformed_schema in (True, 1.0):
                 manifest["schema_version"] = malformed_schema
