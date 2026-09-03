@@ -1212,6 +1212,26 @@ survey_resolution() {
         and (.candidate_failures | type == "number" and . >= 0)
         and (.comparison_mismatches | type == "number" and . >= 0)
         and (.comparison_profiles | type == "number" and . >= 0 and . <= 3)
+        and (.profile_results | type == "array" and length == 3)
+        and ([.profile_results[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        and all(.profile_results[];
+          (.candidate | keys | sort) == ["counts", "total_failures"]
+          and (.candidate.counts | type == "object")
+          and (.candidate.total_failures | type == "number" and . >= 0)
+          and if .candidate.total_failures == 0 then
+            (.comparison | type == "object")
+            and ((.comparison | keys | sort)
+              == ["candidate_manifest_sha256", "counts", "total_mismatches"])
+            and (.comparison.candidate_manifest_sha256
+              | type == "string" and test("^[0-9a-f]{64}$"))
+            and (.comparison.counts | type == "object")
+            and (.comparison.total_mismatches | type == "number" and . >= 0)
+          else .comparison == null end)
+        and .roots_walked == ([.profile_results[].candidate.counts.roots_walked] | add)
+        and .candidate_failures == ([.profile_results[].candidate.total_failures] | add)
+        and .comparison_profiles == ([.profile_results[].comparison | select(. != null)] | length)
+        and .comparison_mismatches == (
+          [.profile_results[].comparison.total_mismatches // 0] | add)
     ' "$outcome" >/dev/null || {
         die "resolution survey did not return its exact typed outcome"
     }
@@ -1235,54 +1255,18 @@ survey_resolution() {
     output="$frozen_output"
     [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
         die "resolution survey did not create its private output directory"
-    local candidate_file comparison_file package_manifest_sha256 resolution_manifest_sha256
+    local candidate_file comparison_file profile_failures
     for profile in fedora-44 ubuntu-26.04 arch; do
         candidate_file="${output}/${profile}.candidate-resolution-survey.json"
         [[ -f "$candidate_file" && ! -L "$candidate_file" && "$(stat -c '%a' "$candidate_file")" == "600" ]] ||
             die "${profile} candidate survey is not a private plain file"
-        revision="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .profile_revision_sha256' "$input_manifest")"
-        architecture="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .target_architecture' "$input_manifest")"
-        package_manifest_sha256="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .package_oracle.manifest_sha256' "$input_manifest")"
-        resolution_manifest_sha256="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .native_resolution.manifest_sha256' "$input_manifest")"
-        cmp -s <(jq -cS . "$candidate_file") <({ cat "$candidate_file"; printf '\n'; }) ||
-            die "${profile} candidate survey is not canonical JSON"
-        jq -e \
-            --arg profile "$profile" --arg revision "$revision" \
-            --arg architecture "$architecture" --arg package "$package_manifest_sha256" '
-            .schema_version == 1
-            and .profile == $profile
-            and .profile_revision_sha256 == $revision
-            and .package_oracle_manifest_sha256 == $package
-            and .target_architecture == $architecture
-            and .policy.architecture == $architecture
-            and .counts.roots_walked == (
-              .counts.resolved_roots + .counts.unresolved_roots
-              + .counts.not_installable_roots + .counts.failed_roots)
-            and .total_failures == .counts.failed_roots
-            and (.counts.error_kinds | type == "array")
-        ' "$candidate_file" >/dev/null ||
-            die "${profile} candidate survey binding is invalid"
+        profile_failures="$(jq -r --arg profile "$profile" \
+            '.profile_results[] | select(.profile == $profile) | .candidate.total_failures' \
+            "$outcome")"
         comparison_file="${output}/${profile}.native-resolution-comparison-survey.json"
-        if [[ "$(jq -r '.total_failures' "$candidate_file")" == "0" ]]; then
+        if [[ "$profile_failures" == "0" ]]; then
             [[ -f "$comparison_file" && ! -L "$comparison_file" && "$(stat -c '%a' "$comparison_file")" == "600" ]] ||
                 die "${profile} comparison survey is not a private plain file"
-            cmp -s <(jq -cS . "$comparison_file") <({ cat "$comparison_file"; printf '\n'; }) ||
-                die "${profile} comparison survey is not canonical JSON"
-            jq -e \
-                --arg profile "$profile" --arg revision "$revision" \
-                --arg package "$package_manifest_sha256" \
-                --arg resolution "$resolution_manifest_sha256" '
-                .schema_version == 1
-                and .profile == $profile
-                and .profile_revision_sha256 == $revision
-                and .package_oracle_manifest_sha256 == $package
-                and .oracle_manifest_sha256 == $resolution
-                and .counts.roots_walked == (.counts.matching_roots + .counts.mismatched_roots)
-                and .total_mismatches == .counts.mismatched_roots
-                and (.counts.mismatch_kinds | type == "array")
-                and (.counts.outcome_kind_pairs | type == "array")
-            ' "$comparison_file" >/dev/null ||
-                die "${profile} comparison survey binding is invalid"
         else
             [[ ! -e "$comparison_file" && ! -L "$comparison_file" ]] ||
                 die "${profile} comparison survey exists despite candidate failures"
@@ -1315,67 +1299,36 @@ survey_resolution() {
     local profiles_json="${SURVEY_STAGING}/profiles.json"
     : >"${profiles_json}.jsonl"
     for profile in fedora-44 ubuntu-26.04 arch; do
-        candidate_file="${output}/${profile}.candidate-resolution-survey.json"
-        comparison_file="${output}/${profile}.native-resolution-comparison-survey.json"
-        revision="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .profile_revision_sha256' "$input_manifest")"
-        architecture="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .target_architecture' "$input_manifest")"
-        package_manifest_sha256="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .package_oracle.manifest_sha256' "$input_manifest")"
-        resolution_manifest_sha256="$(jq -r --arg profile "$profile" '.profiles[] | select(.profile == $profile) | .native_resolution.manifest_sha256' "$input_manifest")"
-        if [[ -f "$comparison_file" ]]; then
-            jq -n -cS \
-                --arg profile "$profile" --arg revision "$revision" \
-                --arg architecture "$architecture" \
-                --arg package "$package_manifest_sha256" \
-                --arg resolution "$resolution_manifest_sha256" \
-                --arg candidate_file "$(basename "$candidate_file")" \
-                --arg comparison_file "$(basename "$comparison_file")" \
-                --slurpfile candidate "$candidate_file" \
-                --slurpfile comparison "$comparison_file" '
-                {
-                  profile: $profile,
-                  profile_revision_sha256: $revision,
-                  target_architecture: $architecture,
-                  package_oracle_manifest_sha256: $package,
-                  native_resolution_manifest_sha256: $resolution,
-                  candidate: {
-                    file: $candidate_file,
-                    counts: $candidate[0].counts,
-                    total_failures: $candidate[0].total_failures,
-                    error_histogram: $candidate[0].counts.error_kinds
-                  },
-                  comparison: {
-                    file: $comparison_file,
-                    counts: $comparison[0].counts,
-                    total_mismatches: $comparison[0].total_mismatches,
-                    mismatch_histogram: $comparison[0].counts.mismatch_kinds,
-                    outcome_histogram: $comparison[0].counts.outcome_kind_pairs
-                  }
-                }
-            ' >>"${profiles_json}.jsonl"
-        else
-            jq -n -cS \
-                --arg profile "$profile" --arg revision "$revision" \
-                --arg architecture "$architecture" \
-                --arg package "$package_manifest_sha256" \
-                --arg resolution "$resolution_manifest_sha256" \
-                --arg candidate_file "$(basename "$candidate_file")" \
-                --slurpfile candidate "$candidate_file" '
-                {
-                  profile: $profile,
-                  profile_revision_sha256: $revision,
-                  target_architecture: $architecture,
-                  package_oracle_manifest_sha256: $package,
-                  native_resolution_manifest_sha256: $resolution,
-                  candidate: {
-                    file: $candidate_file,
-                    counts: $candidate[0].counts,
-                    total_failures: $candidate[0].total_failures,
-                    error_histogram: $candidate[0].counts.error_kinds
-                  },
-                  comparison: null
-                }
-            ' >>"${profiles_json}.jsonl"
-        fi
+        jq -n -cS \
+            --arg profile "$profile" \
+            --arg candidate_file "${profile}.candidate-resolution-survey.json" \
+            --arg comparison_file "${profile}.native-resolution-comparison-survey.json" \
+            --slurpfile input "$input_manifest" \
+            --slurpfile outcome "$outcome" '
+            ($input[0].profiles[] | select(.profile == $profile)) as $binding
+            | ($outcome[0].profile_results[] | select(.profile == $profile)) as $result
+            | {
+                profile: $profile,
+                profile_revision_sha256: $binding.profile_revision_sha256,
+                target_architecture: $binding.target_architecture,
+                package_oracle_manifest_sha256: $binding.package_oracle.manifest_sha256,
+                native_resolution_manifest_sha256: $binding.native_resolution.manifest_sha256,
+                candidate: {
+                  file: $candidate_file,
+                  counts: $result.candidate.counts,
+                  total_failures: $result.candidate.total_failures,
+                  error_histogram: $result.candidate.counts.error_kinds
+                },
+                comparison: if $result.comparison == null then null else {
+                  file: $comparison_file,
+                  candidate_manifest_sha256: $result.comparison.candidate_manifest_sha256,
+                  counts: $result.comparison.counts,
+                  total_mismatches: $result.comparison.total_mismatches,
+                  mismatch_histogram: $result.comparison.counts.mismatch_kinds,
+                  outcome_histogram: $result.comparison.counts.outcome_kind_pairs
+                } end
+              }
+        ' >>"${profiles_json}.jsonl"
     done
     jq -s -cS . "${profiles_json}.jsonl" >"$profiles_json"
     local manifest_canonical

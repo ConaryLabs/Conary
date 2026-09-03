@@ -342,6 +342,8 @@ done
     "fedora-44=$(printf 'a%.0s' {1..64}) ubuntu-26.04=$(printf 'b%.0s' {1..64}) arch=$(printf 'c%.0s' {1..64})" ]]
 [[ "${architectures[*]}" == "fedora-44=x86_64 ubuntu-26.04=amd64 arch=x86_64" ]]
 mkdir -m 0700 "$output"
+profile_results_file="${output}.profile-results.jsonl"
+: >"$profile_results_file"
 candidate_failures=0
 comparison_mismatches=0
 comparison_profiles=0
@@ -419,17 +421,46 @@ for index in 0 1 2; do
     ')"
     printf '%s' "$candidate" >"$output/$profile.candidate-resolution-survey.json"
     chmod 0600 "$output/$profile.candidate-resolution-survey.json"
+    comparison_result=null
     if (( failures == 0 )); then
+        candidate_root="$(jq -cnS --arg root "$(printf 'e%.0s' {1..64})" '
+            {root_package_key_sha256:$root,outcome:{status:"resolved",closure_package_keys_sha256:[$root]}}
+        ')"
+        candidate_artifact_sha256="$(printf '%s\n' "$candidate_root" | sha256sum | cut -d ' ' -f 1)"
+        candidate_artifact_size=$((${#candidate_root} + 1))
+        candidate_manifest="$(jq -cnS \
+            --slurpfile package "$package_root/manifest.json" \
+            --argjson candidate "$candidate" \
+            --arg artifact "$candidate_artifact_sha256" \
+            --argjson size "$candidate_artifact_size" '
+            {
+              schema_version:2,
+              profile:$candidate.profile,
+              profile_revision_sha256:$candidate.profile_revision_sha256,
+              profile_logical_digest_sha256:$package[0].profile_logical_digest_sha256,
+              members:$package[0].members,
+              package_oracle_manifest_sha256:$candidate.package_oracle_manifest_sha256,
+              implementation:$candidate.implementation,
+              policy:$candidate.policy,
+              artifact:{
+                sha256:$artifact,
+                size:$size,
+                counts:{roots:1,resolved_roots:1,unresolved_roots:0,not_installable_roots:0,closure_package_references:1,unresolved_dependencies:0}
+              }
+            }
+        ')"
+        candidate_manifest_sha256="$(printf '%s' "$candidate_manifest" | sha256sum | cut -d ' ' -f 1)"
         comparison="$(jq -cnS \
             --arg profile "$profile" --arg revision "$revision" \
-            --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" '
+            --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" \
+            --arg candidate "$candidate_manifest_sha256" '
             {
               schema_version:1,
               profile:$profile,
               profile_revision_sha256:$revision,
               package_oracle_manifest_sha256:$package,
               oracle_manifest_sha256:$resolution,
-              candidate_manifest_sha256:("d" * 64),
+              candidate_manifest_sha256:$candidate,
               counts:{roots_walked:1,matching_roots:1,mismatched_roots:0,mismatch_kinds:[],outcome_kind_pairs:[]},
               mismatch_record_limit:5000,
               total_mismatches:0,
@@ -441,16 +472,35 @@ for index in 0 1 2; do
         printf '%s' "$comparison" >"$output/$profile.native-resolution-comparison-survey.json"
         chmod 0600 "$output/$profile.native-resolution-comparison-survey.json"
         comparison_profiles=$((comparison_profiles + 1))
+        comparison_result="$(jq -cnS --argjson comparison "$comparison" '
+            {
+              candidate_manifest_sha256:$comparison.candidate_manifest_sha256,
+              counts:$comparison.counts,
+              total_mismatches:$comparison.total_mismatches
+            }
+        ')"
     fi
+    jq -cnS \
+        --arg profile "$profile" \
+        --argjson candidate "$candidate" \
+        --argjson comparison "$comparison_result" '
+        {
+          profile:$profile,
+          candidate:{counts:$candidate.counts,total_failures:$candidate.total_failures},
+          comparison:$comparison
+        }
+    ' >>"$profile_results_file"
 done
 jq -n \
     --arg output "$output" \
     --argjson failures "$candidate_failures" \
     --argjson mismatches "$comparison_mismatches" \
-    --argjson comparison_profiles "$comparison_profiles" '
+    --argjson comparison_profiles "$comparison_profiles" \
+    --slurpfile profile_results "$profile_results_file" '
     {
       output_dir:$output,
       profiles:3,
+      profile_results:$profile_results,
       roots_walked:3,
       candidate_failures:$failures,
       comparison_mismatches:$mismatches,
@@ -484,9 +534,9 @@ make_survey_oracle_transport() {
     local package_manifest_sha256 resolution_manifest_sha256 path
     for profile in fedora-44 ubuntu-26.04 arch; do
         case "$profile" in
-            fedora-44) architecture=x86_64; revision="$(printf 'a%.0s' {1..64})" ;;
-            ubuntu-26.04) architecture=amd64; revision="$(printf 'b%.0s' {1..64})" ;;
-            arch) architecture=x86_64; revision="$(printf 'c%.0s' {1..64})" ;;
+            fedora-44) architecture=x86_64; revision="$(printf 'a%.0s' {1..64})"; ecosystem=rpm ;;
+            ubuntu-26.04) architecture=amd64; revision="$(printf 'b%.0s' {1..64})"; ecosystem=debian ;;
+            arch) architecture=x86_64; revision="$(printf 'c%.0s' {1..64})"; ecosystem=alpm ;;
         esac
         package_root="${build}/${profile}/package-oracle"
         resolution_root="${build}/${profile}/native-resolution"
@@ -497,9 +547,18 @@ make_survey_oracle_transport() {
         printf '%s resolution\n' "$profile" >"$resolution_artifact"
         package_manifest="$(jq -cnS \
             --arg profile "$profile" --arg revision "$revision" \
+            --arg ecosystem "$ecosystem" \
             --arg sha256 "$(sha256sum "$package_artifact" | cut -d ' ' -f 1)" \
             --argjson size "$(stat -c '%s' "$package_artifact")" '
-            {schema_version:1,profile:$profile,profile_revision_sha256:$revision,artifact:{sha256:$sha256,size:$size,counts:{packages:1}}}
+            {
+              schema_version:1,
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              profile_logical_digest_sha256:("1" * 64),
+              members:[],
+              implementation:{ecosystem:$ecosystem,name:"fixture",version:"1",projection_schema:1},
+              artifact:{sha256:$sha256,size:$size,counts:{packages:1}}
+            }
         ')"
         printf '%s' "$package_manifest" >"$package_root/manifest.json"
         package_manifest_sha256="$(sha256sum "$package_root/manifest.json" | cut -d ' ' -f 1)"
@@ -1254,6 +1313,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
         --survey-id "$survey_id" \
         --export-id "$export_id" \
         --input-evidence "$fake_root/survey-input-verification.json" \
+        --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
         --transport "$transport" \
         --evidence "$verification" >/dev/null
     jq -e '
@@ -1288,6 +1348,7 @@ test_resolution_survey_findings_restart_and_succeed() {
     python3 scripts/remi-resolution-survey-transport.py verify-output \
         --survey-id "$survey_id" --export-id "$export_id" \
         --input-evidence "$fake_root/survey-input-verification.json" \
+        --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
         --transport "$transport" --evidence "$verification" >/dev/null
     jq -e '
         .counts.candidate_failures == 3
