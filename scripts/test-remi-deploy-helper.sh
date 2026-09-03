@@ -414,7 +414,7 @@ jq -n \
 '
 if (( candidate_failures > 0 || comparison_mismatches > 0 )); then
     echo "resolution surveys recorded findings" >&2
-    exit 1
+    exit 101
 fi
 EOF
     chmod 0755 "$bin"

@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 34
+revision: 35
 status: active
 ---
 
@@ -471,8 +471,8 @@ survey file is create-only and mode `0600`. A profile with candidate failures
 cannot produce a complete candidate bundle, so its comparison survey is
 skipped while later profiles are still surveyed. Complete candidates are
 materialized only below an automatically removed temporary directory. The
-command reports all written findings and exits non-zero when any candidate
-failure or comparison mismatch exists.
+command reports all written findings and returns Remi's top-level failure status
+`101` when any candidate failure or comparison mismatch exists.
 
 Neither survey is evidence authority. Their JSON cannot be opened as a strict
 resolution bundle or `NativeResolutionComparisonV1`; promotion proof,
@@ -493,8 +493,9 @@ helper from its exact protected `github.workflow_sha` through the existing
 identity, and typed oracle transport path. The root-owned helper reads the exact
 candidate revisions from the stopped deployment's own pointers, uses the
 profile-bound architectures, and freezes the survey JSON under root ownership
-before restarting. It polls `/health/ready` to a bounded successful result
-regardless of recorded findings, and returns only survey JSON
+before restarting. It accepts status `101` only when the typed outcome records
+at least one finding, polls `/health/ready` to a bounded successful result
+regardless of those findings, and returns only survey JSON
 plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport and compares every authority
 binding with its authenticated input verification. Its per-file admission limit

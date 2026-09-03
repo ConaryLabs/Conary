@@ -1223,7 +1223,9 @@ survey_resolution() {
     if (( survey_status == 0 )); then
         (( candidate_failures == 0 && comparison_mismatches == 0 )) ||
             die "resolution survey reported findings with a successful exit status"
-    elif (( survey_status == 1 )); then
+    # Remi's top-level bootstrap maps every returned error, including the
+    # typed "findings recorded" result, to exit status 101.
+    elif (( survey_status == 101 )); then
         (( candidate_failures > 0 || comparison_mismatches > 0 )) || {
             cat "$diagnostic" >&2
             die "resolution survey failed without recording findings"

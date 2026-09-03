@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 142
+revision: 143
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -1070,7 +1070,8 @@ profile has no hard candidate failures it builds a strict candidate only in an
 automatically removed temporary directory and writes
 `<profile>.native-resolution-comparison-survey.json`; otherwise comparison for
 that profile is skipped because no complete candidate exists. All profiles are
-still visited, and the command exits non-zero after reporting any findings.
+still visited, and the command returns Remi's top-level failure status `101`
+after reporting any findings.
 
 These files are diagnosis, never authority. They cannot satisfy a strict
 resolution-bundle or `NativeResolutionComparisonV1` reader, and promotion
@@ -1105,7 +1106,8 @@ pairs, and the profiles' typed `x86_64`, `amd64`, and `x86_64` architectures.
 It writes durable private output below
 `/conary/evidence/resolution-surveys/<survey-id>`, copies the completed JSON into
 root-owned staging before restoring the service, restores and probes Remi even
-when the survey records findings, and requires a bounded successful
+when the survey returns status `101` for recorded findings, accepts that status
+only when the typed outcome reports at least one finding, and requires a bounded successful
 `/health/ready` response before it considers restoration complete. It then emits
 `/tmp/remi-resolution-survey-<survey-id>.tar`. The workflow independently
 reopens that archive, requires every deployment, candidate, architecture, and

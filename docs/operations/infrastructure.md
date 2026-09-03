@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 72
+revision: 73
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -300,8 +300,9 @@ workflow.
   own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
   output into root-owned staging while Remi remains stopped, and always restores
   the service and polls `/health/ready` to a bounded successful result before it
-  interprets the command result. Recorded findings are a
-  successful operator result. The returned seven-day artifact contains only
+  interprets the command result. Remi's top-level status `101` is a successful
+  operator result only when the typed outcome records findings. The returned
+  seven-day artifact contains only
   canonical survey JSON, a digest/size/binding manifest, and public verification
   records. Per-file admission is derived from the already bounded transport size
   rather than an invented limit below the producer contract. The runner
