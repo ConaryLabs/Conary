@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 83
+revision: 84
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -358,7 +358,13 @@ workflow.
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and
   exact comparison coverage of the complete zero-failure candidate root set.
   Every retained mismatch root, identity, and candidate outcome must occur in
-  that candidate survey. The runner also requires the deployment, candidate,
+  that candidate survey. Remi's bounded command outcome supplies the helper's
+  per-profile counts, histograms, and comparison candidate-manifest digest, so
+  the helper never loads a complete survey document into `jq` merely to build
+  the transport manifest. The runner reopens the exact authenticated package
+  manifests, reconstructs the strict candidate root stream and manifest while
+  streaming candidate outcomes, and requires that digest even when the
+  comparison retains zero mismatches. The runner also requires the deployment, candidate,
   architecture, and oracle bindings to equal its authenticated input record. The
   workflow has no refresh, conversion, proof, promotion, activation, or
   publication authority.
