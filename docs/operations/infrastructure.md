@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 79
+revision: 80
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -281,6 +281,9 @@ workflow.
   independently reopens the exported transport and schema-3 deployment
   inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
   requires the artifact-owned deployed commit to remain merged into `main`.
+  It also requires the export's canonical operator attestation to bind its
+  exact run commit and attempt to the protected pinned-host-key SSH contract;
+  pre-attestation exports cannot become strict oracle authority.
   Each lane checks out that exact clean producer source, never a workflow head,
   then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
   Arch image with libsolv 0.7.36, apt-pkg 3.2.0, or the archived libalpm state.
@@ -335,9 +338,10 @@ workflow.
   records, including the authenticated three-lane assembly. Raw deployment
   inspection and survey stderr remain confined to mode-`0600` root-controlled
   staging, are destroyed during helper cleanup, and are never written to SSH or
-  workflow logs; public failures use typed helper messages. Per-file admission
-  is derived from the already bounded transport size
-  rather than an invented limit below the producer contract. The runner
+  workflow logs; public failures use typed helper messages. The verifier places
+  no invented aggregate ceiling on survey transport that the producer contract
+  does not establish; each member is still confined to the actual plain archive
+  extent. The runner
   independently enforces the complete typed Rust survey schemas, retention and
   evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and

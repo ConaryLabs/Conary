@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 41
+revision: 42
 status: active
 ---
 
@@ -48,7 +48,11 @@ apt-pkg implementation remains the sole native fact and resolution authority.
 
 The protected production producer accepts only one successful exact export
 run. It independently reopens the transport and deployment evidence and
-requires the artifact-owned deployed commit to be merged. Dispatch also names
+requires the artifact-owned deployed commit to be merged. The export's
+canonical operator attestation must bind its exact run ID, attempt, workflow
+commit, export identity, and `protected-pinned-known-hosts-v1` contract. An
+older export without that attestation cannot become strict oracle authority.
+Dispatch also names
 one explicit full `producer_commit`; operators use the deployed commit by
 default and name a newer commit only for an intended producer advance. The
 workflow fetches `origin/main`, requires the producer commit to descend from
@@ -573,9 +577,10 @@ binds candidate implementation to the profile ecosystem,
 `conary-sat`, and projection schema 2, then compares every authority binding
 with its authenticated input
 verification, and its seven-day artifact
-also retains the authenticated three-lane assembly. Its per-file admission limit
-is the bounded transport size, not a smaller threshold unrelated to producer
-output. Raw deployment-inspection and survey stderr remain confined to
+also retains the authenticated three-lane assembly. The verifier imposes no
+aggregate transport limit absent from the producer contract; a member read is
+still confined to the actual plain archive extent. Raw deployment-inspection
+and survey stderr remain confined to
 mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
 and are never emitted through SSH or
 workflow logs; public failures contain only a typed helper message. Neither side
