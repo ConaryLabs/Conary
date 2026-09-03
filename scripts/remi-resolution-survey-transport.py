@@ -737,6 +737,7 @@ def verify_output(args: argparse.Namespace) -> None:
     comparison_mismatches = 0
     comparison_profiles = 0
     roots_walked = 0
+    referenced_files: set[str] = set()
     for profile in profiles:
         profile = exact_object(
             profile,
@@ -763,9 +764,19 @@ def verify_output(args: argparse.Namespace) -> None:
         if profile["target_architecture"] != PROFILE_ARCHITECTURES[profile_name]:
             fail(f"{profile_name} survey architecture drifted")
         candidate = profile["candidate"]
-        if not isinstance(candidate, dict) or candidate.get("file") not in file_bytes:
+        candidate = exact_object(
+            candidate,
+            {"file", "counts", "total_failures", "error_histogram"},
+            f"{profile_name} candidate summary",
+        )
+        expected_candidate_name = f"{profile_name}.candidate-resolution-survey.json"
+        if (
+            candidate.get("file") != expected_candidate_name
+            or expected_candidate_name not in file_bytes
+        ):
             fail(f"{profile_name} candidate survey file binding is missing")
         candidate_data = file_bytes[candidate["file"]]
+        referenced_files.add(candidate["file"])
         candidate_value = decode_json(candidate_data, f"{profile_name} candidate survey")
         if canonical_json(candidate_value) != candidate_data:
             fail(f"{profile_name} candidate survey is not canonical JSON")
@@ -786,10 +797,25 @@ def verify_output(args: argparse.Namespace) -> None:
             continue
         if candidate_value["total_failures"] != 0 or not isinstance(comparison, dict):
             fail(f"{profile_name} retained comparison for an incomplete candidate")
+        comparison = exact_object(
+            comparison,
+            {
+                "file",
+                "counts",
+                "total_mismatches",
+                "mismatch_histogram",
+                "outcome_histogram",
+            },
+            f"{profile_name} comparison summary",
+        )
         comparison_name = comparison.get("file")
-        if comparison_name not in file_bytes:
+        expected_comparison_name = (
+            f"{profile_name}.native-resolution-comparison-survey.json"
+        )
+        if comparison_name != expected_comparison_name or comparison_name not in file_bytes:
             fail(f"{profile_name} comparison survey file binding is missing")
         comparison_data = file_bytes[comparison_name]
+        referenced_files.add(comparison_name)
         comparison_value = decode_json(
             comparison_data, f"{profile_name} comparison survey"
         )
@@ -807,6 +833,9 @@ def verify_output(args: argparse.Namespace) -> None:
             fail(f"{profile_name} comparison summary differs from its survey")
         comparison_profiles += 1
         comparison_mismatches += comparison_value["total_mismatches"]
+
+    if referenced_files != set(file_bytes):
+        fail("survey manifest file inventory contains an unbound JSON document")
 
     counts = exact_object(
         manifest["counts"],
