@@ -101,6 +101,7 @@ fn run(arguments: Arguments) -> Result<()> {
         ResolutionWorkerRequest::Automatic,
         ResolutionWorkerRequest::explicit,
     );
+    let mut survey_failures = None;
     let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
             let (_, evidence) = produce_rpm_resolution_oracle_with_workers(
@@ -125,11 +126,7 @@ fn run(arguments: Arguments) -> Result<()> {
             )
             .context("produce RPM resolution survey")?;
             if survey.total_failures != 0 {
-                bail!(
-                    "RPM resolution survey recorded {} failed roots; inventory written to {}",
-                    survey.total_failures,
-                    output.display()
-                );
+                survey_failures = Some((survey.total_failures, output));
             }
             evidence
         }
@@ -137,6 +134,12 @@ fn run(arguments: Arguments) -> Result<()> {
     };
     write_resolution_walk_implementation_evidence(&arguments.implementation_evidence, &evidence)
         .context("write RPM resolution implementation evidence")?;
+    if let Some((failures, output)) = survey_failures {
+        bail!(
+            "RPM resolution survey recorded {failures} failed roots; inventory written to {}",
+            output.display()
+        );
+    }
     Ok(())
 }
 
