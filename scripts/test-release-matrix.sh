@@ -282,6 +282,8 @@ create_release_policy_fixture() {
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
     cp "$REPO_ROOT/.github/workflows/produce-remi-native-oracles.yml" \
         "$repo/.github/workflows/produce-remi-native-oracles.yml"
+    cp "$REPO_ROOT/.github/workflows/survey-remi-resolution.yml" \
+        "$repo/.github/workflows/survey-remi-resolution.yml"
     cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
         "$repo/.github/workflows/remi-conversion-benchmark.yml"
     cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
@@ -293,6 +295,8 @@ create_release_policy_fixture() {
         "$repo/scripts/verify-native-oracle-input-transport.py"
     cp "$REPO_ROOT/scripts/produce-native-oracle-lane.py" \
         "$repo/scripts/produce-native-oracle-lane.py"
+    cp "$REPO_ROOT/scripts/remi-resolution-survey-transport.py" \
+        "$repo/scripts/remi-resolution-survey-transport.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
@@ -338,6 +342,10 @@ test_native_oracle_transport_contract() {
 
 test_native_oracle_lane_contract() {
     python3 "$REPO_ROOT/scripts/test-produce-native-oracle-lane.py"
+}
+
+test_resolution_survey_transport_contract() {
+    python3 "$REPO_ROOT/scripts/test-remi-resolution-survey-transport.py"
 }
 
 replace_fixture_text_once() {
@@ -1878,6 +1886,45 @@ test_check_release_matrix_rejects_mutating_native_oracle_authority() {
         "native-oracle production generic or mutating authority"
 }
 
+test_check_release_matrix_rejects_unserialized_resolution_survey() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '  group: deploy-and-verify' \
+        '  group: remi-resolution-survey'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact oracle input, read-only permissions, and shared serialization"
+}
+
+test_check_release_matrix_rejects_mutating_resolution_survey() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '              "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"' \
+        '              "sudo -n /usr/local/sbin/conary-remi-deploy promotion-activate '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
+test_check_release_matrix_rejects_loose_resolution_survey_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        archive = tarfile.open(args.transport, mode="r:")' \
+        '        archive = tarfile.open(args.transport, mode="r:*")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey strict sanitized output transport verification"
+}
+
 test_check_release_matrix_rejects_unserialized_site_deployment() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2957,6 +3004,7 @@ main() {
         test_bootstrap_installer_contract
         test_native_oracle_transport_contract
         test_native_oracle_lane_contract
+        test_resolution_survey_transport_contract
         test_resolve_tag_suite_canonical
         test_latest_version_from_list_uses_canonical_tags
         test_field_conary_test_deploy_mode
@@ -3051,6 +3099,9 @@ main() {
         test_check_release_matrix_rejects_unbound_native_oracle_producer_source
         test_check_release_matrix_rejects_container_native_oracle_shell
         test_check_release_matrix_rejects_mutating_native_oracle_authority
+        test_check_release_matrix_rejects_unserialized_resolution_survey
+        test_check_release_matrix_rejects_mutating_resolution_survey
+        test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability
         test_check_release_matrix_rejects_unprotected_conversion_benchmark_source

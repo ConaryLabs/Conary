@@ -1,0 +1,372 @@
+name: survey-remi-resolution
+
+on:
+  workflow_dispatch:
+    inputs:
+      oracle_run_id:
+        description: Successful produce-remi-native-oracles run owning all three exact lanes
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-and-verify
+  cancel-in-progress: false
+
+jobs:
+  survey:
+    name: survey exact production candidate resolution
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: production
+    steps:
+      - name: Check out protected survey operator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a protected-main workflow revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "resolution survey must be dispatched from main" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "resolution-survey operator must already be merged into origin/main" >&2
+            exit 1
+          }
+          [[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+            echo "resolution-survey operator checkout is dirty" >&2
+            exit 1
+          }
+
+      - name: Resolve exact oracle export and deployment chain
+        id: source
+        env:
+          ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$ORACLE_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
+            echo "oracle_run_id must be a positive decimal GitHub Actions run id" >&2
+            exit 1
+          }
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${ORACLE_RUN_ID}" \
+            > oracle-run.json
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${ORACLE_RUN_ID}/artifacts" \
+            > oracle-artifacts.json
+
+          export_ids=()
+          for profile in fedora-44 ubuntu-26.04 arch; do
+            artifact_name="$(jq -er \
+              --arg profile "$profile" --arg run_id "$ORACLE_RUN_ID" '
+              [.artifacts[]
+                | select(.expired == false)
+                | select(.name | test("^remi-native-oracles-" + $profile + "-[1-9][0-9]*-" + $run_id + "$"))
+                | .name]
+              | if length == 1 then .[0] else error("expected one exact lane artifact") end
+            ' oracle-artifacts.json)"
+            export_run_id="${artifact_name#remi-native-oracles-${profile}-}"
+            export_run_id="${export_run_id%-${ORACLE_RUN_ID}}"
+            [[ "$export_run_id" =~ ^[1-9][0-9]*$ ]] || {
+              echo "oracle lane artifact does not bind one export run" >&2
+              exit 1
+            }
+            export_ids+=("$export_run_id")
+            echo "${profile//[.-]/_}_artifact=$artifact_name" >> "$GITHUB_OUTPUT"
+          done
+          [[ "${export_ids[0]}" == "${export_ids[1]}" \
+            && "${export_ids[0]}" == "${export_ids[2]}" ]] || {
+            echo "oracle lanes do not bind the same export run" >&2
+            exit 1
+          }
+          export_run_id="${export_ids[0]}"
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${export_run_id}" \
+            > export-run.json
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${export_run_id}/artifacts" \
+            > export-artifacts.json
+          export_artifact="$(jq -er --arg run_id "$export_run_id" '
+            [.artifacts[]
+              | select(.expired == false)
+              | select(.name | test("^remi-native-oracle-input-[1-9][0-9]*-" + $run_id + "$"))
+              | .name]
+            | if length == 1 then .[0] else error("expected one exact export artifact") end
+          ' export-artifacts.json)"
+          deployment_run_id="${export_artifact#remi-native-oracle-input-}"
+          deployment_run_id="${deployment_run_id%-${export_run_id}}"
+          [[ "$deployment_run_id" =~ ^[1-9][0-9]*$ ]] || {
+            echo "export artifact does not bind one deployment run" >&2
+            exit 1
+          }
+          gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${deployment_run_id}" \
+            > deployment-run.json
+          {
+            echo "export_run_id=$export_run_id"
+            echo "deployment_run_id=$deployment_run_id"
+            echo "export_artifact=$export_artifact"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download exact Fedora oracle lane
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.source.outputs.fedora_44_artifact }}
+          path: ${{ runner.temp }}/oracles/fedora-44
+          run-id: ${{ inputs.oracle_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact Ubuntu oracle lane
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.source.outputs.ubuntu_26_04_artifact }}
+          path: ${{ runner.temp }}/oracles/ubuntu-26.04
+          run-id: ${{ inputs.oracle_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact Arch oracle lane
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.source.outputs.arch_artifact }}
+          path: ${{ runner.temp }}/oracles/arch
+          run-id: ${{ inputs.oracle_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download exact export and deployment evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.source.outputs.export_artifact }}
+          path: ${{ runner.temp }}/native-oracle-export
+          run-id: ${{ steps.source.outputs.export_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Authenticate chain and build oracle transport
+        id: input
+        env:
+          DEPLOYMENT_RUN_ID: ${{ steps.source.outputs.deployment_run_id }}
+          EXPORT_RUN_ID: ${{ steps.source.outputs.export_run_id }}
+          ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          survey_id="survey-${ORACLE_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          transport="remi-resolution-survey-oracles-${survey_id}.tar"
+          python3 scripts/remi-resolution-survey-transport.py build-input \
+            --survey-id "$survey_id" \
+            --repository "$GITHUB_REPOSITORY" \
+            --oracle-run-id "$ORACLE_RUN_ID" \
+            --oracle-run oracle-run.json \
+            --oracle-artifacts oracle-artifacts.json \
+            --export-run-id "$EXPORT_RUN_ID" \
+            --export-run export-run.json \
+            --export-artifacts export-artifacts.json \
+            --deployment-run-id "$DEPLOYMENT_RUN_ID" \
+            --deployment-run deployment-run.json \
+            --export-root "$RUNNER_TEMP/native-oracle-export" \
+            --lane "fedora-44=$RUNNER_TEMP/oracles/fedora-44" \
+            --lane "ubuntu-26.04=$RUNNER_TEMP/oracles/ubuntu-26.04" \
+            --lane "arch=$RUNNER_TEMP/oracles/arch" \
+            --output "$transport" \
+            --evidence resolution-survey-input-verification.json \
+            >/dev/null
+          deployed_commit="$(jq -r .deployment.commit_sha resolution-survey-input-verification.json)"
+          git merge-base --is-ancestor "$deployed_commit" origin/main || {
+            echo "surveyed Remi deployment must remain merged into origin/main" >&2
+            exit 1
+          }
+          {
+            echo "survey_id=$survey_id"
+            echo "export_id=$(jq -r .export_id resolution-survey-input-verification.json)"
+            echo "transport=$transport"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run through the fixed production helper
+        id: survey
+        env:
+          INPUT_TRANSPORT: ${{ steps.input.outputs.transport }}
+          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+          SURVEY_ID: ${{ steps.input.outputs.survey_id }}
+          EXPORT_ID: ${{ steps.input.outputs.export_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${REMI_SSH_KEY:-}" ]] || {
+            echo "REMI_SSH_KEY is required" >&2
+            exit 1
+          }
+          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
+          [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
+            echo "REMI_SSH_TARGET must be one explicit user and DNS host" >&2
+            exit 1
+          }
+          remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
+          remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+          local_output="remi-resolution-survey-${SURVEY_ID}.tar"
+          key="${RUNNER_TEMP}/remi-resolution-survey-key"
+          remote_possible=0
+          cleanup() {
+            status=$?
+            rm -f -- "$key"
+            if (( remote_possible == 1 )); then
+              set +e
+              # Every interpolated remote value is typed above.
+              # shellcheck disable=SC2029
+              ssh "${ssh_opts[@]}" "$target" \
+                "rm -f -- '$remote_input' '$remote_output'" >/dev/null 2>&1
+              set -e
+            fi
+            return "$status"
+          }
+          trap cleanup EXIT
+
+          printf '%s\n' "$REMI_SSH_KEY" > "$key"
+          chmod 0600 "$key" "$INPUT_TRANSPORT"
+          host="${target#*@}"
+          mkdir -p ~/.ssh
+          chmod 0700 ~/.ssh
+          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh_opts=(
+            -i "$key"
+            -o BatchMode=yes
+            -o ConnectTimeout=30
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o ServerAliveInterval=30
+            -o ServerAliveCountMax=6
+          )
+
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          remote_possible=1
+          scp "${ssh_opts[@]}" "$INPUT_TRANSPORT" "${target}:${remote_input}"
+          report="$({
+            # Survey and export identities plus the path are locally typed.
+            # shellcheck disable=SC2029
+            ssh "${ssh_opts[@]}" "$target" \
+              "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '$SURVEY_ID' '$EXPORT_ID' '$remote_input'"
+          } 2>&1)" || {
+            printf '%s\n' "$report" >&2
+            exit 1
+          }
+          report_line="$(tail -n 1 <<<"$report")"
+          prefix="Resolution survey: survey=${SURVEY_ID} export=${EXPORT_ID} transport=${remote_output} sha256="
+          [[ "$report_line" =~ ^${prefix}([0-9a-f]{64})\ bytes=([1-9][0-9]*)\ candidate_failures=([0-9]+)\ comparison_mismatches=([0-9]+)$ ]] || {
+            echo "production helper returned malformed resolution-survey evidence" >&2
+            exit 1
+          }
+          reported_sha256="${BASH_REMATCH[1]}"
+          reported_bytes="${BASH_REMATCH[2]}"
+          candidate_failures="${BASH_REMATCH[3]}"
+          comparison_mismatches="${BASH_REMATCH[4]}"
+          scp "${ssh_opts[@]}" "${target}:${remote_output}" "$local_output"
+          [[ "$(sha256sum "$local_output" | cut -d ' ' -f 1)" == "$reported_sha256" \
+            && "$(stat -c '%s' "$local_output")" == "$reported_bytes" ]] || {
+            echo "resolution-survey transport changed across SSH" >&2
+            exit 1
+          }
+          # Both remote paths are derived from typed identities.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" \
+            "rm -f -- '$remote_input' '$remote_output'"
+          remote_possible=0
+          {
+            echo "transport=$local_output"
+            echo "transport_sha256=$reported_sha256"
+            echo "transport_bytes=$reported_bytes"
+            echo "candidate_failures=$candidate_failures"
+            echo "comparison_mismatches=$comparison_mismatches"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Independently reopen sanitized survey transport
+        env:
+          CANDIDATE_FAILURES: ${{ steps.survey.outputs.candidate_failures }}
+          COMPARISON_MISMATCHES: ${{ steps.survey.outputs.comparison_mismatches }}
+          EXPORT_ID: ${{ steps.input.outputs.export_id }}
+          SURVEY_ID: ${{ steps.input.outputs.survey_id }}
+          SURVEY_TRANSPORT: ${{ steps.survey.outputs.transport }}
+          TRANSPORT_BYTES: ${{ steps.survey.outputs.transport_bytes }}
+          TRANSPORT_SHA256: ${{ steps.survey.outputs.transport_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/remi-resolution-survey-transport.py verify-output \
+            --survey-id "$SURVEY_ID" \
+            --export-id "$EXPORT_ID" \
+            --transport "$SURVEY_TRANSPORT" \
+            --evidence resolution-survey-verification.json \
+            >/dev/null
+          jq -e \
+            --arg sha256 "$TRANSPORT_SHA256" \
+            --argjson bytes "$TRANSPORT_BYTES" \
+            --argjson candidate_failures "$CANDIDATE_FAILURES" \
+            --argjson comparison_mismatches "$COMPARISON_MISMATCHES" '
+            .transport == {sha256:$sha256,size:$bytes}
+            and .counts.candidate_failures == $candidate_failures
+            and .counts.comparison_mismatches == $comparison_mismatches
+          ' resolution-survey-verification.json >/dev/null
+
+      - name: Upload exact resolution survey
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-resolution-survey-${{ inputs.oracle_run_id }}-${{ github.run_id }}
+          path: |
+            ${{ steps.survey.outputs.transport }}
+            resolution-survey-verification.json
+            resolution-survey-input-verification.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+      - name: Record resolution survey counts and histograms
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Production resolution survey"
+            echo
+            echo "- oracle run: `$ORACLE_RUN_ID`"
+            echo "- GitHub artifact: `$ARTIFACT_ID`"
+            echo "- GitHub artifact digest: `$ARTIFACT_DIGEST`"
+            jq -r '
+              "- roots walked: `\(.counts.roots_walked)`\n" +
+              "- candidate failures: `\(.counts.candidate_failures)`\n" +
+              "- comparison profiles: `\(.counts.comparison_profiles)`\n" +
+              "- comparison mismatches: `\(.counts.comparison_mismatches)`"
+            ' resolution-survey-verification.json
+            echo
+            echo "#### Histograms"
+            jq -r '
+              .profiles[]
+              | "- **\(.profile)** candidate errors: "
+                + (if (.candidate.error_histogram | length) == 0 then "none"
+                   else (.candidate.error_histogram | map("\(.kind.error_variant)/\(.kind.reason)=\(.count)") | join(", ")) end)
+                + "; comparison mismatches: "
+                + (if .comparison == null or (.comparison.mismatch_histogram | length) == 0 then "none"
+                   else (.comparison.mismatch_histogram | map("\(.kind)=\(.count)") | join(", ")) end)
+                + "; outcome pairs: "
+                + (if .comparison == null or (.comparison.outcome_histogram | length) == 0 then "none"
+                   else (.comparison.outcome_histogram | map("\(.pair.oracle)->\(.pair.candidate)=\(.count)") | join(", ")) end)
+            ' resolution-survey-verification.json
+          } >> "$GITHUB_STEP_SUMMARY"

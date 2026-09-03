@@ -305,6 +305,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("bindings disagree", result.stderr)
 
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            fixture.oracle_run.write_bytes(b'{"id":300,"id":300}')
+            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("repeats key", result.stderr)
+
     def test_verify_output_reopens_manifest_files_and_findings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

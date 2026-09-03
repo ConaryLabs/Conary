@@ -43,6 +43,22 @@ def canonical_json(value: Any) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            fail(f"JSON repeats key {key!r}")
+        value[key] = item
+    return value
+
+
+def decode_json(data: bytes, label: str) -> Any:
+    try:
+        return json.loads(data, object_pairs_hook=reject_duplicate_key)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"{label} is not valid JSON: {error}")
+
+
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
@@ -117,10 +133,7 @@ def load_json(path: Path, label: str, *, canonical: bool = False) -> tuple[Any, 
     data = path.read_bytes()
     if len(data) != metadata.st_size:
         fail(f"{label} changed while being read")
-    try:
-        value = json.loads(data)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        fail(f"{label} is not valid JSON: {error}")
+    value = decode_json(data, label)
     if canonical and canonical_json(value) != data:
         fail(f"{label} is not canonical JSON")
     return value, data
@@ -661,10 +674,7 @@ def verify_output(args: argparse.Namespace) -> None:
         if manifest_member is None:
             fail("survey transport has no manifest.json")
         manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
-        try:
-            manifest = json.loads(manifest_bytes)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            fail(f"survey manifest is not valid JSON: {error}")
+        manifest = decode_json(manifest_bytes, "survey manifest")
         if canonical_json(manifest) != manifest_bytes:
             fail("survey manifest is not canonical JSON")
         manifest = exact_object(
@@ -756,10 +766,7 @@ def verify_output(args: argparse.Namespace) -> None:
         if not isinstance(candidate, dict) or candidate.get("file") not in file_bytes:
             fail(f"{profile_name} candidate survey file binding is missing")
         candidate_data = file_bytes[candidate["file"]]
-        try:
-            candidate_value = json.loads(candidate_data)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            fail(f"{profile_name} candidate survey is not JSON: {error}")
+        candidate_value = decode_json(candidate_data, f"{profile_name} candidate survey")
         if canonical_json(candidate_value) != candidate_data:
             fail(f"{profile_name} candidate survey is not canonical JSON")
         validate_candidate_survey(candidate_value, profile, candidate["file"])
@@ -783,10 +790,9 @@ def verify_output(args: argparse.Namespace) -> None:
         if comparison_name not in file_bytes:
             fail(f"{profile_name} comparison survey file binding is missing")
         comparison_data = file_bytes[comparison_name]
-        try:
-            comparison_value = json.loads(comparison_data)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            fail(f"{profile_name} comparison survey is not JSON: {error}")
+        comparison_value = decode_json(
+            comparison_data, f"{profile_name} comparison survey"
+        )
         if canonical_json(comparison_value) != comparison_data:
             fail(f"{profile_name} comparison survey is not canonical JSON")
         validate_comparison_survey(comparison_value, profile, comparison_name)
@@ -823,7 +829,7 @@ def verify_output(args: argparse.Namespace) -> None:
         fail("survey manifest aggregate counts disagree with its files")
     forbid_private_paths(manifest, "survey manifest")
     for name, data in file_bytes.items():
-        forbid_private_paths(json.loads(data), name)
+        forbid_private_paths(decode_json(data, name), name)
 
     evidence = {
         "schema_version": 1,

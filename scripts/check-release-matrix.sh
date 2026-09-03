@@ -12,11 +12,13 @@ candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
 candidate_deploy_workflow=".github/workflows/deploy-remi-candidate.yml"
 native_oracle_export_workflow=".github/workflows/export-remi-native-oracle-inputs.yml"
 native_oracle_production_workflow=".github/workflows/produce-remi-native-oracles.yml"
+resolution_survey_workflow=".github/workflows/survey-remi-resolution.yml"
 conversion_benchmark_workflow=".github/workflows/remi-conversion-benchmark.yml"
 r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
 conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
 native_oracle_lane_producer="scripts/produce-native-oracle-lane.py"
+resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
@@ -163,9 +165,15 @@ for required_file in \
     "$site_deploy_workflow" \
     "$candidate_build_workflow" \
     "$candidate_deploy_workflow" \
+    "$native_oracle_export_workflow" \
+    "$native_oracle_production_workflow" \
+    "$resolution_survey_workflow" \
     "$conversion_benchmark_workflow" \
     "$r2_durability_workflow" \
     "$conversion_workflow_checker" \
+    "$native_oracle_transport_verifier" \
+    "$native_oracle_lane_producer" \
+    "$resolution_survey_transport" \
     "$candidate_predeployment_filter" \
     "$candidate_postdeployment_filter" \
     "$candidate_artifact_script" \
@@ -476,6 +484,16 @@ require_job_match "$native_oracle_production_workflow" complete 'if: \$\{\{ alwa
 forbid_match "$native_oracle_production_workflow" 'conversion-crawl|promotion-(prove|activate)|/v1/admin|sudo -n (bash|sh)|ssh ' 'native-oracle production generic or mutating authority'
 require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*canonical_json\(value\) != data[\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
 require_match "$native_oracle_lane_producer" 'NATIVE_PACKAGE_ORACLE_SCHEMA = 1[\s\S]*NATIVE_RESOLUTION_ORACLE_SCHEMA = 2[\s\S]*manifest\.get\("schema_version"\) != required_schema' 'native-oracle lane exact distinct package and resolution schema authority'
+require_match "$resolution_survey_workflow" 'workflow_dispatch:[\s\S]*oracle_run_id:[\s\S]*required: true[\s\S]*permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*concurrency:[\s\S]*group: deploy-and-verify[\s\S]*cancel-in-progress: false' 'resolution survey exact oracle input, read-only permissions, and shared serialization'
+require_job_match "$resolution_survey_workflow" survey 'timeout-minutes: 360[\s\S]*environment: production[\s\S]*GITHUB_REF" == refs/heads/main[\s\S]*git merge-base --is-ancestor HEAD origin/main' 'resolution survey protected merged-main operator boundary'
+require_job_match "$resolution_survey_workflow" survey 'actions/runs/\$\{ORACLE_RUN_ID\}[\s\S]*oracle-artifacts\.json[\s\S]*remi-native-oracles-[\s\S]*export_run_id[\s\S]*export-artifacts\.json[\s\S]*remi-native-oracle-input-[\s\S]*deployment_run_id[\s\S]*deployment-run\.json' 'resolution survey exact oracle to export to deployment run chain'
+require_job_match "$resolution_survey_workflow" survey 'Download exact Fedora oracle lane[\s\S]*Download exact Ubuntu oracle lane[\s\S]*Download exact Arch oracle lane[\s\S]*Download exact export and deployment evidence[\s\S]*remi-resolution-survey-transport\.py build-input[\s\S]*git merge-base --is-ancestor "\$deployed_commit" origin/main' 'resolution survey downloads and authenticates every exact bound input'
+require_job_match "$resolution_survey_workflow" survey 'ssh_opts=\([\s\S]*BatchMode=yes[\s\S]*ConnectTimeout=30[\s\S]*IdentitiesOnly=yes[\s\S]*StrictHostKeyChecking=yes[\s\S]*ServerAliveInterval=30[\s\S]*ServerAliveCountMax=6[\s\S]*conary-remi-deploy survey-resolution[\s\S]*sha256sum "\$local_output"[\s\S]*remi-resolution-survey-transport\.py verify-output' 'resolution survey fixed helper, fail-closed SSH, and independent output verification'
+require_job_match "$resolution_survey_workflow" survey 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*resolution-survey-verification\.json[\s\S]*resolution-survey-input-verification\.json[\s\S]*compression-level: 0[\s\S]*retention-days: 7[\s\S]*Record resolution survey counts and histograms[\s\S]*error_histogram[\s\S]*mismatch_histogram[\s\S]*outcome_histogram' 'resolution survey short-lived verified artifact and typed summary'
+forbid_match "$resolution_survey_workflow" 'promotion-(prove|activate)|conversion-crawl|/v1/admin|sudo -n (bash|sh)|conary-remi-deploy (deploy-remi|deploy-conary|deploy-site|publish)' 'resolution survey promotion, activation, publication, or generic mutation authority'
+require_match "$resolution_survey_transport" 'produce-remi-native-oracles\.yml[\s\S]*oracle lane artifacts do not bind one exact export run[\s\S]*export-remi-native-oracle-inputs\.yml[\s\S]*export artifact binding[\s\S]*deploy-remi-candidate\.yml' 'resolution survey validator exact workflow run chain'
+require_match "$resolution_survey_transport" 'validate_lane\([\s\S]*input_manifest_sha256[\s\S]*profile_revision_sha256[\s\S]*target_architecture[\s\S]*package_oracle_manifest_sha256[\s\S]*resolution oracle is not bound to its package oracle' 'resolution survey validator exact oracle lane bindings'
+require_match "$resolution_survey_transport" 'reject_duplicate_key[\s\S]*tarfile\.open\(args\.transport, mode="r:"\)[\s\S]*survey transport repeats member[\s\S]*canonical_json\(manifest\) != manifest_bytes[\s\S]*changed digest[\s\S]*forbid_private_paths' 'resolution survey strict sanitized output transport verification'
 forbid_match "$deploy_workflow" 'CONARYD_VERIFY_URL' 'obsolete public verify URL'
 forbid_match "$deploy_workflow" '24273700060' 'retired one-time conaryd bootstrap exception'
 forbid_match "$deploy_workflow" 'deploy_asset_ref' 'retired bootstrap-only deploy asset ref'
