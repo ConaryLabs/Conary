@@ -5,7 +5,7 @@
 //! (for write operations) request/response bodies.
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{MatchedPath, State};
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -16,49 +16,16 @@ use tokio::sync::RwLock;
 use crate::server::ServerState;
 use crate::server::auth::TokenName;
 
-/// Derive a semantic action name from method + path.
-///
-/// Examples:
-/// - POST /v1/admin/tokens -> "token.create"
-/// - GET /v1/admin/repos -> "repo.list"
-/// - DELETE /v1/admin/federation/peers/abc123 -> "federation.peer.delete"
-pub fn derive_action(method: &str, path: &str) -> String {
-    // Strip the /v1/admin/ prefix
-    let rest = path.strip_prefix("/v1/admin/").unwrap_or(path);
-
-    // Map known path patterns to semantic actions
-    let resource = if rest.starts_with("tokens") {
-        "token"
-    } else if rest.starts_with("repos") {
-        if rest.contains("/sync") {
-            "repo.sync"
-        } else {
-            "repo"
-        }
-    } else if rest.starts_with("federation/config") {
-        "federation.config"
-    } else if rest.starts_with("federation/peers") {
-        "federation.peer"
-    } else if rest.starts_with("audit") {
-        "audit"
-    } else if rest.starts_with("events") {
-        "events"
-    } else if rest.starts_with("test-health") {
-        "test.health"
-    } else if rest.starts_with("test-runs") {
-        "test.run"
-    } else if rest.starts_with("test-fixtures") {
-        "test.fixture"
-    } else if rest.starts_with("test-artifacts") {
-        "test.artifact"
-    } else if rest.starts_with("releases") || rest.starts_with("convert") {
-        "package"
-    } else if rest.starts_with("openapi") {
-        "openapi"
-    } else {
-        "unknown"
-    };
-
+/// Derive a stable action from the matched axum route and HTTP method.
+pub fn derive_action(method: &str, matched_path: &str) -> String {
+    let resource = matched_path
+        .strip_prefix("/v1/admin/")
+        .unwrap_or(matched_path)
+        .split('/')
+        .filter(|segment| !segment.is_empty() && !segment.starts_with('{'))
+        .map(|segment| segment.replace('-', "_"))
+        .collect::<Vec<_>>()
+        .join(".");
     let verb = match method {
         "GET" => "read",
         "POST" => "create",
@@ -66,14 +33,6 @@ pub fn derive_action(method: &str, path: &str) -> String {
         "DELETE" => "delete",
         _ => "unknown",
     };
-
-    // Special cases where the resource already includes the verb
-    if resource.ends_with("dispatch")
-        || resource.ends_with("mirror_sync")
-        || resource.ends_with("sync")
-    {
-        return resource.to_string();
-    }
 
     format!("{resource}.{verb}")
 }
@@ -91,6 +50,11 @@ pub async fn audit_middleware(
     let start = Instant::now();
     let method = request.method().to_string();
     let path = request.uri().path().to_string();
+    let matched_path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|path| path.as_str().to_string())
+        .unwrap_or_else(|| path.clone());
     let is_write = matches!(method.as_str(), "POST" | "PUT" | "DELETE");
 
     // Extract token name from extensions (set by auth middleware)
@@ -207,7 +171,7 @@ pub async fn audit_middleware(
         (response, None)
     };
 
-    let action = derive_action(&method, &path);
+    let action = derive_action(&method, &matched_path);
 
     // Log asynchronously -- don't block the response
     tokio::task::spawn_blocking(move || {
@@ -238,11 +202,11 @@ mod tests {
 
     #[test]
     fn test_derive_action_tokens() {
-        assert_eq!(derive_action("POST", "/v1/admin/tokens"), "token.create");
-        assert_eq!(derive_action("GET", "/v1/admin/tokens"), "token.read");
+        assert_eq!(derive_action("POST", "/v1/admin/tokens"), "tokens.create");
+        assert_eq!(derive_action("GET", "/v1/admin/tokens"), "tokens.read");
         assert_eq!(
-            derive_action("DELETE", "/v1/admin/tokens/5"),
-            "token.delete"
+            derive_action("DELETE", "/v1/admin/tokens/{id}"),
+            "tokens.delete"
         );
     }
 
@@ -250,33 +214,33 @@ mod tests {
     fn test_derive_action_ci() {
         assert_eq!(
             derive_action("GET", "/v1/admin/ci/workflows"),
-            "unknown.read"
+            "ci.workflows.read"
         );
         assert_eq!(
-            derive_action("POST", "/v1/admin/ci/workflows/ci.yaml/dispatch"),
-            "unknown.create"
+            derive_action("POST", "/v1/admin/ci/workflows/{workflow}/dispatch"),
+            "ci.workflows.dispatch.create"
         );
         assert_eq!(
             derive_action("POST", "/v1/admin/ci/mirror-sync"),
-            "unknown.create"
+            "ci.mirror_sync.create"
         );
     }
 
     #[test]
     fn test_derive_action_repos() {
-        assert_eq!(derive_action("GET", "/v1/admin/repos"), "repo.read");
-        assert_eq!(derive_action("POST", "/v1/admin/repos"), "repo.create");
+        assert_eq!(derive_action("GET", "/v1/admin/repos"), "repos.read");
+        assert_eq!(derive_action("POST", "/v1/admin/repos"), "repos.create");
         assert_eq!(
-            derive_action("PUT", "/v1/admin/repos/fedora"),
-            "repo.update"
+            derive_action("PUT", "/v1/admin/repos/{name}"),
+            "repos.update"
         );
         assert_eq!(
-            derive_action("DELETE", "/v1/admin/repos/fedora"),
-            "repo.delete"
+            derive_action("DELETE", "/v1/admin/repos/{name}"),
+            "repos.delete"
         );
         assert_eq!(
-            derive_action("POST", "/v1/admin/repos/fedora/sync"),
-            "repo.sync"
+            derive_action("POST", "/v1/admin/repos/{name}/sync"),
+            "repos.sync.create"
         );
     }
 
@@ -284,15 +248,15 @@ mod tests {
     fn test_derive_action_federation() {
         assert_eq!(
             derive_action("GET", "/v1/admin/federation/peers"),
-            "federation.peer.read"
+            "federation.peers.read"
         );
         assert_eq!(
             derive_action("POST", "/v1/admin/federation/peers"),
-            "federation.peer.create"
+            "federation.peers.create"
         );
         assert_eq!(
-            derive_action("DELETE", "/v1/admin/federation/peers/abc"),
-            "federation.peer.delete"
+            derive_action("DELETE", "/v1/admin/federation/peers/{id}"),
+            "federation.peers.delete"
         );
         assert_eq!(
             derive_action("GET", "/v1/admin/federation/config"),
@@ -312,47 +276,50 @@ mod tests {
 
     #[test]
     fn test_derive_action_test_data() {
-        assert_eq!(derive_action("GET", "/v1/admin/test-runs"), "test.run.read");
+        assert_eq!(
+            derive_action("GET", "/v1/admin/test-runs"),
+            "test_runs.read"
+        );
         assert_eq!(
             derive_action("POST", "/v1/admin/test-runs"),
-            "test.run.create"
+            "test_runs.create"
         );
         assert_eq!(
             derive_action("DELETE", "/v1/admin/test-runs/gc"),
-            "test.run.delete"
+            "test_runs.gc.delete"
         );
         assert_eq!(
             derive_action("GET", "/v1/admin/test-health"),
-            "test.health.read"
+            "test_health.read"
         );
     }
 
     #[test]
     fn test_derive_action_artifacts() {
         assert_eq!(
-            derive_action("PUT", "/v1/admin/test-fixtures/demo/sample.ccs"),
-            "test.fixture.update"
+            derive_action("PUT", "/v1/admin/test-fixtures/{*path}"),
+            "test_fixtures.update"
         );
         assert_eq!(
-            derive_action("PUT", "/v1/admin/test-artifacts/run-1/output.json"),
-            "test.artifact.update"
+            derive_action("PUT", "/v1/admin/test-artifacts/{*path}"),
+            "test_artifacts.update"
         );
     }
 
     #[test]
     fn test_derive_action_packages() {
         assert_eq!(
-            derive_action("POST", "/v1/admin/releases/fedora"),
-            "package.create"
+            derive_action("POST", "/v1/admin/releases/{distro}"),
+            "releases.create"
         );
-        assert_eq!(derive_action("POST", "/v1/admin/convert"), "package.create");
+        assert_eq!(derive_action("POST", "/v1/admin/convert"), "convert.create");
     }
 
     #[test]
     fn test_derive_action_openapi() {
         assert_eq!(
             derive_action("GET", "/v1/admin/openapi.json"),
-            "openapi.read"
+            "openapi.json.read"
         );
     }
 }
