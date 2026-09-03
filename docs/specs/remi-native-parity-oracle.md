@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 28
+revision: 29
 status: active
 ---
 
@@ -479,6 +479,19 @@ resolution bundle or `NativeResolutionComparisonV1`; promotion proof,
 activation, publication, and every binding/validation path reject it. Survey
 files also carry no private paths, credentials, environment data, or host
 identity.
+
+The protected production consumer is `.github/workflows/survey-remi-resolution.yml`.
+Its single `oracle_run_id` selects one successful three-lane
+`produce-remi-native-oracles` run. The workflow derives and reopens the exact
+export and deployment runs, authenticates the lane files into one manifest-bound
+transport, and calls only the three-argument `conary-remi-deploy
+survey-resolution` action with the survey identity, export identity, and typed
+oracle transport path. The root-owned helper reads the exact candidate
+revisions from the stopped deployment's own pointers, uses the profile-bound
+architectures, restores readiness regardless of recorded findings, and returns
+only survey JSON plus a digest, size, deployment, candidate, and oracle binding
+manifest. The workflow independently reopens that transport. Neither side has
+promotion, activation, or publication authority.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact

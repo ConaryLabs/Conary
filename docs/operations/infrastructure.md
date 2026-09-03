@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-31
-revision: 65
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+last_updated: 2026-09-03
+revision: 66
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -104,9 +104,10 @@ workflow.
   probe Remi, pin its catalogs, or inspect/mutate its R2 authority uses the same
   non-cancelling `deploy-and-verify` concurrency group: `deploy-and-verify`,
   `deploy-remi-candidate`, `deploy-site`,
-  `export-remi-native-oracle-inputs`, `remi-conversion-benchmark`, and
-  `remi-r2-durability`. A stopped-service benchmark therefore cannot overlap a
-  deploy, frontend probe, native-oracle export, or durability operation.
+  `export-remi-native-oracle-inputs`, `survey-remi-resolution`,
+  `remi-conversion-benchmark`, and `remi-r2-durability`. A stopped-service
+  survey or benchmark therefore cannot overlap a deploy, frontend probe,
+  native-oracle export, or durability operation.
 - Candidate deployment uses one fail-closed SSH option contract for every
   remote command and transfer: authentication is noninteractive, initial
   connection time is bounded, and protocol keepalives cover long refresh and
@@ -279,6 +280,21 @@ workflow.
   implementation versions, candidate revision, export identity, and deployed
   commit. The workflow has read-only GitHub permissions and no refresh,
   conversion, proof, activation, SSH, or pointer-mutation authority.
+- The protected `survey-remi-resolution` workflow consumes one successful
+  `produce-remi-native-oracles` run and resolves its exact export and deployment
+  runs from the three canonical lane artifact names. It independently reopens
+  every package and resolution oracle, requires their deployment commit,
+  binary, candidate revision, export manifest, and typed architecture bindings
+  to agree, then invokes only the root-owned helper action
+  `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
+  helper authenticates every archive member before private root-owned staging,
+  stops Remi, reads the exact candidate revisions from the stopped deployment's
+  own candidate pointers, runs `remi resolution-survey` as `conary`, and always
+  restores readiness before it interprets the command result. Recorded findings
+  are a successful operator result. The returned seven-day artifact contains
+  only canonical survey JSON, a digest/size/binding manifest, and public
+  verification records; the workflow has no refresh, conversion, proof,
+  promotion, activation, or publication authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and
