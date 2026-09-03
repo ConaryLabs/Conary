@@ -1769,6 +1769,45 @@ test_check_release_matrix_rejects_unprotected_native_oracle_source() {
         "native-oracle export exact successful protected deployment source"
 }
 
+test_check_release_matrix_requires_pinned_native_oracle_export_host() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export pinned production SSH and typed operator attestation"
+}
+
+test_check_release_matrix_rejects_live_native_oracle_export_host_discovery() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          ssh_opts=(' \
+        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export live SSH host-key discovery"
+}
+
+test_check_release_matrix_rejects_unattested_native_oracle_export() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        or attestation["ssh_host_key_contract"] != "protected-pinned-known-hosts-v1"' \
+        '        or attestation["ssh_host_key_contract"] != "live-discovery"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey requires exact pinned export operator evidence"
+}
+
 test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3155,6 +3194,9 @@ main() {
         test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unprotected_native_oracle_source
+        test_check_release_matrix_requires_pinned_native_oracle_export_host
+        test_check_release_matrix_rejects_live_native_oracle_export_host_discovery
+        test_check_release_matrix_rejects_unattested_native_oracle_export
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
         test_check_release_matrix_rejects_unserialized_native_oracle_export
         test_check_release_matrix_rejects_workflow_head_as_deployed_candidate

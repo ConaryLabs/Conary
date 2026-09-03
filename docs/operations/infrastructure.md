@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 69
+revision: 70
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -253,15 +253,18 @@ workflow.
   typed operator also inserts reader pins for the complete three-profile set in
   one operational transaction before it reopens any catalog bytes, so a slow
   earlier reopen cannot expose a later selected resource to concurrent GC. The
-  workflow invokes the fixed helper operation through the production SSH
-  boundary and removes only the staged `/tmp` transport after download.
+  workflow invokes the fixed helper operation through a production SSH boundary
+  authenticated by the protected `REMI_SSH_KNOWN_HOSTS` pin; live host-key
+  discovery is forbidden. It removes only the staged `/tmp` transport after
+  download and records a typed operator attestation bound to the export run's
+  exact protected workflow commit.
   The runner independently rejects unsafe tar members, noncanonical or
   duplicate-key JSON, revision/source digest drift, incomplete object
   inventories, and wrong-sized or digest-mismatched metadata. The seven-day
   handoff artifact contains the exact uncompressed transport, its canonical
-  public-sanitized verification record, and the source deployment inspection;
-  it grants no native-oracle production, conversion, proof, or activation
-  authority.
+  public-sanitized verification record, operator attestation, and source
+  deployment inspection; it grants no native-oracle production, conversion,
+  proof, or activation authority.
 - The protected `produce-remi-native-oracles` workflow consumes only one
   successful exact export run. Its production-environment authorization
   independently reopens the exported transport and schema-3 deployment
@@ -285,7 +288,8 @@ workflow.
   runs from the three canonical lane artifact names. It independently reopens
   every package and resolution oracle, requires their deployment commit,
   binary, candidate revision, export manifest, and typed architecture bindings
-  to agree, then invokes the root-owned survey action
+  to agree, and rejects export runs without the exact pinned-SSH operator
+  attestation before it invokes the root-owned survey action
   `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
   production environment supplies an exact `REMI_SSH_KNOWN_HOSTS` pin; live
   host-key discovery is forbidden and the selected host must match the pin. The

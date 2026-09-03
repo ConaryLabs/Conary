@@ -361,6 +361,51 @@ def tar_add_plain(archive: tarfile.TarFile, source: Path, name: str) -> None:
         archive.addfile(info, stream)
 
 
+def validate_export_operator(
+    export_root: Path,
+    export_run: dict[str, Any],
+    export_run_id: int,
+    export_id: str,
+) -> dict[str, Any]:
+    value, data = load_json(
+        export_root / "native-oracle-export-operator-v1.json",
+        "native-oracle export operator attestation",
+        canonical=True,
+    )
+    attestation = exact_object(
+        value,
+        {
+            "schema_version",
+            "export_id",
+            "workflow_commit_sha",
+            "workflow_run_id",
+            "workflow_run_attempt",
+            "ssh_host_key_contract",
+        },
+        "native-oracle export operator attestation",
+    )
+    run_attempt = export_run.get("run_attempt")
+    if (
+        attestation["schema_version"] != 1
+        or attestation["export_id"] != export_id
+        or attestation["workflow_commit_sha"] != export_run["head_sha"]
+        or attestation["workflow_run_id"] != export_run_id
+        or not isinstance(run_attempt, int)
+        or isinstance(run_attempt, bool)
+        or run_attempt <= 0
+        or attestation["workflow_run_attempt"] != run_attempt
+        or attestation["ssh_host_key_contract"] != "protected-pinned-known-hosts-v1"
+    ):
+        fail("export run lacks its exact pinned SSH operator attestation")
+    return {
+        "schema_version": 1,
+        "workflow_commit_sha": attestation["workflow_commit_sha"],
+        "workflow_run_id": export_run_id,
+        "workflow_run_attempt": run_attempt,
+        "attestation_sha256": sha256_bytes(data),
+    }
+
+
 def build_input(args: argparse.Namespace) -> None:
     survey_id = require_identity(args.survey_id, "survey id")
     oracle_id = require_run_id(args.oracle_run_id, "oracle run id")
@@ -454,6 +499,9 @@ def build_input(args: argparse.Namespace) -> None:
     ):
         fail("export evidence does not prove a complete private-candidate deployment")
     export_id = require_identity(verification.get("export_id"), "export identity")
+    export_operator = validate_export_operator(
+        export_root, export_run, export_id_run, export_id
+    )
     input_manifest_sha256 = require_sha256(
         verification.get("manifest", {}).get("sha256"), "export input manifest"
     )
@@ -541,6 +589,7 @@ def build_input(args: argparse.Namespace) -> None:
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": manifest["workflow_runs"],
+        "export_operator": export_operator,
         "deployment": manifest["deployment"],
         "profiles": [
             {
@@ -664,6 +713,7 @@ def validate_input_evidence(
             "survey_id",
             "export_id",
             "workflow_runs",
+            "export_operator",
             "deployment",
             "profiles",
             "manifest_sha256",
@@ -683,6 +733,28 @@ def validate_input_evidence(
     for name, run_id in workflow_runs.items():
         if exact_nonnegative_int(run_id, f"input {name} run") == 0:
             fail(f"input {name} run must be positive")
+    export_operator = exact_object(
+        evidence["export_operator"],
+        {
+            "schema_version",
+            "workflow_commit_sha",
+            "workflow_run_id",
+            "workflow_run_attempt",
+            "attestation_sha256",
+        },
+        "input export operator",
+    )
+    if (
+        export_operator["schema_version"] != 1
+        or export_operator["workflow_run_id"] != workflow_runs["export"]
+        or exact_nonnegative_int(
+            export_operator["workflow_run_attempt"], "input export run attempt"
+        )
+        == 0
+    ):
+        fail("input export operator binding drifted")
+    require_commit(export_operator["workflow_commit_sha"], "input export operator commit")
+    require_sha256(export_operator["attestation_sha256"], "input export attestation")
     deployment = exact_object(
         evidence["deployment"], {"commit_sha", "binary_sha256"}, "input deployment"
     )

@@ -26,10 +26,13 @@ jobs:
       - name: Check out protected export operator
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Require a protected-main workflow revision
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -37,8 +40,16 @@ jobs:
             echo "native-oracle export must be dispatched from main" >&2
             exit 1
           }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "native-oracle export workflow authority is not a canonical commit SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "native-oracle export checkout does not match its workflow authority" >&2
+            exit 1
+          }
           git fetch --no-tags origin main
-          git merge-base --is-ancestor HEAD origin/main || {
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
             echo "export operator must already be merged into origin/main" >&2
             exit 1
           }
@@ -151,13 +162,19 @@ jobs:
           FEDORA_CANDIDATE: ${{ steps.candidates.outputs.fedora }}
           UBUNTU_CANDIDATE: ${{ steps.candidates.outputs.ubuntu }}
           ARCH_CANDIDATE: ${{ steps.candidates.outputs.arch }}
+          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
           [[ -n "${REMI_SSH_KEY:-}" ]] || {
             echo "REMI_SSH_KEY is required" >&2
+            exit 1
+          }
+          [[ -n "${REMI_SSH_KNOWN_HOSTS:-}" ]] || {
+            echo "REMI_SSH_KNOWN_HOSTS is required" >&2
             exit 1
           }
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
@@ -169,10 +186,11 @@ jobs:
           remote_transport="/tmp/remi-native-oracle-input-${export_id}.tar"
           local_transport="native-oracle-input-${export_id}.tar"
           key="${RUNNER_TEMP}/remi-native-oracle-export-key"
+          known_hosts="${RUNNER_TEMP}/remi-native-oracle-export-known-hosts"
           remote_transport_possible=0
           cleanup() {
             status=$?
-            rm -f -- "$key"
+            rm -f -- "$key" "$known_hosts"
             if (( remote_transport_possible == 1 )); then
               set +e
               # Every interpolated remote value is typed above.
@@ -185,16 +203,23 @@ jobs:
           }
           trap cleanup EXIT
 
+          umask 077
           printf '%s\n' "$REMI_SSH_KEY" > "$key"
-          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
           host="${target#*@}"
-          mkdir -p ~/.ssh
-          chmod 0700 ~/.ssh
-          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$REMI_SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 0600 "$key" "$known_hosts"
+          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then
+            echo "pinned production SSH host identity does not bind $host" >&2
+            exit 1
+          fi
           ssh_opts=(
             -i "$key"
             -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=30
             -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$known_hosts"
             -o ServerAliveInterval=30
             -o ServerAliveCountMax=6
           )
@@ -224,6 +249,25 @@ jobs:
             echo "native-oracle transport digest changed across SSH" >&2
             exit 1
           }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "native-oracle export workflow authority is malformed" >&2
+            exit 1
+          }
+          operator_attestation="$(jq -cnS \
+            --arg export_id "$export_id" \
+            --arg workflow_commit_sha "$WORKFLOW_SHA" \
+            --argjson workflow_run_id "$GITHUB_RUN_ID" \
+            --argjson workflow_run_attempt "$GITHUB_RUN_ATTEMPT" '
+            {
+              schema_version: 1,
+              export_id: $export_id,
+              workflow_commit_sha: $workflow_commit_sha,
+              workflow_run_id: $workflow_run_id,
+              workflow_run_attempt: $workflow_run_attempt,
+              ssh_host_key_contract: "protected-pinned-known-hosts-v1"
+            }
+          ')"
+          printf '%s' "$operator_attestation" > native-oracle-export-operator-v1.json
           # The remote transport is derived from decimal ids.
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$target" "rm -f -- '$remote_transport'"
@@ -264,6 +308,7 @@ jobs:
           name: remi-native-oracle-input-${{ inputs.deployment_run_id }}-${{ github.run_id }}
           path: |
             ${{ steps.export.outputs.transport }}
+            native-oracle-export-operator-v1.json
             native-oracle-input-verification.json
             remi-deployment-inspection.json
           if-no-files-found: error

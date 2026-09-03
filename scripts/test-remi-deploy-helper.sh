@@ -536,6 +536,13 @@ make_survey_oracle_transport() {
           survey_id:$input[0].survey_id,
           export_id:$input[0].export_id,
           workflow_runs:$input[0].workflow_runs,
+          export_operator:{
+            schema_version:1,
+            workflow_commit_sha:("a" * 40),
+            workflow_run_id:$input[0].workflow_runs.export,
+            workflow_run_attempt:1,
+            attestation_sha256:("0" * 64)
+          },
           deployment:$input[0].deployment,
           profiles:[$input[0].profiles[] | {
             profile,

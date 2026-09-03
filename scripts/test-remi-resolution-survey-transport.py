@@ -47,6 +47,7 @@ def run_metadata(run_id: str, workflow: str) -> dict[str, object]:
         "head_branch": "main",
         "head_repository": {"full_name": "FieldmouseWorks/Conary"},
         "head_sha": "a" * 40,
+        "run_attempt": 1,
         "path": workflow,
     }
 
@@ -105,6 +106,17 @@ class TransportFixture:
             run_metadata(DEPLOYMENT_RUN_ID, ".github/workflows/deploy-remi-candidate.yml"),
         )
         self.export_root.mkdir()
+        write_json(
+            self.export_root / "native-oracle-export-operator-v1.json",
+            {
+                "schema_version": 1,
+                "export_id": EXPORT_ID,
+                "workflow_commit_sha": "a" * 40,
+                "workflow_run_id": int(EXPORT_RUN_ID),
+                "workflow_run_attempt": 1,
+                "ssh_host_key_contract": "protected-pinned-known-hosts-v1",
+            },
+        )
         write_json(
             self.export_root / "native-oracle-input-verification.json",
             {
@@ -270,6 +282,9 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             evidence = json.loads(fixture.evidence.read_bytes())
             self.assertEqual(evidence["workflow_runs"], {"oracle": 300, "export": 200, "deployment": 100})
+            self.assertEqual(
+                evidence["export_operator"]["workflow_commit_sha"], "a" * 40
+            )
             self.assertEqual(evidence["deployment"]["binary_sha256"], BINARY_SHA256)
             with tarfile.open(fixture.transport, mode="r:") as archive:
                 self.assertEqual(
@@ -296,6 +311,16 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("successful protected-main", result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            operator = fixture.export_root / "native-oracle-export-operator-v1.json"
+            value = json.loads(operator.read_bytes())
+            value["ssh_host_key_contract"] = "live-discovery"
+            write_json(operator, value)
+            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("pinned SSH operator attestation", result.stderr)
 
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
