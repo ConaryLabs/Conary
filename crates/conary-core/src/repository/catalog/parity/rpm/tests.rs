@@ -687,6 +687,7 @@ fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
 
 #[test]
 fn serial_and_parallel_resolution_outputs_are_byte_identical() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let (metadata, snapshots) = fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
     let profile = profile(&snapshots);

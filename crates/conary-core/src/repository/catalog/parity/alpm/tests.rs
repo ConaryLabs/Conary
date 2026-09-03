@@ -40,6 +40,7 @@ struct PackageFixture<'a> {
 
 #[test]
 fn serial_and_parallel_resolution_outputs_are_byte_identical() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut profile = profile(&snapshots);

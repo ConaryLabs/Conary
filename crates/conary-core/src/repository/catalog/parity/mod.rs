@@ -114,6 +114,8 @@ pub use resolution_io::{
     NativeResolutionOracleReader, NativeResolutionOracleWriter,
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
 };
+#[cfg(test)]
+pub(crate) use resolution_parallel::resolution_test_capacity;
 pub use resolution_parallel::{
     ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
     write_resolution_walk_implementation_evidence,

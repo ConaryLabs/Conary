@@ -2,6 +2,8 @@
 
 //! Bounded worker admission and canonical ordered resolution dispatch.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -22,6 +24,31 @@ use crate::error::{Error, Result};
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const PROC_SELF_CGROUP: &str = "/proc/self/cgroup";
 const PROC_MEMINFO: &str = "/proc/meminfo";
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CAPACITY: Cell<Option<usize>> = const { Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct ResolutionTestCapacityGuard {
+    previous: Option<usize>,
+}
+
+#[cfg(test)]
+impl Drop for ResolutionTestCapacityGuard {
+    fn drop(&mut self) {
+        TEST_CAPACITY.set(self.previous);
+    }
+}
+
+/// Override worker admission on the current test thread only.
+#[cfg(test)]
+pub(crate) fn resolution_test_capacity(capacity: usize) -> ResolutionTestCapacityGuard {
+    assert!(capacity > 0, "test resolution capacity must be positive");
+    let previous = TEST_CAPACITY.replace(Some(capacity));
+    ResolutionTestCapacityGuard { previous }
+}
 
 pub(crate) const RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 // Rounded above the retained 1,271,280 KiB single-pool Fedora observation.
@@ -80,12 +107,20 @@ impl ResolutionWorkerRequest {
                 "resolution worker RSS authority must be positive".to_string(),
             ));
         }
-        let cpu_limit = detected_cpu_limit()?;
-        let memory_limit = memory_budget_bytes / measured_worker_rss_bytes;
         let roots = usize::try_from(root_count).unwrap_or(usize::MAX).max(1);
-        let capacity = cpu_limit
-            .min(usize::try_from(memory_limit).unwrap_or(usize::MAX))
-            .min(roots);
+        #[cfg(test)]
+        let test_capacity = TEST_CAPACITY.get();
+        #[cfg(not(test))]
+        let test_capacity: Option<usize> = None;
+        let capacity = if let Some(capacity) = test_capacity {
+            capacity.min(roots)
+        } else {
+            let cpu_limit = detected_cpu_limit()?;
+            let memory_limit = memory_budget_bytes / measured_worker_rss_bytes;
+            cpu_limit
+                .min(usize::try_from(memory_limit).unwrap_or(usize::MAX))
+                .min(roots)
+        };
         let capacity = ResolutionWorkerCount::new(capacity).map_err(|_| {
             Error::ConfigError(format!(
                 "resolution worker memory budget {memory_budget_bytes} is smaller than measured per-worker RSS {measured_worker_rss_bytes}"

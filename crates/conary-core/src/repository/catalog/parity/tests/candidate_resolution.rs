@@ -256,6 +256,7 @@ fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
 
 #[test]
 fn serial_and_parallel_candidate_outputs_are_byte_identical() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let ecosystem = NativeParityEcosystemV1::Rpm;
     let candidate = candidate_fixture(ecosystem);
     let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));

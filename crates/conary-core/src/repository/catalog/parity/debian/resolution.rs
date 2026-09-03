@@ -6,7 +6,9 @@
 //! parallelism uses worker processes rather than shared or merely thread-local
 //! handles. Each process builds its own cache from the same staged authenticated
 //! inputs and opens the package index read-only. A bounded ordered sink in the
-//! parent remains the sole canonical artifact writer.
+//! parent remains the sole canonical artifact writer. Automatic library calls
+//! fall back to one in-process worker when their host executable cannot serve
+//! the private worker protocol; explicit parallel requests fail instead.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -217,6 +219,8 @@ fn produce_debian_resolution(
         memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
+    let (workers, worker_executable) =
+        select_debian_worker_launch(worker_request, workers, debian_worker_executable())?;
 
     let implementation = NativeParityImplementationV1 {
         ecosystem: NativeParityEcosystemV1::Debian,
@@ -241,6 +245,7 @@ fn produce_debian_resolution(
                 RootOutcomeSink::Strict(&mut writer),
                 &solver_inputs,
                 workers,
+                worker_executable.as_deref(),
             )?;
             let manifest = writer.finish()?;
             write_native_resolution_oracle_manifest(output, &manifest)?;
@@ -271,6 +276,7 @@ fn produce_debian_resolution(
                 RootOutcomeSink::Survey(&mut collector),
                 &solver_inputs,
                 workers,
+                worker_executable.as_deref(),
             )?;
             let survey = collector.finish()?;
             write_native_resolution_survey(output, &survey)?;
@@ -289,6 +295,7 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
     solver_inputs: &[PathBuf],
     workers: ResolutionWorkerCount,
+    worker_executable: Option<&Path>,
 ) -> Result<OrderedResolutionMetrics> {
     let explanation_byte_limit = sink.explanation_byte_limit();
     if workers.get() == 1 {
@@ -311,14 +318,16 @@ fn walk_resolution_roots(
             worker_load_milliseconds: vec![load_milliseconds],
         });
     }
-    let executable = debian_worker_executable()?;
+    let executable = worker_executable.ok_or_else(|| {
+        Error::InternalError("parallel Debian walk has no worker executable".to_string())
+    })?;
     walk_ordered_parallel(
         package_oracle,
         workers,
         explanation_byte_limit,
         |_| {
             DebianResolutionProcess::spawn(
-                &executable,
+                executable,
                 solver_inputs,
                 package_index.database(),
                 &policy.architecture,
@@ -521,6 +530,23 @@ fn debian_worker_executable() -> Result<PathBuf> {
             "cannot locate conary-debian-resolution-oracle worker executable".to_string(),
         )
     })
+}
+
+pub(super) fn select_debian_worker_launch(
+    request: ResolutionWorkerRequest,
+    workers: ResolutionWorkerCount,
+    executable: Result<PathBuf>,
+) -> Result<(ResolutionWorkerCount, Option<PathBuf>)> {
+    if workers.get() == 1 {
+        return Ok((workers, None));
+    }
+    match executable {
+        Ok(executable) => Ok((workers, Some(executable))),
+        Err(_) if request == ResolutionWorkerRequest::Automatic => {
+            Ok((ResolutionWorkerCount::new(1)?, None))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Run the private line-delimited apt-pkg worker protocol.

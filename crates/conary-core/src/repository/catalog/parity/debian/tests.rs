@@ -22,6 +22,37 @@ fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
 }
 
+#[test]
+fn automatic_library_walk_falls_back_without_worker_executable() {
+    let two = crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap();
+    let missing = || {
+        Err(Error::ConfigError(
+            "test worker executable is unavailable".to_string(),
+        ))
+    };
+
+    let (workers, executable) = super::resolution::select_debian_worker_launch(
+        crate::repository::catalog::parity::ResolutionWorkerRequest::Automatic,
+        two,
+        missing(),
+    )
+    .unwrap();
+    assert_eq!(workers.get(), 1);
+    assert!(executable.is_none());
+
+    let error = super::resolution::select_debian_worker_launch(
+        crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(two),
+        two,
+        missing(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("worker executable is unavailable")
+    );
+}
+
 fn packages_fixture(shared_checksum: &str, include_primary: bool) -> Vec<u8> {
     let primary = if include_primary {
         format!(
@@ -770,6 +801,7 @@ fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
 
 #[test]
 fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let high_packages = [
         resolution_stanza(
@@ -1488,6 +1520,7 @@ fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
 
 #[test]
 fn resolution_survey_records_all_failures_and_isolates_later_roots() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let package_text = [
         resolution_stanza(
