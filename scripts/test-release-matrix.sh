@@ -2086,6 +2086,19 @@ test_check_release_matrix_requires_resolution_survey_helper_install() {
         "resolution survey installs its exact protected helper before staging survey input"
 }
 
+test_check_release_matrix_rejects_resolution_survey_helper_downgrade() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          [[ "$helper_sha256" == "$current_helper_sha256" ]] || {' \
+        '          [[ "$helper_sha256" == "$helper_sha256" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey refuses a historical protected-helper downgrade"
+}
+
 test_check_release_matrix_requires_pinned_resolution_survey_host() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3446,6 +3459,7 @@ main() {
         test_check_release_matrix_rejects_unserialized_resolution_survey
         test_check_release_matrix_rejects_unprotected_resolution_survey_helper
         test_check_release_matrix_requires_resolution_survey_helper_install
+        test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
         test_check_release_matrix_rejects_live_resolution_survey_host_discovery
         test_check_release_matrix_rejects_unbound_resolution_survey_output

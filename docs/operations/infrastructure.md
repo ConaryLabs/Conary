@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 76
+revision: 77
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -314,8 +314,11 @@ workflow.
   `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
   production environment supplies an exact `REMI_SSH_KNOWN_HOSTS` pin; live
   host-key discovery is forbidden and the selected host must match the pin. The
-  workflow checks out `github.workflow_sha`, installs that revision's helper
-  through the existing `install-helper` action, then calls the new action. The
+  workflow checks out `github.workflow_sha`, requires that revision's helper
+  bytes to equal the helper at its freshly fetched protected `origin/main`, and
+  only then installs it through the existing `install-helper` action. Historical
+  reruns therefore fail before host contact once the helper advances instead of
+  downgrading the root entry point. The workflow then calls the new action. The
   helper arms cleanup as soon as private root-owned staging exists,
   authenticates every archive member there,
   stops Remi, reads the exact candidate revisions from the stopped deployment's

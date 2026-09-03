@@ -336,12 +336,13 @@ jobs:
           remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
           helper="${RUNNER_TEMP}/remi-resolution-survey-helper-${SURVEY_ID}"
+          current_helper="${helper}.protected-main"
           key="${RUNNER_TEMP}/remi-resolution-survey-key"
           known_hosts="${RUNNER_TEMP}/remi-resolution-survey-known-hosts"
           remote_possible=0
           cleanup() {
             status=$?
-            rm -f -- "$key" "$known_hosts" "$helper"
+            rm -f -- "$key" "$known_hosts" "$helper" "$current_helper"
             if (( remote_possible == 1 )); then
               set +e
               # Every interpolated remote value is typed above.
@@ -364,6 +365,16 @@ jobs:
             exit 1
           }
           helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
+          git show "origin/main:deploy/remi-deploy-helper.sh" > "$current_helper"
+          [[ -s "$current_helper" && ! -L "$current_helper" ]] || {
+            echo "protected main has no regular Remi deploy helper" >&2
+            exit 1
+          }
+          current_helper_sha256="$(sha256sum "$current_helper" | cut -d ' ' -f 1)"
+          [[ "$helper_sha256" == "$current_helper_sha256" ]] || {
+            echo "historical resolution-survey helper is no longer current on protected main" >&2
+            exit 1
+          }
 
           umask 077
           printf '%s\n' "$REMI_SSH_KEY" > "$key"

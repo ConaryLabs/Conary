@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 38
+revision: 39
 status: active
 ---
 
@@ -549,9 +549,10 @@ earlier successful runs remain valid only through those bindings. It
 authenticates the lane files into one manifest-bound transport and requires the
 export's typed operator attestation to bind that run's exact workflow commit to
 the protected pinned-host-key SSH contract.
-Pre-attestation exports are non-authority. The survey workflow installs the
-helper from its exact protected `github.workflow_sha` through the existing
-`install-helper` action, then calls the three-argument
+Pre-attestation exports are non-authority. The survey workflow requires the
+helper from its exact protected `github.workflow_sha` to be byte-identical to
+the helper at its freshly fetched protected `origin/main`, installs it through
+the existing `install-helper` action, then calls the three-argument
 `conary-remi-deploy survey-resolution` action with the survey identity, export
 identity, and typed oracle transport path. The root-owned helper reads the exact
 candidate revisions from the stopped deployment's own pointers, uses the
@@ -574,6 +575,8 @@ mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
 and are never emitted through SSH or
 workflow logs; public failures contain only a typed helper message. Neither side
 has promotion, activation, or publication authority.
+An older workflow rerun fails before host contact after protected main advances
+the helper, so it cannot leave the root entry point downgraded.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact
