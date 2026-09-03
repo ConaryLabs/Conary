@@ -26,10 +26,13 @@ jobs:
       - name: Check out protected survey operator
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Require a protected-main workflow revision
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -37,8 +40,16 @@ jobs:
             echo "resolution survey must be dispatched from main" >&2
             exit 1
           }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "resolution-survey workflow authority is not a canonical commit SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "resolution-survey checkout does not match its workflow authority" >&2
+            exit 1
+          }
           git fetch --no-tags origin main
-          git merge-base --is-ancestor HEAD origin/main || {
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
             echo "resolution-survey operator must already be merged into origin/main" >&2
             exit 1
           }
@@ -205,6 +216,7 @@ jobs:
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           SURVEY_ID: ${{ steps.input.outputs.survey_id }}
           EXPORT_ID: ${{ steps.input.outputs.export_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -223,24 +235,37 @@ jobs:
           }
           remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
           remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+          remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
+          helper="${RUNNER_TEMP}/remi-resolution-survey-helper-${SURVEY_ID}"
           key="${RUNNER_TEMP}/remi-resolution-survey-key"
           known_hosts="${RUNNER_TEMP}/remi-resolution-survey-known-hosts"
           remote_possible=0
           cleanup() {
             status=$?
-            rm -f -- "$key" "$known_hosts"
+            rm -f -- "$key" "$known_hosts" "$helper"
             if (( remote_possible == 1 )); then
               set +e
               # Every interpolated remote value is typed above.
               # shellcheck disable=SC2029
               ssh "${ssh_opts[@]}" "$target" \
-                "rm -f -- '$remote_input' '$remote_output'" >/dev/null 2>&1
+                "rm -f -- '$remote_input' '$remote_output' '$remote_helper'" >/dev/null 2>&1
               set -e
             fi
             return "$status"
           }
           trap cleanup EXIT
+
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "resolution-survey workflow authority is malformed" >&2
+            exit 1
+          }
+          git show "${WORKFLOW_SHA}:deploy/remi-deploy-helper.sh" > "$helper"
+          [[ -s "$helper" && ! -L "$helper" ]] || {
+            echo "exact workflow authority has no regular Remi deploy helper" >&2
+            exit 1
+          }
+          helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
 
           umask 077
           printf '%s\n' "$REMI_SSH_KEY" > "$key"
@@ -266,6 +291,11 @@ jobs:
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
           remote_possible=1
+          scp "${ssh_opts[@]}" "$helper" "${target}:${remote_helper}"
+          # The helper digest and path are derived from the exact workflow authority.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha256' '$remote_helper'"
           scp "${ssh_opts[@]}" "$INPUT_TRANSPORT" "${target}:${remote_input}"
           report="$({
             # Survey and export identities plus the path are locally typed.

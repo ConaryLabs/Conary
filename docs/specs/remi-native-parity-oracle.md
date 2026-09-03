@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 30
+revision: 31
 status: active
 ---
 
@@ -484,9 +484,10 @@ The protected production consumer is `.github/workflows/survey-remi-resolution.y
 Its single `oracle_run_id` selects one successful three-lane
 `produce-remi-native-oracles` run. The workflow derives and reopens the exact
 export and deployment runs, authenticates the lane files into one manifest-bound
-transport, and calls only the three-argument `conary-remi-deploy
-survey-resolution` action with the survey identity, export identity, and typed
-oracle transport path. The root-owned helper reads the exact candidate
+transport, installs the helper from the exact protected `github.workflow_sha`
+through the existing `install-helper` action, then calls the three-argument
+`conary-remi-deploy survey-resolution` action with the survey identity, export
+identity, and typed oracle transport path. The root-owned helper reads the exact candidate
 revisions from the stopped deployment's own pointers, uses the profile-bound
 architectures, freezes the survey JSON under root ownership before restarting,
 restores readiness regardless of recorded findings, and returns only survey JSON
