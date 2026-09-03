@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 30
+revision: 33
 status: active
 ---
 
@@ -633,21 +633,38 @@ forced version and runs with non-strict pinning against the complete
 authenticated version universe. Native policy still orders dependency choices,
 so the highest-precedence candidate is selected whenever it permits a complete
 transaction; a lower authenticated version remains eligible only when the
-forced exact root cannot close with the candidate. The preliminary native
-candidate transaction remains the fast resolved result or contributes typed
-no-target evidence. Only its available-target failure enters the
-complete-version solver, through a fresh dependency cache that never reuses the
-failed candidate state.
+forced exact root cannot close with the candidate.
 Required and pre-required groups participate in resolution; weak groups do
-not. Successful native transactions become exact closure package keys. A
-required group with no native target becomes an exact requiring-package key
-and canonical required-group digest. A policy-excluded exact root becomes the
-typed architecture-excluded outcome before apt-pkg resolution. The Ubuntu
-26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is likewise
-configured with only `APT::Architecture(s)=amd64`, while `Architecture: all`
-remains admitted. Available but unsatisfied targets, conflicts, native identity
-ambiguity, unsupported profile cardinality, and input or package-oracle drift
-fail the complete crawl. Diagnostic strings never establish an outcome.
+not. Successful native transactions become exact closure package keys. When
+the complete solver fails, the producer inspects the retained protected exact
+root in apt-pkg's post-solver dependency cache. A broken root-level required or
+pre-required group becomes typed missing evidence only when apt-pkg exposes no
+authenticated candidate version satisfying any alternative, as decided by
+`DepIterator::IsSatisfied`. This covers both an absent target name and a target
+name available only at incompatible versions. Every broken hard group retained
+on the root must meet that rule; a separate broken group with a satisfying
+candidate keeps the complete failure fatal. Each `AptMissingRequirement`
+carries the exact-root identity, relation kind, and parser-owned native
+dependency text; the Rust boundary binds that text to the exact package-oracle
+group recorded by the same Debian parser, without textual normalization.
+
+Pinned apt-pkg 3.2.0 does not expose solver3's typed failure reason graph as a
+public API: solver state, work, trail, and clause registration are protected or
+private, `DependencySolver` is final, and its exported reason interface renders
+strings. Diagnostic text is not parsed into authority. Consequently a failure
+that cannot be attributed from a broken hard dependency on the retained exact
+root remains a fatal native solver classification. This includes transitive
+no-candidate dependencies as well as conflict-, break-, policy-, or
+version-coexistence failures. Solver timeout attribution uses a steady
+monotonic duration and always remains a fatal `NativeSolverFailed` survey
+record. A policy-excluded exact root becomes the typed
+architecture-excluded outcome before apt-pkg resolution. The
+Ubuntu 26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is
+likewise configured with only `APT::Architecture(s)=amd64`, while
+`Architecture: all` remains admitted.
+Conflicts, native identity ambiguity, unsupported profile cardinality, and
+input or package-oracle drift fail the complete crawl. Diagnostic strings never
+establish an outcome.
 
 Invoke the resolver helper with the exact Debian package bundle produced
 above:
