@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 77
+revision: 78
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -316,8 +316,9 @@ workflow.
   host-key discovery is forbidden and the selected host must match the pin. The
   workflow checks out `github.workflow_sha`, requires that revision's helper
   bytes to equal the helper at its freshly fetched protected `origin/main`, and
-  only then installs it through the existing `install-helper` action. Historical
-  reruns therefore fail before host contact once the helper advances instead of
+  after staging the bytes repeats the fetch and digest equality immediately
+  before the root `install-helper` action. Historical reruns and a concurrent
+  helper-changing merge therefore fail before host mutation instead of
   downgrading the root entry point. The workflow then calls the new action. The
   helper arms cleanup as soon as private root-owned staging exists,
   authenticates every archive member there,
@@ -336,7 +337,8 @@ workflow.
   is derived from the already bounded transport size
   rather than an invented limit below the producer contract. The runner
   independently enforces the complete typed Rust survey schemas, retention and
-  evidence accounting, and requires those deployment, candidate,
+  evidence accounting, fixed profile ecosystem plus `conary-sat` projection-2
+  candidate producer, and requires those deployment, candidate,
   architecture, and oracle bindings to equal its authenticated input record. The
   workflow has no refresh, conversion, proof, promotion, activation, or
   publication authority.
