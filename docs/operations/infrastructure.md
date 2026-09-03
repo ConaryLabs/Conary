@@ -90,13 +90,13 @@ workflow.
   Conary release artifacts and performing recoverable Remi service transitions.
 - Normal Remi binary replacement is driven by GitHub Actions
   `release-build` -> `deploy-and-verify`. The workflow stages the built bundle
-  and exact-tag repository manifest on the host, atomically self-updates the
+  and tag-bound repository manifest on the host, atomically self-updates the
   helper by SHA-256, then calls
   `/usr/local/sbin/conary-remi-deploy deploy-remi`.
 - A bounded pre-release hard-cut sequence that explicitly forbids an
   intermediate release uses `deploy-remi-candidate` instead. Its required
   full commit SHA must already be an ancestor of `origin/main`; the protected
-  production environment builds that exact tree, records the binary digest,
+  production environment builds that tree, records the binary digest,
   and uses the same recoverable helper and source manifest. Dispatch must choose
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
@@ -117,14 +117,14 @@ workflow.
 - Candidate deployment retains exactly one final typed inspection instead of
   emitting every incomplete poll. Private-candidate mode also retains the
   pre-transition inspection used as its fencing baseline. The workflow runs
-  that versioned read-only command from the exact staged binary after checking
+  that versioned read-only command from the staged binary after checking
   its SHA-256, so a new baseline schema does not depend on the previously
   installed binary. The baseline reads current schema, configured repository,
   candidate-pointer, exact run-member, and latest-refresh rows only. It does
   not open signing material, immutable catalogs, package rows, conversions, or
   universe state. Its two-second budget and zero catalog opens/bytes are
   fail-closed workflow predicates, and its output records wall/CPU/RSS, SQLite
-  statement and logical page-read work, and exact serialized bytes.
+  statement and logical page-read work, and serialized bytes.
 - A baseline may contain an absent candidate only as a null identity plus the
   exact latest fenced refresh diagnosis. This is evidence of what the new
   binary must recover, not candidate completion; half-present identities,
@@ -137,7 +137,7 @@ workflow.
   `github.workflow_sha` whose workflow definition is executing, not from the
   deliberately older candidate checkout. It requires that workflow authority
   to be merged into `origin/main`. The job binds the final inspection to the
-  exact merged candidate commit, built binary
+  merged candidate commit, built binary
   SHA-256, completion mode, and post-transition timestamp, uploads those
   public-sanitized JSON artifacts, and writes a concise typed summary even when
   completion fails. It does not expose service logs, generic shell access,
@@ -149,7 +149,7 @@ workflow.
   It also retains every accepted repository-refresh generation with exact
   scope, producer force policy, start/finish time, coalescing disposition,
   aggregate state, and successful/failed profile sets. Candidate completion is
-  bounded by one of those exact generations rather than inferred from elapsed
+  bounded by one of those generations rather than inferred from elapsed
   workflow time.
   Inspection JSON is accepted only from stdout and structurally validated
   before final ingress; stderr diagnostics are never spliced into the typed
@@ -178,7 +178,7 @@ workflow.
   compatibility boundary: a same-revision binary rollback restores config and
   repository authority while retaining the compatible live database, so an
   ordinary deploy performs zero complete database copies. Retired schemas are
-  not migrated in place and retain their exact recoverable files. The helper
+  not migrated in place and retain their recoverable files. The helper
   stops Remi before preparation,
   and the candidate independently enforces that quiescence: prepare acquires
   the same kernel-backed canonical runtime-root lock as the server before its
@@ -189,7 +189,7 @@ workflow.
   authority. `deployment inspect` is read-only evidence and does not establish
   quiescence. Before invoking the root-run candidate, the helper creates the
   lock file as `conary:conary` mode 0600, or verifies an existing plain file has
-  that exact access contract, so first deployment cannot strand a root-owned
+  that access contract, so first deployment cannot strand a root-owned
   lock that the `User=conary` service cannot open.
 - The helper creates `/conary/repository-keys` as a `conary:conary` mode-0700
   durable authority root before candidate preparation. The candidate
@@ -210,10 +210,10 @@ workflow.
   immutable bundle and fenced repository bindings were reopened and
   revalidated. A same-schema deployment requires every Fedora, Ubuntu, and
   Arch fencing epoch to be strictly newer than its recorded baseline. A hard
-  schema transition starts a new fencing authority, so its positive fresh
+  schema transition starts a new fence, so its positive fresh
   epochs are not ordered against the retired database. Both paths require each
   accepted terminal candidate run to match its candidate, finish after the
-  recorded binary transition, and fall within an exact refresh generation that
+  recorded binary transition, and fall within a refresh generation that
   names that profile as successful. If the new process's startup all-profile
   refresh finishes after the floor with a complete zero-skip batch, the queued
   forced request consumes that retained result and performs no second source
@@ -227,12 +227,12 @@ workflow.
   `active-repopulation` polls
   `inspect-remi --require-repopulated` and requires all configured public
   profiles to have populated active immutable catalogs, a complete signing role
-  set, a fresh signed universe naming the exact same profile revisions, and at
+  set, a fresh signed universe naming the same profile revisions, and at
   least one validated converted artifact pinned to every current revision.
   Mutable `repository_packages` rows are not evidence for either mode;
   dispatch, a preexisting candidate, or a green liveness probe alone is not
   deployment proof.
-- Exact production native-oracle inputs use the root-owned helper operation
+- Production native-oracle inputs use the root-owned helper operation
   `export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256>
   <arch-sha256>`. The helper fixes canonical public-profile order, invokes the
   typed `remi native-oracle-input` command as the service user, retains the
@@ -275,12 +275,12 @@ workflow.
   clean checkout before building and recording both producer binary digests.
 - The optional `lanes` input to `produce-remi-native-oracles` defaults to
   `fedora-44,ubuntu-26.04,arch` and accepts only a non-empty duplicate-free
-  subset of those exact comma-separated names. Selected lanes run in this
+  subset of those comma-separated names. Selected lanes run in this
   dispatch; assembly retrieves an unselected lane only from the newest
   successful same-export strict artifact, verifies the GitHub archive digest,
   and still requires one bound artifact for every canonical lane.
 - The protected `produce-remi-native-oracles` workflow consumes only one
-  successful exact export run. Its production-environment authorization
+  successful export run. Its production-environment authorization
   independently reopens the exported transport and schema-3 deployment
   inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
   requires the artifact-owned deployed commit to remain merged into `main`.
@@ -310,7 +310,7 @@ workflow.
   when each is a merged descendant and all schema/implementation pins match;
   missing lanes, digest drift, and survey substitution fail closed.
 - The protected `survey-remi-resolution` workflow consumes one successful
-  `produce-remi-native-oracles` run and resolves its exact export and deployment
+  `produce-remi-native-oracles` run and resolves its export and deployment
   runs from its canonical assembled three-lane evidence. The oracle run head
   must equal the survey's own exact current protected-main operator commit, so
   a historical producer rerun is not admissible. It independently
@@ -363,7 +363,7 @@ workflow.
   independently enforces the complete typed Rust survey schemas, retention and
   evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and
-  exact comparison coverage of the complete zero-failure candidate root set.
+  comparison coverage of the complete zero-failure candidate root set.
   Every retained mismatch root, identity, and candidate outcome must occur in
   that candidate survey. Remi's bounded command outcome supplies the helper's
   per-profile counts, histograms, and comparison candidate-manifest digest, so
@@ -387,7 +387,7 @@ workflow.
   authenticated artifact ZIP is removed after extraction and each extracted
   lane member is removed after it enters the transport. The workflow has no refresh,
   conversion, proof, promotion, activation, or publication authority.
-- Exact production conversion measurements use the protected
+- Production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and
   an exact registered profile revision, and the exact size and SHA-256 of a
@@ -420,7 +420,7 @@ workflow.
   identities and preexisting transports fail closed.
 - The complete schema-v8 report remains mode 0600 on the production host. The
   authenticated caller receives only `conversion-benchmark-public-v6.json`: a
-  strict Rust-produced projection that binds the exact raw-report byte count
+  strict Rust-produced projection that binds the raw-report byte count
   and SHA-256, preserves authority, timing, process, VFS, work, and output
   counters, and removes binary paths, root paths and device IDs, free-form
   failure text, and skipped-phase explanations. The workflow independently
@@ -435,7 +435,7 @@ workflow.
   The conversion-core predicate additionally requires one source open per
   regular content owner, zero payload-source reopens/reread bytes, aggregate
   payload crypto input equal to chunk-identity plus whole-content SHA-256
-  input, one write per unique signed object, exact deduplicated bytes, and zero
+  input, one write per unique signed object, deduplicated bytes, and zero
   staging canonical rereads or durability calls. Schema v8 additionally
   requires canonical fixed-block encode/decode geometry and the exact checked
   buffering ceilings for the reported worker allocations.
@@ -449,7 +449,7 @@ workflow.
   service-restoration outcome. The workflow validates that envelope, binds it
   to the exact deployment, workflow, binary, profile, revision, package, and
   source identities, and may retain only that path-free JSON record. The
-  `/work` preflight uses exact path-free leaves: `work-root-type` requires a
+  `/work` preflight uses path-free leaves: `work-root-type` requires a
   plain directory; `work-root-owner` requires the control identity;
   `work-root-mode` rejects group- or world-writable access;
   `work-root-resolution` covers canonical resolution; `work-root-separation`
@@ -462,15 +462,8 @@ workflow.
   unknown envelopes fail closed with an unproven service outcome. Private
   stderr, its digest and size, and any free-form Remi failure text are deleted
   without entering Actions logs or artifacts.
-- The bounded one-shot production `/work` owner repair succeeded in protected
-  run `33282179559`, and exact conversion baseline run `33282246922`
-  subsequently passed the repaired `/work` preflight. Protected retirement run
-  `33284695296` then installed and verified the exact merged-main command-free
-  helper with SHA-256
-  `65a374327e4c4037e364bfb19b2f9a5293f989a367a3014d5bdcb3a1b9eb6352`,
-  `root:root` ownership, mode `0755`, and a successful `verify-access` result;
-  its strict evidence also proved the old repair command unavailable. Both
-  temporary workflows, their policy checks, and their tests are removed. No
+- The temporary owner-repair and retirement workflows, their policy checks,
+  and their tests are removed. No
   dispatchable owner-repair or retirement surface remains. Future owner drift
   is a fail-closed `work-root-owner` benchmark failure and requires a new
   issue-backed, reviewed operation.
@@ -500,7 +493,7 @@ workflow.
   authenticated SSH staging under `/tmp`. It accepts only a plain basename and
   regular file, enforces Remi's 8 GiB limit, verifies the caller-pinned digest
   before publication, and creates an immutable `/conary/test-artifacts/`
-  target atomically. Repeating the exact publication is idempotent; a
+  target atomically. Repeating the publication is idempotent; a
   same-name, different-digest replacement fails closed.
 - Bootstrap or repair deploy access once from an existing privileged shell with
   `sudo scripts/install-remi-deploy-access.sh`. It installs
@@ -523,7 +516,7 @@ workflow.
   under `/tmp` on `<admin>@ssh.conary.io`, then asks
   `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
   `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
-- Post-release public-frontend updates deploy from the exact `main` commit
+- Post-release public-frontend updates deploy from the selected `main` commit
   selected by the manually dispatched `deploy-site` workflow. Its required
   `target` choice publishes `site`, `packages`, or `both` through the
   repository-held production key. The workflow runs the relevant frontend
@@ -558,13 +551,13 @@ workflow.
   GitHub release. All members inherit `publish = false`; there is no parallel
   crates.io release track.
 - Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
-  pass an exact decision as `--target MAJOR.MINOR.PATCH`. The target must be an
+  pass a version decision as `--target MAJOR.MINOR.PATCH`. The target must be an
   increasing `MAJOR.MINOR.PATCH` version for the complete suite.
 - Run `./scripts/release.sh suite --prepare-only --target VERSION` on the
   issue-linked release branch. Preparation updates the root version, inherited
   workspace lock state, Conary native/CCS packaging, generated man page, and
   suite changelog, but creates no commit or tag.
-- After exact-head CI and review complete, merge the preparation PR and prove
+- After head-bound CI and review complete, merge the preparation PR and prove
   local `main`, `origin/main`, and remote `main` agree. Only then create the
   annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it. The
   active `Protect suite tags` ruleset permits creation of `v*` tags but rejects
@@ -575,7 +568,7 @@ workflow.
   correct the cause in an issue-linked reviewed commit, prepare a strictly
   higher suite version, and create a new tag. Never move or reuse the failed
   tag.
-- Product-prefixed tags remain immutable historical evidence for their exact
+- Product-prefixed tags remain immutable historical evidence for their
   trees. They are not current baselines, version inputs, or workflow routes.
 - `release-build` constructs all four products from the exact suite tag,
   serializes their deployment modes in one schema-v1 metadata document with a
