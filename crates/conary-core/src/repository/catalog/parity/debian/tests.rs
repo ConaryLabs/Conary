@@ -4,16 +4,16 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::ffi::{AptResolution, AptResolutionOutcome};
+use super::ffi::{AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionOutcomeV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
-    verify_native_resolution_oracle_bundle,
+    NativeResolutionSurveyNativeExplanationV1, NativeUnresolvedDependencyV1,
+    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1, native_requirement_group_sha256,
+    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy};
@@ -110,6 +110,181 @@ fn resolution_stanza(
          Description: {name}\n\n",
         digest(checksum)
     )
+}
+
+fn versioned_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "virtual-missing-sibling-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: virt (= 2), absent-virtual-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "virtual-resolved-root",
+            "1",
+            "amd64",
+            'b',
+            "Depends: virt (= 2)\n",
+        ),
+        resolution_stanza(
+            "virtual-wrong-version-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: virt (= 3)\n",
+        ),
+        resolution_stanza(
+            "virtual-provider",
+            "1",
+            "amd64",
+            'd',
+            "Provides: virt (= 2)\n",
+        ),
+    ]
+    .concat();
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let apt = AptResolution::open(&[staged], "amd64").unwrap();
+    (directory, apt)
+}
+
+fn many_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut package_text = resolution_stanza(
+        "many-provider-root",
+        "1",
+        "amd64",
+        'e',
+        "Depends: crowded-virt (= 2), absent-many-provider-sibling (= 9)\n",
+    );
+    for index in 0..64 {
+        package_text.push_str(&resolution_stanza(
+            &format!("crowded-provider-{index:02}"),
+            "1",
+            "amd64",
+            char::from_digit(index % 16, 16).unwrap(),
+            "Provides: crowded-virt (= 2)\n",
+        ));
+    }
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let apt = AptResolution::open(&[staged], "amd64").unwrap();
+    (directory, apt)
+}
+
+fn same_package_virtual_provider_packages() -> String {
+    [
+        resolution_stanza(
+            "same-package-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: same-package-virt (= 2), absent-same-package-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "same-package-root",
+            "2",
+            "amd64",
+            'd',
+            "Provides: same-package-virt (= 2)\n",
+        ),
+    ]
+    .concat()
+}
+
+fn failing_virtual_provider_packages() -> String {
+    [
+        resolution_stanza(
+            "virtual-transitive-root",
+            "1",
+            "amd64",
+            'e',
+            "Depends: broken-virt (= 2), absent-transitive-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "broken-virtual-provider",
+            "1",
+            "amd64",
+            'f',
+            "Provides: broken-virt (= 2)\nDepends: absent-behind-provider (= 4)\n",
+        ),
+        resolution_stanza(
+            "virtual-conflict-root",
+            "1",
+            "amd64",
+            '1',
+            "Depends: conflicting-virt (= 2), absent-conflict-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "conflicting-virtual-provider",
+            "1",
+            "amd64",
+            '2',
+            "Provides: conflicting-virt (= 2)\nConflicts: virtual-conflict-root\n",
+        ),
+    ]
+    .concat()
+}
+
+fn probed_closure_failure_packages() -> String {
+    [
+        resolution_stanza(
+            "closure-conflict-root",
+            "1",
+            "amd64",
+            '3',
+            "Depends: closure-conflict-helper, absent-conflict-root-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "closure-conflict-helper",
+            "1",
+            "amd64",
+            '4',
+            "Depends: closure-conflict-leaf\n",
+        ),
+        resolution_stanza(
+            "closure-conflict-leaf",
+            "1",
+            "amd64",
+            '5',
+            "Conflicts: closure-conflict-root\n",
+        ),
+        resolution_stanza(
+            "closure-missing-root",
+            "1",
+            "amd64",
+            '6',
+            "Depends: closure-missing-helper, absent-missing-root-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "closure-missing-helper",
+            "1",
+            "amd64",
+            '7',
+            "Depends: closure-missing-leaf\n",
+        ),
+        resolution_stanza(
+            "closure-missing-leaf",
+            "1",
+            "amd64",
+            '8',
+            "Depends: absent-behind-leaf (= 4)\n",
+        ),
+        resolution_stanza(
+            "two-root-misses",
+            "1",
+            "amd64",
+            '9',
+            "Depends: absent-first (= 1), healthy-helper, absent-second (= 2)\n",
+        ),
+        resolution_stanza("healthy-helper", "1", "amd64", 'a', ""),
+    ]
+    .concat()
 }
 
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
@@ -554,11 +729,11 @@ fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
     let mut apt = AptResolution::open(&paths, "amd64").unwrap();
 
     for root_version in [older, newer] {
-        let AptResolutionOutcome::Resolved(packages) = apt
+        let outcome = apt
             .resolve("language-pack-hr-base", root_version, "amd64")
-            .unwrap()
-        else {
-            panic!("language pack root {root_version} must resolve");
+            .unwrap();
+        let AptResolutionOutcome::Resolved(packages) = outcome else {
+            panic!("language pack root {root_version} must resolve, found {outcome:?}");
         };
         let identities = packages
             .into_iter()
@@ -786,6 +961,477 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
         0,
         "resolved and typed-unresolved Debian roots must not build survey evidence"
     );
+}
+
+#[test]
+fn resolution_producer_projects_direct_no_satisfying_candidates() {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "version-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: version-target (= 2)\n",
+        ),
+        resolution_stanza("version-target", "3", "amd64", 'b', ""),
+        resolution_stanza(
+            "absent-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: absent-target (= 2)\n",
+        ),
+    ]
+    .concat();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &package_text,
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 3;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+
+    let manifest = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 2);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut package_by_name = std::collections::BTreeMap::new();
+    package_reader
+        .for_each_package(|package| {
+            package_by_name.insert(package.name.clone(), package);
+            Ok(())
+        })
+        .unwrap();
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut outcomes = std::collections::BTreeMap::new();
+    resolution_reader
+        .for_each_root(|root| {
+            outcomes.insert(root.root_package_key_sha256.clone(), root.outcome);
+            Ok(())
+        })
+        .unwrap();
+    let expected_dependency = |requiring: &str, native_text: &str| {
+        let package = &package_by_name[requiring];
+        let group = package
+            .requirement_groups
+            .iter()
+            .find(|group| group.native_text.as_deref() == Some(native_text))
+            .unwrap();
+        NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: package.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(group).unwrap(),
+        }
+    };
+    for (root, native_text) in [
+        ("version-root", "version-target (= 2)"),
+        ("absent-root", "absent-target (= 2)"),
+    ] {
+        assert_eq!(
+            outcomes[&package_by_name[root].package_key_sha256],
+            NativeResolutionOutcomeV1::Unresolved {
+                dependencies: vec![expected_dependency(root, native_text)]
+            }
+        );
+    }
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    assert_eq!(survey.counts.roots_walked, 3);
+    assert_eq!(survey.counts.unresolved_roots, 2);
+    assert_eq!(survey.counts.failed_roots, 0);
+}
+
+#[test]
+fn apt_pkg_keeps_only_missing_sibling_with_matching_versioned_provider() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) = apt
+        .resolve("virtual-missing-sibling-root", "1", "amd64")
+        .unwrap()
+    else {
+        panic!("a valid versioned virtual provider must leave only the missing sibling");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "virtual-missing-sibling-root");
+    assert_eq!(missing[0].native_text, "absent-virtual-sibling (= 9)");
+}
+
+#[test]
+fn apt_pkg_keeps_missing_outcome_with_many_virtual_providers() {
+    let (_directory, mut apt) = many_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) =
+        apt.resolve("many-provider-root", "1", "amd64").unwrap()
+    else {
+        panic!("many viable virtual providers must leave only the missing sibling");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "many-provider-root");
+    assert_eq!(missing[0].native_text, "absent-many-provider-sibling (= 9)");
+}
+
+#[test]
+fn apt_pkg_resolves_matching_versioned_virtual_provider() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Resolved(closure) =
+        apt.resolve("virtual-resolved-root", "1", "amd64").unwrap()
+    else {
+        panic!("a matching versioned virtual provider must resolve");
+    };
+    assert!(closure.iter().any(|item| item.name == "virtual-provider"));
+}
+
+#[test]
+fn apt_pkg_projects_mismatched_versioned_virtual_provider_as_missing() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) = apt
+        .resolve("virtual-wrong-version-root", "1", "amd64")
+        .unwrap()
+    else {
+        panic!("a mismatched versioned virtual provider must be unresolved");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "virtual-wrong-version-root");
+    assert_eq!(missing[0].native_text, "virt (= 3)");
+}
+
+#[test]
+fn apt_pkg_rejects_same_package_virtual_provider_for_exact_root() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &same_package_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt.resolve("same-package-root", "1", "amd64").unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a virtual provider from another version of the exact root must stay fatal: {error}"
+    );
+}
+
+#[test]
+fn resolution_survey_records_same_package_provider_as_native_solver_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &same_package_virtual_provider_packages(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    assert!(survey.failures.iter().any(|failure| {
+        failure.name == "same-package-root"
+            && failure.version == "1"
+            && failure.error_kind.reason == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+    }));
+}
+
+#[test]
+fn apt_pkg_keeps_failure_behind_virtual_provider_fatal() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("virtual-transitive-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a broken virtual provider must keep the native failure fatal: {error}"
+    );
+}
+
+#[test]
+fn apt_pkg_keeps_virtual_provider_conflict_fatal() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("virtual-conflict-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a conflicting virtual provider must keep the native failure fatal: {error}"
+    );
+}
+
+#[test]
+fn resolution_survey_records_virtual_provider_failures_as_native_solver_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &failing_virtual_provider_packages(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 4;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    for root in ["virtual-transitive-root", "virtual-conflict-root"] {
+        assert!(survey.failures.iter().any(|failure| {
+            failure.name == root
+                && failure.error_kind.reason
+                    == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+        }));
+    }
+}
+
+#[test]
+fn apt_pkg_rejects_conflict_anywhere_in_probed_closure() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &probed_closure_failure_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("closure-conflict-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a conflict-broken leaf must keep the native failure fatal: {error}"
+    );
+}
+
+#[test]
+fn apt_pkg_rejects_transitive_no_target_in_probed_closure() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &probed_closure_failure_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let error = apt
+        .resolve("closure-missing-root", "1", "amd64")
+        .unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "a transitive no-target group must keep the root failure fatal: {error}"
+    );
+}
+
+#[test]
+fn apt_pkg_projects_all_root_no_target_groups_with_healthy_closure() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &probed_closure_failure_packages(),
+    );
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    let AptResolutionOutcome::Unresolved(missing) =
+        apt.resolve("two-root-misses", "1", "amd64").unwrap()
+    else {
+        panic!("root-only no-target groups beside a healthy closure must be unresolved");
+    };
+    assert_eq!(missing.len(), 2);
+    assert!(
+        missing
+            .iter()
+            .all(|item| item.requiring.name == "two-root-misses")
+    );
+    assert_eq!(
+        missing
+            .iter()
+            .map(|item| item.native_text.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["absent-first (= 1)", "absent-second (= 2)"])
+    );
+}
+
+#[test]
+fn resolution_survey_records_probed_closure_failures_as_native_solver_failed() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &probed_closure_failure_packages(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 8;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    for root in ["closure-conflict-root", "closure-missing-root"] {
+        assert!(survey.failures.iter().any(|failure| {
+            failure.name == root
+                && failure.error_kind.reason
+                    == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+        }));
+    }
+}
+
+#[test]
+fn transitive_and_mixed_failures_remain_typed_native_solver_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "transitive-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: broken-helper\n",
+        ),
+        resolution_stanza(
+            "broken-helper",
+            "1",
+            "amd64",
+            'b',
+            "Depends: transitive-target (= 2)\n",
+        ),
+        resolution_stanza("transitive-target", "3", "amd64", 'c', ""),
+        resolution_stanza(
+            "mixed-root",
+            "1",
+            "amd64",
+            'd',
+            "Depends: absent-mixed-target (= 2), coexistence-target (= 1), coexistence-target (= 2)\n",
+        ),
+        resolution_stanza("coexistence-target", "1", "amd64", 'e', ""),
+        resolution_stanza("coexistence-target", "2", "amd64", 'f', ""),
+    ]
+    .concat();
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(&source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+    let error = apt.resolve("transitive-root", "1", "amd64").unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "transitive failure must stay fatal without public solver3 reasons: {error}"
+    );
+    let error = apt.resolve("mixed-root", "1", "amd64").unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("without a typed missing requirement"),
+        "mixed no-candidate and available-target failure must stay fatal: {error}"
+    );
+    drop(apt);
+
+    let packages = vec![source];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 6;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    for root in ["transitive-root", "mixed-root"] {
+        assert!(survey.failures.iter().any(|failure| {
+            failure.name == root
+                && failure.error_kind.reason
+                    == NativeResolutionSurveyErrorReasonV1::NativeSolverFailed
+        }));
+    }
 }
 
 #[test]

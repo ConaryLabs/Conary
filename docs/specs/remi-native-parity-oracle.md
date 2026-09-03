@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define strict native parity artifacts and deterministic bounded-parallel native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
+summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 29
+revision: 34
 status: active
 ---
 
@@ -47,18 +47,77 @@ operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
 apt-pkg implementation remains the sole native fact and resolution authority.
 
 The protected production producer accepts only one successful exact export
-run. It independently reopens the transport and deployment evidence, requires
-the artifact-owned deployed commit to be merged, and checks out that commit as
-producer source separately from the protected workflow/operator checkout.
+run. It independently reopens the transport and deployment evidence and
+requires the artifact-owned deployed commit to be merged. Dispatch also names
+one explicit full `producer_commit`; operators use the deployed commit by
+default and name a newer commit only for an intended producer advance. The
+workflow fetches `origin/main`, requires the producer commit to descend from
+the deployed commit and already be an ancestor of `origin/main`, then checks
+out that exact clean tree separately from the protected workflow/operator
+checkout. Floating branches, workflow heads, malformed SHAs, unmerged commits,
+non-descendants, and dirty producer trees are inadmissible.
+`scripts/verify-native-oracle-producer.py` owns this exact reusable full-SHA,
+fetch, and two-direction ancestry predicate for protected native-oracle and
+resolution-survey producers; workflows may not fork a weaker local version.
 Three pinned container lanes derive every member and object argument from the
 canonical input contract: Fedora 44 uses libsolv 0.7.36, Ubuntu 26.04 uses
 apt-pkg 3.2.0, and Arch uses the pinned archive/libalpm image. A lane succeeds
 only after both its package-fact producer and exact-architecture resolution
 producer complete their strict output reopen. Short-lived sanitized evidence
 binds both manifests and artifacts to the input manifest, profile revision,
-export identity, implementation version, architecture, and deployed commit.
+export identity, implementation version, architecture, deployed commit,
+producer commit, and independently recomputed SHA-256 digests of both producer
+binaries.
 The operation is read-only and carries no refresh, conversion, proof,
 activation, or public-pointer authority.
+
+The accepted producer-binding decision deliberately separates immutable input
+authority from producer implementation provenance. A merged descendant may fix
+producer-only behavior without forcing a semantically identical Remi deploy
+and export, while the exact export continues to own every candidate, source,
+and metadata byte. Merged provenance alone grants no schema latitude: package
+schema 1, resolution schema 2, and every ecosystem implementation/projection
+pin remain mandatory. A three-lane set may contain different producer
+commits per lane only when each is a merged descendant of the same deployed
+commit and every lane passes those identical pins; each lane records its own
+commit and binary digests.
+
+Every selected production lane produces diagnostics before deciding strict
+authority. It reopens one exact staged export, creates and reopens the package
+oracle once, runs the resolution producer with `--survey`, validates and
+uploads the canonical survey plus a separate binding manifest, and only then
+runs strict resolution against that same package oracle. Survey findings cause
+the survey process to return non-zero after writing; the lane adapter accepts
+that status only when it agrees with the validated failure inventory. A strict
+failure still fails the lane and emits no strict lane artifact, but it cannot
+discard an already validated survey. Survey artifacts are named separately,
+carry the export/deployment/producer/image/schema/implementation/binary-digest
+bindings, and remain diagnostics-only. Their type can never satisfy assembly,
+comparison, promotion, activation, or publication.
+
+Dispatch input `lanes` is an optional comma-separated, non-empty,
+duplicate-free subset of `fedora-44,ubuntu-26.04,arch`; its default is that
+complete canonical set. Each successful strict artifact is named by exact
+export identity, lane, and producer commit. Assembly always requires exactly
+one strict artifact for each canonical lane. A selected lane must come from
+the current run. For each unselected lane, assembly queries Actions artifacts
+and chooses the newest unexpired artifact with the exact export/lane prefix,
+then requires its exact producer job to have succeeded in a completed
+protected-main production run. It verifies the API-recorded SHA-256 of the
+downloaded archive before safe extraction and independently reopens every
+canonical evidence, manifest, and artifact digest.
+
+All three lane records must bind the same export run, export identity,
+transport digest, deployment run, deployed commit, and input manifest. Each
+producer commit must separately satisfy deployed-to-producer-to-`origin/main`
+ancestry. Mixed descendant producer commits are accepted as decided above;
+package schema 1, resolution schema 2, lane images, implementation versions,
+and projection schemas remain identical per lane contract. Different exports,
+non-descendants, unmerged producers, digest drift, missing or duplicate lanes,
+and survey substitution fail closed. The assembled evidence records each
+source workflow artifact ID/run/name/archive digest, lane evidence digest,
+producer commit, both producer binary digests, and both strict oracle binding
+records.
 
 `NativeParityOracleV1` is the sole parity manifest authority. It binds the
 exact profile revision digest, profile logical digest, ordered source members,
@@ -631,21 +690,38 @@ forced version and runs with non-strict pinning against the complete
 authenticated version universe. Native policy still orders dependency choices,
 so the highest-precedence candidate is selected whenever it permits a complete
 transaction; a lower authenticated version remains eligible only when the
-forced exact root cannot close with the candidate. The preliminary native
-candidate transaction remains the fast resolved result or contributes typed
-no-target evidence. Only its available-target failure enters the
-complete-version solver, through a fresh dependency cache that never reuses the
-failed candidate state.
+forced exact root cannot close with the candidate.
 Required and pre-required groups participate in resolution; weak groups do
-not. Successful native transactions become exact closure package keys. A
-required group with no native target becomes an exact requiring-package key
-and canonical required-group digest. A policy-excluded exact root becomes the
-typed architecture-excluded outcome before apt-pkg resolution. The Ubuntu
-26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is likewise
-configured with only `APT::Architecture(s)=amd64`, while `Architecture: all`
-remains admitted. Available but unsatisfied targets, conflicts, native identity
-ambiguity, unsupported profile cardinality, and input or package-oracle drift
-fail the complete crawl. Diagnostic strings never establish an outcome.
+not. Successful native transactions become exact closure package keys. When
+the complete solver fails, the producer inspects the retained protected exact
+root in apt-pkg's post-solver dependency cache. A broken root-level required or
+pre-required group becomes typed missing evidence only when apt-pkg exposes no
+authenticated candidate version satisfying any alternative, as decided by
+`DepIterator::IsSatisfied`. This covers both an absent target name and a target
+name available only at incompatible versions. Every broken hard group retained
+on the root must meet that rule; a separate broken group with a satisfying
+candidate keeps the complete failure fatal. Each `AptMissingRequirement`
+carries the exact-root identity, relation kind, and parser-owned native
+dependency text; the Rust boundary binds that text to the exact package-oracle
+group recorded by the same Debian parser, without textual normalization.
+
+Pinned apt-pkg 3.2.0 does not expose solver3's typed failure reason graph as a
+public API: solver state, work, trail, and clause registration are protected or
+private, `DependencySolver` is final, and its exported reason interface renders
+strings. Diagnostic text is not parsed into authority. Consequently a failure
+that cannot be attributed from a broken hard dependency on the retained exact
+root remains a fatal native solver classification. This includes transitive
+no-candidate dependencies as well as conflict-, break-, policy-, or
+version-coexistence failures. Solver timeout attribution uses a steady
+monotonic duration and always remains a fatal `NativeSolverFailed` survey
+record. A policy-excluded exact root becomes the typed
+architecture-excluded outcome before apt-pkg resolution. The
+Ubuntu 26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is
+likewise configured with only `APT::Architecture(s)=amd64`, while
+`Architecture: all` remains admitted.
+Conflicts, native identity ambiguity, unsupported profile cardinality, and
+input or package-oracle drift fail the complete crawl. Diagnostic strings never
+establish an outcome.
 
 Invoke the resolver helper with the exact Debian package bundle produced
 above:
