@@ -9,10 +9,10 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
-    verify_native_resolution_oracle_bundle,
+    NativeResolutionSurveyNativeExplanationV1, NativeUnresolvedDependencyV1,
+    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
+    SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1, native_requirement_group_sha256,
+    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrustPolicy};
@@ -553,11 +553,11 @@ fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
     let mut apt = AptResolution::open(&paths, "amd64").unwrap();
 
     for root_version in [older, newer] {
-        let AptResolutionOutcome::Resolved(packages) = apt
+        let outcome = apt
             .resolve("language-pack-hr-base", root_version, "amd64")
-            .unwrap()
-        else {
-            panic!("language pack root {root_version} must resolve");
+            .unwrap();
+        let AptResolutionOutcome::Resolved(packages) = outcome else {
+            panic!("language pack root {root_version} must resolve, found {outcome:?}");
         };
         let identities = packages
             .into_iter()
@@ -758,6 +758,125 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
         0,
         "resolved and typed-unresolved Debian roots must not build survey evidence"
     );
+}
+
+#[test]
+fn resolution_producer_projects_unavailable_versions_and_transitive_frontier() {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "version-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: version-target (= 2)\n",
+        ),
+        resolution_stanza("version-target", "3", "amd64", 'b', ""),
+        resolution_stanza(
+            "absent-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: absent-target (= 2)\n",
+        ),
+        resolution_stanza(
+            "transitive-root",
+            "1",
+            "amd64",
+            'd',
+            "Depends: broken-helper\n",
+        ),
+        resolution_stanza(
+            "broken-helper",
+            "1",
+            "amd64",
+            'e',
+            "Depends: transitive-target (= 2)\n",
+        ),
+        resolution_stanza("transitive-target", "3", "amd64", 'f', ""),
+    ]
+    .concat();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &package_text,
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 6;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+
+    let manifest = produce_debian_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 4);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut package_by_name = std::collections::BTreeMap::new();
+    package_reader
+        .for_each_package(|package| {
+            package_by_name.insert(package.name.clone(), package);
+            Ok(())
+        })
+        .unwrap();
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut outcomes = std::collections::BTreeMap::new();
+    resolution_reader
+        .for_each_root(|root| {
+            outcomes.insert(root.root_package_key_sha256.clone(), root.outcome);
+            Ok(())
+        })
+        .unwrap();
+    let expected_dependency = |requiring: &str, native_text: &str| {
+        let package = &package_by_name[requiring];
+        let group = package
+            .requirement_groups
+            .iter()
+            .find(|group| group.native_text.as_deref() == Some(native_text))
+            .unwrap();
+        NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: package.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(group).unwrap(),
+        }
+    };
+    for (root, requiring, native_text) in [
+        ("version-root", "version-root", "version-target (= 2)"),
+        ("absent-root", "absent-root", "absent-target (= 2)"),
+        (
+            "transitive-root",
+            "broken-helper",
+            "transitive-target (= 2)",
+        ),
+    ] {
+        assert_eq!(
+            outcomes[&package_by_name[root].package_key_sha256],
+            NativeResolutionOutcomeV1::Unresolved {
+                dependencies: vec![expected_dependency(requiring, native_text)]
+            }
+        );
+    }
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    assert_eq!(survey.counts.roots_walked, 6);
+    assert_eq!(survey.counts.unresolved_roots, 4);
+    assert_eq!(survey.counts.failed_roots, 0);
 }
 
 #[test]

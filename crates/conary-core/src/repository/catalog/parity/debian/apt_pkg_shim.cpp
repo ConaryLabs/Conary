@@ -592,8 +592,124 @@ pkgCache::VerIterator find_exact_version(ResolutionHandle &handle, std::string c
     return selected;
 }
 
-bool collect_resolution(ResolutionHandle &handle, pkgDepCache &dependency_cache,
-                        pkgCache::VerIterator const &root, bool marked, bool resolved) {
+enum class FrontierStatus { Viable, Missing, Untyped, Error };
+
+struct FrontierResult {
+    FrontierStatus status = FrontierStatus::Viable;
+    std::vector<MissingRequirement> missing;
+};
+
+FrontierResult collect_candidate_frontier(
+    ResolutionHandle &handle, pkgCache::VerIterator const &version,
+    std::map<std::string, map_id_t> selected) {
+    Package const *source = find_source_package(handle, version);
+    if (source == nullptr) {
+        handle.error = "apt-pkg candidate package is absent from authenticated Packages inputs: " +
+                       version.ParentPkg().FullName(false) + "=" + version.VerStr();
+        return {FrontierStatus::Error, {}};
+    }
+    auto const selected_version = selected.find(source->name);
+    if (selected_version != selected.end()) {
+        return {selected_version->second == version->ID ? FrontierStatus::Viable
+                                                       : FrontierStatus::Untyped,
+                {}};
+    }
+    selected.emplace(source->name, version->ID);
+
+    FrontierResult result;
+    bool found_untyped = false;
+    std::size_t depends_ordinal = 0;
+    std::size_t pre_depends_ordinal = 0;
+    for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+        pkgCache::DepIterator start;
+        pkgCache::DepIterator end;
+        cursor.GlobOr(start, end);
+        cursor = end;
+        ++cursor;
+
+        int kind = 0;
+        std::size_t ordinal = 0;
+        if (end->Type == pkgCache::Dep::PreDepends) {
+            kind = PRE_DEPENDS;
+            ordinal = pre_depends_ordinal++;
+        } else if (end->Type == pkgCache::Dep::Depends) {
+            kind = DEPENDS;
+            ordinal = depends_ordinal++;
+        } else {
+            continue;
+        }
+        RelationGroup const *group = strong_group_at(*source, kind, ordinal);
+        if (group == nullptr) {
+            handle.error = "apt-pkg candidate dependency does not bind an exact source group for " +
+                           version.ParentPkg().FullName(false) + "=" + version.VerStr();
+            return {FrontierStatus::Error, {}};
+        }
+
+        std::vector<pkgCache::VerIterator> targets;
+        std::set<map_id_t> target_ids;
+        for (pkgCache::DepIterator atom = start;; ++atom) {
+            std::unique_ptr<pkgCache::Version *[]> raw_targets(atom.AllTargets());
+            for (std::size_t index = 0; raw_targets[index] != nullptr; ++index) {
+                pkgCache::VerIterator target(*handle.cache, raw_targets[index]);
+                if (atom.IsSatisfied(target) && handle.policy->GetPriority(target) > 0 &&
+                    target_ids.insert(target->ID).second) {
+                    targets.push_back(target);
+                }
+            }
+            if (atom == end) {
+                break;
+            }
+        }
+        if (targets.empty()) {
+            result.status = FrontierStatus::Missing;
+            result.missing.push_back(
+                {{source->name, source->version, source->architecture}, kind, group->native_text});
+            continue;
+        }
+
+        bool viable = false;
+        bool untyped = false;
+        std::vector<MissingRequirement> branch_missing;
+        for (pkgCache::VerIterator const &target : targets) {
+            FrontierResult branch = collect_candidate_frontier(handle, target, selected);
+            if (branch.status == FrontierStatus::Error) {
+                return branch;
+            }
+            if (branch.status == FrontierStatus::Viable) {
+                viable = true;
+                break;
+            }
+            if (branch.status == FrontierStatus::Untyped) {
+                untyped = true;
+            } else {
+                branch_missing.insert(branch_missing.end(),
+                                      std::make_move_iterator(branch.missing.begin()),
+                                      std::make_move_iterator(branch.missing.end()));
+            }
+        }
+        if (viable) {
+            continue;
+        }
+        if (untyped) {
+            found_untyped = true;
+            continue;
+        }
+        result.status = FrontierStatus::Missing;
+        result.missing.insert(result.missing.end(),
+                              std::make_move_iterator(branch_missing.begin()),
+                              std::make_move_iterator(branch_missing.end()));
+    }
+    if (!result.missing.empty()) {
+        result.status = FrontierStatus::Missing;
+    } else if (found_untyped) {
+        result.status = FrontierStatus::Untyped;
+    }
+    return result;
+}
+
+bool collect_resolution(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
+                        pkgCache::VerIterator const &root, bool marked, bool resolved,
+                        bool complete_solver) {
     bool root_selected = false;
     for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
         if (!dependency_cache[package].Install()) {
@@ -658,10 +774,13 @@ bool collect_resolution(ResolutionHandle &handle, pkgDepCache &dependency_cache,
                 }
             }
             if (has_native_target) {
-                handle.error = "apt-pkg could not satisfy a required group with available native "
-                               "targets for " +
-                               package.FullName(false) + "=" + version.VerStr();
-                return false;
+                if (!complete_solver) {
+                    handle.error = "apt-pkg preliminary candidate transaction requires the complete "
+                                   "solver for " +
+                                   package.FullName(false) + "=" + version.VerStr();
+                    return false;
+                }
+                continue;
             }
             RelationGroup const *group = strong_group_at(*source, kind, ordinal);
             if (group == nullptr) {
@@ -669,8 +788,8 @@ bool collect_resolution(ResolutionHandle &handle, pkgDepCache &dependency_cache,
                                package.FullName(false) + "=" + version.VerStr();
                 return false;
             }
-            handle.missing.push_back({
-                {source->name, source->version, source->architecture}, kind, group->native_text});
+            handle.missing.push_back(
+                {{source->name, source->version, source->architecture}, kind, group->native_text});
         }
     }
     if (!root_selected) {
@@ -683,6 +802,14 @@ bool collect_resolution(ResolutionHandle &handle, pkgDepCache &dependency_cache,
         return true;
     }
     if (!marked || !resolved || dependency_cache.BrokenCount() != 0) {
+        FrontierResult frontier = collect_candidate_frontier(handle, root, {});
+        if (frontier.status == FrontierStatus::Error) {
+            return false;
+        }
+        if (frontier.status == FrontierStatus::Missing) {
+            handle.missing = std::move(frontier.missing);
+            return true;
+        }
         handle.error = "apt-pkg could not resolve the exact root without a typed missing requirement";
         return false;
     }
@@ -725,7 +852,7 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
     }
     bool const provisional = collect_resolution(
         handle, dependency_probe, root, probe_marked,
-        probe_marked && dependency_probe.BrokenCount() == 0);
+        probe_marked && dependency_probe.BrokenCount() == 0, false);
     if (provisional) {
         apt_errors();
         return true;
@@ -747,7 +874,7 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
     bool const resolved = marked && EDSP::ResolveExternal(
         "3.0", dependency_cache, EDSP::Request::FORBID_REMOVE, nullptr);
     std::string const solver_errors = apt_errors();
-    if (!collect_resolution(handle, dependency_cache, root, marked, resolved)) {
+    if (!collect_resolution(handle, dependency_cache, root, marked, resolved, true)) {
         if (!solver_errors.empty()) {
             handle.error.append(": ").append(solver_errors);
         }
