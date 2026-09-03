@@ -2438,6 +2438,34 @@ test_check_release_matrix_rejects_retained_survey_profile_copies() {
         "resolution survey verification stages and deletes one profile at a time"
 }
 
+test_check_release_matrix_rejects_post_findings_package_coverage() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            candidate_failures += candidate_value["total_failures"]
+            validate_candidate_package_coverage(' \
+        '            candidate_failures += candidate_value["total_failures"]
+            validate_candidate_package_coverage_after_findings('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey validates package coverage before the findings branch"
+}
+
+test_check_release_matrix_rejects_unrecomputed_native_comparison() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if comparison_survey["counts"] != expected_counts:' \
+        '    if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey recomputes comparison authority from authenticated native roots"
+}
+
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3746,6 +3774,8 @@ main() {
         test_check_release_matrix_rejects_unbound_candidate_package_roots
         test_check_release_matrix_rejects_flat_nested_outcome_decode
         test_check_release_matrix_rejects_retained_survey_profile_copies
+        test_check_release_matrix_rejects_post_findings_package_coverage
+        test_check_release_matrix_rejects_unrecomputed_native_comparison
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

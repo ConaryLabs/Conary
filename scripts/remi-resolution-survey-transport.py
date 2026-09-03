@@ -1236,6 +1236,11 @@ NATIVE_OUTCOME_STREAM_SPEC = {
     "dependencies": "array",
 }
 CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}
+CANDIDATE_FAILURE_COVERAGE_STREAM_SPEC = {
+    "error_kind": "skip",
+    "error_message": "skip",
+    "native_explanation": "skip",
+}
 COMPARISON_MISMATCH_STREAM_SPEC = {
     "oracle": {"outcome": NATIVE_OUTCOME_STREAM_SPEC},
     "candidate": {"outcome": NATIVE_OUTCOME_STREAM_SPEC},
@@ -1514,6 +1519,8 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         limits["failure_record_limit"] != SURVEY_RECORD_LIMIT
         or limits["evidence_byte_limit"] != SURVEY_EVIDENCE_BYTE_LIMIT
         or limits["retained_failures"] != len(failures)
+        or limits["retained_failures"]
+        != min(limits["total_failures"], limits["failure_record_limit"])
         or limits["retained_failures"] > limits["total_failures"]
         or limits["retained_failures"] > limits["failure_record_limit"]
     ):
@@ -1757,6 +1764,8 @@ def validate_comparison_survey(
         or limits["mismatch_record_limit"] != SURVEY_RECORD_LIMIT
         or limits["total_mismatches"] != mismatched
         or limits["retained_mismatches"] != len(mismatches)
+        or limits["retained_mismatches"]
+        != min(limits["total_mismatches"], limits["mismatch_record_limit"])
         or limits["retained_mismatches"] > limits["total_mismatches"]
         or limits["retained_mismatches"] > limits["mismatch_record_limit"]
         or not isinstance(survey["truncated"], bool)
@@ -1997,7 +2006,11 @@ def load_input_package_manifests(
     expected_manifest_sha256: str,
     expected_transport: dict[str, Any],
     profiles: list[dict[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+    dict[str, dict[str, Any]],
+]:
     metadata = plain_file(path, "authenticated oracle transport")
     if (
         metadata.st_size != expected_transport["size"]
@@ -2032,6 +2045,7 @@ def load_input_package_manifests(
         expected_names = {"manifest.json"}
         package_manifests: dict[str, dict[str, Any]] = {}
         package_artifacts: dict[str, dict[str, Any]] = {}
+        resolution_artifacts: dict[str, dict[str, Any]] = {}
         for profile in profiles:
             profile_name = profile["profile"]
             package_name = f"{profile_name}/package-oracle/manifest.json"
@@ -2120,9 +2134,131 @@ def load_input_package_manifests(
                 "size": artifact_size,
                 "packages": package_count,
             }
+            resolution_name = f"{profile_name}/native-resolution/manifest.json"
+            resolution_member = members.get(resolution_name)
+            if resolution_member is None:
+                fail(f"oracle transport omits {resolution_name}")
+            resolution_bytes = read_tar_member(
+                archive, resolution_member, MAX_MANIFEST_BYTES
+            )
+            if (
+                sha256_bytes(resolution_bytes)
+                != profile["native_resolution_manifest_sha256"]
+            ):
+                fail(
+                    f"{profile_name} resolution manifest differs from authenticated input"
+                )
+            resolution = decode_json(
+                resolution_bytes, f"{profile_name} resolution manifest"
+            )
+            if canonical_json(resolution) != resolution_bytes:
+                fail(f"{profile_name} resolution manifest is not canonical JSON")
+            resolution = exact_object(
+                resolution,
+                {
+                    "schema_version",
+                    "profile",
+                    "profile_revision_sha256",
+                    "profile_logical_digest_sha256",
+                    "members",
+                    "package_oracle_manifest_sha256",
+                    "implementation",
+                    "policy",
+                    "artifact",
+                },
+                f"{profile_name} resolution manifest",
+            )
+            if (
+                exact_u32(
+                    resolution["schema_version"],
+                    f"{profile_name} resolution schema_version",
+                )
+                != 2
+                or resolution["profile"] != profile_name
+                or resolution["profile_revision_sha256"]
+                != profile["profile_revision_sha256"]
+                or resolution["package_oracle_manifest_sha256"]
+                != profile["package_oracle_manifest_sha256"]
+                or resolution["profile_logical_digest_sha256"]
+                != package["profile_logical_digest_sha256"]
+                or resolution["members"] != package["members"]
+            ):
+                fail(f"{profile_name} resolution manifest binding drifted")
+            resolution_implementation = exact_object(
+                resolution["implementation"],
+                {"ecosystem", "name", "version", "projection_schema"},
+                f"{profile_name} resolution implementation",
+            )
+            if resolution_implementation["ecosystem"] != PROFILE_ECOSYSTEMS[profile_name]:
+                fail(f"{profile_name} resolution implementation binding drifted")
+            validate_policy(
+                resolution["policy"],
+                profile["target_architecture"],
+                f"{profile_name} resolution policy",
+            )
+            resolution_artifact = exact_object(
+                resolution["artifact"],
+                {"sha256", "size", "counts"},
+                f"{profile_name} resolution artifact",
+            )
+            resolution_sha256 = require_sha256(
+                resolution_artifact["sha256"],
+                f"{profile_name} resolution artifact digest",
+            )
+            resolution_size = exact_nonnegative_int(
+                resolution_artifact["size"],
+                f"{profile_name} resolution artifact size",
+            )
+            resolution_counts = exact_object(
+                resolution_artifact["counts"],
+                {
+                    "roots",
+                    "resolved_roots",
+                    "unresolved_roots",
+                    "not_installable_roots",
+                    "closure_package_references",
+                    "unresolved_dependencies",
+                },
+                f"{profile_name} resolution artifact counts",
+            )
+            for key, value in resolution_counts.items():
+                exact_nonnegative_int(
+                    value, f"{profile_name} resolution artifact counts.{key}"
+                )
+            roots_name = f"{profile_name}/native-resolution/roots.jsonl"
+            roots_member = members.get(roots_name)
+            if (
+                roots_member is None
+                or not roots_member.isreg()
+                or roots_member.size != resolution_size
+            ):
+                fail(f"{profile_name} resolution artifact differs from its manifest")
+            roots_stream = archive.extractfile(roots_member)
+            if roots_stream is None:
+                fail(f"{profile_name} resolution artifact cannot be read")
+            roots_digest = hashlib.sha256()
+            roots_size = 0
+            while chunk := roots_stream.read(1024 * 1024):
+                roots_size += len(chunk)
+                if roots_size > resolution_size:
+                    fail(
+                        f"{profile_name} resolution artifact exceeded its manifest size"
+                    )
+                roots_digest.update(chunk)
+            if (
+                roots_size != resolution_size
+                or roots_digest.hexdigest() != resolution_sha256
+            ):
+                fail(f"{profile_name} resolution artifact differs from its manifest")
+            resolution_artifacts[profile_name] = {
+                "offset": roots_member.offset_data,
+                "size": resolution_size,
+                "counts": resolution_counts,
+                "manifest_sha256": profile["native_resolution_manifest_sha256"],
+            }
         if set(members) != expected_names:
             fail("oracle transport contains missing or unexpected members")
-    return package_manifests, package_artifacts
+    return package_manifests, package_artifacts, resolution_artifacts
 
 
 PACKAGE_ROW_FIELDS = {
@@ -2158,9 +2294,39 @@ def validate_candidate_package_coverage(
     candidate_survey: dict[str, Any],
     label: str,
 ) -> None:
-    candidate_outcomes = iter(
+    if (
+        candidate_survey["counts"]["roots_walked"]
+        != package_artifact["packages"]
+    ):
+        fail(f"{label} root count differs from its authenticated package manifest")
+    outcomes = iter(
         stream_objects(candidate_survey["outcomes"], CANDIDATE_ROOT_STREAM_SPEC)
     )
+    failures = iter(
+        stream_objects(
+            candidate_survey["failures"], CANDIDATE_FAILURE_COVERAGE_STREAM_SPEC
+        )
+    )
+    outcome = next(outcomes, None)
+    failure = next(failures, None)
+
+    def next_retained_root() -> dict[str, Any] | None:
+        nonlocal outcome, failure
+        if outcome is None and failure is None:
+            return None
+        if failure is None or (
+            outcome is not None
+            and outcome["root_package_key_sha256"]
+            < failure["root_package_key_sha256"]
+        ):
+            retained = outcome
+            outcome = next(outcomes, None)
+        else:
+            retained = failure
+            failure = next(failures, None)
+        return retained
+
+    retained = next_retained_root()
     with oracle_transport.open("rb") as stream:
         mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
         try:
@@ -2177,31 +2343,187 @@ def validate_candidate_package_coverage(
                     PACKAGE_ROW_FIELDS,
                     f"{label} package row {packages_seen}",
                 )
-                try:
-                    candidate = next(candidate_outcomes)
-                except StopIteration:
-                    fail(f"{label} omits authenticated package roots")
-                expected = {
-                    "root_package_key_sha256": package["package_key_sha256"],
-                    "name": package["name"],
-                    "version": package["version"],
-                    "release": package["package_release"],
-                    "architecture": package["architecture"],
-                }
-                actual = {key: candidate[key] for key in expected}
-                if actual != expected:
-                    fail(f"{label} root differs from its authenticated package oracle")
+                if retained is not None:
+                    package_key = package["package_key_sha256"]
+                    retained_key = retained["root_package_key_sha256"]
+                    if retained_key < package_key:
+                        fail(f"{label} retains a root absent from its package oracle")
+                    if retained_key == package_key:
+                        expected = {
+                            "root_package_key_sha256": package_key,
+                            "name": package["name"],
+                            "version": package["version"],
+                            "release": package["package_release"],
+                            "architecture": package["architecture"],
+                        }
+                        actual = {key: retained[key] for key in expected}
+                        if actual != expected:
+                            fail(
+                                f"{label} root differs from its authenticated package oracle"
+                            )
+                        retained = next_retained_root()
                 packages_seen += 1
-            try:
-                next(candidate_outcomes)
-            except StopIteration:
-                pass
-            else:
-                fail(f"{label} contains roots absent from the authenticated package oracle")
+            if retained is not None:
+                fail(f"{label} retains a root absent from its package oracle")
             if packages_seen != package_artifact["packages"]:
                 fail(f"{label} package root count differs from its authenticated manifest")
         finally:
             mapping.close()
+
+
+def validate_native_comparison(
+    oracle_transport: Path,
+    resolution_artifact: dict[str, Any],
+    candidate_survey: dict[str, Any],
+    comparison_survey: dict[str, Any],
+    candidate_manifest_sha256: str,
+    label: str,
+) -> None:
+    candidates = iter(
+        stream_objects(candidate_survey["outcomes"], CANDIDATE_ROOT_STREAM_SPEC)
+    )
+    retained = iter(
+        stream_objects(
+            comparison_survey["mismatches"], COMPARISON_MISMATCH_STREAM_SPEC
+        )
+    )
+    roots = 0
+    matching = 0
+    mismatched = 0
+    native_kind_counts = dict.fromkeys(OUTCOME_KINDS, 0)
+    closure_references = 0
+    unresolved_dependencies = 0
+    mismatch_counts = dict.fromkeys(MISMATCH_KINDS, 0)
+    outcome_pair_counts: dict[tuple[str, str], int] = {}
+    previous_root = ""
+    with oracle_transport.open("rb") as stream:
+        mapping = mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ)
+        try:
+            native_rows = StreamingJsonLines(
+                mapping,
+                resolution_artifact["offset"],
+                resolution_artifact["size"],
+                f"{label} authenticated native resolution",
+            ).objects(CANDIDATE_ROOT_STREAM_SPEC)
+            for native_view in native_rows:
+                native = exact_object(
+                    native_view.value,
+                    {"root_package_key_sha256", "outcome"},
+                    f"{label} native root {roots}",
+                )
+                root_sha256 = require_sha256(
+                    native["root_package_key_sha256"], f"{label} native root {roots}"
+                )
+                if root_sha256 <= previous_root:
+                    fail(f"{label} native roots are duplicated or noncanonical")
+                previous_root = root_sha256
+                try:
+                    candidate = next(candidates)
+                except StopIteration:
+                    fail(f"{label} candidate omits authenticated native roots")
+                if candidate["root_package_key_sha256"] != root_sha256:
+                    fail(f"{label} candidate and native root order differs")
+                native_kind = validate_native_outcome(
+                    native["outcome"], root_sha256, f"{label} native root {roots}.outcome"
+                )
+                candidate_kind = candidate["outcome"]["status"]
+                native_kind_counts[native_kind] += 1
+                if native_kind == "resolved":
+                    closure_references += len(
+                        native["outcome"]["closure_package_keys_sha256"]
+                    )
+                elif native_kind == "unresolved":
+                    unresolved_dependencies += len(native["outcome"]["dependencies"])
+                native_sha256 = native_outcome_sha256(native["outcome"])
+                candidate_sha256 = native_outcome_sha256(candidate["outcome"])
+                roots += 1
+                if native_sha256 == candidate_sha256:
+                    matching += 1
+                    continue
+                mismatched += 1
+                if native_kind != candidate_kind:
+                    kind = "resolution_outcome"
+                elif native_kind == "resolved":
+                    kind = "dependency_closure"
+                elif native_kind == "unresolved":
+                    kind = "unresolved_dependencies"
+                else:
+                    kind = "not_installable_reason"
+                mismatch_counts[kind] += 1
+                pair = (native_kind, candidate_kind)
+                outcome_pair_counts[pair] = outcome_pair_counts.get(pair, 0) + 1
+                if mismatched <= comparison_survey["retained_mismatches"]:
+                    try:
+                        recorded = next(retained)
+                    except StopIteration:
+                        fail(f"{label} omits retained mismatch evidence")
+                    root = recorded["root"]
+                    oracle = recorded["oracle"]
+                    candidate_evidence = recorded["candidate"]
+                    if (
+                        recorded["kind"] != kind
+                        or root
+                        != {
+                            "package_key_sha256": root_sha256,
+                            "name": candidate["name"],
+                            "version": candidate["version"],
+                            "release": candidate["release"],
+                            "architecture": candidate["architecture"],
+                        }
+                        or oracle["manifest_sha256"]
+                        != resolution_artifact["manifest_sha256"]
+                        or candidate_evidence["manifest_sha256"]
+                        != candidate_manifest_sha256
+                        or native_outcome_sha256(oracle["outcome"]) != native_sha256
+                        or native_outcome_sha256(candidate_evidence["outcome"])
+                        != candidate_sha256
+                    ):
+                        fail(f"{label} retained mismatch differs from authenticated roots")
+            try:
+                next(candidates)
+            except StopIteration:
+                pass
+            else:
+                fail(f"{label} candidate contains roots absent from the native oracle")
+            try:
+                next(retained)
+            except StopIteration:
+                pass
+            else:
+                fail(f"{label} retains excess mismatch evidence")
+        finally:
+            mapping.close()
+    native_counts = {
+        "roots": roots,
+        "resolved_roots": native_kind_counts["resolved"],
+        "unresolved_roots": native_kind_counts["unresolved"],
+        "not_installable_roots": native_kind_counts["not_installable"],
+        "closure_package_references": closure_references,
+        "unresolved_dependencies": unresolved_dependencies,
+    }
+    if native_counts != resolution_artifact["counts"]:
+        fail(f"{label} authenticated native root counts differ from its manifest")
+    expected_counts = {
+        "roots_walked": roots,
+        "matching_roots": matching,
+        "mismatched_roots": mismatched,
+        "mismatch_kinds": [
+            {"kind": kind, "count": mismatch_counts[kind]}
+            for kind in MISMATCH_KINDS
+            if mismatch_counts[kind]
+        ],
+        "outcome_kind_pairs": [
+            {
+                "pair": {"oracle": oracle, "candidate": candidate},
+                "count": outcome_pair_counts[(oracle, candidate)],
+            }
+            for oracle in OUTCOME_KINDS
+            for candidate in OUTCOME_KINDS
+            if (oracle, candidate) in outcome_pair_counts
+        ],
+    }
+    if comparison_survey["counts"] != expected_counts:
+        fail(f"{label} comparison counts differ from authenticated native roots")
 
 
 def verify_staged_output(
@@ -2213,6 +2535,7 @@ def verify_staged_output(
     input_profiles: list[dict[str, Any]],
     package_manifests: dict[str, dict[str, Any]],
     package_artifacts: dict[str, dict[str, Any]],
+    resolution_artifacts: dict[str, dict[str, Any]],
 ) -> None:
     metadata = plain_file(args.transport, "survey transport")
     try:
@@ -2372,6 +2695,12 @@ def verify_staged_output(
                 fail(f"{profile_name} candidate summary differs from its survey")
             roots_walked += candidate_value["counts"]["roots_walked"]
             candidate_failures += candidate_value["total_failures"]
+            validate_candidate_package_coverage(
+                args.oracle_transport,
+                package_artifacts[profile_name],
+                candidate_value,
+                candidate["file"],
+            )
 
             comparison = profile["comparison"]
             if comparison is None:
@@ -2396,12 +2725,6 @@ def verify_staged_output(
             expected_candidate_manifest_sha256 = reconstruct_candidate_manifest_sha256(
                 candidate_value,
                 package_manifests[profile_name],
-                candidate["file"],
-            )
-            validate_candidate_package_coverage(
-                args.oracle_transport,
-                package_artifacts[profile_name],
-                candidate_value,
                 candidate["file"],
             )
             if (
@@ -2443,6 +2766,14 @@ def verify_staged_output(
                     comparison_name,
                     candidate_value,
                     expected_candidate_manifest_sha256,
+                )
+                validate_native_comparison(
+                    args.oracle_transport,
+                    resolution_artifacts[profile_name],
+                    candidate_value,
+                    comparison_value,
+                    expected_candidate_manifest_sha256,
+                    comparison_name,
                 )
                 if (
                     comparison.get("counts") != comparison_value["counts"]
@@ -2510,7 +2841,11 @@ def verify_output(args: argparse.Namespace) -> None:
     ) = validate_input_evidence(
         args.input_evidence, survey_id, export_id
     )
-    package_manifests, package_artifacts = load_input_package_manifests(
+    (
+        package_manifests,
+        package_artifacts,
+        resolution_artifacts,
+    ) = load_input_package_manifests(
         args.oracle_transport,
         input_manifest_sha256,
         input_transport,
@@ -2528,6 +2863,7 @@ def verify_output(args: argparse.Namespace) -> None:
             input_profiles,
             package_manifests,
             package_artifacts,
+            resolution_artifacts,
         )
 
 

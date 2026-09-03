@@ -409,14 +409,23 @@ for index in 0 1 2; do
           }] else [] end),
           failure_record_limit:5000,
           total_failures:$failures,
-          retained_failures:0,
-          truncated:($failures > 0),
+          retained_failures:$failures,
+          truncated:false,
           evidence_byte_limit:67108864,
           retained_evidence_bytes:0,
           retained_explanations:0,
-          withheld_explanations:0,
-          truncated_evidence:false,
-          failures:[]
+          withheld_explanations:$failures,
+          truncated_evidence:($failures > 0),
+          failures:(if $failures == 1 then [{
+            root_package_key_sha256:("e" * 64),
+            name:"example",
+            version:"1",
+            release:"1",
+            architecture:$architecture,
+            error_kind:{error_variant:"config_error",reason:"solver_failed"},
+            error_message:"solver failed",
+            native_explanation:{source:"withheld",reason:"evidence_budget_exhausted"}
+          }] else [] end)
         }
     ')"
     printf '%s' "$candidate" >"$output/$profile.candidate-resolution-survey.json"
@@ -566,7 +575,12 @@ make_survey_oracle_transport() {
               version_scheme:$ecosystem
             }
         ' >"$package_artifact"
-        printf '%s resolution\n' "$profile" >"$resolution_artifact"
+        jq -cnS '
+            {
+              outcome:{status:"resolved",closure_package_keys_sha256:[("e" * 64)]},
+              root_package_key_sha256:("e" * 64)
+            }
+        ' >"$resolution_artifact"
         package_manifest="$(jq -cnS \
             --arg profile "$profile" --arg revision "$revision" \
             --arg ecosystem "$ecosystem" \
@@ -590,10 +604,32 @@ make_survey_oracle_transport() {
         package_manifest_sha256="$(sha256sum "$package_root/manifest.json" | cut -d ' ' -f 1)"
         resolution_manifest="$(jq -cnS \
             --arg profile "$profile" --arg revision "$revision" \
-            --arg architecture "$architecture" --arg package "$package_manifest_sha256" \
+            --arg architecture "$architecture" --arg ecosystem "$ecosystem" \
+            --arg package "$package_manifest_sha256" \
             --arg sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
             --argjson size "$(stat -c '%s' "$resolution_artifact")" '
-            {schema_version:2,profile:$profile,profile_revision_sha256:$revision,package_oracle_manifest_sha256:$package,policy:{architecture:$architecture},artifact:{sha256:$sha256,size:$size,counts:{roots:1}}}
+            {
+              schema_version:2,
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              profile_logical_digest_sha256:("1" * 64),
+              members:[],
+              package_oracle_manifest_sha256:$package,
+              implementation:{ecosystem:$ecosystem,name:"fixture-resolution",version:"1",projection_schema:1},
+              policy:{
+                architecture:$architecture,
+                architecture_admission:"native_only",
+                installed_state:"empty",
+                roots:"every_exact_package",
+                positive_requirements:"required_only",
+                provider_selection:"native_precedence"
+              },
+              artifact:{
+                sha256:$sha256,
+                size:$size,
+                counts:{roots:1,resolved_roots:1,unresolved_roots:0,not_installable_roots:0,closure_package_references:1,unresolved_dependencies:0}
+              }
+            }
         ')"
         printf '%s' "$resolution_manifest" >"$resolution_root/manifest.json"
         resolution_manifest_sha256="$(sha256sum "$resolution_root/manifest.json" | cut -d ' ' -f 1)"

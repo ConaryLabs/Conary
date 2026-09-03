@@ -175,17 +175,21 @@ class TransportFixture:
             resolution_root = lane / "resolution-oracle"
             package_root.mkdir(parents=True)
             resolution_root.mkdir()
-            package_artifact = canonical(
-                {
-                    "package_key_sha256": "1" * 64,
+            package_rows = []
+            for root_key, name, version, release in (
+                ("1" * 64, "example", "1:2.0~rc1", "1.fc44"),
+                ("2" * 64, "broken-example", "1", "1"),
+            ):
+                package_rows.append({
+                    "package_key_sha256": root_key,
                     "member_ordinal": 0,
                     "source_identity": "source",
                     "repository_identity": "repository",
                     "source_snapshot_sha256": "7" * 64,
                     "source_profile": profile,
-                    "name": "example",
-                    "version": "1:2.0~rc1",
-                    "package_release": "1.fc44",
+                    "name": name,
+                    "version": version,
+                    "package_release": release,
                     "architecture": ARCHITECTURES[profile],
                     "debian_multi_arch": None,
                     "checksum": "8" * 64,
@@ -194,9 +198,21 @@ class TransportFixture:
                     "version_scheme": ECOSYSTEMS[profile],
                     "provides": [],
                     "requirement_groups": [],
+                })
+            package_artifact = b"".join(canonical(row) + b"\n" for row in package_rows)
+            resolution_rows = [
+                {
+                    "root_package_key_sha256": row["package_key_sha256"],
+                    "outcome": {
+                        "status": "resolved",
+                        "closure_package_keys_sha256": [row["package_key_sha256"]],
+                    },
                 }
-            ) + b"\n"
-            resolution_artifact = f"{profile} resolution rows\n".encode()
+                for row in package_rows
+            ]
+            resolution_artifact = b"".join(
+                canonical(row) + b"\n" for row in resolution_rows
+            )
             (package_root / "packages.jsonl").write_bytes(package_artifact)
             (resolution_root / "roots.jsonl").write_bytes(resolution_artifact)
             package_manifest = {
@@ -215,7 +231,7 @@ class TransportFixture:
                     "sha256": digest(package_artifact),
                     "size": len(package_artifact),
                     "counts": {
-                        "packages": 1,
+                        "packages": 2,
                         "provides": 0,
                         "requirement_groups": 0,
                         "requirement_atoms": 0,
@@ -228,12 +244,34 @@ class TransportFixture:
                 "schema_version": 2,
                 "profile": profile,
                 "profile_revision_sha256": self.candidates[profile],
+                "profile_logical_digest_sha256": "f" * 64,
+                "members": [],
                 "package_oracle_manifest_sha256": digest(package_manifest_bytes),
-                "policy": {"architecture": ARCHITECTURES[profile]},
+                "implementation": {
+                    "ecosystem": ECOSYSTEMS[profile],
+                    "name": "fixture-resolution",
+                    "version": "1",
+                    "projection_schema": 1,
+                },
+                "policy": {
+                    "architecture": ARCHITECTURES[profile],
+                    "architecture_admission": "native_only",
+                    "installed_state": "empty",
+                    "roots": "every_exact_package",
+                    "positive_requirements": "required_only",
+                    "provider_selection": "native_precedence",
+                },
                 "artifact": {
                     "sha256": digest(resolution_artifact),
                     "size": len(resolution_artifact),
-                    "counts": {"roots": 1},
+                    "counts": {
+                        "roots": 2,
+                        "resolved_roots": 2,
+                        "unresolved_roots": 0,
+                        "not_installable_roots": 0,
+                        "closure_package_references": 2,
+                        "unresolved_dependencies": 0,
+                    },
                 },
             }
             resolution_manifest_bytes = canonical(resolution_manifest)
@@ -275,7 +313,7 @@ class TransportFixture:
                         "name": "roots.jsonl",
                         "sha256": digest(resolution_artifact),
                         "size": len(resolution_artifact),
-                        "counts": {"roots": 1},
+                        "counts": resolution_manifest["artifact"]["counts"],
                     },
                 },
             }
@@ -670,11 +708,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             fixture = TransportFixture(Path(temporary))
             subprocess.run(fixture.command(), check=True, capture_output=True)
             evidence = json.loads(fixture.evidence.read_bytes())
-            _manifests, artifacts = TRANSPORT_TOOL.load_input_package_manifests(
-                fixture.transport,
-                evidence["manifest_sha256"],
-                evidence["transport"],
-                evidence["profiles"],
+            _manifests, artifacts, resolution_artifacts = (
+                TRANSPORT_TOOL.load_input_package_manifests(
+                    fixture.transport,
+                    evidence["manifest_sha256"],
+                    evidence["transport"],
+                    evidence["profiles"],
+                )
             )
             profile = evidence["profiles"][0]
             candidate = candidate_survey(
@@ -682,9 +722,25 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 profile["profile_revision_sha256"],
                 profile["package_oracle_manifest_sha256"],
             )
+            TRANSPORT_TOOL.validate_candidate_package_coverage(
+                fixture.transport,
+                artifacts[profile["profile"]],
+                candidate,
+                "candidate.json",
+            )
+            candidate["counts"]["roots_walked"] = 3
+            candidate["counts"]["failed_roots"] = 2
+            candidate["total_failures"] = 2
+            with self.assertRaisesRegex(ValueError, "root count"):
+                TRANSPORT_TOOL.validate_candidate_package_coverage(
+                    fixture.transport,
+                    artifacts[profile["profile"]],
+                    candidate,
+                    "candidate.json",
+                )
             candidate["counts"] = {
-                "roots_walked": 1,
-                "resolved_roots": 1,
+                "roots_walked": 2,
+                "resolved_roots": 2,
                 "unresolved_roots": 0,
                 "not_installable_roots": 0,
                 "failed_roots": 0,
@@ -699,17 +755,68 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     "failures": [],
                 }
             )
+            candidate["outcomes"].append(
+                {
+                    "root_package_key_sha256": "2" * 64,
+                    "name": "broken-example",
+                    "version": "1",
+                    "release": "1",
+                    "architecture": ARCHITECTURES[profile["profile"]],
+                    "outcome": {
+                        "status": "resolved",
+                        "closure_package_keys_sha256": ["2" * 64],
+                    },
+                }
+            )
             TRANSPORT_TOOL.validate_candidate_package_coverage(
                 fixture.transport,
                 artifacts[profile["profile"]],
                 candidate,
                 "candidate.json",
             )
+            candidate_manifest_sha256 = "9" * 64
+            comparison = {
+                "counts": {
+                    "roots_walked": 2,
+                    "matching_roots": 2,
+                    "mismatched_roots": 0,
+                    "mismatch_kinds": [],
+                    "outcome_kind_pairs": [],
+                },
+                "retained_mismatches": 0,
+                "mismatches": [],
+            }
+            TRANSPORT_TOOL.validate_native_comparison(
+                fixture.transport,
+                resolution_artifacts[profile["profile"]],
+                candidate,
+                comparison,
+                candidate_manifest_sha256,
+                "comparison.json",
+            )
+            candidate["outcomes"][1]["outcome"] = {
+                "status": "unresolved",
+                "dependencies": [
+                    {
+                        "requiring_package_key_sha256": "2" * 64,
+                        "requirement_group_sha256": "a" * 64,
+                    }
+                ],
+            }
+            with self.assertRaisesRegex(ValueError, "comparison counts"):
+                TRANSPORT_TOOL.validate_native_comparison(
+                    fixture.transport,
+                    resolution_artifacts[profile["profile"]],
+                    candidate,
+                    comparison,
+                    candidate_manifest_sha256,
+                    "comparison.json",
+                )
             candidate["outcomes"][0]["root_package_key_sha256"] = "9" * 64
             candidate["outcomes"][0]["outcome"][
                 "closure_package_keys_sha256"
             ] = ["9" * 64]
-            with self.assertRaisesRegex(ValueError, "authenticated package oracle"):
+            with self.assertRaisesRegex(ValueError, "package oracle"):
                 TRANSPORT_TOOL.validate_candidate_package_coverage(
                     fixture.transport,
                     artifacts[profile["profile"]],
