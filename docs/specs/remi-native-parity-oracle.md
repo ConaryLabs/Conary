@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 28
+revision: 29
 status: active
 ---
 
@@ -576,19 +576,29 @@ so the highest-precedence candidate is selected whenever it permits a complete
 transaction; a lower authenticated version remains eligible only when the
 forced exact root cannot close with the candidate. The preliminary native
 candidate transaction remains the fast resolved result or contributes typed
-no-target evidence. Only its available-target failure enters the
-complete-version solver, through a fresh dependency cache that never reuses the
-failed candidate state.
+no-target evidence. Any failure with a satisfying authenticated target enters
+the complete-version solver through a fresh dependency cache that never reuses
+the failed candidate state.
 Required and pre-required groups participate in resolution; weak groups do
 not. Successful native transactions become exact closure package keys. A
-required group with no native target becomes an exact requiring-package key
-and canonical required-group digest. A policy-excluded exact root becomes the
-typed architecture-excluded outcome before apt-pkg resolution. The Ubuntu
-26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is likewise
-configured with only `APT::Architecture(s)=amd64`, while `Architecture: all`
-remains admitted. Available but unsatisfied targets, conflicts, native identity
-ambiguity, unsupported profile cardinality, and input or package-oracle drift
-fail the complete crawl. Diagnostic strings never establish an outcome.
+required group with no satisfying authenticated target version becomes an
+exact requiring-package key and canonical required-group digest, whether the
+target name is absent or exists only at incompatible versions. When the
+complete solver cannot retain its transaction, the producer follows apt-pkg's
+typed satisfying targets through every alternative and reports the terminal
+required or pre-required groups only when every branch ends at a no-target
+group. Each `AptMissingRequirement` carries the requiring package identity,
+relation kind, and parser-owned native dependency text; the Rust boundary binds
+that text to the exact package-oracle group recorded by the same Debian parser,
+without textual normalization. A branch with a viable authenticated closure
+does not become missing merely because candidate policy preferred a different
+version. A policy-excluded exact root becomes the typed architecture-excluded
+outcome before apt-pkg resolution. The Ubuntu 26.04 profile supplies only
+sixteen `binary-amd64` indexes; apt-pkg is likewise configured with only
+`APT::Architecture(s)=amd64`, while `Architecture: all` remains admitted.
+Conflicts, native identity ambiguity, unsupported profile cardinality, and
+input or package-oracle drift fail the complete crawl. Diagnostic strings never
+establish an outcome.
 
 Invoke the resolver helper with the exact Debian package bundle produced
 above:

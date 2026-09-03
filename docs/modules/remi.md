@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 136
+revision: 137
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -972,11 +972,18 @@ non-strict pinning. Native policy still prefers the highest-precedence
 dependency version that permits a complete transaction, while a shadowed lower
 version remains eligible when required by the protected exact root. A separate
 native-candidate probe remains the fast resolved result or contributes required
-or pre-required groups with no native target as typed unresolved evidence. Only
-its available-target failure enters the complete-version solver, and that
-solver never reuses the failed candidate state. All three bind closures and
-missing groups back to exact package-oracle authority. Policy-excluded Debian
-and ALPM roots are typed before native solving; the configured Ubuntu profile
+or pre-required groups with no satisfying authenticated target version as typed
+unresolved evidence. Failures with satisfying targets enter the
+complete-version solver, which never reuses the failed candidate state. If that
+solver fails, the producer follows every typed satisfying alternative to the
+terminal no-target frontier. Both absent names and names available only at
+incompatible versions become typed missing requirements; the requiring
+identity, relation kind, and parser-owned native group text bind directly back
+to exact package-oracle authority without textual normalization. A viable
+authenticated alternative prevents this projection, leaving actual conflicts
+fatal. All three bind closures and missing groups back to exact package-oracle
+authority. Policy-excluded Debian and ALPM roots are typed before native
+solving; the configured Ubuntu profile
 contains sixteen `binary-amd64` indexes and the Arch profile contains three
 `/os/x86_64` databases, with `all` and `any` admitted respectively. Conflicts,
 identity or input drift, and unexpected native errors remain fatal. The
