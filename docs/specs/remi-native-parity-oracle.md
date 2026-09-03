@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 48
+revision: 49
 status: active
 ---
 
@@ -603,6 +603,10 @@ profiles bind their total and retained root identities to the package
 stream before the findings branch. Zero-failure profiles additionally replay
 the authenticated native root stream against candidate outcomes and recompute
 the comparison totals, ordered histograms, and retained evidence.
+Aggregate and per-profile summary counts retain exact JSON integer types. The
+helper archives the frozen root-owned survey files directly after service
+restoration, so transport construction does not allocate another survey-sized
+staging copy.
 Raw deployment-inspection
 and survey stderr remain confined to
 mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,

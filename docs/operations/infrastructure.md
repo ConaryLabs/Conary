@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 86
+revision: 87
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -372,7 +372,9 @@ workflow.
   are replayed against the authenticated native root stream to recompute the
   comparison counts, histograms, and retained mismatch evidence. The runner
   also requires the deployment, candidate, architecture, and oracle bindings
-  to equal its authenticated input record. The workflow has no refresh,
+  to equal its authenticated input record and rejects non-integer aggregate
+  count encodings. The helper archives its frozen root-owned survey snapshot
+  directly rather than allocating another full staging copy. The workflow has no refresh,
   conversion, proof, promotion, activation, or publication authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
