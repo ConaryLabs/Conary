@@ -618,71 +618,83 @@ bool collect_resolved_closure(ResolutionHandle &handle, EvidenceDepCache &depend
     return true;
 }
 
-bool broken_hard_group_has_target(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
-                                  pkgCache::VerIterator const &version) {
-    for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
-        pkgCache::DepIterator start;
-        pkgCache::DepIterator end;
-        cursor.GlobOr(start, end);
-        cursor = end;
-        ++cursor;
-        if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
-            continue;
-        }
-        bool const satisfied =
-            (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
-        if (satisfied) {
-            continue;
-        }
-        for (pkgCache::DepIterator atom = start;; ++atom) {
-            std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
-            for (std::size_t index = 0; targets[index] != nullptr; ++index) {
-                pkgCache::VerIterator target(*handle.cache, targets[index]);
-                if (handle.policy->GetPriority(target) > 0) {
-                    return true;
-                }
+bool group_has_policy_target(ResolutionHandle &handle, pkgCache::DepIterator const &start,
+                             pkgCache::DepIterator const &end) {
+    for (pkgCache::DepIterator atom = start;; ++atom) {
+        std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+        for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+            pkgCache::VerIterator target(*handle.cache, targets[index]);
+            if (handle.policy->GetPriority(target) > 0) {
+                return true;
             }
-            if (atom == end) {
-                break;
-            }
+        }
+        if (atom == end) {
+            break;
         }
     }
     return false;
+}
+
+bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
+                                          EvidenceDepCache &dependency_cache,
+                                          pkgCache::VerIterator const &root) {
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        pkgDepCache::StateCache &state = dependency_cache[package];
+        if (!state.Install()) {
+            continue;
+        }
+        pkgCache::VerIterator version = state.InstVerIter(*handle.cache);
+        if (version.end()) {
+            return false;
+        }
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+            bool const satisfied =
+                (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+            if (satisfied || (!end.IsCritical() && !end.IsNegative())) {
+                continue;
+            }
+            bool const root_no_target =
+                version == root &&
+                (end->Type == pkgCache::Dep::Depends || end->Type == pkgCache::Dep::PreDepends) &&
+                !group_has_policy_target(handle, start, end);
+            if (!root_no_target) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 bool target_is_installable_with_root(ResolutionHandle &handle,
                                      pkgCache::VerIterator const &root,
                                      pkgCache::VerIterator const &target, bool &installable) {
     // A failed solver3 run rolls its selections back. Ask apt's marker in an isolated cache
-    // whether this exact AllTargets() version survives beside the exact root. Missing-only root
-    // groups are evidence; any remaining target-backed break keeps the solver failure fatal.
+    // whether the entire closure beside the protected exact root is healthy, apart from the
+    // root's own no-target groups that direct-root attribution will emit.
     EvidenceDepCache probe(handle.cache.get(), handle.policy.get());
     if (!probe.Init(nullptr)) {
         handle.error = apt_errors();
         return false;
     }
     probe.SetCandidateVersion(target);
-    if (!probe.MarkInstall(target.ParentPkg(), true, 0, false, false)) {
+    if (!probe.MarkInstall(target.ParentPkg(), true, 0, true, false)) {
         installable = false;
         return true;
     }
-    pkgDepCache::StateCache &target_state = probe[target.ParentPkg()];
-    if (!target_state.Install() || target_state.InstBroken() ||
-        target_state.InstVerIter(*handle.cache) != target) {
-        installable = false;
-        return true;
-    }
-
+    probe.MarkProtected(target.ParentPkg());
     probe.SetCandidateVersion(root);
     probe.allow_exact_root(root.ParentPkg());
+    probe.MarkProtected(root.ParentPkg());
     if (!probe.MarkInstall(root.ParentPkg(), true, 0, true, false)) {
         installable = false;
         return true;
     }
-    pkgDepCache::StateCache &selected_state = probe[target.ParentPkg()];
-    installable = selected_state.Install() && !selected_state.InstBroken() &&
-                  selected_state.InstVerIter(*handle.cache) == target &&
-                  !broken_hard_group_has_target(handle, probe, root);
+    installable = probe_has_only_root_no_target_breaks(handle, probe, root);
     return true;
 }
 
