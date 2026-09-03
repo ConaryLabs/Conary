@@ -336,18 +336,19 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_promotion_evidence_sha256,
         base_conversion_crawl_sha256,
         active_manifest,
+        obsolete_profile_schema,
     ) = match active {
         Some((sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
-            let manifest = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
+            let (manifest, obsolete_profile_schema) = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
                 &sha256,
                 i64::try_from(sequence).context("active universe sequence exceeds SQLite INTEGER range")?,
                 &manifest_json,
             )? {
-                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => Some(manifest),
-                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteUniverseSchema { .. } => None,
-                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => None,
+                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => (Some(manifest), false),
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteUniverseSchema { .. } => (None, false),
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => (None, true),
             };
             (
                 Some(sha256),
@@ -355,10 +356,24 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
                 Some(promotion_evidence),
                 Some(conversion_crawl),
                 manifest,
+                obsolete_profile_schema,
             )
         }
-        None => (None, 0, None, None, None),
+        None => (None, 0, None, None, None, false),
     };
+
+    if obsolete_profile_schema {
+        return Ok(UniverseInputs {
+            base_manifest_sha256,
+            base_sequence,
+            base_promotion_evidence_sha256,
+            base_conversion_crawl_sha256,
+            active_manifest,
+            profiles: Vec::new(),
+            profile_physical_attestations: BTreeMap::new(),
+            canonical_map: load_canonical_map_snapshot(&conn)?,
+        });
+    }
 
     let mut statement = conn.prepare(
         "SELECT resource.resource_sha256
