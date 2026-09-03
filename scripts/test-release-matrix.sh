@@ -2180,7 +2180,7 @@ test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    if roots != candidate_roots_walked or len(candidate_roots) != candidate_roots_walked:' \
+        '    if roots != candidate_roots_walked or len(candidate_survey["outcomes"]) != roots:' \
         '    if False:'
 
     assert_check_release_matrix_fails \
@@ -2310,12 +2310,38 @@ test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/remi-resolution-survey-transport.py" \
-        '            data = read_tar_member(archive, member, metadata.st_size)' \
-        '            data = read_tar_member(archive, member, 96 * 1024 * 1024)'
+        '    if not member.isreg() or member.size <= 0 or member.size != expected_size:' \
+        '    if not member.isreg() or member.size <= 0 or member.size != expected_size or member.size > 96 * 1024 * 1024:'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey file admission derives from the actual transport extent"
+        "resolution survey arbitrary aggregate output limit"
+}
+
+test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 1' \
+        '            manifest["schema_version"] != 1'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey strict sanitized output transport verification"
+}
+
+test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        file_paths: dict[str, Path] = {}' \
+        '        file_bytes: dict[str, bytes] = {}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey whole-document output buffering"
 }
 
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
@@ -3617,6 +3643,8 @@ main() {
         test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass
         test_check_release_matrix_rejects_executable_resolution_survey_summary
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
+        test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
+        test_check_release_matrix_rejects_buffered_resolution_survey_documents
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

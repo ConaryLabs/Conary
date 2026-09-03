@@ -8,12 +8,14 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import mmap
 import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
 import tarfile
-from typing import Any, NoReturn
+import tempfile
+from typing import Any, Iterator, NoReturn
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
@@ -37,6 +39,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 2
 SURVEY_RECORD_LIMIT = 5_000
 SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
 U32_MAX = 2**32 - 1
@@ -369,7 +372,7 @@ def validate_lane(
             fail(f"{profile} {kind} producer name drifted")
         require_sha256(binary["sha256"], f"{profile} {kind} producer digest")
     if (
-        evidence["schema_version"] != 3
+        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 3
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != deployment_run_id
         or evidence["export_run_id"] != export_run_id
@@ -440,10 +443,13 @@ def validate_lane(
     if not isinstance(package_value, dict) or not isinstance(resolution_value, dict):
         fail(f"{profile} oracle manifest must be an object")
     if (
-        package_value.get("schema_version") != 1
+        exact_u32(package_value.get("schema_version"), f"{profile} package schema_version") != 1
         or package_value.get("profile") != profile
         or package_value.get("profile_revision_sha256") != candidate_sha256
-        or resolution_value.get("schema_version") != 2
+        or exact_u32(
+            resolution_value.get("schema_version"), f"{profile} resolution schema_version"
+        )
+        != 2
         or resolution_value.get("profile") != profile
         or resolution_value.get("profile_revision_sha256") != candidate_sha256
         or resolution_value.get("policy", {}).get("architecture") != architecture
@@ -527,7 +533,7 @@ def validate_export_operator(
     )
     run_attempt = export_run.get("run_attempt")
     if (
-        attestation["schema_version"] != 1
+        exact_u32(attestation["schema_version"], "export operator schema_version") != 1
         or attestation["export_id"] != export_id
         or attestation["workflow_commit_sha"] != export_run["head_sha"]
         or attestation["workflow_run_id"] != export_run_id
@@ -604,7 +610,7 @@ def build_input(args: argparse.Namespace) -> None:
     )
     assembled_lanes = assembly.get("lanes")
     if (
-        assembly["schema_version"] != 1
+        exact_u32(assembly["schema_version"], "oracle assembly schema_version") != 1
         or assembly["artifact_type"] != "native-oracle-three-lane-set"
         or not isinstance(assembled_lanes, list)
         or len(assembled_lanes) != len(PUBLIC_PROFILES)
@@ -670,11 +676,18 @@ def build_input(args: argparse.Namespace) -> None:
     deployed_commit = require_commit(deployment.get("commit_sha"), "deployed commit")
     binary_sha256 = require_sha256(deployment.get("binary_sha256"), "deployed binary")
     if (
-        inspection.get("deployment_evidence_schema_version") != 3
+        exact_u32(
+            inspection.get("deployment_evidence_schema_version"),
+            "deployment evidence schema_version",
+        )
+        != 3
         or deployment.get("completion_mode") != "private-candidates"
         or deployment.get("outcome") != "complete"
         or deployment.get("failure_phase") is not None
-        or verification.get("schema_version") != 1
+        or exact_u32(
+            verification.get("schema_version"), "export verification schema_version"
+        )
+        != 1
     ):
         fail("export evidence does not prove a complete private-candidate deployment")
     verified_export_id = require_identity(verification.get("export_id"), "export identity")
@@ -835,6 +848,236 @@ def read_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, maximum: 
     if len(data) != member.size:
         fail(f"survey transport member {member.name!r} changed size")
     return data
+
+
+def copy_tar_member(
+    archive: tarfile.TarFile,
+    member: tarfile.TarInfo,
+    destination: Path,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    if not member.isreg() or member.size <= 0 or member.size != expected_size:
+        fail(f"survey transport member {member.name!r} is not the declared plain file")
+    stream = archive.extractfile(member)
+    if stream is None:
+        fail(f"survey transport member {member.name!r} cannot be read")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(destination, flags, 0o600)
+    digest = hashlib.sha256()
+    copied = 0
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            while chunk := stream.read(1024 * 1024):
+                copied += len(chunk)
+                if copied > expected_size:
+                    fail(f"survey transport member {member.name!r} exceeded its declared size")
+                digest.update(chunk)
+                output.write(chunk)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
+    if copied != expected_size:
+        destination.unlink(missing_ok=True)
+        fail(f"survey transport member {member.name!r} changed size")
+    if digest.hexdigest() != expected_sha256:
+        destination.unlink(missing_ok=True)
+        fail(f"survey file {member.name} changed digest")
+
+
+def scan_json_string_end(data: mmap.mmap, start: int, label: str) -> int:
+    if start >= len(data) or data[start] != ord('"'):
+        fail(f"{label} expected a JSON string")
+    position = start + 1
+    hexadecimal = b"0123456789abcdefABCDEF"
+    while position < len(data):
+        byte = data[position]
+        if byte == ord('"'):
+            return position + 1
+        if byte < 0x20:
+            fail(f"{label} contains a control byte in a JSON string")
+        if byte == ord("\\"):
+            position += 1
+            if position >= len(data):
+                fail(f"{label} has an unterminated JSON escape")
+            escape = data[position]
+            if escape == ord("u"):
+                end = position + 5
+                if end > len(data) or any(
+                    value not in hexadecimal for value in data[position + 1 : end]
+                ):
+                    fail(f"{label} has an invalid Unicode escape")
+                position = end
+                continue
+            if escape not in b'"\\/bfnrt':
+                fail(f"{label} has an invalid JSON escape")
+        position += 1
+    fail(f"{label} has an unterminated JSON string")
+
+
+def scan_json_value_end(data: mmap.mmap, start: int, label: str) -> int:
+    if start >= len(data):
+        fail(f"{label} has a missing JSON value")
+    first = data[start]
+    if first == ord('"'):
+        return scan_json_string_end(data, start, label)
+    if first in (ord("{"), ord("[")):
+        stack = [ord("}") if first == ord("{") else ord("]")]
+        position = start + 1
+        while position < len(data):
+            byte = data[position]
+            if byte in b" \t\r\n":
+                fail(f"{label} is not canonical JSON")
+            if byte == ord('"'):
+                position = scan_json_string_end(data, position, label)
+                continue
+            if byte in (ord("{"), ord("[")):
+                stack.append(ord("}") if byte == ord("{") else ord("]"))
+            elif byte in (ord("}"), ord("]")):
+                if byte != stack[-1]:
+                    fail(f"{label} has mismatched JSON delimiters")
+                stack.pop()
+                if not stack:
+                    return position + 1
+            position += 1
+        fail(f"{label} has an unterminated JSON value")
+    position = start
+    while position < len(data) and data[position] not in b",]}":
+        if data[position] in b" \t\r\n":
+            fail(f"{label} is not canonical JSON")
+        position += 1
+    if position == start:
+        fail(f"{label} has a missing JSON value")
+    return position
+
+
+def decode_canonical_fragment(data: mmap.mmap, start: int, end: int, label: str) -> Any:
+    fragment = data[start:end]
+    value = decode_json(fragment, label)
+    if canonical_json(value) != fragment:
+        fail(f"{label} is not canonical JSON")
+    return value
+
+
+class StreamingJsonArray:
+    """Canonical JSON array decoded one element at a time from a read-only mapping."""
+
+    def __init__(self, data: mmap.mmap, start: int, end: int, label: str) -> None:
+        self.data = data
+        self.start = start
+        self.end = end
+        self.label = label
+        self._length: int | None = None
+
+    def spans(self) -> Iterator[tuple[int, int, int]]:
+        position = self.start + 1
+        index = 0
+        if position >= self.end or self.data[position] == ord("]"):
+            if position + 1 != self.end:
+                fail(f"{self.label} is not one canonical JSON array")
+            return
+        while position < self.end:
+            item_end = scan_json_value_end(
+                self.data, position, f"{self.label} element {index}"
+            )
+            yield position, item_end, index
+            index += 1
+            if item_end >= self.end:
+                fail(f"{self.label} has an unterminated JSON array")
+            delimiter = self.data[item_end]
+            if delimiter == ord("]"):
+                if item_end + 1 != self.end:
+                    fail(f"{self.label} has trailing JSON data")
+                return
+            if delimiter != ord(",") or item_end + 1 >= self.end:
+                fail(f"{self.label} has an invalid JSON array delimiter")
+            position = item_end + 1
+        fail(f"{self.label} has an unterminated JSON array")
+
+    def __iter__(self) -> Iterator[Any]:
+        for start, end, index in self.spans():
+            yield decode_canonical_fragment(
+                self.data, start, end, f"{self.label} element {index}"
+            )
+
+    def __len__(self) -> int:
+        if self._length is None:
+            self._length = sum(1 for _ in self.spans())
+        return self._length
+
+
+class StreamingJsonDocument:
+    """A canonical top-level object with selected arrays represented as streams."""
+
+    def __init__(self, path: Path, label: str, streamed_keys: set[str]) -> None:
+        self.stream = path.open("rb")
+        self.mapping: mmap.mmap | None = None
+        try:
+            if os.fstat(self.stream.fileno()).st_size == 0:
+                fail(f"{label} is empty")
+            self.mapping = mmap.mmap(self.stream.fileno(), 0, access=mmap.ACCESS_READ)
+            self.value = self.parse_object(label, streamed_keys)
+        except BaseException:
+            self.close()
+            raise
+
+    def parse_object(self, label: str, streamed_keys: set[str]) -> dict[str, Any]:
+        assert self.mapping is not None
+        data = self.mapping
+        if data[0] != ord("{"):
+            fail(f"{label} must be one canonical JSON object")
+        position = 1
+        result: dict[str, Any] = {}
+        previous_key: str | None = None
+        if position < len(data) and data[position] == ord("}"):
+            if len(data) != 2:
+                fail(f"{label} has trailing JSON data")
+            return result
+        while position < len(data):
+            key_end = scan_json_string_end(data, position, label)
+            key = decode_canonical_fragment(data, position, key_end, f"{label} key")
+            if not isinstance(key, str) or (previous_key is not None and key <= previous_key):
+                fail(f"{label} keys are repeated or noncanonical")
+            previous_key = key
+            if key_end >= len(data) or data[key_end] != ord(":"):
+                fail(f"{label} has a malformed object member")
+            value_start = key_end + 1
+            value_end = scan_json_value_end(data, value_start, f"{label}.{key}")
+            if key in streamed_keys:
+                if data[value_start] != ord("["):
+                    fail(f"{label}.{key} must be an array")
+                result[key] = StreamingJsonArray(
+                    data, value_start, value_end, f"{label}.{key}"
+                )
+            else:
+                result[key] = decode_canonical_fragment(
+                    data, value_start, value_end, f"{label}.{key}"
+                )
+            if value_end >= len(data):
+                fail(f"{label} has an unterminated JSON object")
+            delimiter = data[value_end]
+            if delimiter == ord("}"):
+                if value_end + 1 != len(data):
+                    fail(f"{label} has trailing JSON data")
+                return result
+            if delimiter != ord(",") or value_end + 1 >= len(data):
+                fail(f"{label} has an invalid JSON object delimiter")
+            position = value_end + 1
+        fail(f"{label} has an unterminated JSON object")
+
+    def close(self) -> None:
+        if self.mapping is not None:
+            self.mapping.close()
+            self.mapping = None
+        self.stream.close()
+
+    def __enter__(self) -> dict[str, Any]:
+        return self.value
+
+    def __exit__(self, *_: Any) -> None:
+        self.close()
 
 
 def require_optional_string(value: Any, label: str) -> str | None:
@@ -1080,15 +1323,33 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
 
     outcomes = survey["outcomes"]
     failures = survey["failures"]
-    if not isinstance(outcomes, list) or not isinstance(failures, list):
+    if not isinstance(outcomes, (list, StreamingJsonArray)) or not isinstance(
+        failures, (list, StreamingJsonArray)
+    ):
         fail(f"{name} root records must be arrays")
+    limits = {
+        key: exact_nonnegative_int(survey[key], f"{name}.{key}")
+        for key in (
+            "failure_record_limit", "total_failures", "retained_failures",
+            "evidence_byte_limit", "retained_evidence_bytes", "retained_explanations",
+            "withheld_explanations",
+        )
+    }
+    if (
+        limits["failure_record_limit"] != SURVEY_RECORD_LIMIT
+        or limits["evidence_byte_limit"] != SURVEY_EVIDENCE_BYTE_LIMIT
+        or limits["retained_failures"] != len(failures)
+        or limits["retained_failures"] > limits["total_failures"]
+        or limits["retained_failures"] > limits["failure_record_limit"]
+    ):
+        fail(f"{name} retention or evidence counts are inconsistent")
     successful = (
         count_values["resolved_roots"] + count_values["unresolved_roots"]
         + count_values["not_installable_roots"]
     )
     if len(outcomes) != successful:
         fail(f"{name} successful root records disagree with counts")
-    outcome_keys: list[str] = []
+    previous_outcome_key = ""
     typed_counts = dict.fromkeys(OUTCOME_KINDS, 0)
     for index, item in enumerate(outcomes):
         outcome = exact_object(
@@ -1097,14 +1358,14 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
             f"{name} outcome {index}",
         )
         root_sha256 = require_sha256(outcome["root_package_key_sha256"], f"{name} outcome {index} root")
-        outcome_keys.append(root_sha256)
+        if root_sha256 <= previous_outcome_key:
+            fail(f"{name} successful roots are noncanonical")
+        previous_outcome_key = root_sha256
         for key in ("name", "version", "release"):
             require_rust_identity(outcome[key], f"{name} outcome {index}.{key}")
         require_optional_string(outcome["architecture"], f"{name} outcome {index}.architecture")
         kind = validate_native_outcome(outcome["outcome"], root_sha256, f"{name} outcome {index}.outcome")
         typed_counts[kind] += 1
-    if outcome_keys != sorted(set(outcome_keys)):
-        fail(f"{name} successful roots are noncanonical")
     if typed_counts != {
         "resolved": count_values["resolved_roots"],
         "unresolved": count_values["unresolved_roots"],
@@ -1144,23 +1405,15 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
                 fail(f"{name} retained evidence after withholding began")
             retained_explanations += 1
             retained_bytes += size
-    if failure_keys != sorted(set(failure_keys)) or set(failure_keys) & set(outcome_keys):
+    if failure_keys != sorted(set(failure_keys)):
         fail(f"{name} failure roots are noncanonical or overlap successful roots")
-    limits = {
-        key: exact_nonnegative_int(survey[key], f"{name}.{key}")
-        for key in (
-            "failure_record_limit", "total_failures", "retained_failures",
-            "evidence_byte_limit", "retained_evidence_bytes", "retained_explanations",
-            "withheld_explanations",
-        )
-    }
+    failure_key_set = set(failure_keys)
+    if any(
+        item["root_package_key_sha256"] in failure_key_set for item in outcomes
+    ):
+        fail(f"{name} failure roots are noncanonical or overlap successful roots")
     if (
         limits["total_failures"] != count_values["failed_roots"]
-        or limits["failure_record_limit"] != SURVEY_RECORD_LIMIT
-        or limits["evidence_byte_limit"] != SURVEY_EVIDENCE_BYTE_LIMIT
-        or limits["retained_failures"] != len(failures)
-        or limits["retained_failures"] > limits["total_failures"]
-        or limits["retained_failures"] > limits["failure_record_limit"]
         or not isinstance(survey["truncated"], bool)
         or survey["truncated"] != (limits["retained_failures"] < limits["total_failures"])
         or retained_bytes > limits["evidence_byte_limit"]
@@ -1217,10 +1470,7 @@ def validate_comparison_survey(
     candidate_roots_walked = exact_nonnegative_int(
         candidate_survey["counts"]["roots_walked"], "candidate roots walked"
     )
-    candidate_roots = {
-        item["root_package_key_sha256"]: item for item in candidate_survey["outcomes"]
-    }
-    if roots != candidate_roots_walked or len(candidate_roots) != candidate_roots_walked:
+    if roots != candidate_roots_walked or len(candidate_survey["outcomes"]) != roots:
         fail(f"{name} root population differs from the candidate survey")
     mismatch_keys: list[int] = []
     mismatch_total = 0
@@ -1256,7 +1506,7 @@ def validate_comparison_survey(
     }
     mismatches = survey["mismatches"]
     if (
-        not isinstance(mismatches, list)
+        not isinstance(mismatches, (list, StreamingJsonArray))
         or limits["mismatch_record_limit"] != SURVEY_RECORD_LIMIT
         or limits["total_mismatches"] != mismatched
         or limits["retained_mismatches"] != len(mismatches)
@@ -1267,6 +1517,7 @@ def validate_comparison_survey(
     ):
         fail(f"{name} mismatch retention counts are inconsistent")
     retained_root_keys: list[str] = []
+    retained_candidate_bindings: dict[str, tuple[str, str]] = {}
     for index, item in enumerate(mismatches):
         mismatch = exact_object(item, {"root", "kind", "oracle", "candidate"}, f"{name} mismatch {index}")
         root = exact_object(
@@ -1279,19 +1530,6 @@ def validate_comparison_survey(
         for key in ("name", "version", "release"):
             require_rust_identity(root[key], f"{name} mismatch {index} root.{key}")
         require_optional_string(root["architecture"], f"{name} mismatch {index} root.architecture")
-        candidate_root = candidate_roots.get(root_sha256)
-        if candidate_root is None or {
-            "name": root["name"],
-            "version": root["version"],
-            "release": root["release"],
-            "architecture": root["architecture"],
-        } != {
-            "name": candidate_root["name"],
-            "version": candidate_root["version"],
-            "release": candidate_root["release"],
-            "architecture": candidate_root["architecture"],
-        }:
-            fail(f"{name} mismatch {index} root differs from the candidate survey")
         typed: dict[str, tuple[str, dict[str, Any]]] = {}
         for side, manifest_key in (("oracle", "oracle_manifest_sha256"), ("candidate", "candidate_manifest_sha256")):
             evidence = exact_object(mismatch[side], {"manifest_sha256", "outcome"}, f"{name} mismatch {index} {side}")
@@ -1303,8 +1541,19 @@ def validate_comparison_survey(
             )
         if typed["oracle"][1] == typed["candidate"][1]:
             fail(f"{name} mismatch {index} retains equal outcomes")
-        if typed["candidate"][1] != candidate_root["outcome"]:
-            fail(f"{name} mismatch {index} candidate outcome differs from its survey")
+        retained_candidate_bindings[root_sha256] = (
+            sha256_bytes(
+                canonical_json(
+                    {
+                        "name": root["name"],
+                        "version": root["version"],
+                        "release": root["release"],
+                        "architecture": root["architecture"],
+                    }
+                )
+            ),
+            sha256_bytes(canonical_json(typed["candidate"][1])),
+        )
         if typed["oracle"][0] != typed["candidate"][0]:
             expected_kind = "resolution_outcome"
         elif typed["oracle"][0] == "resolved":
@@ -1317,6 +1566,29 @@ def validate_comparison_survey(
             fail(f"{name} mismatch {index} kind disagrees with its evidence")
     if retained_root_keys != sorted(set(retained_root_keys)):
         fail(f"{name} retained mismatch roots are noncanonical")
+    matched_roots: set[str] = set()
+    for candidate_root in candidate_survey["outcomes"]:
+        root_sha256 = candidate_root["root_package_key_sha256"]
+        binding = retained_candidate_bindings.get(root_sha256)
+        if binding is None:
+            continue
+        matched_roots.add(root_sha256)
+        identity_sha256, outcome_sha256 = binding
+        if identity_sha256 != sha256_bytes(
+            canonical_json(
+                {
+                    "name": candidate_root["name"],
+                    "version": candidate_root["version"],
+                    "release": candidate_root["release"],
+                    "architecture": candidate_root["architecture"],
+                }
+            )
+        ):
+            fail(f"{name} mismatch root differs from the candidate survey")
+        if outcome_sha256 != sha256_bytes(canonical_json(candidate_root["outcome"])):
+            fail(f"{name} mismatch candidate outcome differs from its survey")
+    if matched_roots != set(retained_candidate_bindings):
+        fail(f"{name} mismatch root differs from the candidate survey")
 
 
 def forbid_private_paths(value: Any, label: str) -> None:
@@ -1324,7 +1596,7 @@ def forbid_private_paths(value: Any, label: str) -> None:
         for key, item in value.items():
             forbid_private_paths(key, label)
             forbid_private_paths(item, label)
-    elif isinstance(value, list):
+    elif isinstance(value, (list, StreamingJsonArray)):
         for item in value:
             forbid_private_paths(item, label)
     elif isinstance(value, str) and any(
@@ -1355,7 +1627,7 @@ def validate_input_evidence(
         "resolution-survey input verification",
     )
     if (
-        evidence["schema_version"] != 1
+        exact_u32(evidence["schema_version"], "input evidence schema_version") != 1
         or evidence["survey_id"] != survey_id
         or evidence["export_id"] != export_id
     ):
@@ -1396,7 +1668,10 @@ def validate_input_evidence(
         "input export operator",
     )
     if (
-        export_operator["schema_version"] != 1
+        exact_u32(
+            export_operator["schema_version"], "input export operator schema_version"
+        )
+        != 1
         or export_operator["workflow_run_id"] != workflow_runs["export"]
         or exact_nonnegative_int(
             export_operator["workflow_run_attempt"], "input export run attempt"
@@ -1450,12 +1725,14 @@ def validate_input_evidence(
     return deployment, profiles
 
 
-def verify_output(args: argparse.Namespace) -> None:
-    survey_id = require_identity(args.survey_id, "survey id")
-    export_id = require_identity(args.export_id, "export id")
-    input_deployment, input_profiles = validate_input_evidence(
-        args.input_evidence, survey_id, export_id
-    )
+def verify_staged_output(
+    args: argparse.Namespace,
+    staging: Path,
+    survey_id: str,
+    export_id: str,
+    input_deployment: dict[str, Any],
+    input_profiles: list[dict[str, Any]],
+) -> None:
     metadata = plain_file(args.transport, "survey transport")
     try:
         archive = tarfile.open(args.transport, mode="r:")
@@ -1470,6 +1747,8 @@ def verify_output(args: argparse.Namespace) -> None:
             if member.pax_headers or getattr(member, "sparse", None):
                 fail(f"survey transport member {name!r} uses extended metadata")
             members[name] = member
+            if len(members) > MAX_SURVEY_DOCUMENTS + 1:
+                fail("survey transport exceeds the fixed profile document inventory")
         manifest_member = members.get("manifest.json")
         if manifest_member is None:
             fail("survey transport has no manifest.json")
@@ -1491,7 +1770,7 @@ def verify_output(args: argparse.Namespace) -> None:
             "survey manifest",
         )
         if (
-            manifest["schema_version"] != 1
+            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 1
             or manifest["survey_id"] != survey_id
             or manifest["export_id"] != export_id
         ):
@@ -1514,7 +1793,7 @@ def verify_output(args: argparse.Namespace) -> None:
         if not isinstance(files, list):
             fail("survey manifest file inventory must be an array")
         expected_names = {"manifest.json"}
-        file_bytes: dict[str, bytes] = {}
+        file_paths: dict[str, Path] = {}
         previous_name = ""
         for index, item in enumerate(files):
             item = exact_object(item, {"path", "sha256", "size"}, f"survey file {index}")
@@ -1528,10 +1807,11 @@ def verify_output(args: argparse.Namespace) -> None:
             member = members.get(name)
             if member is None or member.size != expected_size:
                 fail(f"survey file {name} is missing or changed size")
-            data = read_tar_member(archive, member, metadata.st_size)
-            if sha256_bytes(data) != expected_sha256:
-                fail(f"survey file {name} changed digest")
-            file_bytes[name] = data
+            destination = staging / name
+            copy_tar_member(
+                archive, member, destination, expected_size, expected_sha256
+            )
+            file_paths[name] = destination
         if set(members) != expected_names:
             fail("survey transport contains missing or unexpected members")
 
@@ -1586,71 +1866,78 @@ def verify_output(args: argparse.Namespace) -> None:
         expected_candidate_name = f"{profile_name}.candidate-resolution-survey.json"
         if (
             candidate.get("file") != expected_candidate_name
-            or expected_candidate_name not in file_bytes
+            or expected_candidate_name not in file_paths
         ):
             fail(f"{profile_name} candidate survey file binding is missing")
-        candidate_data = file_bytes[candidate["file"]]
         referenced_files.add(candidate["file"])
-        candidate_value = decode_json(candidate_data, f"{profile_name} candidate survey")
-        if canonical_json(candidate_value) != candidate_data:
-            fail(f"{profile_name} candidate survey is not canonical JSON")
-        validate_candidate_survey(candidate_value, profile, candidate["file"])
-        if (
-            candidate.get("counts") != candidate_value["counts"]
-            or candidate.get("total_failures") != candidate_value["total_failures"]
-            or candidate.get("error_histogram") != candidate_value["counts"]["error_kinds"]
-        ):
-            fail(f"{profile_name} candidate summary differs from its survey")
-        roots_walked += candidate_value["counts"]["roots_walked"]
-        candidate_failures += candidate_value["total_failures"]
+        with StreamingJsonDocument(
+            file_paths[candidate["file"]],
+            f"{profile_name} candidate survey",
+            {"outcomes", "failures"},
+        ) as candidate_value:
+            validate_candidate_survey(candidate_value, profile, candidate["file"])
+            forbid_private_paths(candidate_value, candidate["file"])
+            if (
+                candidate.get("counts") != candidate_value["counts"]
+                or candidate.get("total_failures") != candidate_value["total_failures"]
+                or candidate.get("error_histogram")
+                != candidate_value["counts"]["error_kinds"]
+            ):
+                fail(f"{profile_name} candidate summary differs from its survey")
+            roots_walked += candidate_value["counts"]["roots_walked"]
+            candidate_failures += candidate_value["total_failures"]
 
-        comparison = profile["comparison"]
-        if comparison is None:
-            if candidate_value["total_failures"] == 0:
-                fail(f"{profile_name} omitted comparison without candidate failures")
-            continue
-        if candidate_value["total_failures"] != 0 or not isinstance(comparison, dict):
-            fail(f"{profile_name} retained comparison for an incomplete candidate")
-        comparison = exact_object(
-            comparison,
-            {
-                "file",
-                "counts",
-                "total_mismatches",
-                "mismatch_histogram",
-                "outcome_histogram",
-            },
-            f"{profile_name} comparison summary",
-        )
-        comparison_name = comparison.get("file")
-        expected_comparison_name = (
-            f"{profile_name}.native-resolution-comparison-survey.json"
-        )
-        if comparison_name != expected_comparison_name or comparison_name not in file_bytes:
-            fail(f"{profile_name} comparison survey file binding is missing")
-        comparison_data = file_bytes[comparison_name]
-        referenced_files.add(comparison_name)
-        comparison_value = decode_json(
-            comparison_data, f"{profile_name} comparison survey"
-        )
-        if canonical_json(comparison_value) != comparison_data:
-            fail(f"{profile_name} comparison survey is not canonical JSON")
-        validate_comparison_survey(
-            comparison_value, profile, comparison_name, candidate_value
-        )
-        if (
-            comparison.get("counts") != comparison_value["counts"]
-            or comparison.get("total_mismatches") != comparison_value["total_mismatches"]
-            or comparison.get("mismatch_histogram")
-            != comparison_value["counts"]["mismatch_kinds"]
-            or comparison.get("outcome_histogram")
-            != comparison_value["counts"]["outcome_kind_pairs"]
-        ):
-            fail(f"{profile_name} comparison summary differs from its survey")
-        comparison_profiles += 1
-        comparison_mismatches += comparison_value["total_mismatches"]
+            comparison = profile["comparison"]
+            if comparison is None:
+                if candidate_value["total_failures"] == 0:
+                    fail(f"{profile_name} omitted comparison without candidate failures")
+                continue
+            if candidate_value["total_failures"] != 0 or not isinstance(comparison, dict):
+                fail(f"{profile_name} retained comparison for an incomplete candidate")
+            comparison = exact_object(
+                comparison,
+                {
+                    "file",
+                    "counts",
+                    "total_mismatches",
+                    "mismatch_histogram",
+                    "outcome_histogram",
+                },
+                f"{profile_name} comparison summary",
+            )
+            comparison_name = comparison.get("file")
+            expected_comparison_name = (
+                f"{profile_name}.native-resolution-comparison-survey.json"
+            )
+            if (
+                comparison_name != expected_comparison_name
+                or comparison_name not in file_paths
+            ):
+                fail(f"{profile_name} comparison survey file binding is missing")
+            referenced_files.add(comparison_name)
+            with StreamingJsonDocument(
+                file_paths[comparison_name],
+                f"{profile_name} comparison survey",
+                {"mismatches"},
+            ) as comparison_value:
+                validate_comparison_survey(
+                    comparison_value, profile, comparison_name, candidate_value
+                )
+                forbid_private_paths(comparison_value, comparison_name)
+                if (
+                    comparison.get("counts") != comparison_value["counts"]
+                    or comparison.get("total_mismatches")
+                    != comparison_value["total_mismatches"]
+                    or comparison.get("mismatch_histogram")
+                    != comparison_value["counts"]["mismatch_kinds"]
+                    or comparison.get("outcome_histogram")
+                    != comparison_value["counts"]["outcome_kind_pairs"]
+                ):
+                    fail(f"{profile_name} comparison summary differs from its survey")
+                comparison_profiles += 1
+                comparison_mismatches += comparison_value["total_mismatches"]
 
-    if referenced_files != set(file_bytes):
+    if referenced_files != set(file_paths):
         fail("survey manifest file inventory contains an unbound JSON document")
 
     counts = exact_object(
@@ -1673,8 +1960,6 @@ def verify_output(args: argparse.Namespace) -> None:
     }:
         fail("survey manifest aggregate counts disagree with its files")
     forbid_private_paths(manifest, "survey manifest")
-    for name, data in file_bytes.items():
-        forbid_private_paths(decode_json(data, name), name)
 
     evidence = {
         "schema_version": 1,
@@ -1688,6 +1973,25 @@ def verify_output(args: argparse.Namespace) -> None:
     }
     write_new(args.evidence, canonical_json(evidence))
     print(canonical_json(evidence).decode())
+
+
+def verify_output(args: argparse.Namespace) -> None:
+    survey_id = require_identity(args.survey_id, "survey id")
+    export_id = require_identity(args.export_id, "export id")
+    input_deployment, input_profiles = validate_input_evidence(
+        args.input_evidence, survey_id, export_id
+    )
+    with tempfile.TemporaryDirectory(prefix="remi-resolution-survey-verify-") as path:
+        staging = Path(path)
+        os.chmod(staging, 0o700)
+        verify_staged_output(
+            args,
+            staging,
+            survey_id,
+            export_id,
+            input_deployment,
+            input_profiles,
+        )
 
 
 def parse_args() -> argparse.Namespace:

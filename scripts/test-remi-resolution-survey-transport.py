@@ -522,7 +522,14 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             )
 
         malformed = json.loads(canonical(comparison))
-        malformed["mismatches"][0]["root"]["package_key_sha256"] = "b" * 64
+        replacement_root = "b" * 64
+        malformed["mismatches"][0]["root"]["package_key_sha256"] = replacement_root
+        malformed["mismatches"][0]["oracle"]["outcome"][
+            "closure_package_keys_sha256"
+        ] = [replacement_root]
+        malformed["mismatches"][0]["candidate"]["outcome"]["dependencies"][0][
+            "requiring_package_key_sha256"
+        ] = replacement_root
         with self.assertRaisesRegex(ValueError, "root differs from the candidate"):
             TRANSPORT_TOOL.validate_comparison_survey(
                 malformed, profile, "comparison.json", candidate
@@ -712,6 +719,28 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
 
             first_name = sorted(survey_files)[0]
             valid_candidate = survey_files[first_name]
+            with TRANSPORT_TOOL.StreamingJsonDocument(
+                root / first_name,
+                "streamed candidate survey",
+                {"outcomes", "failures"},
+            ) as streamed_candidate:
+                self.assertIsInstance(
+                    streamed_candidate["outcomes"], TRANSPORT_TOOL.StreamingJsonArray
+                )
+                self.assertEqual(len(streamed_candidate["outcomes"]), 1)
+                self.assertEqual(len(list(streamed_candidate["failures"])), 1)
+
+            for malformed_schema in (True, 1.0):
+                manifest["schema_version"] = malformed_schema
+                write_output()
+                verification.unlink(missing_ok=True)
+                result = subprocess.run(
+                    command, text=True, capture_output=True, check=False
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("unsigned 64-bit integer", result.stderr)
+            manifest["schema_version"] = 1
+
             malformed_candidate = json.loads(valid_candidate)
             del malformed_candidate["failure_record_limit"]
             survey_files[first_name] = canonical(malformed_candidate)
