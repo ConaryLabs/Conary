@@ -332,7 +332,10 @@ pub async fn stage_profile_sources(
         .into_iter()
         .map(|plan| {
             let candidate_directory = candidate_run_dir.join(format!("source-{:08}", plan.ordinal));
-            create_private_directory(&candidate_directory, &candidate_run_dir)?;
+            crate::server::private_output::create_new_private_directory(
+                &candidate_directory,
+                "source catalog candidate directory",
+            )?;
             let repository_identity = plan
                 .repository
                 .repository_identity
@@ -665,7 +668,10 @@ fn stage_profile_candidate(
         }
         None => {
             let profile_candidate_directory = candidate_run_dir.join("profile");
-            create_private_directory(&profile_candidate_directory, &candidate_run_dir)?;
+            crate::server::private_output::create_new_private_directory(
+                &profile_candidate_directory,
+                "profile catalog candidate directory",
+            )?;
             let candidate = write_profile_catalog_candidate_verified_with_scratch_admission(
                 profile_candidate_directory.join(CATALOG_FILE_NAME),
                 &profile,
@@ -723,7 +729,7 @@ fn publish_staged_profile(
     staged: StagedProfileCatalog,
     catalog_root: &Path,
 ) -> Result<PublishedProfileCatalog> {
-    require_real_directory(catalog_root, "immutable catalog root")?;
+    crate::server::private_output::require_real_directory(catalog_root, "immutable catalog root")?;
     if staged.sources.len() != staged.source_verifications.len() {
         bail!("staged source verification count changed before publication");
     }
@@ -823,7 +829,10 @@ fn require_registered_source_publication(
             manifest_sha256
         );
     }
-    require_real_directory(bundle_path, "reused immutable source bundle")?;
+    crate::server::private_output::require_real_directory(
+        bundle_path,
+        "reused immutable source bundle",
+    )?;
     let catalog_path = bundle_path.join(CATALOG_FILE_NAME).canonicalize()?;
     if reader.path() != catalog_path
         || reader.binding().scope
@@ -860,7 +869,10 @@ fn require_registered_profile_publication(
         .join("profiles")
         .join(&manifest.profile)
         .join(&manifest_sha256);
-    require_real_directory(&expected_bundle, "reused immutable profile bundle")?;
+    crate::server::private_output::require_real_directory(
+        &expected_bundle,
+        "reused immutable profile bundle",
+    )?;
     let expected_catalog_path = expected_bundle.join(CATALOG_FILE_NAME).canonicalize()?;
     let reader = reused.reader();
     if reader.path() != expected_catalog_path
@@ -889,9 +901,12 @@ fn require_registered_profile_publication(
 
 fn create_candidate_run_dir(root: &Path, run_id: &str) -> Result<PathBuf> {
     validate_run_id(run_id)?;
-    require_real_directory(root, "catalog candidate root")?;
+    crate::server::private_output::require_real_directory(root, "catalog candidate root")?;
     let path = root.join(run_id);
-    create_private_directory(&path, root)?;
+    crate::server::private_output::create_new_private_directory(
+        &path,
+        "catalog candidate run directory",
+    )?;
     Ok(path)
 }
 
@@ -899,7 +914,7 @@ fn create_candidate_run_dir(root: &Path, run_id: &str) -> Result<PathBuf> {
 /// Immutable source/profile destinations are never beneath this path.
 pub fn cleanup_candidate_run(root: &Path, run_id: &str) -> Result<()> {
     validate_run_id(run_id)?;
-    require_real_directory(root, "catalog candidate root")?;
+    crate::server::private_output::require_real_directory(root, "catalog candidate root")?;
     let path = root.join(run_id);
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
@@ -922,30 +937,6 @@ fn validate_run_id(run_id: &str) -> Result<()> {
     let parsed = uuid::Uuid::parse_str(run_id).context("catalog run ID must be a UUID")?;
     if parsed.hyphenated().to_string() != run_id {
         bail!("catalog run ID must use canonical lowercase hyphenated UUID form");
-    }
-    Ok(())
-}
-
-fn create_private_directory(path: &Path, parent: &Path) -> Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        let mut builder = fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder.create(path)?;
-    }
-    #[cfg(not(unix))]
-    fs::create_dir(path)?;
-    require_real_directory(path, "catalog candidate directory")?;
-    File::open(parent)?.sync_all()?;
-    Ok(())
-}
-
-fn require_real_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("inspect {label} {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        bail!("{label} {} must be a real directory", path.display());
     }
     Ok(())
 }

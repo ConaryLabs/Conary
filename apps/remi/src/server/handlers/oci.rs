@@ -795,18 +795,10 @@ fn local_chunk_servable_for_active_revision(
     Ok(false)
 }
 
-/// Strip the "sha256:" prefix from an OCI digest, returning the bare hex hash.
-///
-/// Validates that the remaining string is exactly 64 lowercase hex characters
-/// to prevent path traversal via crafted digest strings.
 /// Strip the `sha256:` prefix and validate the hash.
-///
-/// OCI digests may contain uppercase hex, so this function validates against
-/// the case-insensitive `is_valid_hex_hash` (unlike chunk endpoints which
-/// require lowercase). Callers must normalize to lowercase before CAS lookup.
 fn strip_digest_prefix(digest: &str) -> Option<&str> {
     let hash = digest.strip_prefix("sha256:")?;
-    if super::is_valid_hex_hash(hash) {
+    if conary_core::hash::is_canonical_sha256(hash) {
         Some(hash)
     } else {
         None

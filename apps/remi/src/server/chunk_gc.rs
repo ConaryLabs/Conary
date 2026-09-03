@@ -395,7 +395,6 @@ where
 {
     let mut result = GcResult::default();
 
-    // Step 1: Build referenced set (blocking DB work)
     // Each spawn_blocking task opens its own DB connection because
     // rusqlite::Connection is !Send and can't cross await points.
     let db_path_owned = db_path.to_path_buf();
@@ -408,7 +407,6 @@ where
     .context("build_referenced_set")?;
     result.referenced = referenced.len();
 
-    // Step 2: Scan local disk (blocking I/O)
     let objects_dir_owned = objects_dir.to_path_buf();
     let local_chunks = tokio::task::spawn_blocking(move || scan_local_chunks(&objects_dir_owned))
         .await
@@ -416,11 +414,9 @@ where
         .context("scan_local_chunks")?;
     result.local_scanned = local_chunks.len();
 
-    // Step 3: Account for the R2 listing, when R2 is configured at all.
     let r2_chunks = r2_chunks.unwrap_or_default();
     result.r2_scanned = r2_chunks.len();
 
-    // Step 4: Find orphans (stored but not referenced)
     let local_set: HashSet<&str> = local_chunks.iter().map(String::as_str).collect();
     let r2_set: HashSet<&str> = r2_chunks.iter().map(String::as_str).collect();
     let mut all_stored: HashSet<&str> =
@@ -438,7 +434,6 @@ where
         .copied()
         .collect();
 
-    // Step 5: Apply grace period -- skip recently-accessed chunks
     let db_path_grace = db_path.to_path_buf();
     let orphan_strings: Vec<String> = orphan_candidates.iter().map(|s| (*s).to_string()).collect();
     let grace = grace_period_secs;
@@ -497,8 +492,6 @@ where
         return Ok(result);
     }
 
-    // Step 6: Delete orphans.
-    //
     // Local unlinks stay one at a time, but the R2 orphans collected above are
     // removed in one bulk pass below. One HTTP round trip per orphan turned the
     // first production run's 345,913 R2 orphans into hours of serial deletes.

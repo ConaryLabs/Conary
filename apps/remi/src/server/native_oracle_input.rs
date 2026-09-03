@@ -546,22 +546,11 @@ fn validate_manifest(manifest: &NativeOracleInputSetV1) -> Result<()> {
 }
 
 fn output_parent(path: &Path) -> Result<PathBuf> {
-    let parent = path
-        .parent()
-        .context("native-oracle output has no parent")?;
-    require_plain_directory(parent, "native-oracle output parent")?;
-    Ok(parent.to_path_buf())
+    crate::server::private_output::output_parent(path, "native-oracle output parent")
 }
 
 fn require_plain_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("inspect {label} {}", path.display()))?;
-    ensure!(
-        metadata.file_type().is_dir() && !metadata.file_type().is_symlink(),
-        "{label} {} must be a plain directory",
-        path.display()
-    );
-    Ok(())
+    crate::server::private_output::require_real_directory(path, label)
 }
 
 fn require_exact_entries(directory: &Path, expected: &[&str]) -> Result<()> {
@@ -585,10 +574,7 @@ fn require_exact_entries(directory: &Path, expected: &[&str]) -> Result<()> {
 
 fn validate_sha256(value: &str) -> Result<()> {
     ensure!(
-        value.len() == 64
-            && value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        conary_core::hash::is_canonical_sha256(value),
         "native-oracle input requires a lowercase SHA-256 digest"
     );
     Ok(())

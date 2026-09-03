@@ -48,8 +48,6 @@ fn is_valid_seed_id(id: &str) -> bool {
 struct SeedMetadataBody {
     seed_id: String,
     source: String,
-    #[allow(dead_code)]
-    origin_url: Option<String>,
     builder: Option<String>,
     packages: Option<Vec<String>>,
     target_triple: String,

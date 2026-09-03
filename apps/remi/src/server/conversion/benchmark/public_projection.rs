@@ -4,8 +4,7 @@
 use super::{
     ConversionBenchmarkAuthority, ConversionBenchmarkOutcome, ConversionBenchmarkOutputProof,
     ConversionBenchmarkProcessUsage, ConversionBenchmarkReportV8, ConversionBenchmarkSetup,
-    ConversionBenchmarkSubject, ConversionBenchmarkViews, PublishedInode, report::validate_report,
-    rollback_failed_publication, sync_parent, validate_sha256,
+    ConversionBenchmarkSubject, ConversionBenchmarkViews, report::validate_report, validate_sha256,
 };
 use crate::server::conversion_timing::{
     ConversionPhase, ConversionPhaseTiming, ConversionSourceIdentity, ConversionWorkMetrics,
@@ -15,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::io::Read;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::Path;
 
 pub(super) const PUBLIC_REPORT_FILE_NAME: &str = "conversion-benchmark-public-v6.json";
@@ -435,106 +434,30 @@ fn read_regular_nofollow(path: &Path, label: &str) -> Result<Vec<u8>> {
 }
 
 fn publish_create_new(path: &Path, report: &ConversionBenchmarkPublicReportV6) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => bail!("public benchmark report already exists: {}", path.display()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let parent = path
-        .parent()
-        .context("public benchmark report path has no parent")?;
-    let parent_metadata = fs::symlink_metadata(parent).with_context(|| {
-        format!(
-            "inspect public benchmark report parent {}",
-            parent.display()
-        )
-    })?;
-    ensure!(
-        parent_metadata.file_type().is_dir() && !parent_metadata.file_type().is_symlink(),
-        "public benchmark report parent must be a plain directory"
-    );
     let mut bytes = serde_json::to_vec_pretty(report)?;
     bytes.push(b'\n');
-    let temporary = parent.join(format!(
-        ".{PUBLIC_REPORT_FILE_NAME}.{}.tmp",
-        uuid::Uuid::new_v4()
-    ));
-    let mut linked_inode = None;
-    let publication = (|| -> Result<PublishedInode> {
-        let mut output = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(PRIVATE_FILE_MODE)
-            .open(&temporary)
-            .with_context(|| {
-                format!(
-                    "create private public-report staging file {}",
-                    temporary.display()
-                )
-            })?;
-        output.set_permissions(fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
-        output.write_all(&bytes)?;
-        output.sync_all()?;
-        let staged_metadata = output.metadata()?;
-        let staged_inode = PublishedInode::from_metadata(&staged_metadata);
-
-        match fs::hard_link(&temporary, path) {
-            Ok(()) => linked_inode = Some(staged_inode),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                bail!("public benchmark report already exists: {}", path.display())
-            }
-            Err(error) => return Err(error.into()),
-        }
-        let published_metadata = fs::symlink_metadata(path)?;
-        ensure!(
-            published_metadata.file_type().is_file()
-                && published_metadata.dev() == staged_metadata.dev()
-                && published_metadata.ino() == staged_metadata.ino()
-                && published_metadata.nlink() == 2
-                && published_metadata.mode() & 0o7777 == PRIVATE_FILE_MODE,
-            "published public benchmark report is not the private staged file"
-        );
-        fs::remove_file(&temporary)?;
-        let final_metadata = fs::symlink_metadata(path)?;
-        ensure!(
-            final_metadata.file_type().is_file()
-                && final_metadata.dev() == staged_metadata.dev()
-                && final_metadata.ino() == staged_metadata.ino()
-                && final_metadata.nlink() == 1
-                && final_metadata.mode() & 0o7777 == PRIVATE_FILE_MODE,
-            "published public benchmark report retained an unexpected link"
-        );
-        sync_parent(path)?;
-        Ok(staged_inode)
-    })();
-    let published_inode = match publication {
-        Ok(published_inode) => published_inode,
-        Err(error) => {
-            rollback_failed_publication(path, &temporary, linked_inode);
-            return Err(error);
-        }
-    };
-
-    let reopen = (|| -> Result<()> {
-        let reopened_bytes = read_regular_nofollow(path, "public conversion benchmark")?;
-        ensure!(
-            reopened_bytes == bytes,
-            "reopened public conversion benchmark report changed bytes"
-        );
-        let reopened: ConversionBenchmarkPublicReportV6 =
-            serde_json::from_slice(&reopened_bytes)
-                .context("strictly reopen published public conversion benchmark schema v6")?;
-        validate_public_report(&reopened)?;
-        ensure!(
-            reopened == *report,
-            "reopened public conversion benchmark report changed value"
-        );
-        Ok(())
-    })();
-    if reopen.is_err() {
-        rollback_failed_publication(path, &temporary, Some(published_inode));
-    }
-    reopen
+    crate::server::private_output::publish_new_private_file(
+        path,
+        PUBLIC_REPORT_FILE_NAME,
+        &bytes,
+        "public benchmark report",
+        |path| {
+            let reopened_bytes = read_regular_nofollow(path, "public conversion benchmark")?;
+            ensure!(
+                reopened_bytes == bytes,
+                "reopened public conversion benchmark report changed bytes"
+            );
+            let reopened: ConversionBenchmarkPublicReportV6 =
+                serde_json::from_slice(&reopened_bytes)
+                    .context("strictly reopen published public conversion benchmark schema v6")?;
+            validate_public_report(&reopened)?;
+            ensure!(
+                reopened == *report,
+                "reopened public conversion benchmark report changed value"
+            );
+            Ok(())
+        },
+    )
 }
 
 #[cfg(test)]

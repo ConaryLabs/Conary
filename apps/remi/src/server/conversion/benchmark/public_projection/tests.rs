@@ -14,6 +14,7 @@ use conary_core::repository::catalog::{
     CatalogVerificationEvidenceV1, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1,
     portable_manifest_size_v1,
 };
+use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::time::Duration;
 

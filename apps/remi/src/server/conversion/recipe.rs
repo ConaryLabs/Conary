@@ -30,11 +30,9 @@ impl ConversionService {
 
         info!("Building package from recipe: {}", recipe_url);
 
-        // Step 1: Fetch recipe content
         let recipe_content = Self::fetch_url(recipe_url).await?;
         info!("Fetched recipe ({} bytes)", recipe_content.len());
 
-        // Step 2: Parse and validate recipe
         let recipe =
             parse_recipe(&recipe_content).map_err(|e| anyhow!("Failed to parse recipe: {}", e))?;
 
@@ -43,7 +41,6 @@ impl ConversionService {
             recipe.package.name, recipe.package.version
         );
 
-        // Step 3: Cook the recipe
         let temp_dir =
             TempDir::new_in(&self.cache_dir).context("Failed to create temp directory")?;
 
@@ -69,7 +66,6 @@ impl ConversionService {
             cook_result.warnings.len()
         );
 
-        // Step 4: verify and store the exact signed CCS objects.
         let stored = self
             .store_signed_ccs_path_with_timing(&cook_result.package_path, profile.id())
             .await?;

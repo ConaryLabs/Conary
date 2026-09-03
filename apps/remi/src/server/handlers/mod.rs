@@ -23,6 +23,7 @@ pub mod canonical;
 pub mod chunks;
 pub mod derivations;
 pub mod detail;
+#[cfg(feature = "dormant-federation")]
 pub mod federation;
 pub mod jobs;
 pub mod models;
@@ -42,7 +43,6 @@ pub mod universe;
 use crate::server::auth::{extract_bearer, hash_token};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use conary_core::db::models::Repository;
 use rusqlite::Connection;
 
 /// A boxed HTTP error response used by handlers whose success value is also a
@@ -81,11 +81,6 @@ pub(crate) fn is_valid_path_param(s: &str) -> bool {
         && s.len() <= 128
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-}
-
-/// Validate a 64-char hex hash.
-pub(crate) fn is_valid_hex_hash(s: &str) -> bool {
-    s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Open a database connection for request-time handler work.
@@ -179,16 +174,6 @@ pub(crate) fn human_bytes(bytes: u64) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub fn supported_route_slugs() -> Vec<String> {
-    conary_core::repository::supported_profiles::public_profiles()
-        .iter()
-        .map(|profile| profile.remi_route_slug().to_string())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
 /// Validate a package or distro name: no path traversal, no null bytes, reasonable length
 #[allow(clippy::result_large_err)]
 pub fn validate_name(name: &str) -> Result<(), Response> {
@@ -258,37 +243,6 @@ pub fn json_response(json: String, cache_max_age: u32) -> Response {
         )
         .body(axum::body::Body::from(json))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-}
-
-/// Find a repository configured for one exact public source profile.
-///
-/// Public route slugs must be resolved at the HTTP boundary before calling
-/// this persisted-authority lookup.
-// Used by test modules in sparse.rs and index.rs.
-#[allow(dead_code)]
-pub fn find_repository_for_profile(
-    conn: &Connection,
-    source_profile: &str,
-) -> Result<Option<Repository>, anyhow::Error> {
-    let all = find_repositories_for_profile(conn, source_profile)?;
-    Ok(all.into_iter().next())
-}
-
-/// Find all repositories configured for one exact public source profile.
-///
-/// Repository names, URLs, route slugs, and package formats never establish
-/// persisted source authority.
-pub fn find_repositories_for_profile(
-    conn: &Connection,
-    source_profile: &str,
-) -> Result<Vec<Repository>, anyhow::Error> {
-    let profile = conary_core::repository::supported_profiles::profile_by_public_id(source_profile)
-        .ok_or_else(|| anyhow::anyhow!("unsupported public source profile '{source_profile}'"))?;
-    let repos = Repository::list_enabled(conn)?;
-    Ok(repos
-        .into_iter()
-        .filter(|repository| repository.source_profile.as_deref() == Some(profile.id()))
-        .collect())
 }
 
 #[cfg(test)]

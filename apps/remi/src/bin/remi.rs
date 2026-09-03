@@ -6,7 +6,7 @@ mod deployment_command;
 #[path = "remi/native_oracle_input_command.rs"]
 mod native_oracle_input_command;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use remi::server::{
     IndexGenConfig, PrewarmConfig, ProfileRevisionSelection, ProxyConfig, RemiConfig,
@@ -424,10 +424,7 @@ fn run_server_command(args: ServeArgs) -> Result<()> {
     let mut remi_config = load_remi_config(&args, &default_paths)?;
     apply_serve_overrides(&mut remi_config, &args);
 
-    if let Err(err) = remi_config.validate() {
-        eprintln!("Configuration error: {err}");
-        std::process::exit(1);
-    }
+    remi_config.validate().context("Configuration error")?;
 
     if args.validate {
         println!("Configuration is valid.");
@@ -454,7 +451,7 @@ fn load_remi_config(args: &ServeArgs, default_paths: &[PathBuf]) -> Result<RemiC
 
     for path in default_paths {
         if path.exists() {
-            println!("Using config: {}", path.display());
+            eprintln!("Using config: {}", path.display());
             return RemiConfig::load(path);
         }
     }
@@ -716,12 +713,7 @@ pub(crate) fn parse_candidate(
     if source_profile.is_empty() {
         return Err("candidate profile must not be empty".to_string());
     }
-    if profile_revision_sha256.len() != 64
-        || !profile_revision_sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
-        || profile_revision_sha256 != profile_revision_sha256.to_ascii_lowercase()
-    {
+    if !conary_core::hash::is_canonical_sha256(profile_revision_sha256) {
         return Err("candidate revision must be an exact lowercase SHA-256 digest".to_string());
     }
     Ok(ProfileRevisionSelection {

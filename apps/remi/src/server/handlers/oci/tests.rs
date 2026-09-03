@@ -225,12 +225,9 @@ fn test_strip_digest_prefix() {
         None
     );
 
-    // sha256: prefix with uppercase (is_valid_hash accepts ascii hex which includes A-F)
+    // SHA-256 identities use one canonical lowercase spelling.
     let upper_hash = "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890";
-    assert_eq!(
-        strip_digest_prefix(&format!("sha256:{}", upper_hash)),
-        Some(upper_hash)
-    );
+    assert_eq!(strip_digest_prefix(&format!("sha256:{}", upper_hash)), None);
 }
 
 #[test]

@@ -6,12 +6,15 @@ pub(crate) fn publish_candidate_files(
     candidate: &SignedUniverseCandidate,
     profile_physical_attestations: &ProfilePhysicalAttestations,
 ) -> Result<PathBuf> {
-    require_real_directory(candidate_root, "universe candidate root")?;
-    require_real_directory(catalog_dir, "catalog root")?;
+    crate::server::private_output::require_real_directory(
+        candidate_root,
+        "universe candidate root",
+    )?;
+    crate::server::private_output::require_real_directory(catalog_dir, "catalog root")?;
     if fs::metadata(candidate_root)?.dev() != fs::metadata(catalog_dir)?.dev() {
         bail!("universe candidate and catalog roots must share one filesystem");
     }
-    let universes = ensure_real_subdirectory(catalog_dir, "universes")?;
+    let universes = crate::server::private_output::ensure_real_subdirectory(catalog_dir, "universes")?;
     let destination = universes.join(&candidate.manifest_sha256);
     if destination.exists() {
         verify_published_bundle(
@@ -67,7 +70,10 @@ pub(crate) fn verify_published_bundle(
         bail!("published universe path identity disagrees with its manifest");
     }
     let directory = universe_bundle_path(catalog_dir, expected_sha256);
-    require_real_directory(&directory, "published universe bundle")?;
+    crate::server::private_output::require_real_directory(
+        &directory,
+        "published universe bundle",
+    )?;
     let mut names = fs::read_dir(&directory)?
         .map(|entry| entry.map(|entry| entry.file_name()))
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -154,27 +160,6 @@ fn canonical_json(value: &impl serde::Serialize, label: &str) -> Result<Vec<u8>>
 
 pub(crate) fn universe_bundle_path(catalog_dir: &Path, manifest_sha256: &str) -> PathBuf {
     catalog_dir.join("universes").join(manifest_sha256)
-}
-
-fn ensure_real_subdirectory(parent: &Path, name: &str) -> Result<PathBuf> {
-    require_real_directory(parent, "directory parent")?;
-    let path = parent.join(name);
-    match fs::create_dir(&path) {
-        Ok(()) => File::open(parent)?.sync_all()?,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(error) => return Err(error.into()),
-    }
-    require_real_directory(&path, name)?;
-    Ok(path)
-}
-
-fn require_real_directory(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("inspect {label} {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        bail!("{label} {} must be a real directory", path.display());
-    }
-    Ok(())
 }
 
 fn write_new_file(path: &Path, bytes: &[u8]) -> Result<()> {
