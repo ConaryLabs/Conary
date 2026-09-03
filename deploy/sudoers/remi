@@ -1,4 +1,5 @@
 # /etc/sudoers.d/remi
+# Typed actions, including survey-resolution, are validated inside this root-owned helper.
 Cmnd_Alias CONARY_REMI_DEPLOY = /usr/local/sbin/conary-remi-deploy *
 
 peter ALL=(root) NOPASSWD: CONARY_REMI_DEPLOY

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 67
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 91
+summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
 # Infrastructure Overview
@@ -104,9 +104,10 @@ workflow.
   probe Remi, pin its catalogs, or inspect/mutate its R2 authority uses the same
   non-cancelling `deploy-and-verify` concurrency group: `deploy-and-verify`,
   `deploy-remi-candidate`, `deploy-site`,
-  `export-remi-native-oracle-inputs`, `remi-conversion-benchmark`, and
-  `remi-r2-durability`. A stopped-service benchmark therefore cannot overlap a
-  deploy, frontend probe, native-oracle export, or durability operation.
+  `export-remi-native-oracle-inputs`, `survey-remi-resolution`,
+  `remi-conversion-benchmark`, and `remi-r2-durability`. A stopped-service
+  survey or benchmark therefore cannot overlap a deploy, frontend probe,
+  native-oracle export, or durability operation.
 - Candidate deployment uses one fail-closed SSH option contract for every
   remote command and transfer: authentication is noninteractive, initial
   connection time is bounded, and protocol keepalives cover long refresh and
@@ -252,15 +253,21 @@ workflow.
   typed operator also inserts reader pins for the complete three-profile set in
   one operational transaction before it reopens any catalog bytes, so a slow
   earlier reopen cannot expose a later selected resource to concurrent GC. The
-  workflow invokes the fixed helper operation through the production SSH
-  boundary and removes only the staged `/tmp` transport after download.
+  workflow invokes the fixed helper operation through a production SSH boundary
+  authenticated by the protected `REMI_SSH_KNOWN_HOSTS` pin; live host-key
+  discovery is forbidden. Its workflow commit must equal freshly fetched
+  protected `main` both at authorization and immediately before SSH; an old
+  run cannot be rerun to mint fresh export authority after `main` advances.
+  It removes only the staged `/tmp` transport after
+  download and records a typed operator attestation bound to the export run's
+  exact protected workflow commit.
   The runner independently rejects unsafe tar members, noncanonical or
   duplicate-key JSON, revision/source digest drift, incomplete object
   inventories, and wrong-sized or digest-mismatched metadata. The seven-day
   handoff artifact contains the exact uncompressed transport, its canonical
-  public-sanitized verification record, and the source deployment inspection;
-  it grants no native-oracle production, conversion, proof, or activation
-  authority.
+  public-sanitized verification record, operator attestation, and source
+  deployment inspection; it grants no native-oracle production, conversion,
+  proof, or activation authority.
 - The required `producer_commit` input to `produce-remi-native-oracles` is one
   full lowercase 40-hex SHA. Pass the deployed commit by default; name a newer
   producer only deliberately. Authorization fetches `origin/main`, requires
@@ -277,6 +284,11 @@ workflow.
   independently reopens the exported transport and schema-3 deployment
   inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
   requires the artifact-owned deployed commit to remain merged into `main`.
+  It also requires the export's canonical operator attestation to bind its
+  exact run commit and attempt to the protected pinned-host-key SSH contract;
+  that export commit must equal the producer's exact current protected-main
+  workflow commit. Pre-attestation and stale-operator exports cannot become
+  strict oracle authority.
   Each lane checks out that exact clean producer source, never a workflow head,
   then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
   Arch image with libsolv 0.7.36, apt-pkg 3.2.0, or the archived libalpm state.
@@ -297,6 +309,84 @@ workflow.
   common deployed commit. Different per-lane producer commits are allowed only
   when each is a merged descendant and all schema/implementation pins match;
   missing lanes, digest drift, and survey substitution fail closed.
+- The protected `survey-remi-resolution` workflow consumes one successful
+  `produce-remi-native-oracles` run and resolves its exact export and deployment
+  runs from its canonical assembled three-lane evidence. The oracle run head
+  must equal the survey's own exact current protected-main operator commit, so
+  a historical producer rerun is not admissible. It independently
+  authenticates the assembled artifact archive and every referenced strict lane
+  archive, including a retained same-export lane from an earlier successful
+  producer run, before reopening every package and resolution oracle. Their
+  deployment commit, producer ancestry and binary digests, candidate revision,
+  export manifest, and typed architecture bindings must agree. The workflow
+  rejects export runs without the exact pinned-SSH operator
+  attestation before it invokes the root-owned survey action
+  `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
+  production environment supplies an exact `REMI_SSH_KNOWN_HOSTS` pin; live
+  host-key discovery is forbidden and the selected host must match the pin. The
+  workflow checks out `github.workflow_sha`, requires that revision's helper
+  bytes to equal the helper at its freshly fetched protected `origin/main`, and
+  requires the complete workflow revision itself to equal that current main
+  commit. After staging the bytes it repeats the main fetch, exact-commit check,
+  and digest equality immediately before the root `install-helper` action. That
+  action independently resolves current protected main through GitHub's HTTPS
+  API, downloads the exact commit's helper from the protected repository, and
+  installs only those root-fetched bytes after matching the requested digest.
+  The SSH caller's staged file is comparison input, never installation authority.
+  Historical reruns and any concurrent main advance therefore fail before host
+  mutation instead of using stale workflow, verifier, or helper authority. The
+  workflow then calls the new action. The
+  helper arms cleanup as soon as private root-owned staging exists,
+  authenticates every archive member there,
+  stops Remi, reads the exact candidate revisions from the stopped deployment's
+  own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
+  output into root-owned staging while Remi remains stopped, and always restores
+  the service and polls `/health/ready` to a bounded successful result before it
+  interprets the command result. Remi's top-level status `101` is a successful
+  operator result only when the typed outcome records findings. The returned
+  seven-day artifact contains only
+  canonical survey JSON, a digest/size/binding manifest, and public verification
+  records, including the authenticated three-lane assembly. Raw deployment
+  inspection and survey stderr remain confined to mode-`0600` root-controlled
+  staging, are destroyed during helper cleanup, and are never written to SSH or
+  workflow logs; public failures use typed helper messages. Neither helper
+  input admission nor runner output verification places an invented aggregate
+  ceiling on survey transport that the producer contract does not establish;
+  the uncompressed input archive uses GNU base-256 tar headers, avoiding an
+  unsupported 8-GiB ceiling on any authenticated catalog member without PAX
+  metadata. Each member is chunk-copied and hashed into a private mode-`0700`
+  runner staging directory within its declared plain archive extent. The
+  runner maps those authenticated files read-only and decodes the potentially
+  large root
+  arrays one canonical record at a time instead of buffering the archive or
+  whole survey documents. The runner
+  independently enforces the complete typed Rust survey schemas, retention and
+  evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
+  profile ecosystem plus `conary-sat` projection-2 candidate producer, and
+  exact comparison coverage of the complete zero-failure candidate root set.
+  Every retained mismatch root, identity, and candidate outcome must occur in
+  that candidate survey. Remi's bounded command outcome supplies the helper's
+  per-profile counts, histograms, and comparison candidate-manifest digest, so
+  the helper never loads a complete survey document into `jq` merely to build
+  the transport manifest. The runner reopens the exact authenticated package
+  manifests, reconstructs the strict candidate root stream and manifest while
+  streaming candidate outcomes, requires exact root-key and package-identity
+  coverage against the authenticated package artifact, and requires that
+  digest even when the comparison retains zero mismatches. Nested closure and
+  dependency arrays remain streamed, and runner staging holds only the current
+  profile's survey files. Package counts and every retained success/failure
+  identity are checked before findings can skip comparison. Complete profiles
+  are replayed against the authenticated native root stream to recompute the
+  comparison counts, histograms, and retained mismatch evidence. The runner
+  also requires the deployment, candidate, architecture, and oracle bindings
+  to equal its authenticated input record and rejects non-integer aggregate
+  count encodings. The helper archives its frozen root-owned survey snapshot
+  directly rather than allocating another full staging copy, and materializes
+  the authenticated unbounded oracle members in private root-owned staging on
+  the `/conary/evidence` capacity domain instead of `/tmp`. On the runner, each
+  authenticated artifact ZIP is removed after extraction and each extracted
+  lane member is removed after it enters the transport. The workflow has no refresh,
+  conversion, proof, promotion, activation, or publication authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and

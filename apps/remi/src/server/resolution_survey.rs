@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use conary_core::repository::catalog::{
+    ConaryResolutionSurveyCountsV1, NativeResolutionComparisonSurveyCountsV1,
     produce_conary_resolution_comparison_survey, produce_conary_resolution_survey,
 };
 
@@ -23,10 +24,31 @@ pub struct RemiResolutionSurveyConfig {
 pub struct RemiResolutionSurveyOutcome {
     pub output_dir: PathBuf,
     pub profiles: usize,
+    pub profile_results: Vec<RemiResolutionSurveyProfileOutcome>,
     pub roots_walked: u64,
     pub candidate_failures: u64,
     pub comparison_mismatches: u64,
     pub comparison_profiles: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemiResolutionSurveyProfileOutcome {
+    pub profile: String,
+    pub candidate: RemiResolutionSurveyCandidateOutcome,
+    pub comparison: Option<RemiResolutionSurveyComparisonOutcome>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemiResolutionSurveyCandidateOutcome {
+    pub counts: ConaryResolutionSurveyCountsV1,
+    pub total_failures: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RemiResolutionSurveyComparisonOutcome {
+    pub candidate_manifest_sha256: String,
+    pub counts: NativeResolutionComparisonSurveyCountsV1,
+    pub total_mismatches: u64,
 }
 
 pub(crate) fn produce_remi_resolution_surveys(
@@ -40,6 +62,7 @@ pub(crate) fn produce_remi_resolution_surveys(
     let mut candidate_failures = 0_u64;
     let mut comparison_mismatches = 0_u64;
     let mut comparison_profiles = 0_usize;
+    let mut profile_results = Vec::with_capacity(config.profiles.len());
     for input in &config.profiles {
         let pin = authority
             .open_selected_profile_exclusively(&input.selection)
@@ -76,7 +99,16 @@ pub(crate) fn produce_remi_resolution_surveys(
         };
         roots_walked = checked_add(roots_walked, candidate.counts.roots_walked)?;
         candidate_failures = checked_add(candidate_failures, candidate.total_failures)?;
+        let candidate_outcome = RemiResolutionSurveyCandidateOutcome {
+            counts: candidate.counts.clone(),
+            total_failures: candidate.total_failures,
+        };
         if candidate.total_failures != 0 {
+            profile_results.push(RemiResolutionSurveyProfileOutcome {
+                profile: input.selection.source_profile.clone(),
+                candidate: candidate_outcome,
+                comparison: None,
+            });
             continue;
         }
 
@@ -105,11 +137,21 @@ pub(crate) fn produce_remi_resolution_surveys(
         comparison_profiles = comparison_profiles
             .checked_add(1)
             .context("resolution survey profile count exceeds usize")?;
+        profile_results.push(RemiResolutionSurveyProfileOutcome {
+            profile: input.selection.source_profile.clone(),
+            candidate: candidate_outcome,
+            comparison: Some(RemiResolutionSurveyComparisonOutcome {
+                candidate_manifest_sha256: comparison.candidate_manifest_sha256,
+                counts: comparison.counts,
+                total_mismatches: comparison.total_mismatches,
+            }),
+        });
     }
 
     Ok(RemiResolutionSurveyOutcome {
         output_dir: config.output_dir.clone(),
         profiles: config.profiles.len(),
+        profile_results,
         roots_walked,
         candidate_failures,
         comparison_mismatches,

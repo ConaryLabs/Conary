@@ -262,6 +262,7 @@ create_release_policy_fixture() {
         "$repo/.github/actions/setup-rust-workspace" \
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
+        "$repo/apps/remi/src/server" \
         "$repo/docs/operations" \
         "$repo/site/src/lib" \
         "$repo/site/static" \
@@ -282,6 +283,8 @@ create_release_policy_fixture() {
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
     cp "$REPO_ROOT/.github/workflows/produce-remi-native-oracles.yml" \
         "$repo/.github/workflows/produce-remi-native-oracles.yml"
+    cp "$REPO_ROOT/.github/workflows/survey-remi-resolution.yml" \
+        "$repo/.github/workflows/survey-remi-resolution.yml"
     cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
         "$repo/.github/workflows/remi-conversion-benchmark.yml"
     cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
@@ -293,6 +296,10 @@ create_release_policy_fixture() {
         "$repo/scripts/verify-native-oracle-input-transport.py"
     cp "$REPO_ROOT/scripts/produce-native-oracle-lane.py" \
         "$repo/scripts/produce-native-oracle-lane.py"
+    cp "$REPO_ROOT/scripts/remi-resolution-survey-transport.py" \
+        "$repo/scripts/remi-resolution-survey-transport.py"
+    cp "$REPO_ROOT/apps/remi/src/server/resolution_survey.rs" \
+        "$repo/apps/remi/src/server/resolution_survey.rs"
     cp "$REPO_ROOT/scripts/assemble-native-oracle-lanes.py" \
         "$repo/scripts/assemble-native-oracle-lanes.py"
     cp "$REPO_ROOT/scripts/native-oracle-lane-selection.py" \
@@ -305,6 +312,8 @@ create_release_policy_fixture() {
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
         "$repo/deploy/remi-postdeployment-fencing.jq"
+    cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" \
+        "$repo/deploy/remi-deploy-helper.sh"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
@@ -344,6 +353,10 @@ test_native_oracle_transport_contract() {
 
 test_native_oracle_lane_contract() {
     python3 "$REPO_ROOT/scripts/test-produce-native-oracle-lane.py"
+}
+
+test_resolution_survey_transport_contract() {
+    python3 "$REPO_ROOT/scripts/test-remi-resolution-survey-transport.py"
 }
 
 test_native_oracle_assembly_contract() {
@@ -1779,6 +1792,93 @@ test_check_release_matrix_rejects_unprotected_native_oracle_source() {
         "native-oracle export exact successful protected deployment source"
 }
 
+test_check_release_matrix_rejects_stale_native_oracle_export_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
+        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export initial and pre-SSH current-main revalidation"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    python3 - "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {'
+position = text.rfind(needle)
+if position < 0:
+    raise SystemExit("fixture could not find pre-SSH current-main revalidation")
+replacement = '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+path.write_text(text[:position] + replacement + text[position + len(needle):])
+PY
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export initial and pre-SSH current-main revalidation"
+}
+
+test_check_release_matrix_requires_pinned_native_oracle_export_host() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export pinned production SSH and typed operator attestation"
+}
+
+test_check_release_matrix_rejects_live_native_oracle_export_host_discovery() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          ssh_opts=(' \
+        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export live SSH host-key discovery"
+}
+
+test_check_release_matrix_rejects_unattested_native_oracle_export() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        or attestation["ssh_host_key_contract"] != "protected-pinned-known-hosts-v1"' \
+        '        or attestation["ssh_host_key_contract"] != "live-discovery"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey requires exact pinned export operator evidence"
+}
+
+test_check_release_matrix_rejects_unattested_native_oracle_production_input() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .ssh_host_key_contract == "protected-pinned-known-hosts-v1"' \
+        '            .ssh_host_key_contract == "live-discovery"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production requires the export pinned-SSH operator attestation"
+}
+
 test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1789,7 +1889,7 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle export protected production operator boundary"
+        "native-oracle export exact current protected-main operator boundary"
 }
 
 test_check_release_matrix_rejects_unserialized_native_oracle_export() {
@@ -1854,7 +1954,33 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_production() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production protected-main and full producer SHA authorization"
+        "native-oracle production exact current protected-main and full producer SHA authorization"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_production_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        '          ref: main'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact current protected-main and full producer SHA authorization"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_export_source() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .head_sha == $workflow_sha and' \
+        '            (.head_sha | test("^[0-9a-f]{40}$")) and'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact current-main successful protected export source"
 }
 
 test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
@@ -1880,7 +2006,7 @@ test_check_release_matrix_rejects_malformed_native_oracle_producer_commit() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production protected-main and full producer SHA authorization"
+        "native-oracle production exact current protected-main and full producer SHA authorization"
 }
 
 test_check_release_matrix_rejects_non_descendant_native_oracle_producer() {
@@ -1998,6 +2124,476 @@ test_check_release_matrix_rejects_mutating_native_oracle_authority() {
     assert_check_release_matrix_fails \
         "$repo" \
         "native-oracle production generic or mutating authority"
+}
+
+test_check_release_matrix_rejects_unserialized_resolution_survey() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '  group: deploy-and-verify' \
+        '  group: remi-resolution-survey'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact oracle input, read-only permissions, and shared serialization"
+}
+
+test_check_release_matrix_rejects_unprotected_resolution_survey_helper() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        '          ref: main'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact current protected-main operator boundary"
+}
+
+test_check_release_matrix_rejects_stale_resolution_survey_verifier() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
+        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact current protected-main operator boundary"
+}
+
+test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if oracle_run["head_sha"] != workflow_commit:' \
+        '    if oracle_run["head_sha"] != oracle_run["head_sha"]:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey rejects stale oracle workflow authority"
+}
+
+test_check_release_matrix_rejects_ustar_resolution_survey_input() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT' \
+        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.USTAR_FORMAT'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey input transport supports unbounded member sizes"
+}
+
+test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if roots != candidate_roots_walked or len(candidate_survey["outcomes"]) != roots:' \
+        '    if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey comparison binds the exact candidate root population"
+}
+
+test_check_release_matrix_requires_resolution_survey_helper_install() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '\''$helper_sha256'\'' '\''$remote_helper'\''"' \
+        '            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey installs its exact protected helper before staging survey input"
+}
+
+test_check_release_matrix_rejects_caller_authorized_helper_update() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    install -m 0755 "${staging}/helper" "$next"' \
+        '    install -m 0755 "$source" "$next"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "Remi helper updates require exact current protected-main bytes from root-trusted HTTPS authority"
+}
+
+test_check_release_matrix_rejects_resolution_survey_helper_downgrade() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {' \
+        '          [[ "$helper_sha256" == "$helper_sha256" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey revalidates protected main immediately before helper installation"
+}
+
+test_check_release_matrix_requires_pinned_resolution_survey_host() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey requires the protected pinned production SSH host identity"
+}
+
+test_check_release_matrix_rejects_live_resolution_survey_host_discovery() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          ssh_opts=(' \
+        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey live SSH host-key discovery"
+}
+
+test_check_release_matrix_rejects_unbound_resolution_survey_output() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --input-evidence resolution-survey-input-verification.json \' \
+        '            # authenticated input binding removed'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
+test_check_release_matrix_rejects_unbound_resolution_survey_assembly() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \' \
+        '            # assembled oracle binding removed'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey downloads and authenticates every exact current-operator assembled input"
+}
+
+test_check_release_matrix_rejects_resolution_survey_set_digest_bypass() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          [[ "sha256:$(sha256sum "$set_archive" | cut -d '\'' '\'' -f 1)" == "$set_digest" ]] || {' \
+        '          true || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact assembled oracle to export to deployment run chain"
+}
+
+test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            [[ "$(sha256sum "$lane_archive" | cut -d '\'' '\'' -f 1)" == "$artifact_sha256" ]] || {' \
+        '            true || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey independently authenticates every assembled strict lane artifact"
+}
+
+test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --consume-lane-files \' \
+        '            # retain every extracted lane member'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey releases authenticated lane archives and members while building its transport"
+}
+
+test_check_release_matrix_rejects_executable_resolution_survey_summary() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            echo "- oracle run: \`$ORACLE_RUN_ID\`"' \
+        '            echo "- oracle run: `$ORACLE_RUN_ID`"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey escaped oracle run summary binding"
+}
+
+test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if not member.isreg() or member.size <= 0 or member.size != expected_size:' \
+        '    if not member.isreg() or member.size <= 0 or member.size != expected_size or member.size > 96 * 1024 * 1024:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey arbitrary aggregate output limit"
+}
+
+test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 1' \
+        '            manifest["schema_version"] != 1'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey strict sanitized output transport verification"
+}
+
+test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        file_entries: dict[str, tuple[int, str]] = {}' \
+        '        file_bytes: dict[str, bytes] = {}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey whole-document output buffering"
+}
+
+test_check_release_matrix_rejects_helper_survey_document_slurp() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '            --slurpfile outcome "$outcome" '\''' \
+        $'            --slurpfile outcome "$outcome" \\\n            --slurpfile candidate "$candidate_file" '\'''
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey helper whole-document jq buffering"
+}
+
+test_check_release_matrix_rejects_nonportable_helper_summary_jq() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '                comparison: (if $result.comparison == null then null else {' \
+        '                comparison: if $result.comparison == null then null else {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey helper builds portable transport summaries from bounded Remi outcome authority"
+}
+
+test_check_release_matrix_rejects_unbound_comparison_candidate_manifest() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        or survey["candidate_manifest_sha256"] != candidate_manifest_sha256' \
+        '        or False'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey comparison binds its streamed reconstructed candidate manifest"
+}
+
+test_check_release_matrix_rejects_unreopened_survey_oracle_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --oracle-transport "$ORACLE_TRANSPORT" \' \
+        '            --oracle-transport "$SURVEY_TRANSPORT" \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
+test_check_release_matrix_rejects_unbound_candidate_package_roots() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '                if actual != expected:' \
+        '                if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey candidate roots exactly cover the authenticated package oracle"
+}
+
+test_check_release_matrix_rejects_flat_nested_outcome_decode() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        'CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}' \
+        'CANDIDATE_ROOT_STREAM_SPEC = {}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey verifier streams canonical root records and nested outcomes without whole-document buffering"
+}
+
+test_check_release_matrix_rejects_retained_survey_profile_copies() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            comparison_path.unlink()' \
+        '            pass'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey verification stages and deletes one profile at a time"
+}
+
+test_check_release_matrix_rejects_post_findings_package_coverage() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '            candidate_failures += candidate_value["total_failures"]
+            validate_candidate_package_coverage(' \
+        '            candidate_failures += candidate_value["total_failures"]
+            validate_candidate_package_coverage_after_findings('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey validates package coverage before the findings branch"
+}
+
+test_check_release_matrix_rejects_unrecomputed_native_comparison() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if comparison_survey["counts"] != expected_counts:' \
+        '    if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey recomputes comparison authority from authenticated native roots"
+}
+
+test_check_release_matrix_rejects_untyped_survey_aggregate_counts() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        exact_nonnegative_int(value, f"survey counts.{key}")' \
+        '        pass'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey aggregate manifest counts retain exact integer types"
+}
+
+test_check_release_matrix_rejects_duplicate_survey_transport_copy() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '        -C "$output" "${transport_members[@]}"' \
+        '        -C "$SURVEY_STAGING" "${transport_members[@]}"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey archives the frozen root-owned snapshot without another full copy"
+}
+
+test_check_release_matrix_rejects_tmp_survey_oracle_duplication() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    local survey_staging_root="${evidence_root}/.remi-operator-staging"' \
+        '    local survey_staging_root="/tmp/remi-resolution-survey-staging"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey materializes unbounded oracles on the evidence capacity domain"
+}
+
+test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    metadata = plain_file(args.transport, "survey transport")' \
+        '    metadata = plain_file(args.transport, "survey transport", 640 * 1024 * 1024)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey arbitrary aggregate output limit"
+}
+
+test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    local listing="${manifest}.listing"' \
+        $'    local transport_size\n    transport_size="$(stat -c \'%s\' "$transport")"\n    (( transport_size <= 32 * 1024 * 1024 * 1024 )) || die "oracle transport too large"\n\n    local listing="${manifest}.listing"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey arbitrary aggregate oracle input limit"
+}
+
+test_check_release_matrix_rejects_mutating_resolution_survey() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '              "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"' \
+        '              "sudo -n /usr/local/sbin/conary-remi-deploy promotion-activate '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
+test_check_release_matrix_rejects_loose_resolution_survey_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        archive = tarfile.open(args.transport, mode="r:")' \
+        '        archive = tarfile.open(args.transport, mode="r:*")'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey strict sanitized output transport verification"
 }
 
 test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection() {
@@ -3118,6 +3714,7 @@ main() {
         test_bootstrap_installer_contract
         test_native_oracle_transport_contract
         test_native_oracle_lane_contract
+        test_resolution_survey_transport_contract
         test_native_oracle_assembly_contract
         test_native_oracle_lane_selection_contract
         test_native_oracle_producer_verification_contract
@@ -3206,12 +3803,20 @@ main() {
         test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unprotected_native_oracle_source
+        test_check_release_matrix_rejects_stale_native_oracle_export_operator
+        test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh
+        test_check_release_matrix_requires_pinned_native_oracle_export_host
+        test_check_release_matrix_rejects_live_native_oracle_export_host_discovery
+        test_check_release_matrix_rejects_unattested_native_oracle_export
+        test_check_release_matrix_rejects_unattested_native_oracle_production_input
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
         test_check_release_matrix_rejects_unserialized_native_oracle_export
         test_check_release_matrix_rejects_workflow_head_as_deployed_candidate
         test_check_release_matrix_rejects_unmerged_deployed_candidate
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_nonproduction_native_oracle_production
+        test_check_release_matrix_rejects_stale_native_oracle_production_operator
+        test_check_release_matrix_rejects_stale_native_oracle_export_source
         test_check_release_matrix_rejects_unbound_native_oracle_producer_source
         test_check_release_matrix_rejects_malformed_native_oracle_producer_commit
         test_check_release_matrix_rejects_non_descendant_native_oracle_producer
@@ -3223,6 +3828,42 @@ main() {
         test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence
         test_check_release_matrix_rejects_container_native_oracle_shell
         test_check_release_matrix_rejects_mutating_native_oracle_authority
+        test_check_release_matrix_rejects_unserialized_resolution_survey
+        test_check_release_matrix_rejects_unprotected_resolution_survey_helper
+        test_check_release_matrix_rejects_stale_resolution_survey_verifier
+        test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
+        test_check_release_matrix_rejects_ustar_resolution_survey_input
+        test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots
+        test_check_release_matrix_requires_resolution_survey_helper_install
+        test_check_release_matrix_rejects_caller_authorized_helper_update
+        test_check_release_matrix_rejects_resolution_survey_helper_downgrade
+        test_check_release_matrix_requires_pinned_resolution_survey_host
+        test_check_release_matrix_rejects_live_resolution_survey_host_discovery
+        test_check_release_matrix_rejects_unbound_resolution_survey_output
+        test_check_release_matrix_rejects_unbound_resolution_survey_assembly
+        test_check_release_matrix_rejects_resolution_survey_set_digest_bypass
+        test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass
+        test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads
+        test_check_release_matrix_rejects_executable_resolution_survey_summary
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
+        test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
+        test_check_release_matrix_rejects_buffered_resolution_survey_documents
+        test_check_release_matrix_rejects_helper_survey_document_slurp
+        test_check_release_matrix_rejects_nonportable_helper_summary_jq
+        test_check_release_matrix_rejects_unbound_comparison_candidate_manifest
+        test_check_release_matrix_rejects_unreopened_survey_oracle_transport
+        test_check_release_matrix_rejects_unbound_candidate_package_roots
+        test_check_release_matrix_rejects_flat_nested_outcome_decode
+        test_check_release_matrix_rejects_retained_survey_profile_copies
+        test_check_release_matrix_rejects_post_findings_package_coverage
+        test_check_release_matrix_rejects_unrecomputed_native_comparison
+        test_check_release_matrix_rejects_untyped_survey_aggregate_counts
+        test_check_release_matrix_rejects_duplicate_survey_transport_copy
+        test_check_release_matrix_rejects_tmp_survey_oracle_duplication
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
+        test_check_release_matrix_rejects_mutating_resolution_survey
+        test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection
         test_check_release_matrix_rejects_unvalidated_native_oracle_survey
         test_check_release_matrix_rejects_native_oracle_archive_digest_bypass

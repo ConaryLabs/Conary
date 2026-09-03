@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 141
+revision: 161
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -788,8 +788,12 @@ Production transport is owned by the protected
 successful protected-main private-candidate deployment run, derives all three
 revision bindings from that run's typed inspection, calls the fixed root-owned
 helper operation, and independently reopens every transported manifest and
-object byte before retaining the short-lived handoff artifact. Callers cannot
-supply paths, profile order, conversion commands, or publication operations.
+object byte before retaining the short-lived handoff artifact. Its exact
+workflow commit must equal freshly fetched protected `main` before any SSH and
+again immediately at the SSH boundary. Native-oracle production accepts the
+result only when the export run used its own exact current-main operator
+revision. Callers cannot supply paths, profile order, conversion commands, or
+publication operations.
 
 ```text
 remi native-oracle-input \
@@ -1090,12 +1094,118 @@ profile has no hard candidate failures it builds a strict candidate only in an
 automatically removed temporary directory and writes
 `<profile>.native-resolution-comparison-survey.json`; otherwise comparison for
 that profile is skipped because no complete candidate exists. All profiles are
-still visited, and the command exits non-zero after reporting any findings.
+still visited, and the command returns Remi's top-level failure status `101`
+after reporting any findings.
 
 These files are diagnosis, never authority. They cannot satisfy a strict
 resolution-bundle or `NativeResolutionComparisonV1` reader, and promotion
 proof, activation, publication, and public binding paths reject them. They
 contain no input paths, credentials, process environment, or host identity.
+
+Production operators dispatch `.github/workflows/survey-remi-resolution.yml`
+from protected `main` with `oracle_run_id` naming one successful
+`produce-remi-native-oracles` run. The workflow derives the common export run
+and deployment run from its canonical assembled three-lane evidence, and
+requires the oracle run head to equal its own exact current protected-main
+operator commit. For each
+Fedora, Ubuntu, and Arch lane, including a retained same-export lane from an
+earlier successful producer run, it reopens the recorded workflow and successful
+producer job, verifies the API-bound artifact archive digest before safe
+extraction, and requires the lane evidence, producer provenance, export
+manifest, deployment inspection, installed binary digest, exact candidates,
+oracle manifests, and typed architectures to agree. The export must also carry the
+typed operator attestation binding its exact workflow commit to the protected
+pinned-host-key SSH contract; pre-attestation exports are non-authority. It
+transfers one authenticated
+oracle archive, requires the helper from its exact protected
+`github.workflow_sha` to be byte-identical to the freshly fetched protected-main
+helper and the complete workflow revision to be that exact current main commit.
+It stages the helper, then refetches protected main and repeats both the commit
+and digest checks immediately before the existing `install-helper` action. The
+root helper independently resolves current protected main over pinned HTTPS,
+downloads that exact commit's helper itself, requires its digest to match, and
+installs those root-fetched bytes rather than the caller's staged file. It
+then invokes
+the production survey entry point:
+
+```text
+sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution \
+  <survey-id> <export-id> \
+  /tmp/remi-resolution-survey-oracles-<survey-id>.tar
+```
+
+Rerunning an older workflow revision fails before root mutation even when its
+helper bytes remain unchanged, so stale verifier code cannot certify evidence.
+Any protected-main advance during input authentication also fences the run.
+
+The helper obtains candidate revisions from the stopped deployment's current
+private-candidate pointers; they are deliberately absent from its argument
+contract. It runs `remi resolution-survey` as the service user with
+`--config /etc/conary/remi.toml`, the three authenticated oracle directory
+pairs, and the profiles' typed `x86_64`, `amd64`, and `x86_64` architectures.
+It writes durable private output below
+`/conary/evidence/resolution-surveys/<survey-id>`, copies the completed JSON into
+root-owned staging before restoring the service, restores and probes Remi even
+when the survey returns status `101` for recorded findings, accepts that status
+only when the typed outcome reports at least one finding, and requires a bounded successful
+`/health/ready` response before it considers restoration complete. It then emits
+`/tmp/remi-resolution-survey-<survey-id>.tar`. The workflow independently
+reopens that archive, requires every deployment, candidate, architecture, and
+oracle binding to equal the authenticated input verification, and uploads its
+canonical JSON, exact digest/size/binding manifest, and count/histogram
+verification plus the authenticated three-lane assembly for seven days. The
+independent reader enforces every typed Rust survey field, outcome, histogram,
+the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
+mismatch-evidence relationship.
+Comparison counts must cover the exact zero-failure candidate root population;
+every retained mismatch root, identity, and candidate outcome must match that
+candidate survey.
+It also requires the candidate producer to be profile-ecosystem `conary-sat`
+projection schema 2; a merely well-formed implementation identity is rejected.
+Neither helper input admission nor runner output verification imposes an
+aggregate transport ceiling absent from the producer contract. Each still
+admits only a plain archive. Runner construction uses uncompressed GNU
+base-256 tar headers, so an authenticated member larger than USTAR's 8-GiB
+ceiling does not become an invented unsupported class; no PAX metadata is
+admitted. The independent reader chunk-copies and hashes each declared member
+into private mode-`0700` staging, then maps the authenticated JSON read-only
+and decodes large outcome, failure, and mismatch arrays one canonical record
+at a time. Its candidate/comparison join retains
+only the at-most-5,000 mismatch bindings, so neither the archive nor a complete
+survey document or candidate-root index is held in memory.
+Remi returns a bounded per-profile summary with the exact comparison candidate
+manifest digest; the helper uses that summary rather than reparsing survey
+documents with `jq`. The independent reader reconstructs the strict candidate
+`roots.jsonl` bytes and manifest from streamed successful outcomes plus the
+authenticated package-oracle manifest, and requires the comparison digest to
+match even when there are no retained mismatches. It maps the authenticated
+package artifact directly from the oracle archive and requires every
+zero-failure candidate root key and identity to cover those package rows in
+order. Nested closure and unresolved-dependency arrays are decoded one element
+at a time, while copied survey documents are retained for only one profile and
+deleted before the next profile is admitted.
+Every profile's total root count and each retained success or failure identity
+is checked against the package rows before the findings branch. For complete
+profiles, the reader also maps the authenticated native `roots.jsonl`, walks it
+in lockstep with candidate outcomes, and recomputes matching and mismatch
+counts, histograms, and retained evidence rather than trusting the survey's
+comparison summary.
+The sanitized manifest's aggregate and per-profile summaries retain exact JSON
+integer types. After Remi is restored, the helper archives the root-owned
+frozen survey snapshot directly, without another survey-sized staging copy.
+The authenticated oracle members are materialized in a private root-owned
+staging directory on the `/conary/evidence` capacity domain, rather than
+duplicating the unbounded transport beneath `/tmp`.
+The protected runner deletes each authenticated GitHub artifact ZIP after
+extraction and consumes each extracted lane member immediately after adding it
+to the oracle transport, keeping no three-copy full-catalog working set.
+The helper arms cleanup immediately after creating root staging.
+Raw deployment-inspection and survey stderr remain only in its mode-`0600`
+diagnostic file, are destroyed during helper cleanup, and are never copied to
+SSH or workflow logs;
+public failures are typed helper messages. The Markdown summary escapes all
+shell-interpolated code spans. This path cannot promote, activate, or publish
+anything.
 
 Conary separately replays the exact verified profile catalog into a
 private temporary resolver projection, resolves every exact package key
