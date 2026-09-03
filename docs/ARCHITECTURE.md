@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 63
-summary: Describe workspace and release boundaries, immutable Remi catalogs with manifest-scoped resource identity and filesystem-independent chunk attestation, coherent native inventory adoption, exact source and advisory authority, set-based package transactions, typed generation database snapshots, lifecycle execution, carrier selection and security, generation GC, and service boundaries
+revision: 64
+summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
 # Conary Architecture

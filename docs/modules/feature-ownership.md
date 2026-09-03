@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 91
-summary: Route feature ownership through producer-bound native parity assembly, its protected production resolution survey, and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 92
+summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
 # Feature Ownership And Interaction Gates

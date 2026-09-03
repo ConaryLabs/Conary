@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 92
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 93
+summary: Document non-secret CI, release, deployment, hosting, agent-operation, and production evidence workflows; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
 # Infrastructure Overview
@@ -15,7 +15,7 @@ summary: Non-secret infrastructure, trusted-main compiler seeding, agent operati
   of the public client distro support matrix, which is Fedora 44, Ubuntu 26.04
   LTS, and Arch Linux for the limited preview. The destructive host procedure,
   storage contract, recovery boundary, and completion proof live in
-  [`remi-host-rebuild.md`](remi-host-rebuild.md).
+  [the Remi host rebuild runbook](remi-host-rebuild.md).
 - Forge remote validation and Forge-local staging deployment are decommissioned.
   The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
   or conary-test deployment path is supported.
@@ -23,7 +23,7 @@ summary: Non-secret infrastructure, trusted-main compiler seeding, agent operati
   evidence comes from `scripts/local-qemu-validation.sh` on a local
   development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
-  ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
+  ignored `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> not in tracked docs.
 
 ## Agent Operations And MCP
 
@@ -515,7 +515,7 @@ workflow.
 - `scripts/rebuild-remi.sh` is retired for production deploys. It now fails
   closed and points operators back to the GitHub release/deploy flow and the
   root-owned helper.
-- Host-local credential files such as ignored `deploy/.credentials.toml` are not
+- Host-local credential files such as ignored `deploy/.credentials.toml` <!-- repo-path: local --> are not
   canonical deployment instructions; tracked operations docs and deploy helpers
   are the source of truth.
 - The public frontends currently share the Remi host but deploy as two separate
@@ -658,7 +658,7 @@ workflow.
 ## Contributor Notes
 
 - Prefer the tracked docs for stable roles and workflows, and keep local-only
-  access details in `docs/operations/LOCAL_ACCESS.md`, using
+  access details in `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> using
   [`docs/operations/LOCAL_ACCESS.example.md`](LOCAL_ACCESS.example.md) as the
   starting template
 - For suite layout, phase selection, and manifest-run behavior, use

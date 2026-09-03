@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 62
-summary: Document distinct package-variant selection and host-architecture assertions, profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 63
+summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -117,7 +117,7 @@ accepted as source-identity aliases. Native repository sync instead consumes
 the exact persisted native source policy described below. A configured public
 profile remains an optional feed preset during W10 and is copied into native
 package rows when present; it is not required for repository identity or
-refresh authority. The superseded `data/distros.toml` catalog is absent.
+refresh authority. The superseded distro catalog is absent.
 
 Host-native admission derives `NativeMachineIdentityV1` only from compile-time
 machine facts: `target_arch`, pointer width, endianness, and `target_abi` for
@@ -630,7 +630,7 @@ generators' own documentation:
 - pacman `a6f7467d`
   [`lib/libalpm/signing.c`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/signing.c#L521-L719)
   for the GPGME status/validity mapping and
-  [`scripts/pacman-key.sh.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/scripts/pacman-key.sh.in)
+  [upstream `pacman-key.sh.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/scripts/pacman-key.sh.in)
   for keyring population, local signing, ownertrust, and disabled keys
 - GnuPG `gnupg-2.4.9` `g10/getkey.c`, `g10/sig-check.c`, and `g10/trustdb.c`
   for the reference-time, expiry, revocation, and web-of-trust semantics that
@@ -758,14 +758,14 @@ authority. Legacy APT declarations without `Signed-By` can proceed only when
 the enrollment manifest binds exact primary fingerprints to native global
 keyring bytes below the selected root; the keyring files then join the owned,
 rollback-safe projection set. The exact contract is
-[`native-repository-takeover.md`](../specs/native-repository-takeover.md).
+[the native repository takeover specification](../specs/native-repository-takeover.md).
 
 After takeover, repository declarations and trust roots installed by a package
 participate in the package's selected-root and SQLite transaction. CCS carries
 the signed desired-state intent; direct native installation derives the same
 intent from exact package payload grammars before mutation. Update, removal,
 explicit retention, shared ownership, and rollback follow
-[`package-repository-enrollment.md`](../specs/package-repository-enrollment.md).
+[the package repository enrollment specification](../specs/package-repository-enrollment.md).
 The completed filesystem is never scanned for repository-looking files.
 
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan

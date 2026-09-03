@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 35
+revision: 36
 summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
@@ -31,25 +31,6 @@ configuration semantics; the target supplies typed host capabilities. Adoption
 and unadoption remain a migration bridge for already-installed native packages,
 not the product's primary package path. Generation, conaryd, and federation
 claims stay inside the narrower limits recorded below.
-
-Remote Forge validation and conary-test deployment are decommissioned. The dated
-2026-05-21 Group O local QEMU run established the earlier export baseline. The
-dated 2026-07-16 Group O local KVM run superseded it by passing all five
-installed-runtime, file-capability, and bootstrap-run raw/qcow2 cases against
-`minimal-boot-v4`. That run predates the #61 schema epoch cut, and the
-`minimal-boot-*` lineage cannot run the current build at all: those images ship
-a bootstrap-built Conary database at a retired schema. The suites now target
-`fedora44-guest-v2`, an official Fedora Cloud Base 44 image built by
-`scripts/build-qemu-guest-image.sh` per #153's re-base decision. Its immutable
-public artifact is pinned at
-`f688ac2a02b0b0558e28de1c97bbcb2e45b6772a4f019b037f72ec584a420174`
-and includes Fedora's packaged systemd-boot EFI binary.
-The dated 2026-07-31 Group O implementation proof passed all five qcow2 cases
-against that fixture, including ordinary signed Remi CCS assembly and
-selected-generation publication. The dated 2026-07-31 Group P implementation
-proof passed its ISO case, including provenance, copy-back, read-only carrier
-boot, and writable `/etc` overlay proof. This is local x86_64 evidence, not a
-broad remote-validation claim.
 
 Bootable-image export is a retained generation capability, not a bootstrap
 capability. Generation keeps raw/qcow2/ISO export with a UEFI QEMU boot proof,
@@ -125,7 +106,7 @@ the stated scope, not whether a workstream happens to be active.
 | Database, CAS, native parsing, and resolution | solid | Some advanced repository-policy abstractions and integration edges remain incomplete. |
 | Packaging, static repositories, trust, and self-update | solid | Immutable synchronized `v0.16.1` has an exact annotated tag, 15 checksum/digest-verified assets across four products, GitHub release attestation, detached CCS and bootstrap-manifest signatures, deployments, and native RPM/DEB/Arch lifecycle proof. No current artifact publishes an SBOM or additional provenance sidecar. |
 | CCS conversion and native lifecycle authority | active hard switch | The exact RPM, Debian, and ALPM lifecycle contract is released and deployed; current source-backed format defects are explicit work in #98, #99, and #102 through #105 rather than manual-review authority. These share one root cause: the shared package model normalizes source facts at parse time instead of at each consumer's boundary. W5 owns the structural correction. |
-| Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap; the re-based Group O/P suites passed locally on 2026-07-31. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
+| Generation build and export | limited | Bootable-image export (raw/qcow2/ISO plus a UEFI QEMU boot proof) is retained and proven from a supported-host fixture rather than from bootstrap. Proven paths are x86_64; non-x86 assets, signed boot authority, and persistent-effect rollback remain later work. |
 | Model, source selection, and replatforming | limited | Some resolution deltas and builder inputs are not wired end to end. |
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
 | Remi core and publication | active launch gate | The signed immutable-universe architecture is implemented through its production ceremony. #598 remains open because no complete Fedora/Ubuntu/Arch universe is active; public readiness correctly stays false. The v0.16.1 schema-40 deployment record is historical release evidence, not current production or tester authority. |

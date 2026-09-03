@@ -141,6 +141,6 @@ Git history is the archive.
 
 Keep credentials, private paths, raw review artifacts, host-local state, and
 personal notes out of tracked guidance and public evidence. Use ignored files
-such as `docs/operations/LOCAL_ACCESS.md`. Do not weaken HTTPS fingerprint
+such as `docs/operations/LOCAL_ACCESS.md`. <!-- repo-path: local --> Do not weaken HTTPS fingerprint
 pinning or other trust defaults casually; Remi or conaryd service changes run
 their owning package tests.

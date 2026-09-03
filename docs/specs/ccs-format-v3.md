@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-31
-revision: 13
+last_updated: 2026-09-03
+revision: 14
 summary: Canonical current signed CCS v3 identity, capability, archive, payload, and trust contract
 ---
 
@@ -305,7 +305,7 @@ Git history is the only source for the removed pre-alpha implementation.
 ## W5 Completion
 
 Issues #104 and #105 deliver the complete approved W5 target in
-[`source-package-authority.md`](source-package-authority.md): identity and
+[the source-package authority specification](source-package-authority.md): identity and
 capabilities are independent, and source config declarations are independent
 from materialized payload nodes. Retired v2 readers, writers, fixtures, common
 metadata/config adapters, and compatibility paths do not remain.

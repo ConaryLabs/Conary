@@ -420,7 +420,7 @@ creating the branch. Include the issue number in a short descriptive name:
 
 - `fix/42-rpm-parser-overflow`
 - `feat/57-sparse-index`
-- `docs/63-update-architecture`
+- `docs/63-update-architecture` <!-- repo-path: hypothetical -->
 - `chore/71-refresh-dependencies`
 
 Do not commit or push repository changes directly to `main`.

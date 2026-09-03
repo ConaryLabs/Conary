@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 54
+revision: 55
 status: active
 ---
 
@@ -172,9 +172,9 @@ parsing or test-time fetches:
   The pinned Fedora 44 image ships `rpm-6.0.1-2.fc44.x86_64`.
 - dpkg 1.23.7 tag `1.23.7`, commit
   `ef4d59f5925661818484ac666014ee3e665aadcf`, contributes
-  [`data/cputable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
+  [upstream data/cputable](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
   and
-  [`data/tupletable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
+  [upstream data/tupletable](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
   The pinned Ubuntu 26.04 image ships `dpkg 1.23.7ubuntu1`.
 - The Arch producer pins `pacman 7.1.0.r9.g54d9411-2`; its installed
   `CARCH=x86_64` derives from

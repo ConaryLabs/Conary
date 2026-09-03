@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 42
+revision: 43
 summary: Map fixture ownership, including stable boot-tool interfaces, typed public and candidate profiles, attributable daily-driver same-name provides, configuration upgrade, payload topology, and snapshot-bound cross-source lifecycle proof
 ---
 
@@ -479,7 +479,7 @@ Each fixture family should record:
   packages may also be built or published through `conary-test fixtures`
   commands documented in `docs/INTEGRATION-TESTING.md`. Suite result JSON is
   generated locally under the ignored
-  `apps/conary/tests/integration/remi/results/` directory.
+  `apps/conary/tests/integration/remi/results/` directory. <!-- repo-path: generated -->
 - **Safety notes:** Treat manifest schema and semantics as persisted test
   configuration; changes need parser/list proof and an explicit migration or
   defaulting decision. Every successful CCS fixture build is signed with the

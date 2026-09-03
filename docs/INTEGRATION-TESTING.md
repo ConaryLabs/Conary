@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 63
+revision: 64
 summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -337,10 +337,6 @@ cargo run -p conary-test -- bootstrap smoke --json
 result files through the normal runner. It is not package publishing, does not
 publish fixtures, and does not require cloud credentials.
 
-Remote Forge control-plane validation and conary-test deployment are
-decommissioned. Use the local QEMU/KVM gate for temporary release evidence;
-there is no replacement Forge rollout path.
-
 Do not describe local evidence as hosted CI. Any QEMU release evidence must
 name the absolute run date, distro, suite name, and pass/fail/skip/cancel
 counts.
@@ -393,7 +389,7 @@ Current Group N QEMU evidence from 2026-05-21:
   Current installs materialize DB/CAS state when no generation exists and
   publish `/conary/current` through the same atomic package transaction.
 
-Current Group O QEMU export evidence from 2026-07-31:
+Group O QEMU export evidence:
 
 - `cargo run -p conary-test -- run --suite phase3-group-o-generation-export --distro fedora44 --phase 3`:
   passed 5 / failed 0 / skipped 0 / cancelled 0 against
@@ -452,7 +448,7 @@ Keep Group O in the release-candidate rotation because it is still the full
 boot/export proof for installed-runtime and supported-host generation
 artifacts.
 
-Current Group P ISO export evidence from 2026-07-31:
+Group P ISO export evidence:
 
 - `cargo run -p conary-test -- run --suite phase3-group-p-iso-export --distro fedora44 --phase 3`:
   passed `TISO01`, 1 passed / 0 failed / 0 skipped / 0 cancelled against
@@ -1140,7 +1136,7 @@ configuration once issue #354 wires it into local runs:
 ## Results
 
 Test results are written as JSON under
-`apps/conary/tests/integration/remi/results/`, using filenames such as
+`apps/conary/tests/integration/remi/results/`, <!-- repo-path: generated --> using filenames such as
 `<distro>-phase<N>.json`:
 
 ```json
