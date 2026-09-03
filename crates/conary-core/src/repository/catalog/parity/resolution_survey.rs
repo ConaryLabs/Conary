@@ -510,6 +510,19 @@ pub(super) struct NativeRootResolutionError {
     wire_identity: Option<(NativeResolutionSurveyErrorVariantV1, String)>,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum NativeResolutionWireErrorV1 {
+    Display {
+        variant: NativeResolutionSurveyErrorVariantV1,
+        message: String,
+    },
+    UnknownArchitectureToken {
+        scheme: String,
+        token: String,
+    },
+}
+
 #[allow(dead_code)]
 impl NativeRootResolutionError {
     pub(super) fn new(
@@ -528,94 +541,41 @@ impl NativeRootResolutionError {
     pub(super) fn into_wire(
         self,
     ) -> (
-        NativeResolutionSurveyErrorVariantV1,
-        String,
+        NativeResolutionWireErrorV1,
         NativeResolutionSurveyErrorReasonV1,
         NativeResolutionSurveyNativeExplanationV1,
     ) {
-        let variant = NativeResolutionSurveyErrorVariantV1::from_error(&self.error);
-        (
-            variant,
-            self.error.to_string(),
-            self.reason,
-            self.explanation,
-        )
+        let error = match self.error {
+            Error::UnknownArchitectureToken { scheme, token } => {
+                NativeResolutionWireErrorV1::UnknownArchitectureToken { scheme, token }
+            }
+            error => NativeResolutionWireErrorV1::Display {
+                variant: NativeResolutionSurveyErrorVariantV1::from_error(&error),
+                message: error.to_string(),
+            },
+        };
+        (error, self.reason, self.explanation)
     }
 
     pub(super) fn from_wire(
-        variant: NativeResolutionSurveyErrorVariantV1,
-        message: String,
+        wire_error: NativeResolutionWireErrorV1,
         reason: NativeResolutionSurveyErrorReasonV1,
         explanation: NativeResolutionSurveyNativeExplanationV1,
     ) -> Box<Self> {
-        let error = match variant {
-            NativeResolutionSurveyErrorVariantV1::IoError => {
-                Error::IoError(strip_error_prefix(&message, ""))
+        let (error, variant, message) = match wire_error {
+            NativeResolutionWireErrorV1::UnknownArchitectureToken { scheme, token } => {
+                let error = Error::UnknownArchitectureToken { scheme, token };
+                let message = error.to_string();
+                (
+                    error,
+                    NativeResolutionSurveyErrorVariantV1::UnknownArchitectureToken,
+                    message,
+                )
             }
-            NativeResolutionSurveyErrorVariantV1::InitError => Error::InitError(
-                strip_error_prefix(&message, "Failed to initialize database: "),
-            ),
-            NativeResolutionSurveyErrorVariantV1::MissingId => {
-                Error::MissingId(strip_error_prefix(&message, "Missing ID: "))
+            NativeResolutionWireErrorV1::Display { variant, message } => {
+                let error = error_from_display_wire(variant, &message);
+                (error, variant, message)
             }
-            NativeResolutionSurveyErrorVariantV1::VersionParse => {
-                Error::VersionParse(strip_error_prefix(&message, "Version parse error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::ConfigError => {
-                Error::ConfigError(strip_error_prefix(&message, "Configuration error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::DatabaseNotFound => Error::DatabaseNotFound(
-                strip_error_prefix(&message, "Database not found at path: "),
-            ),
-            NativeResolutionSurveyErrorVariantV1::DownloadError => {
-                Error::DownloadError(strip_error_prefix(&message, "Download failed: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::ConflictError => {
-                Error::ConflictError(strip_error_prefix(&message, "Conflict: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::ParseError => {
-                Error::ParseError(strip_error_prefix(&message, "Parse error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::InvalidPath => {
-                Error::InvalidPath(strip_error_prefix(&message, "Invalid path: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::PathTraversal => {
-                Error::PathTraversal(strip_error_prefix(&message, "Path traversal detected: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::NotFound => {
-                Error::NotFound(strip_error_prefix(&message, "Not found: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::RecoveryFailed => {
-                Error::RecoveryFailed(strip_error_prefix(&message, "Recovery failed: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::TimeoutError => {
-                Error::TimeoutError(strip_error_prefix(&message, "Timeout: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::ResolutionError => {
-                Error::ResolutionError(strip_error_prefix(&message, "Resolution error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::NotImplemented => {
-                Error::NotImplemented(strip_error_prefix(&message, "Not implemented: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::Capability => {
-                Error::Capability(strip_error_prefix(&message, "Capability error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::Federation => {
-                Error::Federation(strip_error_prefix(&message, "Federation error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::Cancelled => {
-                Error::Cancelled(strip_error_prefix(&message, "Operation cancelled: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::InternalError => {
-                Error::InternalError(strip_error_prefix(&message, "Internal error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::TrustError => {
-                Error::TrustError(strip_error_prefix(&message, "Trust error: "))
-            }
-            NativeResolutionSurveyErrorVariantV1::PoolOverflow => {
-                Error::PoolOverflow(strip_error_prefix(&message, "Resolver pool overflow: "))
-            }
-            _ => Error::ResolutionError(message.clone()),
         };
         Box::new(Self {
             error,
@@ -639,6 +599,79 @@ impl NativeRootResolutionError {
     #[cfg(feature = "native-alpm-oracle")]
     pub(super) fn error_message(&self) -> String {
         self.error.to_string()
+    }
+}
+
+fn error_from_display_wire(variant: NativeResolutionSurveyErrorVariantV1, message: &str) -> Error {
+    match variant {
+        NativeResolutionSurveyErrorVariantV1::IoError => {
+            Error::IoError(strip_error_prefix(message, ""))
+        }
+        NativeResolutionSurveyErrorVariantV1::InitError => Error::InitError(strip_error_prefix(
+            message,
+            "Failed to initialize database: ",
+        )),
+        NativeResolutionSurveyErrorVariantV1::MissingId => {
+            Error::MissingId(strip_error_prefix(message, "Missing ID: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::VersionParse => {
+            Error::VersionParse(strip_error_prefix(message, "Version parse error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::ConfigError => {
+            Error::ConfigError(strip_error_prefix(message, "Configuration error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::DatabaseNotFound => {
+            Error::DatabaseNotFound(strip_error_prefix(message, "Database not found at path: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::DownloadError => {
+            Error::DownloadError(strip_error_prefix(message, "Download failed: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::ConflictError => {
+            Error::ConflictError(strip_error_prefix(message, "Conflict: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::ParseError => {
+            Error::ParseError(strip_error_prefix(message, "Parse error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::InvalidPath => {
+            Error::InvalidPath(strip_error_prefix(message, "Invalid path: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::PathTraversal => {
+            Error::PathTraversal(strip_error_prefix(message, "Path traversal detected: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::NotFound => {
+            Error::NotFound(strip_error_prefix(message, "Not found: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::RecoveryFailed => {
+            Error::RecoveryFailed(strip_error_prefix(message, "Recovery failed: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::TimeoutError => {
+            Error::TimeoutError(strip_error_prefix(message, "Timeout: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::ResolutionError => {
+            Error::ResolutionError(strip_error_prefix(message, "Resolution error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::NotImplemented => {
+            Error::NotImplemented(strip_error_prefix(message, "Not implemented: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::Capability => {
+            Error::Capability(strip_error_prefix(message, "Capability error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::Federation => {
+            Error::Federation(strip_error_prefix(message, "Federation error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::Cancelled => {
+            Error::Cancelled(strip_error_prefix(message, "Operation cancelled: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::InternalError => {
+            Error::InternalError(strip_error_prefix(message, "Internal error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::TrustError => {
+            Error::TrustError(strip_error_prefix(message, "Trust error: "))
+        }
+        NativeResolutionSurveyErrorVariantV1::PoolOverflow => {
+            Error::PoolOverflow(strip_error_prefix(message, "Resolver pool overflow: "))
+        }
+        _ => Error::ResolutionError(message.to_string()),
     }
 }
 
@@ -1080,5 +1113,37 @@ mod tests {
         assert_eq!(survey.withheld_explanations, 1);
         assert!(survey.truncated_evidence);
         survey.validate().unwrap();
+    }
+
+    #[test]
+    fn worker_wire_preserves_unknown_architecture_error_fields() {
+        let failure = NativeRootResolutionError::new(
+            Error::UnknownArchitectureToken {
+                scheme: "deb".to_string(),
+                token: "future-architecture".to_string(),
+            },
+            NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
+            NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Unavailable {
+                    reason: "not requested".to_string(),
+                },
+            },
+        );
+
+        let (wire_error, reason, explanation) = (*failure).into_wire();
+        let restored = NativeRootResolutionError::from_wire(wire_error, reason, explanation);
+
+        assert!(matches!(
+            restored.error,
+            Error::UnknownArchitectureToken { ref scheme, ref token }
+                if scheme == "deb" && token == "future-architecture"
+        ));
+        assert_eq!(
+            restored.wire_identity,
+            Some((
+                NativeResolutionSurveyErrorVariantV1::UnknownArchitectureToken,
+                "Unknown architecture token for deb: 'future-architecture'".to_string(),
+            ))
+        );
     }
 }

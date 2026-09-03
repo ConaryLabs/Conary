@@ -391,7 +391,10 @@ fn walk_resolution_roots(
         explanation_byte_limit,
         |_| projection.worker(),
         |worker, root, byte_limit| worker.resolve(&root.package_key_sha256, policy, byte_limit),
-        |root, result| sink.root(root, result),
+        |root, result| {
+            sink.root(root, result)?;
+            Ok(sink.explanation_byte_limit())
+        },
     )
 }
 

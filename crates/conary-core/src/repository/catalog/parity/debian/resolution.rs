@@ -31,8 +31,8 @@ use crate::repository::catalog::parity::resolution_parallel::{
     walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
-    NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
-    NativeRootResolutionResult, RootOutcomeSink,
+    NativeExplanationBudget, NativeResolutionSurveyCollector, NativeResolutionWireErrorV1,
+    NativeRootResolutionError, NativeRootResolutionResult, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
@@ -43,9 +43,8 @@ use crate::repository::catalog::parity::{
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyErrorVariantV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
-    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
@@ -326,7 +325,10 @@ fn walk_resolution_roots(
             )
         },
         |worker, root, byte_limit| worker.resolve(root, byte_limit),
-        |root, result| sink.root(root, result),
+        |root, result| {
+            sink.root(root, result)?;
+            Ok(sink.explanation_byte_limit())
+        },
     )
 }
 
@@ -382,8 +384,7 @@ enum DebianResolutionWorkerResponse {
         outcome: NativeResolutionOutcomeV1,
     },
     Failure {
-        error_variant: NativeResolutionSurveyErrorVariantV1,
-        error_message: String,
+        error: NativeResolutionWireErrorV1,
         reason: NativeResolutionSurveyErrorReasonV1,
         explanation: NativeResolutionSurveyNativeExplanationV1,
     },
@@ -453,13 +454,11 @@ impl DebianResolutionProcess {
         match read_worker_response(&mut self.output) {
             Ok(DebianResolutionWorkerResponse::Outcome { outcome }) => Ok(outcome),
             Ok(DebianResolutionWorkerResponse::Failure {
-                error_variant,
-                error_message,
+                error,
                 reason,
                 explanation,
             }) => Err(NativeRootResolutionError::from_wire(
-                error_variant,
-                error_message,
+                error,
                 reason,
                 explanation,
             )),
@@ -562,10 +561,9 @@ pub fn run_debian_resolution_worker(
         ) {
             Ok(outcome) => DebianResolutionWorkerResponse::Outcome { outcome },
             Err(failure) => {
-                let (error_variant, error_message, reason, explanation) = (*failure).into_wire();
+                let (error, reason, explanation) = (*failure).into_wire();
                 DebianResolutionWorkerResponse::Failure {
-                    error_variant,
-                    error_message,
+                    error,
                     reason,
                     explanation,
                 }

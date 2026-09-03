@@ -8,6 +8,8 @@ use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError, TrySendError};
 use std::time::Instant;
 
@@ -177,14 +179,16 @@ enum WorkerMessage<R> {
 }
 
 /// Resolve roots concurrently while making the calling thread the sole,
-/// canonical-order sink owner.
+/// canonical-order sink owner. Workers sample the sink's latest evidence
+/// allowance immediately before each solve, so exhaustion stops later
+/// explanation construction without making scheduling authoritative.
 pub(crate) fn walk_ordered_parallel<W, R>(
     package_oracle: &NativeParityOracleReader,
     workers: ResolutionWorkerCount,
     explanation_byte_limit: u64,
     initialize: impl Fn(usize) -> Result<W> + Sync,
     resolve: impl Fn(&mut W, &NativeParityPackageV1, u64) -> R + Sync,
-    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<()>,
+    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<OrderedResolutionMetrics>
 where
     R: Send,
@@ -197,6 +201,7 @@ where
         let max_in_flight = u64::try_from(channel_capacity).map_err(|_| {
             Error::ConfigError("resolution worker channel capacity exceeds u64".to_string())
         })?;
+        let explanation_byte_limit = Arc::new(AtomicU64::new(explanation_byte_limit));
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
         let mut handles = Vec::with_capacity(worker_count);
@@ -206,6 +211,7 @@ where
             let result_sender = result_sender.clone();
             let initialize = &initialize;
             let resolve = &resolve;
+            let explanation_byte_limit = Arc::clone(&explanation_byte_limit);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let mut state = match initialize(worker) {
@@ -228,7 +234,8 @@ where
                     return;
                 }
                 while let Ok((sequence, root)) = job_receiver.recv() {
-                    let result = resolve(&mut state, &root, explanation_byte_limit);
+                    let byte_limit = explanation_byte_limit.load(Ordering::Acquire);
+                    let result = resolve(&mut state, &root, byte_limit);
                     if result_sender
                         .send(WorkerMessage::Root {
                             sequence,
@@ -283,6 +290,7 @@ where
                     &result_receiver,
                     &mut pending,
                     &mut next_sequence,
+                    explanation_byte_limit.as_ref(),
                     &mut emit,
                 )?;
             }
@@ -297,6 +305,7 @@ where
                             &result_receiver,
                             &mut pending,
                             &mut next_sequence,
+                            explanation_byte_limit.as_ref(),
                             &mut emit,
                         )?;
                     }
@@ -315,6 +324,7 @@ where
                 &result_receiver,
                 &mut pending,
                 &mut next_sequence,
+                explanation_byte_limit.as_ref(),
                 &mut emit,
             )
         });
@@ -327,6 +337,7 @@ where
                         &result_receiver,
                         &mut pending,
                         &mut next_sequence,
+                        explanation_byte_limit.as_ref(),
                         &mut emit,
                     )?;
                 }
@@ -361,20 +372,22 @@ fn receive_and_emit<R>(
     receiver: &Receiver<WorkerMessage<R>>,
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
     next_sequence: &mut u64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<()>,
+    explanation_byte_limit: &AtomicU64,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<()> {
     let message = receiver
         .recv()
         .map_err(|_| Error::InternalError("resolution worker result channel closed".to_string()))?;
     retain_result(message, pending)?;
-    emit_ready(pending, next_sequence, emit)
+    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
 }
 
 fn drain_available<R>(
     receiver: &Receiver<WorkerMessage<R>>,
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
     next_sequence: &mut u64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<()>,
+    explanation_byte_limit: &AtomicU64,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<()> {
     loop {
         match receiver.try_recv() {
@@ -383,7 +396,7 @@ fn drain_available<R>(
             Err(TryRecvError::Disconnected) => break,
         }
     }
-    emit_ready(pending, next_sequence, emit)
+    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
 }
 
 fn retain_result<R>(
@@ -411,10 +424,11 @@ fn retain_result<R>(
 fn emit_ready<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
     next_sequence: &mut u64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<()>,
+    explanation_byte_limit: &AtomicU64,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<()> {
     while let Some((root, result)) = pending.remove(next_sequence) {
-        emit(&root, result)?;
+        explanation_byte_limit.store(emit(&root, result)?, Ordering::Release);
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
             Error::ConfigError("resolution root sequence exceeds u64".to_string())
         })?;
@@ -587,6 +601,29 @@ fn parse_cpu_max(value: &str) -> Result<Option<usize>> {
 mod tests {
     use super::*;
 
+    fn root() -> NativeParityPackageV1 {
+        serde_json::from_value(serde_json::json!({
+            "package_key_sha256": "c".repeat(64),
+            "member_ordinal": 0,
+            "source_identity": "test-source",
+            "repository_identity": "test-repository",
+            "source_snapshot_sha256": "d".repeat(64),
+            "source_profile": "test-profile",
+            "name": "test-package",
+            "version": "1",
+            "package_release": "1",
+            "architecture": "x86_64",
+            "debian_multi_arch": null,
+            "checksum": format!("sha256:{}", "e".repeat(64)),
+            "size": 1,
+            "download_url": "https://example.test/test-package.rpm",
+            "version_scheme": "rpm",
+            "provides": [],
+            "requirement_groups": []
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn worker_count_rejects_zero() {
         assert!(ResolutionWorkerCount::new(0).is_err());
@@ -683,5 +720,23 @@ mod tests {
             crate::json::canonical_json(&evidence).unwrap()
         );
         assert!(write_resolution_walk_implementation_evidence(&path, &evidence).is_err());
+    }
+
+    #[test]
+    fn ordered_emit_publishes_exhausted_evidence_budget_to_workers() {
+        let mut pending = BTreeMap::from([(0, (root(), ()))]);
+        let mut next_sequence = 0;
+        let explanation_byte_limit = AtomicU64::new(64);
+
+        emit_ready(
+            &mut pending,
+            &mut next_sequence,
+            &explanation_byte_limit,
+            &mut |_, ()| Ok(0),
+        )
+        .unwrap();
+
+        assert_eq!(next_sequence, 1);
+        assert_eq!(explanation_byte_limit.load(Ordering::Acquire), 0);
     }
 }

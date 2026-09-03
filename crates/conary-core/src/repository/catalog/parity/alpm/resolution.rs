@@ -289,7 +289,10 @@ fn walk_resolution_roots(
                 byte_limit,
             )
         },
-        |root, result| sink.root(root, result),
+        |root, result| {
+            sink.root(root, result)?;
+            Ok(sink.explanation_byte_limit())
+        },
     )
 }
 
