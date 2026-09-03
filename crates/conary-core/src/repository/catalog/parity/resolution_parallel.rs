@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::num::NonZeroUsize;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -209,14 +210,16 @@ enum WorkerMessage<R> {
     Root {
         sequence: u64,
         root: Box<NativeParityPackageV1>,
-        result: R,
+        result: Result<R>,
     },
 }
 
 /// Resolve roots concurrently while making the calling thread the sole,
 /// canonical-order sink owner. Workers sample the sink's latest evidence
 /// allowance immediately before each solve, so exhaustion stops later
-/// explanation construction without making scheduling authoritative.
+/// explanation construction without making scheduling authoritative. A worker
+/// panic becomes an ordered error result and the failed worker remains present
+/// until the coordinator closes dispatch, preventing a missing-sequence wait.
 pub(crate) fn walk_ordered_parallel<W, R>(
     package_oracle: &NativeParityOracleReader,
     workers: ResolutionWorkerCount,
@@ -249,8 +252,13 @@ where
             let explanation_byte_limit = Arc::clone(&explanation_byte_limit);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
-                let mut state = match initialize(worker) {
-                    Ok(state) => state,
+                let mut state = match catch_worker_panic(worker, None, || initialize(worker)) {
+                    Ok(Ok(state)) => state,
+                    Ok(Err(error)) => {
+                        let _ = result_sender
+                            .send(WorkerMessage::InitializationFailed { worker, error });
+                        return;
+                    }
                     Err(error) => {
                         let _ = result_sender
                             .send(WorkerMessage::InitializationFailed { worker, error });
@@ -268,9 +276,22 @@ where
                 {
                     return;
                 }
+                let mut terminal_failure: Option<String> = None;
                 while let Ok((sequence, root)) = job_receiver.recv() {
                     let byte_limit = explanation_byte_limit.load(Ordering::Acquire);
-                    let result = resolve(&mut state, &root, byte_limit);
+                    let result = if let Some(message) = &terminal_failure {
+                        Err(Error::InternalError(message.clone()))
+                    } else {
+                        match catch_worker_panic(worker, Some(sequence), || {
+                            resolve(&mut state, &root, byte_limit)
+                        }) {
+                            Ok(result) => Ok(result),
+                            Err(error) => {
+                                terminal_failure = Some(error.to_string());
+                                Err(error)
+                            }
+                        }
+                    };
                     if result_sender
                         .send(WorkerMessage::Root {
                             sequence,
@@ -405,7 +426,7 @@ where
 
 fn receive_and_emit<R>(
     receiver: &Receiver<WorkerMessage<R>>,
-    pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
+    pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     next_sequence: &mut u64,
     explanation_byte_limit: &AtomicU64,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
@@ -419,7 +440,7 @@ fn receive_and_emit<R>(
 
 fn drain_available<R>(
     receiver: &Receiver<WorkerMessage<R>>,
-    pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
+    pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     next_sequence: &mut u64,
     explanation_byte_limit: &AtomicU64,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
@@ -436,7 +457,7 @@ fn drain_available<R>(
 
 fn retain_result<R>(
     message: WorkerMessage<R>,
-    pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
+    pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
 ) -> Result<()> {
     let WorkerMessage::Root {
         sequence,
@@ -457,18 +478,32 @@ fn retain_result<R>(
 }
 
 fn emit_ready<R>(
-    pending: &mut BTreeMap<u64, (NativeParityPackageV1, R)>,
+    pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     next_sequence: &mut u64,
     explanation_byte_limit: &AtomicU64,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<()> {
     while let Some((root, result)) = pending.remove(next_sequence) {
-        explanation_byte_limit.store(emit(&root, result)?, Ordering::Release);
+        explanation_byte_limit.store(emit(&root, result?)?, Ordering::Release);
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
             Error::ConfigError("resolution root sequence exceeds u64".to_string())
         })?;
     }
     Ok(())
+}
+
+fn catch_worker_panic<T>(
+    worker: usize,
+    sequence: Option<u64>,
+    operation: impl FnOnce() -> T,
+) -> Result<T> {
+    catch_unwind(AssertUnwindSafe(operation)).map_err(|_| {
+        let phase = sequence.map_or_else(
+            || "during initialization".to_string(),
+            |sequence| format!("while resolving root sequence {sequence}"),
+        );
+        Error::InternalError(format!("resolution worker {worker} panicked {phase}"))
+    })
 }
 
 fn join_workers<T>(handles: Vec<std::thread::ScopedJoinHandle<'_, T>>) -> Result<()> {
@@ -759,7 +794,7 @@ mod tests {
 
     #[test]
     fn ordered_emit_publishes_exhausted_evidence_budget_to_workers() {
-        let mut pending = BTreeMap::from([(0, (root(), ()))]);
+        let mut pending = BTreeMap::from([(0, (root(), Ok(())))]);
         let mut next_sequence = 0;
         let explanation_byte_limit = AtomicU64::new(64);
 
@@ -773,5 +808,18 @@ mod tests {
 
         assert_eq!(next_sequence, 1);
         assert_eq!(explanation_byte_limit.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn worker_panics_become_sequence_bound_internal_errors() {
+        let error = catch_worker_panic(2, Some(17), || -> () {
+            panic!("private panic detail must not escape")
+        })
+        .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "Internal error: resolution worker 2 panicked while resolving root sequence 17"
+        );
     }
 }
