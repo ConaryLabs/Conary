@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use flate2::{Compression, GzBuilder};
 
+use super::ffi::SolvResolution;
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
@@ -829,6 +830,102 @@ fn resolution_producer_uses_precedence_variants_files_rich_and_strong_requiremen
     assert!(!closure.contains(&package_key("provider-low", None)));
     assert!(!closure.contains(&package_key("helper", Some("9-1.fc44"))));
     assert_eq!(closure.len(), 7, "weak requirements must not enter closure");
+}
+
+#[test]
+fn resolution_producer_projects_existing_name_with_only_wrong_version() {
+    const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
+
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b'].map(digest);
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="wrong-version-root" flags="EQ" epoch="0" ver="1.0" rel="1.fc44"/></rpm:provides>
+    <rpm:requires><rpm:entry name="wrong-version-target" flags="EQ" epoch="0" ver="2.0" rel="1.fc44"/></rpm:requires>"#;
+    let target_format = r#"
+    <rpm:provides><rpm:entry name="wrong-version-target" flags="EQ" epoch="0" ver="3.0" rel="1.fc44"/></rpm:provides>"#;
+    let mut root = PackageFixture::simple("wrong-version-root", &checksums[0]);
+    root.format = root_format;
+    let mut target = PackageFixture::simple("wrong-version-target", &checksums[1]);
+    target.version = "3.0";
+    target.format = target_format;
+    let metadata = write_metadata(directory.path(), "fedora", &[root, target]);
+
+    let mut pool = SolvPool::create().unwrap();
+    pool.load("fedora", &metadata.0, &metadata.1, 0, 30_000)
+        .unwrap();
+    pool.set_architecture("x86_64").unwrap();
+    let root_index = (0..pool.package_count())
+        .find(|index| pool.package(*index).unwrap().name().unwrap() == "wrong-version-root")
+        .unwrap();
+    let SolvResolution::Unresolved(problems) = pool.solve(root_index).unwrap() else {
+        panic!("wrong-version-root must be unresolved");
+    };
+    assert!(
+        problems
+            .iter()
+            .flat_map(|problem| &problem.rules)
+            .any(|rule| {
+                rule.rule_type == SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP
+                    && pool.dependency(rule.dependency).unwrap().text().unwrap()
+                        == "wrong-version-target = 2.0-1.fc44"
+            })
+    );
+
+    let snapshots = vec![source_snapshot("fedora", &metadata.0, &metadata.1)];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 2;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(
+        &profile,
+        &inputs(&snapshots, &[metadata.clone()]),
+        &package_output,
+    )
+    .unwrap();
+    let resolution_output = directory.path().join("resolution-oracle");
+    produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &[metadata]),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut root = None;
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "wrong-version-root" {
+                root = Some(package);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let root = root.unwrap();
+    let group = root
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("wrong-version-target = 2.0-1.fc44"))
+        .unwrap();
+    let expected = NativeResolutionOutcomeV1::Unresolved {
+        dependencies: vec![NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: root.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(group).unwrap(),
+        }],
+    };
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut observed = None;
+    resolution_reader
+        .for_each_root(|candidate| {
+            if candidate.root_package_key_sha256 == root.package_key_sha256 {
+                observed = Some(candidate.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(observed, Some(expected));
 }
 
 #[test]

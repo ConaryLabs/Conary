@@ -11,9 +11,9 @@ use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityOracleWriter,
     NativeResolutionOutcomeV1, NativeResolutionSurveyAlpmResultV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
+    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
     write_native_parity_oracle_manifest,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
@@ -431,6 +431,8 @@ fn resolution_fixture_databases(
     let core = directory.join("core-resolution.db");
     let extra = directory.join("extra-resolution.db");
     let digests = ('0'..='9').map(digest).collect::<Vec<_>>();
+    let wrong_version_root_digest = digest('b');
+    let wrong_version_target_digest = digest('c');
 
     let leaf = PackageFixture::new("leaf", &digests[0]);
     let mut middle = PackageFixture::new("middle", &digests[1]);
@@ -445,6 +447,12 @@ fn resolution_fixture_databases(
     broken_child.depends = &["transitive-missing>=2"];
     let mut broken_root = PackageFixture::new("broken-root", &digests[6]);
     broken_root.depends = &["broken-child"];
+    let mut wrong_version_root =
+        PackageFixture::new("wrong-version-root", &wrong_version_root_digest);
+    wrong_version_root.depends = &["wrong-version-target=2.0-1"];
+    let mut wrong_version_target =
+        PackageFixture::new("wrong-version-target", &wrong_version_target_digest);
+    wrong_version_target.version = "3.0-1";
     let mut multi_v1 = PackageFixture::new("multi", &digests[7]);
     multi_v1.version = "1.0-1";
     let shared_checksum = digest('a');
@@ -462,6 +470,8 @@ fn resolution_fixture_databases(
             broken,
             broken_child,
             broken_root,
+            wrong_version_root,
+            wrong_version_target,
             multi_v1,
             shared_core.clone(),
         ],
@@ -485,7 +495,7 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 11;
+    profile.counts.packages = 13;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
 
@@ -507,8 +517,8 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
         ALPM_RESOLUTION_PROJECTION_SCHEMA_V2
     );
     assert_eq!(manifest.policy.architecture, "x86_64");
-    assert_eq!(manifest.artifact.counts.roots, 11);
-    assert_eq!(manifest.artifact.counts.unresolved_roots, 3);
+    assert_eq!(manifest.artifact.counts.roots, 13);
+    assert_eq!(manifest.artifact.counts.unresolved_roots, 4);
 
     let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
     let mut package_by_name = std::collections::BTreeMap::<String, Vec<_>>::new();
@@ -593,6 +603,25 @@ fn resolution_producer_emits_exact_closure_precedence_versions_and_unresolved_gr
             && dependency.requirement_group_sha256 == transitive_group_sha256
     }));
 
+    let wrong_version_root = &package_by_name["wrong-version-root"][0];
+    let NativeResolutionOutcomeV1::Unresolved { dependencies } =
+        &roots[&wrong_version_root.package_key_sha256].outcome
+    else {
+        panic!("wrong-version-root must remain typed unresolved");
+    };
+    let wrong_version_group = wrong_version_root
+        .requirement_groups
+        .iter()
+        .find(|group| group.native_text.as_deref() == Some("wrong-version-target=2.0-1"))
+        .unwrap();
+    assert_eq!(
+        dependencies,
+        &[NativeUnresolvedDependencyV1 {
+            requiring_package_key_sha256: wrong_version_root.package_key_sha256.clone(),
+            requirement_group_sha256: native_requirement_group_sha256(wrong_version_group).unwrap(),
+        }]
+    );
+
     let mut multi = package_by_name.remove("multi").unwrap();
     multi.sort_by(|left, right| left.version.cmp(&right.version));
     assert_eq!(multi.len(), 2);
@@ -617,7 +646,7 @@ fn resolution_producer_excludes_non_native_roots_and_rejects_conflicting_closure
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut wrong_profile = profile(&snapshots);
-    wrong_profile.counts.packages = 11;
+    wrong_profile.counts.packages = 13;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(
         &wrong_profile,
@@ -641,7 +670,7 @@ fn resolution_producer_excludes_non_native_roots_and_rejects_conflicting_closure
     let conflict_directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(conflict_directory.path(), true);
     let mut conflict_profile = profile(&snapshots);
-    conflict_profile.counts.packages = 11;
+    conflict_profile.counts.packages = 13;
     let package_output = conflict_directory.path().join("package-oracle");
     produce_alpm_parity_oracle(
         &conflict_profile,
@@ -753,7 +782,7 @@ fn resolution_producer_rejects_valid_but_non_native_package_oracle() {
     let directory = tempfile::tempdir().unwrap();
     let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 11;
+    profile.counts.packages = 13;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
     let original = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();

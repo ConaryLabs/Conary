@@ -985,16 +985,25 @@ order into candidate and provider priority, records exact native transactions,
 and forces each exact root through apt 3.0's complete-version solver with
 non-strict pinning. Native policy still prefers the highest-precedence
 dependency version that permits a complete transaction, while a shadowed lower
-version remains eligible when required by the protected exact root. A separate
-native-candidate probe remains the fast resolved result or contributes required
-or pre-required groups with no native target as typed unresolved evidence. Only
-its available-target failure enters the complete-version solver, and that
-solver never reuses the failed candidate state. All three bind closures and
-missing groups back to exact package-oracle authority. Policy-excluded Debian
-and ALPM roots are typed before native solving; the configured Ubuntu profile
-contains sixteen `binary-amd64` indexes and the Arch profile contains three
-`/os/x86_64` databases, with `all` and `any` admitted respectively. Conflicts,
-identity or input drift, and unexpected native errors remain fatal. The
+version remains eligible when required by the protected exact root. After a
+failed solve, a broken required or pre-required group retained directly on that
+exact root becomes typed unresolved evidence when apt-pkg exposes no
+authenticated candidate satisfying any alternative. This covers absent names
+and names available only at incompatible versions. Every broken hard group on
+the retained root must meet that rule; a separate broken group with a
+satisfying candidate keeps the complete failure fatal. The exact-root identity,
+relation kind, and parser-owned native group text bind directly back to package
+oracle authority without textual normalization. Pinned apt-pkg 3.2.0 does not
+publicly expose solver3's typed reason graph, and rendered diagnostics are not
+authority. Transitive no-candidate failures and other failures without a
+directly attributable root group therefore remain fatal native solver failures
+and become `NativeSolverFailed` records in survey mode.
+All three bind closures and missing groups back to exact package-oracle
+authority. Policy-excluded Debian and ALPM roots are typed before native
+solving; the configured Ubuntu profile contains sixteen `binary-amd64` indexes
+and the Arch profile contains three `/os/x86_64` databases, with `all` and `any`
+admitted respectively. Conflicts, identity or input drift, and unexpected
+native errors remain fatal. The
 producers write the canonical resolution bundle and fully reopen it before
 success.
 
