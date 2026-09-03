@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 89
-summary: Route feature ownership through producer-bound native parity assembly and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
+revision: 90
+summary: Route feature ownership through producer-bound native parity assembly, its protected production resolution survey, and architecture authority, trusted-main compiler seeding, shared compiler caching with isolated build targets, bulk-cached and timed build-once exact-main deployment artifacts, typed Remi refresh coordination, hosted CI bootstrap, typed profile tiers and complete universes, focused corpus coverage, package transactions, database rebuilds, generation recovery, source identity, Remi, lifecycle, release, and canonical docs
 ---
 
 # Feature Ownership And Interaction Gates
@@ -590,8 +590,11 @@ release schema bindings.
 `scripts/test-produce-native-oracle-lane.py`;
 `scripts/verify-native-oracle-input-transport.py`;
 `scripts/test-native-oracle-input-transport.py`;
+`scripts/remi-resolution-survey-transport.py`;
+`scripts/test-remi-resolution-survey-transport.py`;
 `.github/workflows/export-remi-native-oracle-inputs.yml`;
 `.github/workflows/produce-remi-native-oracles.yml`;
+`.github/workflows/survey-remi-resolution.yml`;
 `docs/specs/remi-native-parity-oracle.md`;
 `apps/remi/src/server/promotion_proof.rs`;
 `apps/remi/src/server/promotion_evidence.rs`;
@@ -605,6 +608,7 @@ release schema bindings.
 `python3 scripts/test-native-oracle-lane-selection.py`;
 `python3 scripts/test-verify-native-oracle-producer.py`;
 `python3 scripts/test-produce-native-oracle-lane.py`;
+`python3 scripts/test-remi-resolution-survey-transport.py`;
 `bash scripts/check-release-matrix.sh`.
 
 **Interaction gate:** `cargo test -p remi promotion` when promotion-proof or

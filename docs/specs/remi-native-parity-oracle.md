@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 34
+revision: 54
 status: active
 ---
 
@@ -48,7 +48,15 @@ apt-pkg implementation remains the sole native fact and resolution authority.
 
 The protected production producer accepts only one successful exact export
 run. It independently reopens the transport and deployment evidence and
-requires the artifact-owned deployed commit to be merged. Dispatch also names
+requires the artifact-owned deployed commit to be merged. The export's
+canonical operator attestation must bind its exact run ID, attempt, workflow
+commit, export identity, and `protected-pinned-known-hosts-v1` contract. An
+older export without that attestation cannot become strict oracle authority.
+The export operator must equal freshly fetched protected `main` at initial
+authorization and immediately before SSH. Production accepts the export only
+when its run head equals the producer workflow's own exact current-main commit,
+so rerunning a historical workflow cannot mint new input authority.
+Dispatch also names
 one explicit full `producer_commit`; operators use the deployed commit by
 default and name a newer commit only for an intended producer advance. The
 workflow fetches `origin/main`, requires the producer commit to descend from
@@ -596,14 +604,100 @@ load times separately from those canonical surveys. A profile with candidate fai
 cannot produce a complete candidate bundle, so its comparison survey is
 skipped while later profiles are still surveyed. Complete candidates are
 materialized only below an automatically removed temporary directory. The
-command reports all written findings and exits non-zero when any candidate
-failure or comparison mismatch exists.
+command reports all written findings and returns Remi's top-level failure status
+`101` when any candidate failure or comparison mismatch exists.
 
 Neither survey is evidence authority. Their JSON cannot be opened as a strict
 resolution bundle or `NativeResolutionComparisonV1`; promotion proof,
 activation, publication, and every binding/validation path reject it. Survey
 files also carry no private paths, credentials, environment data, or host
 identity.
+
+The protected production consumer is `.github/workflows/survey-remi-resolution.yml`.
+Its single `oracle_run_id` selects one successful three-lane
+`produce-remi-native-oracles` run. The workflow authenticates that run's
+head as its own exact current protected-main operator commit, then authenticates
+the assembled three-lane artifact and derives and reopens the exact export and
+deployment runs, then verifies the API metadata, successful producer job, and
+archive digest for each referenced strict lane. Retained same-export lanes from
+earlier successful runs remain valid only through those bindings. It
+authenticates the lane files into one manifest-bound transport and requires the
+export's typed operator attestation to bind that run's exact workflow commit to
+the protected pinned-host-key SSH contract.
+Pre-attestation exports are non-authority. The survey workflow requires the
+helper from its exact protected `github.workflow_sha` to be byte-identical to
+the helper at its freshly fetched protected `origin/main` and requires the
+complete workflow revision to equal that exact current-main commit. It stages
+the helper, refetches protected main, repeats both equalities immediately before the existing
+`install-helper` action. The root helper independently resolves protected main
+through GitHub's HTTPS API, fetches that exact commit's helper, matches its
+digest, and installs those root-fetched bytes rather than caller-staged code.
+The workflow then calls the three-argument
+`conary-remi-deploy survey-resolution` action with the survey identity, export
+identity, and typed oracle transport path. The root-owned helper reads the exact
+candidate revisions from the stopped deployment's own pointers, uses the
+profile-bound architectures, and freezes the survey JSON under root ownership
+before restarting. Cleanup owns every exit from the instant root staging is
+created, and deployment-inspection and survey stderr remain in one mode-`0600`
+staging diagnostic that is never transported or logged. It accepts status `101`
+only when the typed outcome records
+at least one finding, polls `/health/ready` to a bounded successful result
+regardless of those findings, and returns only survey JSON
+and separate resolution-walk implementation JSON plus a digest, size,
+deployment, candidate, and oracle binding manifest. Survey transport manifest
+and verification evidence schema 2 bind every candidate/comparison survey to
+its implementation file; the independent reader validates the worker count,
+per-worker load-time vector, effective memory budget, and retained worker RSS
+allowance. The
+workflow independently reopens that transport, enforces the complete typed Rust
+survey schemas and their cross-count, retention, evidence-budget, and mismatch
+relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
+binds candidate implementation to the profile ecosystem, `conary-sat`, and
+projection schema 2. Comparison counts must cover the exact complete
+zero-failure candidate root population, and every retained mismatch root,
+identity, and candidate outcome must come from that candidate survey. It then
+compares every authority binding with its authenticated input verification, and
+its seven-day artifact
+also retains the authenticated three-lane assembly. Neither helper input
+admission nor runner output verification imposes an aggregate transport limit
+absent from the producer contract. The uncompressed input archive uses GNU
+base-256 tar headers to avoid USTAR's unsupported 8-GiB per-member ceiling
+without admitting PAX metadata. The runner chunk-copies and authenticates each
+declared member into private mode-`0700` staging, maps those files read-only,
+and decodes large root-record arrays one canonical record at a time.
+Its comparison join keeps only the fixed retained-mismatch envelope rather
+than indexing the complete candidate population. Remi returns bounded
+per-profile summaries to the helper, including the comparison candidate
+manifest digest, so transport construction never reparses a whole survey with
+`jq`. The workflow reader reconstructs the exact strict candidate root stream
+and manifest from streamed outcomes and the authenticated package manifest,
+and it requires those zero-failure roots and identities to cover the mapped
+authenticated package rows exactly. Nested closure and dependency vectors are
+streamed element by element, and copied survey files are discarded after each
+profile; the comparison digest must match even for zero mismatches. All
+profiles bind their total and retained root identities to the package
+stream before the findings branch. Zero-failure profiles additionally replay
+the authenticated native root stream against candidate outcomes and recompute
+the comparison totals, ordered histograms, and retained evidence.
+Aggregate and per-profile summary counts retain exact JSON integer types. The
+helper archives the frozen root-owned survey files directly after service
+restoration, so transport construction does not allocate another survey-sized
+staging copy. Authenticated oracle members are materialized in private
+root-owned staging on the `/conary/evidence` capacity domain, leaving `/tmp`
+to hold only the caller-owned ingress transport and sanitized egress archive.
+Runner assembly removes each authenticated artifact ZIP after extraction and
+consumes each extracted lane member after writing it to the transport, avoiding
+a three-copy unbounded full-catalog working set.
+Raw deployment-inspection
+and survey stderr remain confined to
+mode-`0600` root-controlled helper staging, are destroyed during helper cleanup,
+and are never emitted through SSH or
+workflow logs; public failures contain only a typed helper message. Neither side
+has promotion, activation, or publication authority.
+An older workflow rerun fails before root mutation even when helper bytes are
+unchanged, and any protected-main advance during input processing fences the
+run. Stale verifier code therefore cannot certify evidence or leave the root
+entry point downgraded.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact

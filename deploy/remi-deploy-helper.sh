@@ -7,6 +7,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ROOT="${CONARY_REMI_DEPLOY_ROOT:-}"
 SKIP_RESTART="${CONARY_REMI_DEPLOY_SKIP_RESTART:-0}"
 HEALTH_URL="${CONARY_REMI_DEPLOY_HEALTH_URL:-http://localhost:8081/health}"
+SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"
 SITE_HOME_URL="${CONARY_REMI_DEPLOY_SITE_HOME_URL:-https://conary.io/}"
 SITE_INSTALLER_URL="${CONARY_REMI_DEPLOY_SITE_INSTALLER_URL:-https://conary.io/install-conary-preview.sh}"
 SITE_ORIGIN_RESOLVE="${CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE:-conary.io:443:127.0.0.1}"
@@ -28,6 +29,7 @@ usage:
   conary-remi-deploy inspect-remi-candidate-baseline <version> <sha256> <bundle.tar.gz>
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
+  conary-remi-deploy survey-resolution <survey-id> <export-id> <oracle-transport-path>
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
@@ -72,6 +74,11 @@ validate_sha256() {
     [[ "$value" =~ ^[0-9a-f]{64}$ ]] || die "invalid SHA-256 digest"
 }
 
+validate_commit() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9a-f]{40}$ ]] || die "invalid commit SHA"
+}
+
 validate_site_target() {
     local target="$1"
     case "$target" in
@@ -90,6 +97,12 @@ validate_export_id() {
     local export_id="$1"
     [[ "$export_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
         die "invalid native-oracle export identity: $export_id"
+}
+
+validate_survey_id() {
+    local survey_id="$1"
+    [[ "$survey_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
+        die "invalid resolution-survey identity: $survey_id"
 }
 
 validate_profile_id() {
@@ -518,6 +531,49 @@ publish_test_artifact() {
         "$filename" "$expected_sha" "$size"
 }
 
+protected_main_commit() {
+    local test_authority="${CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT:-}"
+    local commit
+    if [[ -n "$test_authority" ]]; then
+        [[ -n "$ROOT" ]] || die "protected-main test authority requires a fake root"
+        [[ -d "$test_authority" && ! -L "$test_authority" \
+            && -f "${test_authority}/main-commit" \
+            && ! -L "${test_authority}/main-commit" ]] ||
+            die "protected-main test authority is malformed"
+        commit="$(<"${test_authority}/main-commit")"
+    else
+        commit="$(curl -fsS --proto '=https' --tlsv1.2 --max-time 60 \
+            --retry 2 --retry-connrefused --max-filesize 1048576 \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            https://api.github.com/repos/FieldmouseWorks/Conary/commits/main \
+            | jq -er '.sha')" || die "could not resolve protected-main helper authority"
+    fi
+    validate_commit "$commit"
+    printf '%s' "$commit"
+}
+
+fetch_protected_main_helper() {
+    local commit="$1"
+    local destination="$2"
+    local test_authority="${CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT:-}"
+    validate_commit "$commit"
+    if [[ -n "$test_authority" ]]; then
+        [[ -n "$ROOT" ]] || die "protected-main test authority requires a fake root"
+        local canonical="${test_authority}/deploy/remi-deploy-helper.sh"
+        [[ -f "$canonical" && ! -L "$canonical" ]] ||
+            die "protected-main test helper is not plain data"
+        install -m 0600 "$canonical" "$destination"
+    else
+        curl -fsS --proto '=https' --tlsv1.2 --max-time 60 \
+            --retry 2 --retry-connrefused --max-filesize 1048576 \
+            --output "$destination" \
+            "https://raw.githubusercontent.com/FieldmouseWorks/Conary/${commit}/deploy/remi-deploy-helper.sh" ||
+            die "could not fetch the exact protected-main helper"
+        chmod 0600 "$destination"
+    fi
+}
+
 install_helper() {
     local expected_sha="$1"
     local source
@@ -525,16 +581,29 @@ install_helper() {
     source="$(real_tmp_path "$2")"
     [[ -f "$source" && ! -L "$source" ]] || die "helper source is not a plain file: $source"
 
-    local actual_sha target next
+    local actual_sha target next staging main_commit canonical_sha256
     actual_sha="$(sha256sum "$source" | cut -d ' ' -f 1)"
     [[ "$actual_sha" == "$expected_sha" ]] || die "helper SHA-256 mismatch"
-    bash -n "$source" || die "helper shell validation failed"
+
+    staging="$(mktemp -d /tmp/conary-remi-helper.XXXXXX)"
+    chmod 0700 "$staging"
+    trap 'rm -rf -- "$staging"' EXIT
+    main_commit="$(protected_main_commit)"
+    fetch_protected_main_helper "$main_commit" "${staging}/helper"
+    canonical_sha256="$(sha256sum "${staging}/helper" | cut -d ' ' -f 1)"
+    [[ "$canonical_sha256" == "$expected_sha" ]] ||
+        die "helper digest is not authorized by current protected main"
+    [[ "$(protected_main_commit)" == "$main_commit" ]] ||
+        die "protected main advanced during helper authorization"
+    bash -n "${staging}/helper" || die "protected-main helper shell validation failed"
 
     target="$(root_path /usr/local/sbin/conary-remi-deploy)"
     next="${target}.next.$$"
-    install -m 0755 "$source" "$next"
+    install -m 0755 "${staging}/helper" "$next"
     mv "$next" "$target"
     rm -f "$source"
+    rm -rf -- "$staging"
+    trap - EXIT
 }
 
 inspect_remi() {
@@ -755,6 +824,662 @@ export_native_oracle_inputs() {
     trap - EXIT
     printf 'Native oracle inputs: export=%s transport=%s sha256=%s\n' \
         "$export_id" "$transport" "$(sha256sum "$transport" | cut -d ' ' -f 1)"
+}
+
+SURVEY_REMI_STOPPED=0
+SURVEY_SYSTEMCTL=systemctl
+SURVEY_STAGING=""
+SURVEY_TRANSPORT_NEXT=""
+
+survey_systemctl() {
+    "$SURVEY_SYSTEMCTL" "$@" >/dev/null
+}
+
+survey_start_and_probe() {
+    if ! survey_systemctl start remi; then
+        echo "remi deploy helper: failed to restart Remi after resolution survey" >&2
+        return 1
+    fi
+    local readiness_attempts_remaining=30
+    while (( readiness_attempts_remaining > 0 )); do
+        if curl -fsS --max-time 2 "$SURVEY_READINESS_URL" >/dev/null 2>&1; then
+            SURVEY_REMI_STOPPED=0
+            return 0
+        fi
+        readiness_attempts_remaining=$((readiness_attempts_remaining - 1))
+        if (( readiness_attempts_remaining > 0 )) && [[ -z "$ROOT" ]]; then
+            sleep 1
+        fi
+    done
+    echo "remi deploy helper: Remi readiness check failed after resolution survey" >&2
+    return 1
+}
+
+survey_restore_and_exit() {
+    local status="$1"
+    trap - EXIT INT TERM
+    set +e
+    if [[ -n "$SURVEY_TRANSPORT_NEXT" ]]; then
+        rm -f -- "$SURVEY_TRANSPORT_NEXT"
+        SURVEY_TRANSPORT_NEXT=""
+    fi
+    if [[ "$SURVEY_REMI_STOPPED" == "1" ]]; then
+        if ! survey_start_and_probe; then
+            if (( status == 0 )); then
+                status=1
+            fi
+        fi
+    fi
+    if [[ -n "$SURVEY_STAGING" ]]; then
+        rm -rf -- "$SURVEY_STAGING"
+        SURVEY_STAGING=""
+    fi
+    exit "$status"
+}
+
+survey_validate_oracle_transport() {
+    local survey_id="$1"
+    local export_id="$2"
+    local transport="$3"
+    local manifest="$4"
+
+    local listing="${manifest}.listing"
+    if ! tar -tf "$transport" >"$listing"; then
+        die "resolution-survey oracle transport is not an uncompressed tar archive"
+    fi
+    [[ "$(head -n 1 "$listing")" == "manifest.json" ]] ||
+        die "resolution-survey oracle transport must begin with manifest.json"
+    [[ -z "$(sort "$listing" | uniq -d)" ]] ||
+        die "resolution-survey oracle transport repeats a member"
+    if grep -Ev '^(manifest\.json|(fedora-44|ubuntu-26\.04|arch)/(package-oracle|native-resolution)/(manifest\.json|packages\.jsonl|roots\.jsonl))$' \
+        "$listing" | grep -q .; then
+        die "resolution-survey oracle transport contains an unsafe member"
+    fi
+    local verbose_listing="${manifest}.verbose"
+    if ! tar -tvf "$transport" >"$verbose_listing"; then
+        die "could not inspect resolution-survey oracle member types"
+    fi
+    if awk 'substr($1, 1, 1) != "-" { exit 1 }' "$verbose_listing"; then
+        :
+    else
+        die "resolution-survey oracle transport contains a non-plain member"
+    fi
+    [[ "$(grep -c '^manifest\.json$' "$listing")" == "1" ]] ||
+        die "resolution-survey oracle transport has no unique manifest"
+    tar -xOf "$transport" -- manifest.json >"$manifest" ||
+        die "could not read resolution-survey oracle manifest"
+    [[ -s "$manifest" && "$(stat -c '%s' "$manifest")" -le 1048576 ]] ||
+        die "resolution-survey oracle manifest size is outside its bounded contract"
+    jq -e -cS . "$manifest" >/dev/null ||
+        die "resolution-survey oracle manifest is not valid JSON"
+    [[ "$(jq -cS . "$manifest")" == "$(cat "$manifest")" ]] ||
+        die "resolution-survey oracle manifest is not canonical JSON"
+
+    jq -e \
+        --arg survey_id "$survey_id" \
+        --arg export_id "$export_id" '
+        def sha256: type == "string" and test("^[0-9a-f]{64}$");
+        def commit: type == "string" and test("^[0-9a-f]{40}$");
+        def uint: type == "number" and floor == . and . >= 0;
+        def exact_keys($keys): (keys | sort) == ($keys | sort);
+        exact_keys(["deployment", "export_id", "files", "profiles", "schema_version", "survey_id", "workflow_runs"])
+        and .schema_version == 1
+        and .survey_id == $survey_id
+        and .export_id == $export_id
+        and (.workflow_runs | exact_keys(["deployment", "export", "oracle"]))
+        and all(.workflow_runs[]; uint and . > 0)
+        and (.deployment | exact_keys(["binary_sha256", "commit_sha"]))
+        and (.deployment.commit_sha | commit)
+        and (.deployment.binary_sha256 | sha256)
+        and ([.profiles[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        and ([.profiles[].target_architecture] == ["x86_64", "amd64", "x86_64"])
+        and all(.profiles[];
+          exact_keys(["input_manifest_sha256", "native_resolution", "package_oracle", "profile", "profile_revision_sha256", "target_architecture"])
+          and (.profile_revision_sha256 | sha256)
+          and (.input_manifest_sha256 | sha256)
+          and (.package_oracle | exact_keys(["artifact", "manifest_sha256"]))
+          and (.package_oracle.manifest_sha256 | sha256)
+          and (.package_oracle.artifact | exact_keys(["name", "sha256", "size"]))
+          and .package_oracle.artifact.name == "packages.jsonl"
+          and (.package_oracle.artifact.sha256 | sha256)
+          and (.package_oracle.artifact.size | uint)
+          and (.native_resolution | exact_keys(["artifact", "manifest_sha256", "package_oracle_manifest_sha256"]))
+          and (.native_resolution.manifest_sha256 | sha256)
+          and .native_resolution.package_oracle_manifest_sha256 == .package_oracle.manifest_sha256
+          and (.native_resolution.artifact | exact_keys(["name", "sha256", "size"]))
+          and .native_resolution.artifact.name == "roots.jsonl"
+          and (.native_resolution.artifact.sha256 | sha256)
+          and (.native_resolution.artifact.size | uint))
+        and (.files | type == "array" and length == 12)
+        and ([.files[].path] == [
+          "fedora-44/package-oracle/manifest.json",
+          "fedora-44/package-oracle/packages.jsonl",
+          "fedora-44/native-resolution/manifest.json",
+          "fedora-44/native-resolution/roots.jsonl",
+          "ubuntu-26.04/package-oracle/manifest.json",
+          "ubuntu-26.04/package-oracle/packages.jsonl",
+          "ubuntu-26.04/native-resolution/manifest.json",
+          "ubuntu-26.04/native-resolution/roots.jsonl",
+          "arch/package-oracle/manifest.json",
+          "arch/package-oracle/packages.jsonl",
+          "arch/native-resolution/manifest.json",
+          "arch/native-resolution/roots.jsonl"
+        ])
+        and all(.files[];
+          exact_keys(["path", "sha256", "size"])
+          and (.sha256 | sha256)
+          and (.size | uint))
+        ' "$manifest" >/dev/null ||
+        die "resolution-survey oracle manifest violates its exact schema"
+
+    local expected_members="${manifest}.expected"
+    {
+        printf '%s\n' manifest.json
+        jq -r '.files[].path' "$manifest"
+    } >"$expected_members"
+    cmp -s "$listing" "$expected_members" ||
+        die "resolution-survey oracle transport members disagree with its manifest"
+
+    local path expected_sha256 expected_size observed_sha256 observed_size
+    while IFS=$'\t' read -r path expected_sha256 expected_size; do
+        observed_size="$(tar -xOf "$transport" -- "$path" | wc -c)" ||
+            die "could not size resolution-survey oracle member: $path"
+        [[ "$observed_size" == "$expected_size" ]] ||
+            die "resolution-survey oracle member size mismatch: $path"
+        observed_sha256="$(tar -xOf "$transport" -- "$path" | sha256sum | cut -d ' ' -f 1)" ||
+            die "could not hash resolution-survey oracle member: $path"
+        [[ "$observed_sha256" == "$expected_sha256" ]] ||
+            die "resolution-survey oracle member SHA-256 mismatch: $path"
+    done < <(jq -r '.files[] | [.path, .sha256, (.size | tostring)] | @tsv' "$manifest")
+}
+
+survey_validate_unpacked_oracles() {
+    local manifest="$1"
+    local oracle_root="$2"
+    local profile architecture revision package_manifest resolution_manifest
+    local package_manifest_sha256 resolution_manifest_sha256 package_artifact resolution_artifact
+    while IFS=$'\t' read -r profile architecture revision package_manifest_sha256 resolution_manifest_sha256; do
+        package_manifest="${oracle_root}/${profile}/package-oracle/manifest.json"
+        resolution_manifest="${oracle_root}/${profile}/native-resolution/manifest.json"
+        package_artifact="${oracle_root}/${profile}/package-oracle/packages.jsonl"
+        resolution_artifact="${oracle_root}/${profile}/native-resolution/roots.jsonl"
+        jq -e -cS . "$package_manifest" >/dev/null ||
+            die "${profile} package-oracle manifest is invalid"
+        jq -e -cS . "$resolution_manifest" >/dev/null ||
+            die "${profile} resolution-oracle manifest is invalid"
+        [[ "$(jq -cS . "$package_manifest")" == "$(cat "$package_manifest")" ]] ||
+            die "${profile} package-oracle manifest is not canonical"
+        [[ "$(jq -cS . "$resolution_manifest")" == "$(cat "$resolution_manifest")" ]] ||
+            die "${profile} resolution-oracle manifest is not canonical"
+        jq -e \
+            --arg profile "$profile" \
+            --arg revision "$revision" \
+            --arg artifact_sha256 "$(sha256sum "$package_artifact" | cut -d ' ' -f 1)" \
+            --argjson artifact_size "$(stat -c '%s' "$package_artifact")" '
+            .schema_version == 1
+            and .profile == $profile
+            and .profile_revision_sha256 == $revision
+            and .artifact.sha256 == $artifact_sha256
+            and .artifact.size == $artifact_size
+        ' "$package_manifest" >/dev/null ||
+            die "${profile} package oracle differs from the authenticated binding"
+        jq -e \
+            --arg profile "$profile" \
+            --arg revision "$revision" \
+            --arg architecture "$architecture" \
+            --arg package_manifest_sha256 "$package_manifest_sha256" \
+            --arg artifact_sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
+            --argjson artifact_size "$(stat -c '%s' "$resolution_artifact")" '
+            .schema_version == 2
+            and .profile == $profile
+            and .profile_revision_sha256 == $revision
+            and .package_oracle_manifest_sha256 == $package_manifest_sha256
+            and .policy.architecture == $architecture
+            and .artifact.sha256 == $artifact_sha256
+            and .artifact.size == $artifact_size
+        ' "$resolution_manifest" >/dev/null ||
+            die "${profile} resolution oracle differs from the authenticated binding"
+        [[ "$(sha256sum "$package_manifest" | cut -d ' ' -f 1)" == "$package_manifest_sha256" ]] ||
+            die "${profile} package-oracle manifest digest changed after unpacking"
+        [[ "$(sha256sum "$resolution_manifest" | cut -d ' ' -f 1)" == "$resolution_manifest_sha256" ]] ||
+            die "${profile} resolution-oracle manifest digest changed after unpacking"
+    done < <(jq -r '.profiles[] | [
+      .profile,
+      .target_architecture,
+      .profile_revision_sha256,
+      .package_oracle.manifest_sha256,
+      .native_resolution.manifest_sha256
+    ] | @tsv' "$manifest")
+}
+
+survey_resolution() {
+    [[ $# -eq 3 ]] || usage
+    local survey_id="$1"
+    local export_id="$2"
+    local transport_arg="$3"
+    validate_survey_id "$survey_id"
+    validate_export_id "$export_id"
+
+    [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
+    [[ "$SKIP_RESTART" == "0" ]] ||
+        die "resolution survey may not skip Remi service restoration"
+    require_shared_conary_root
+
+    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
+    if [[ -n "$test_systemctl" ]]; then
+        [[ -n "$ROOT" ]] || die "resolution-survey systemctl override requires a fake root"
+        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
+            die "resolution-survey systemctl test override is not a plain executable"
+        SURVEY_SYSTEMCTL="$(realpath -e "$test_systemctl")"
+    fi
+
+    [[ "$transport_arg" == "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" ]] ||
+        die "resolution-survey oracle transport path does not match its survey identity"
+    [[ ! -L "$transport_arg" ]] ||
+        die "resolution-survey oracle transport must not be a symlink"
+    local oracle_transport
+    oracle_transport="$(real_tmp_path "$transport_arg")"
+    [[ -f "$oracle_transport" && ! -L "$oracle_transport" ]] ||
+        die "resolution-survey oracle transport is not a plain file"
+    [[ "$(stat -c '%h' "$oracle_transport")" == "1" ]] ||
+        die "resolution-survey oracle transport must have exactly one link"
+    local source_uid
+    if [[ -n "$ROOT" ]]; then
+        source_uid="$(id -u)"
+    else
+        source_uid="${SUDO_UID:-0}"
+        [[ "$source_uid" =~ ^[0-9]+$ ]] || die "invalid sudo caller identity"
+    fi
+    [[ "$(stat -c '%u' "$oracle_transport")" == "$source_uid" ]] ||
+        die "resolution-survey oracle transport has the wrong owner"
+    local transport_mode transport_mode_value
+    transport_mode="$(stat -c '%a' "$oracle_transport")"
+    transport_mode_value=$((8#$transport_mode))
+    (( (transport_mode_value & 0077) == 0 )) ||
+        die "resolution-survey oracle transport must be private"
+
+    local bin config evidence_root survey_root output public_transport
+    bin="$(root_path /usr/local/bin/remi)"
+    config="$(root_path /etc/conary/remi.toml)"
+    evidence_root="$(root_path /conary/evidence)"
+    survey_root="${evidence_root}/resolution-surveys"
+    output="${survey_root}/${survey_id}"
+    public_transport="/tmp/remi-resolution-survey-${survey_id}.tar"
+    [[ -f "$bin" && ! -L "$bin" && -x "$bin" ]] ||
+        die "installed Remi binary is not a plain executable"
+    [[ -f "$config" && ! -L "$config" ]] ||
+        die "Remi configuration is not a plain file"
+    local control_uid
+    if [[ -n "$ROOT" ]]; then
+        control_uid="$(id -u)"
+    else
+        control_uid=0
+    fi
+    require_secure_benchmark_file "$bin" "installed Remi binary" "$control_uid" 1
+    require_secure_benchmark_file "$config" "Remi configuration" "$control_uid" 0
+    [[ ! -e "$output" && ! -L "$output" ]] ||
+        die "resolution survey already exists: $output"
+    [[ ! -e "$public_transport" && ! -L "$public_transport" ]] ||
+        die "resolution-survey transport already exists: $public_transport"
+
+    install_owned_dir 0750 "$evidence_root"
+    local survey_staging_root="${evidence_root}/.remi-operator-staging"
+    if [[ ! -e "$survey_staging_root" && ! -L "$survey_staging_root" ]]; then
+        mkdir -m 0750 "$survey_staging_root"
+        if [[ -z "$ROOT" ]]; then
+            chown root:conary "$survey_staging_root"
+        fi
+    fi
+    [[ -d "$survey_staging_root" && ! -L "$survey_staging_root" \
+        && "$(stat -c '%a' "$survey_staging_root")" == "750" \
+        && "$(stat -c '%u' "$survey_staging_root")" == "$control_uid" ]] ||
+        die "resolution-survey operator staging root is not a private root-owned directory"
+
+    SURVEY_REMI_STOPPED=0
+    SURVEY_TRANSPORT_NEXT=""
+    SURVEY_STAGING="$(mktemp -d "${survey_staging_root}/resolution-survey-${survey_id}.XXXXXX")"
+    trap 'survey_restore_and_exit "$?"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    chmod 0750 "$SURVEY_STAGING"
+    if [[ -z "$ROOT" ]]; then
+        chown root:conary "$SURVEY_STAGING"
+    fi
+    local diagnostic="${SURVEY_STAGING}/diagnostic.log"
+    : >"$diagnostic"
+    chmod 0600 "$diagnostic"
+    [[ "$(stat -c '%u' "$diagnostic")" == "$control_uid" ]] ||
+        die "resolution survey diagnostic staging has the wrong owner"
+    local input_manifest="${SURVEY_STAGING}/oracle-manifest.json"
+    survey_validate_oracle_transport "$survey_id" "$export_id" "$oracle_transport" "$input_manifest"
+
+    local oracle_root="${SURVEY_STAGING}/oracles"
+    mkdir -m 0750 "$oracle_root"
+    local oracle_members=()
+    mapfile -t oracle_members < <(jq -r '.files[].path' "$input_manifest")
+    tar -xf "$oracle_transport" -C "$oracle_root" -- "${oracle_members[@]}" ||
+        die "could not unpack authenticated resolution-survey oracles"
+    find "$oracle_root" -type d -exec chmod 0750 {} +
+    find "$oracle_root" -type f -exec chmod 0440 {} +
+    if [[ -z "$ROOT" ]]; then
+        chown -R root:conary "$oracle_root"
+    fi
+    survey_validate_unpacked_oracles "$input_manifest" "$oracle_root"
+
+    local observed_binary_sha256
+    observed_binary_sha256="$(sha256sum "$bin" | cut -d ' ' -f 1)"
+    [[ "$observed_binary_sha256" == "$(jq -r '.deployment.binary_sha256' "$input_manifest")" ]] ||
+        die "installed Remi binary differs from the oracle deployment binding"
+    if [[ ! -e "$survey_root" && ! -L "$survey_root" ]]; then
+        install_owned_dir 0700 "$survey_root"
+    fi
+    [[ -d "$survey_root" && ! -L "$survey_root" && "$(stat -c '%a' "$survey_root")" == "700" ]] ||
+        die "resolution-survey evidence root is not a private plain directory"
+    local runtime_uid
+    if [[ -n "$ROOT" ]]; then
+        runtime_uid="$(id -u)"
+    else
+        runtime_uid="$(id -u conary)" || die "missing conary service account"
+    fi
+    [[ "$(stat -c '%u' "$survey_root")" == "$runtime_uid" ]] ||
+        die "resolution-survey evidence root has the wrong owner"
+
+    survey_systemctl is-active --quiet remi ||
+        die "Remi must be active before a production resolution survey"
+    SURVEY_REMI_STOPPED=1
+    survey_systemctl stop remi || die "failed to stop Remi for resolution survey"
+
+    local inspection="${SURVEY_STAGING}/candidate-inspection.json"
+    "$bin" deployment inspect --config "$config" --require-private-candidates \
+        >"$inspection" 2>>"$diagnostic" ||
+        die "could not inspect exact stopped-runtime candidate pointers"
+    jq -e '
+        .configured_profiles == 3
+        and .candidate_profiles == 3
+        and ([.candidates[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        and all(.candidates[];
+          (.profile_revision_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+          and (.packages | type == "number" and . > 0))
+    ' "$inspection" >/dev/null ||
+        die "stopped-runtime inspection does not prove three exact private candidates"
+    jq -e --slurpfile inspection "$inspection" '
+        [.profiles[].profile_revision_sha256]
+        == [$inspection[0].candidates[].profile_revision_sha256]
+    ' "$input_manifest" >/dev/null ||
+        die "current candidate pointers differ from the authenticated oracle revisions"
+
+    local command=("$bin" resolution-survey --config "$config")
+    local profile revision architecture
+    while IFS=$'\t' read -r profile revision; do
+        command+=(--candidate "${profile}=${revision}")
+    done < <(jq -r '.candidates[] | [.profile, .profile_revision_sha256] | @tsv' "$inspection")
+    while IFS=$'\t' read -r profile revision architecture; do
+        command+=(--package-oracle "${profile}=${oracle_root}/${profile}/package-oracle")
+    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
+    while IFS=$'\t' read -r profile revision architecture; do
+        command+=(--native-resolution "${profile}=${oracle_root}/${profile}/native-resolution")
+    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
+    while IFS=$'\t' read -r profile revision architecture; do
+        command+=(--architecture "${profile}=${architecture}")
+    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
+    command+=(--output-dir "$output")
+
+    local outcome="${SURVEY_STAGING}/outcome.json"
+    local survey_status=0
+    if [[ -z "$ROOT" ]]; then
+        if runuser -u conary -- "${command[@]}" >"$outcome" 2>>"$diagnostic"; then
+            survey_status=0
+        else
+            survey_status=$?
+        fi
+    elif "${command[@]}" >"$outcome" 2>>"$diagnostic"; then
+        survey_status=0
+    else
+        survey_status=$?
+    fi
+
+    [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
+        die "resolution survey did not create its private output directory"
+    [[ "$(stat -c '%u' "$output")" == "$runtime_uid" ]] ||
+        die "resolution survey output directory has the wrong owner"
+    local source_file source_name source_mode frozen_output
+    frozen_output="${SURVEY_STAGING}/survey-output"
+    mkdir -m 0700 "$frozen_output"
+    [[ "$(stat -c '%u' "$frozen_output")" == "$control_uid" ]] ||
+        die "resolution-survey frozen output has the wrong owner"
+    while IFS= read -r source_file; do
+        source_name="$(basename "$source_file")"
+        case "$source_name" in
+            fedora-44.candidate-resolution-survey.json | \
+                fedora-44.candidate-resolution-implementation.json | \
+                fedora-44.native-resolution-comparison-survey.json | \
+                fedora-44.comparison-resolution-implementation.json | \
+                ubuntu-26.04.candidate-resolution-survey.json | \
+                ubuntu-26.04.candidate-resolution-implementation.json | \
+                ubuntu-26.04.native-resolution-comparison-survey.json | \
+                ubuntu-26.04.comparison-resolution-implementation.json | \
+                arch.candidate-resolution-survey.json | \
+                arch.candidate-resolution-implementation.json | \
+                arch.comparison-resolution-implementation.json | \
+                arch.native-resolution-comparison-survey.json) ;;
+            *) die "resolution survey output contains an unexpected file" ;;
+        esac
+        [[ -f "$source_file" && ! -L "$source_file" \
+            && "$(stat -c '%u' "$source_file")" == "$runtime_uid" ]] ||
+            die "resolution survey output is not owned plain data"
+        source_mode="$(stat -c '%a' "$source_file")"
+        [[ "$source_mode" == "600" ]] ||
+            die "resolution survey output file is not private"
+        install -m 0600 -- "$source_file" "${frozen_output}/${source_name}"
+        cmp -s -- "$source_file" "${frozen_output}/${source_name}" ||
+            die "resolution survey output changed while it was frozen"
+    done < <(find "$output" -mindepth 1 -maxdepth 1 -type f -printf '%p\n' | sort)
+    local unexpected_before_restart
+    unexpected_before_restart="$(find "$output" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+    [[ -z "$unexpected_before_restart" ]] ||
+        die "resolution survey output contains a non-plain entry"
+
+    if ! survey_start_and_probe; then
+        die "failed to restore Remi after resolution survey"
+    fi
+
+    jq -e \
+        --arg output "$output" '
+        .output_dir == $output
+        and .profiles == 3
+        and (.roots_walked | type == "number" and . >= 0)
+        and (.candidate_failures | type == "number" and . >= 0)
+        and (.comparison_mismatches | type == "number" and . >= 0)
+        and (.comparison_profiles | type == "number" and . >= 0 and . <= 3)
+        and (.profile_results | type == "array" and length == 3)
+        and ([.profile_results[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        and all(.profile_results[];
+          (.candidate | keys | sort) == ["counts", "total_failures"]
+          and (.candidate.counts | type == "object")
+          and (.candidate.total_failures | type == "number" and . >= 0)
+          and if .candidate.total_failures == 0 then
+            (.comparison | type == "object")
+            and ((.comparison | keys | sort)
+              == ["candidate_manifest_sha256", "counts", "total_mismatches"])
+            and (.comparison.candidate_manifest_sha256
+              | type == "string" and test("^[0-9a-f]{64}$"))
+            and (.comparison.counts | type == "object")
+            and (.comparison.total_mismatches | type == "number" and . >= 0)
+          else .comparison == null end)
+        and .roots_walked == ([.profile_results[].candidate.counts.roots_walked] | add)
+        and .candidate_failures == ([.profile_results[].candidate.total_failures] | add)
+        and .comparison_profiles == ([.profile_results[].comparison | select(. != null)] | length)
+        and .comparison_mismatches == (
+          [.profile_results[].comparison.total_mismatches // 0] | add)
+    ' "$outcome" >/dev/null || {
+        die "resolution survey did not return its exact typed outcome"
+    }
+    local candidate_failures comparison_mismatches
+    candidate_failures="$(jq -r '.candidate_failures' "$outcome")"
+    comparison_mismatches="$(jq -r '.comparison_mismatches' "$outcome")"
+    if (( survey_status == 0 )); then
+        (( candidate_failures == 0 && comparison_mismatches == 0 )) ||
+            die "resolution survey reported findings with a successful exit status"
+    # Remi's top-level bootstrap maps every returned error, including the
+    # typed "findings recorded" result, to exit status 101.
+    elif (( survey_status == 101 )); then
+        (( candidate_failures > 0 || comparison_mismatches > 0 )) || {
+            die "resolution survey failed without recording findings"
+        }
+    else
+        die "resolution survey failed with status ${survey_status}"
+    fi
+
+    # Everything below reads the root-owned snapshot made while Remi was stopped.
+    output="$frozen_output"
+    [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
+        die "resolution survey did not create its private output directory"
+    local candidate_file candidate_implementation_file comparison_file
+    local comparison_implementation_file profile_failures
+    for profile in fedora-44 ubuntu-26.04 arch; do
+        candidate_file="${output}/${profile}.candidate-resolution-survey.json"
+        candidate_implementation_file="${output}/${profile}.candidate-resolution-implementation.json"
+        [[ -f "$candidate_file" && ! -L "$candidate_file" && "$(stat -c '%a' "$candidate_file")" == "600" ]] ||
+            die "${profile} candidate survey is not a private plain file"
+        [[ -f "$candidate_implementation_file" && ! -L "$candidate_implementation_file" \
+            && "$(stat -c '%a' "$candidate_implementation_file")" == "600" ]] ||
+            die "${profile} candidate implementation evidence is not a private plain file"
+        profile_failures="$(jq -r --arg profile "$profile" \
+            '.profile_results[] | select(.profile == $profile) | .candidate.total_failures' \
+            "$outcome")"
+        comparison_file="${output}/${profile}.native-resolution-comparison-survey.json"
+        comparison_implementation_file="${output}/${profile}.comparison-resolution-implementation.json"
+        if [[ "$profile_failures" == "0" ]]; then
+            [[ -f "$comparison_file" && ! -L "$comparison_file" && "$(stat -c '%a' "$comparison_file")" == "600" ]] ||
+                die "${profile} comparison survey is not a private plain file"
+            [[ -f "$comparison_implementation_file" && ! -L "$comparison_implementation_file" \
+                && "$(stat -c '%a' "$comparison_implementation_file")" == "600" ]] ||
+                die "${profile} comparison implementation evidence is not a private plain file"
+        else
+            [[ ! -e "$comparison_file" && ! -L "$comparison_file" ]] ||
+                die "${profile} comparison survey exists despite candidate failures"
+            [[ ! -e "$comparison_implementation_file" && ! -L "$comparison_implementation_file" ]] ||
+                die "${profile} comparison implementation evidence exists despite candidate failures"
+        fi
+    done
+    local unexpected
+    unexpected="$(find "$output" -mindepth 1 -maxdepth 1 -type f \
+        ! -name '*.candidate-resolution-survey.json' \
+        ! -name '*.candidate-resolution-implementation.json' \
+        ! -name '*.comparison-resolution-implementation.json' \
+        ! -name '*.native-resolution-comparison-survey.json' -print -quit)"
+    [[ -z "$unexpected" ]] || die "resolution survey output contains an unexpected file"
+    unexpected="$(find "$output" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+    [[ -z "$unexpected" ]] || die "resolution survey output contains a non-plain entry"
+    if grep -F -e /conary/ -e /etc/conary/ -e /tmp/ -e /data/ "$output"/*.json >/dev/null; then
+        die "resolution survey output contains a private host path"
+    fi
+
+    local inventory="${SURVEY_STAGING}/survey-files.json"
+    local inventory_rows="${SURVEY_STAGING}/survey-files.jsonl"
+    : >"$inventory_rows"
+    while IFS= read -r candidate_file; do
+        jq -n -c \
+            --arg path "$(basename "$candidate_file")" \
+            --arg sha256 "$(sha256sum "$candidate_file" | cut -d ' ' -f 1)" \
+            --argjson size "$(stat -c '%s' "$candidate_file")" \
+            '{path: $path, sha256: $sha256, size: $size}' >>"$inventory_rows"
+    done < <(find "$output" -mindepth 1 -maxdepth 1 -type f -printf '%p\n' | sort)
+    jq -s -cS . "$inventory_rows" >"$inventory"
+
+    local survey_manifest="${SURVEY_STAGING}/manifest.json"
+    local profiles_json="${SURVEY_STAGING}/profiles.json"
+    : >"${profiles_json}.jsonl"
+    for profile in fedora-44 ubuntu-26.04 arch; do
+        jq -n -cS \
+            --arg profile "$profile" \
+            --arg candidate_file "${profile}.candidate-resolution-survey.json" \
+            --arg candidate_implementation_file "${profile}.candidate-resolution-implementation.json" \
+            --arg comparison_file "${profile}.native-resolution-comparison-survey.json" \
+            --arg comparison_implementation_file "${profile}.comparison-resolution-implementation.json" \
+            --slurpfile input "$input_manifest" \
+            --slurpfile outcome "$outcome" '
+            ($input[0].profiles[] | select(.profile == $profile)) as $binding
+            | ($outcome[0].profile_results[] | select(.profile == $profile)) as $result
+            | {
+                profile: $profile,
+                profile_revision_sha256: $binding.profile_revision_sha256,
+                target_architecture: $binding.target_architecture,
+                package_oracle_manifest_sha256: $binding.package_oracle.manifest_sha256,
+                native_resolution_manifest_sha256: $binding.native_resolution.manifest_sha256,
+                candidate: {
+                  file: $candidate_file,
+                  implementation_file: $candidate_implementation_file,
+                  counts: $result.candidate.counts,
+                  total_failures: $result.candidate.total_failures,
+                  error_histogram: $result.candidate.counts.error_kinds
+                },
+                comparison: (if $result.comparison == null then null else {
+                  file: $comparison_file,
+                  implementation_file: $comparison_implementation_file,
+                  candidate_manifest_sha256: $result.comparison.candidate_manifest_sha256,
+                  counts: $result.comparison.counts,
+                  total_mismatches: $result.comparison.total_mismatches,
+                  mismatch_histogram: $result.comparison.counts.mismatch_kinds,
+                  outcome_histogram: $result.comparison.counts.outcome_kind_pairs
+                } end)
+              }
+        ' >>"${profiles_json}.jsonl"
+    done
+    jq -s -cS . "${profiles_json}.jsonl" >"$profiles_json"
+    local manifest_canonical
+    manifest_canonical="$(jq -n -cS \
+        --arg survey_id "$survey_id" \
+        --arg export_id "$export_id" \
+        --slurpfile input "$input_manifest" \
+        --slurpfile profiles "$profiles_json" \
+        --slurpfile files "$inventory" \
+        --slurpfile outcome "$outcome" '
+        {
+          schema_version: 2,
+          survey_id: $survey_id,
+          export_id: $export_id,
+          deployment: $input[0].deployment,
+          profiles: $profiles[0],
+          counts: {
+            profiles: $outcome[0].profiles,
+            roots_walked: $outcome[0].roots_walked,
+            candidate_failures: $outcome[0].candidate_failures,
+            comparison_profiles: $outcome[0].comparison_profiles,
+            comparison_mismatches: $outcome[0].comparison_mismatches
+          },
+          files: $files[0]
+        }
+    ')" || die "could not construct sanitized resolution-survey manifest"
+    printf '%s' "$manifest_canonical" >"$survey_manifest"
+    if grep -F -e "$output" -e "$oracle_root" -e "$config" -e /tmp/ "$survey_manifest" >/dev/null; then
+        die "sanitized resolution-survey manifest contains a private path"
+    fi
+
+    SURVEY_TRANSPORT_NEXT="$(mktemp "/tmp/remi-resolution-survey-${survey_id}.XXXXXX")"
+    mapfile -t transport_members < <(jq -r '.files[].path' "$survey_manifest")
+    tar -cf "$SURVEY_TRANSPORT_NEXT" \
+        -C "$SURVEY_STAGING" manifest.json \
+        -C "$output" "${transport_members[@]}"
+    chmod 0600 "$SURVEY_TRANSPORT_NEXT"
+    if [[ -z "$ROOT" ]]; then
+        chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$SURVEY_TRANSPORT_NEXT"
+    fi
+    if ! ln "$SURVEY_TRANSPORT_NEXT" "$public_transport"; then
+        die "resolution-survey transport target appeared during publication"
+    fi
+    rm -f "$SURVEY_TRANSPORT_NEXT"
+    SURVEY_TRANSPORT_NEXT=""
+    local public_sha256 public_bytes
+    public_sha256="$(sha256sum "$public_transport" | cut -d ' ' -f 1)"
+    public_bytes="$(stat -c '%s' "$public_transport")"
+
+    trap - EXIT INT TERM
+    rm -rf -- "$SURVEY_STAGING"
+    SURVEY_STAGING=""
+    printf 'Resolution survey: survey=%s export=%s transport=%s sha256=%s bytes=%s candidate_failures=%s comparison_mismatches=%s\n' \
+        "$survey_id" "$export_id" "$public_transport" "$public_sha256" "$public_bytes" \
+        "$candidate_failures" "$comparison_mismatches"
 }
 
 BENCHMARK_REMI_STOPPED=0
@@ -1281,6 +2006,10 @@ case "${1:-}" in
     export-native-oracle-inputs)
         [[ $# -eq 5 ]] || usage
         export_native_oracle_inputs "$2" "$3" "$4" "$5"
+        ;;
+    survey-resolution)
+        shift
+        survey_resolution "$@"
         ;;
     benchmark-remi-conversion)
         shift

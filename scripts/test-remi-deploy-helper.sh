@@ -282,11 +282,469 @@ case "${1:-}" in
             exit 37
         fi
         printf 'active\n' >"$CONARY_FAKE_SERVICE_STATE"
+        if [[ -n "${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" ]]; then
+            printf '{"forged_after_restart":true}' >"$CONARY_FAKE_MUTATE_SURVEY_ON_START"
+            chmod 0600 "$CONARY_FAKE_MUTATE_SURVEY_ON_START"
+        fi
         ;;
     *) exit 2 ;;
 esac
 EOF
     chmod 0700 "$command"
+}
+
+make_fake_survey_remi() {
+    local fake_root="$1"
+    local bin="${fake_root}/usr/local/bin/remi"
+    mkdir -p "$(dirname "$bin")"
+    cat >"$bin" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "deployment" && "${2:-}" == "inspect" ]]; then
+    [[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "stopped" ]]
+    printf 'inspect\n' >>"$CONARY_FAKE_SERVICE_LOG"
+    if [[ -n "${CONARY_FAKE_SURVEY_INSPECT_STATUS:-}" ]]; then
+        printf '%s\n' "${CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC:-unexpected inspection failure}" >&2
+        exit "$CONARY_FAKE_SURVEY_INSPECT_STATUS"
+    fi
+    jq -cn '
+      {
+        configured_profiles: 3,
+        candidate_profiles: 3,
+        candidates: [
+          {profile:"fedora-44",profile_revision_sha256:("a" * 64),packages:1},
+          {profile:"ubuntu-26.04",profile_revision_sha256:("b" * 64),packages:1},
+          {profile:"arch",profile_revision_sha256:("c" * 64),packages:1}
+        ]
+      }
+    '
+    exit 0
+fi
+[[ "${1:-}" == "resolution-survey" ]]
+[[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "stopped" ]]
+printf 'survey\n' >>"$CONARY_FAKE_SERVICE_LOG"
+printf '%s\n' "$@" >"$CONARY_FAKE_SURVEY_ARGS"
+shift
+output=""
+declare -a candidates=() packages=() resolutions=() architectures=()
+while (( $# > 0 )); do
+    case "$1" in
+        --config) shift 2 ;;
+        --candidate) candidates+=("$2"); shift 2 ;;
+        --package-oracle) packages+=("$2"); shift 2 ;;
+        --native-resolution) resolutions+=("$2"); shift 2 ;;
+        --architecture) architectures+=("$2"); shift 2 ;;
+        --output-dir) output="$2"; shift 2 ;;
+        *) exit 2 ;;
+    esac
+done
+[[ "${candidates[*]}" == \
+    "fedora-44=$(printf 'a%.0s' {1..64}) ubuntu-26.04=$(printf 'b%.0s' {1..64}) arch=$(printf 'c%.0s' {1..64})" ]]
+[[ "${architectures[*]}" == "fedora-44=x86_64 ubuntu-26.04=amd64 arch=x86_64" ]]
+mkdir -m 0700 "$output"
+profile_results_file="${output}.profile-results.jsonl"
+: >"$profile_results_file"
+candidate_failures=0
+comparison_mismatches=0
+comparison_profiles=0
+for index in 0 1 2; do
+    profile="${candidates[$index]%%=*}"
+    revision="${candidates[$index]#*=}"
+    architecture="${architectures[$index]#*=}"
+    case "$profile" in
+        fedora-44) ecosystem=rpm ;;
+        ubuntu-26.04) ecosystem=debian ;;
+        arch) ecosystem=alpm ;;
+        *) exit 2 ;;
+    esac
+    package_root="${packages[$index]#*=}"
+    resolution_root="${resolutions[$index]#*=}"
+    package_manifest_sha256="$(sha256sum "$package_root/manifest.json" | cut -d ' ' -f 1)"
+    resolution_manifest_sha256="$(sha256sum "$resolution_root/manifest.json" | cut -d ' ' -f 1)"
+    failures=0
+    if [[ "${CONARY_FAKE_SURVEY_FINDINGS:-0}" == "1" ]]; then
+        failures=1
+        candidate_failures=$((candidate_failures + 1))
+    fi
+    candidate="$(jq -cnS \
+        --arg profile "$profile" --arg revision "$revision" \
+        --arg architecture "$architecture" --arg ecosystem "$ecosystem" \
+        --arg package "$package_manifest_sha256" \
+        --argjson failures "$failures" '
+        {
+          schema_version:1,
+          profile:$profile,
+          profile_revision_sha256:$revision,
+          package_oracle_manifest_sha256:$package,
+          implementation:{
+            ecosystem:$ecosystem,
+            name:"conary-sat",
+            version:"1",
+            projection_schema:2
+          },
+          policy:{
+            architecture:$architecture,
+            architecture_admission:"native_only",
+            installed_state:"empty",
+            roots:"every_exact_package",
+            positive_requirements:"required_only",
+            provider_selection:"native_precedence"
+          },
+          target_architecture:$architecture,
+          counts:{
+            roots_walked:1,
+            resolved_roots:(1-$failures),
+            unresolved_roots:0,
+            not_installable_roots:0,
+            failed_roots:$failures,
+            error_kinds:(if $failures == 1 then [{kind:{error_variant:"config_error",reason:"solver_failed"},count:1}] else [] end)
+          },
+          outcomes:(if $failures == 0 then [{
+            root_package_key_sha256:("e" * 64),
+            name:"example",
+            version:"1",
+            release:"1",
+            architecture:$architecture,
+            outcome:{status:"resolved",closure_package_keys_sha256:[("e" * 64)]}
+          }] else [] end),
+          failure_record_limit:5000,
+          total_failures:$failures,
+          retained_failures:$failures,
+          truncated:false,
+          evidence_byte_limit:67108864,
+          retained_evidence_bytes:0,
+          retained_explanations:0,
+          withheld_explanations:$failures,
+          truncated_evidence:($failures > 0),
+          failures:(if $failures == 1 then [{
+            root_package_key_sha256:("e" * 64),
+            name:"example",
+            version:"1",
+            release:"1",
+            architecture:$architecture,
+            error_kind:{error_variant:"config_error",reason:"solver_failed"},
+            error_message:"solver failed",
+            native_explanation:{source:"withheld",reason:"evidence_budget_exhausted"}
+          }] else [] end)
+        }
+    ')"
+    printf '%s' "$candidate" >"$output/$profile.candidate-resolution-survey.json"
+    chmod 0600 "$output/$profile.candidate-resolution-survey.json"
+    implementation_evidence="$(jq -cnS '{
+      schema_version:1,
+      workers:2,
+      worker_load_milliseconds:[12,13],
+      memory_budget_bytes:8589934592,
+      measured_worker_rss_bytes:1610612736
+    }')"
+    printf '%s' "$implementation_evidence" \
+        >"$output/$profile.candidate-resolution-implementation.json"
+    chmod 0600 "$output/$profile.candidate-resolution-implementation.json"
+    comparison_result=null
+    if (( failures == 0 )); then
+        candidate_root="$(jq -cnS --arg root "$(printf 'e%.0s' {1..64})" '
+            {root_package_key_sha256:$root,outcome:{status:"resolved",closure_package_keys_sha256:[$root]}}
+        ')"
+        candidate_artifact_sha256="$(printf '%s\n' "$candidate_root" | sha256sum | cut -d ' ' -f 1)"
+        candidate_artifact_size=$((${#candidate_root} + 1))
+        candidate_manifest="$(jq -cnS \
+            --slurpfile package "$package_root/manifest.json" \
+            --argjson candidate "$candidate" \
+            --arg artifact "$candidate_artifact_sha256" \
+            --argjson size "$candidate_artifact_size" '
+            {
+              schema_version:2,
+              profile:$candidate.profile,
+              profile_revision_sha256:$candidate.profile_revision_sha256,
+              profile_logical_digest_sha256:$package[0].profile_logical_digest_sha256,
+              members:$package[0].members,
+              package_oracle_manifest_sha256:$candidate.package_oracle_manifest_sha256,
+              implementation:$candidate.implementation,
+              policy:$candidate.policy,
+              artifact:{
+                sha256:$artifact,
+                size:$size,
+                counts:{roots:1,resolved_roots:1,unresolved_roots:0,not_installable_roots:0,closure_package_references:1,unresolved_dependencies:0}
+              }
+            }
+        ')"
+        candidate_manifest_sha256="$(printf '%s' "$candidate_manifest" | sha256sum | cut -d ' ' -f 1)"
+        comparison="$(jq -cnS \
+            --arg profile "$profile" --arg revision "$revision" \
+            --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" \
+            --arg candidate "$candidate_manifest_sha256" '
+            {
+              schema_version:1,
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              package_oracle_manifest_sha256:$package,
+              oracle_manifest_sha256:$resolution,
+              candidate_manifest_sha256:$candidate,
+              counts:{roots_walked:1,matching_roots:1,mismatched_roots:0,mismatch_kinds:[],outcome_kind_pairs:[]},
+              mismatch_record_limit:5000,
+              total_mismatches:0,
+              retained_mismatches:0,
+              truncated:false,
+              mismatches:[]
+            }
+        ')"
+        printf '%s' "$comparison" >"$output/$profile.native-resolution-comparison-survey.json"
+        chmod 0600 "$output/$profile.native-resolution-comparison-survey.json"
+        printf '%s' "$implementation_evidence" \
+            >"$output/$profile.comparison-resolution-implementation.json"
+        chmod 0600 "$output/$profile.comparison-resolution-implementation.json"
+        comparison_profiles=$((comparison_profiles + 1))
+        comparison_result="$(jq -cnS --argjson comparison "$comparison" '
+            {
+              candidate_manifest_sha256:$comparison.candidate_manifest_sha256,
+              counts:$comparison.counts,
+              total_mismatches:$comparison.total_mismatches
+            }
+        ')"
+    fi
+    jq -cnS \
+        --arg profile "$profile" \
+        --argjson candidate "$candidate" \
+        --argjson comparison "$comparison_result" '
+        {
+          profile:$profile,
+          candidate:{counts:$candidate.counts,total_failures:$candidate.total_failures},
+          comparison:$comparison
+        }
+    ' >>"$profile_results_file"
+done
+jq -n \
+    --arg output "$output" \
+    --argjson failures "$candidate_failures" \
+    --argjson mismatches "$comparison_mismatches" \
+    --argjson comparison_profiles "$comparison_profiles" \
+    --slurpfile profile_results "$profile_results_file" '
+    {
+      output_dir:$output,
+      profiles:3,
+      profile_results:$profile_results,
+      roots_walked:3,
+      candidate_failures:$failures,
+      comparison_mismatches:$mismatches,
+      comparison_profiles:$comparison_profiles
+    }
+'
+if [[ -n "${CONARY_FAKE_SURVEY_STATUS:-}" ]]; then
+    printf '%s\n' "${CONARY_FAKE_SURVEY_DIAGNOSTIC:-unexpected survey failure}" >&2
+    exit "$CONARY_FAKE_SURVEY_STATUS"
+elif (( candidate_failures > 0 || comparison_mismatches > 0 )); then
+    echo "resolution surveys recorded findings" >&2
+    exit 101
+fi
+EOF
+    chmod 0755 "$bin"
+}
+
+make_survey_oracle_transport() {
+    local fake_root="$1"
+    local survey_id="$2"
+    local export_id="$3"
+    local build="${tmpdir}/survey-oracles-${survey_id}"
+    local transport="/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    local profiles_json="${build}/profiles.jsonl"
+    local files_json="${build}/files.jsonl"
+    mkdir -p "$build"
+    : >"$profiles_json"
+    : >"$files_json"
+    local profile architecture revision package_root resolution_root
+    local package_artifact resolution_artifact package_manifest resolution_manifest
+    local package_manifest_sha256 resolution_manifest_sha256 path
+    for profile in fedora-44 ubuntu-26.04 arch; do
+        case "$profile" in
+            fedora-44) architecture=x86_64; revision="$(printf 'a%.0s' {1..64})"; ecosystem=rpm ;;
+            ubuntu-26.04) architecture=amd64; revision="$(printf 'b%.0s' {1..64})"; ecosystem=debian ;;
+            arch) architecture=x86_64; revision="$(printf 'c%.0s' {1..64})"; ecosystem=alpm ;;
+        esac
+        package_root="${build}/${profile}/package-oracle"
+        resolution_root="${build}/${profile}/native-resolution"
+        mkdir -p "$package_root" "$resolution_root"
+        package_artifact="${package_root}/packages.jsonl"
+        resolution_artifact="${resolution_root}/roots.jsonl"
+        jq -cnS \
+            --arg profile "$profile" --arg architecture "$architecture" \
+            --arg ecosystem "$ecosystem" '
+            {
+              architecture:$architecture,
+              checksum:("8" * 64),
+              debian_multi_arch:null,
+              download_url:"https://example.invalid/package",
+              member_ordinal:0,
+              name:"example",
+              package_key_sha256:("e" * 64),
+              package_release:"1",
+              provides:[],
+              repository_identity:"repository",
+              requirement_groups:[],
+              size:1,
+              source_identity:"source",
+              source_profile:$profile,
+              source_snapshot_sha256:("7" * 64),
+              version:"1",
+              version_scheme:$ecosystem
+            }
+        ' >"$package_artifact"
+        jq -cnS '
+            {
+              outcome:{status:"resolved",closure_package_keys_sha256:[("e" * 64)]},
+              root_package_key_sha256:("e" * 64)
+            }
+        ' >"$resolution_artifact"
+        package_manifest="$(jq -cnS \
+            --arg profile "$profile" --arg revision "$revision" \
+            --arg ecosystem "$ecosystem" \
+            --arg sha256 "$(sha256sum "$package_artifact" | cut -d ' ' -f 1)" \
+            --argjson size "$(stat -c '%s' "$package_artifact")" '
+            {
+              schema_version:1,
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              profile_logical_digest_sha256:("1" * 64),
+              members:[],
+              implementation:{ecosystem:$ecosystem,name:"fixture",version:"1",projection_schema:1},
+              artifact:{
+                sha256:$sha256,
+                size:$size,
+                counts:{packages:1,provides:0,requirement_groups:0,requirement_atoms:0}
+              }
+            }
+        ')"
+        printf '%s' "$package_manifest" >"$package_root/manifest.json"
+        package_manifest_sha256="$(sha256sum "$package_root/manifest.json" | cut -d ' ' -f 1)"
+        resolution_manifest="$(jq -cnS \
+            --arg profile "$profile" --arg revision "$revision" \
+            --arg architecture "$architecture" --arg ecosystem "$ecosystem" \
+            --arg package "$package_manifest_sha256" \
+            --arg sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
+            --argjson size "$(stat -c '%s' "$resolution_artifact")" '
+            {
+              schema_version:2,
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              profile_logical_digest_sha256:("1" * 64),
+              members:[],
+              package_oracle_manifest_sha256:$package,
+              implementation:{ecosystem:$ecosystem,name:"fixture-resolution",version:"1",projection_schema:1},
+              policy:{
+                architecture:$architecture,
+                architecture_admission:"native_only",
+                installed_state:"empty",
+                roots:"every_exact_package",
+                positive_requirements:"required_only",
+                provider_selection:"native_precedence"
+              },
+              artifact:{
+                sha256:$sha256,
+                size:$size,
+                counts:{roots:1,resolved_roots:1,unresolved_roots:0,not_installable_roots:0,closure_package_references:1,unresolved_dependencies:0}
+              }
+            }
+        ')"
+        printf '%s' "$resolution_manifest" >"$resolution_root/manifest.json"
+        resolution_manifest_sha256="$(sha256sum "$resolution_root/manifest.json" | cut -d ' ' -f 1)"
+        jq -cnS \
+            --arg profile "$profile" --arg revision "$revision" \
+            --arg architecture "$architecture" --arg input "$(printf 'f%.0s' {1..64})" \
+            --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" \
+            --arg package_artifact "$(sha256sum "$package_artifact" | cut -d ' ' -f 1)" \
+            --argjson package_size "$(stat -c '%s' "$package_artifact")" \
+            --arg resolution_artifact "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
+            --argjson resolution_size "$(stat -c '%s' "$resolution_artifact")" '
+            {
+              profile:$profile,
+              profile_revision_sha256:$revision,
+              target_architecture:$architecture,
+              input_manifest_sha256:$input,
+              package_oracle:{manifest_sha256:$package,artifact:{name:"packages.jsonl",sha256:$package_artifact,size:$package_size}},
+              native_resolution:{manifest_sha256:$resolution,package_oracle_manifest_sha256:$package,artifact:{name:"roots.jsonl",sha256:$resolution_artifact,size:$resolution_size}}
+            }
+        ' >>"$profiles_json"
+        for path in \
+            "$profile/package-oracle/manifest.json" \
+            "$profile/package-oracle/packages.jsonl" \
+            "$profile/native-resolution/manifest.json" \
+            "$profile/native-resolution/roots.jsonl"; do
+            jq -cnS \
+                --arg path "$path" \
+                --arg sha256 "$(sha256sum "$build/$path" | cut -d ' ' -f 1)" \
+                --argjson size "$(stat -c '%s' "$build/$path")" \
+                '{path:$path,sha256:$sha256,size:$size}' >>"$files_json"
+        done
+    done
+    local manifest
+    manifest="$(jq -cnS \
+        --arg survey_id "$survey_id" --arg export_id "$export_id" \
+        --arg commit "$(printf 'd%.0s' {1..40})" \
+        --arg binary "$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)" \
+        --slurpfile profiles "$profiles_json" --slurpfile files "$files_json" '
+        {
+          schema_version:1,
+          survey_id:$survey_id,
+          export_id:$export_id,
+          workflow_runs:{oracle:300,export:200,deployment:100},
+          deployment:{commit_sha:$commit,binary_sha256:$binary},
+          profiles:$profiles,
+          files:$files
+        }
+    ')"
+    printf '%s' "$manifest" >"$build/manifest.json"
+    tar -cf "$transport" -C "$build" \
+        manifest.json \
+        fedora-44/package-oracle/manifest.json \
+        fedora-44/package-oracle/packages.jsonl \
+        fedora-44/native-resolution/manifest.json \
+        fedora-44/native-resolution/roots.jsonl \
+        ubuntu-26.04/package-oracle/manifest.json \
+        ubuntu-26.04/package-oracle/packages.jsonl \
+        ubuntu-26.04/native-resolution/manifest.json \
+        ubuntu-26.04/native-resolution/roots.jsonl \
+        arch/package-oracle/manifest.json \
+        arch/package-oracle/packages.jsonl \
+        arch/native-resolution/manifest.json \
+        arch/native-resolution/roots.jsonl
+    chmod 0600 "$transport"
+    local input_verification
+    input_verification="$(jq -cnS \
+        --slurpfile input "$build/manifest.json" \
+        --arg manifest_sha256 "$(sha256sum "$build/manifest.json" | cut -d ' ' -f 1)" \
+        --arg transport_sha256 "$(sha256sum "$transport" | cut -d ' ' -f 1)" \
+        --argjson transport_size "$(stat -c '%s' "$transport")" '
+        {
+          schema_version:1,
+          survey_id:$input[0].survey_id,
+          export_id:$input[0].export_id,
+          workflow_runs:$input[0].workflow_runs,
+          oracle_operator:{
+            workflow_commit_sha:("a" * 40),
+            workflow_run_id:$input[0].workflow_runs.oracle,
+            workflow_run_attempt:1
+          },
+          oracle_assembly:{sha256:("9" * 64)},
+          export_operator:{
+            schema_version:1,
+            workflow_commit_sha:("a" * 40),
+            workflow_run_id:$input[0].workflow_runs.export,
+            workflow_run_attempt:1,
+            attestation_sha256:("0" * 64)
+          },
+          deployment:$input[0].deployment,
+          profiles:[$input[0].profiles[] | {
+            profile,
+            profile_revision_sha256,
+            target_architecture,
+            package_oracle_manifest_sha256:.package_oracle.manifest_sha256,
+            native_resolution_manifest_sha256:.native_resolution.manifest_sha256
+          }],
+          manifest_sha256:$manifest_sha256,
+          transport:{sha256:$transport_sha256,size:$transport_size}
+        }
+    ')"
+    printf '%s' "$input_verification" >"${fake_root}/survey-input-verification.json"
+    benchmark_tmp_paths+=("$transport" "/tmp/remi-resolution-survey-${survey_id}.tar")
 }
 
 make_benchmark_fixture() {
@@ -355,6 +813,27 @@ run_benchmark_helper() {
     CONARY_FAKE_LEGACY_PUBLIC_RAW_SCHEMA="${CONARY_FAKE_LEGACY_PUBLIC_RAW_SCHEMA:-0}" \
     CONARY_FAKE_RAW_REPORT_MODE="${CONARY_FAKE_RAW_REPORT_MODE:-0600}" \
         bash "$helper" benchmark-remi-conversion "$@"
+}
+
+run_survey_helper() {
+    local fake_root="$1"
+    shift
+
+    CONARY_REMI_DEPLOY_ROOT="$fake_root" \
+    CONARY_REMI_DEPLOY_SKIP_RESTART=0 \
+    CONARY_REMI_DEPLOY_SURVEY_READINESS_URL="file://${fake_root}/health" \
+    CONARY_REMI_DEPLOY_TEST_SYSTEMCTL="${fake_root}/fake-systemctl" \
+    CONARY_FAKE_SERVICE_STATE="${fake_root}/service-state" \
+    CONARY_FAKE_SERVICE_LOG="${fake_root}/service-log" \
+    CONARY_FAKE_FAIL_START="${fake_root}/fail-start" \
+    CONARY_FAKE_SURVEY_ARGS="${fake_root}/survey-args" \
+    CONARY_FAKE_SURVEY_FINDINGS="${CONARY_FAKE_SURVEY_FINDINGS:-0}" \
+    CONARY_FAKE_SURVEY_STATUS="${CONARY_FAKE_SURVEY_STATUS:-}" \
+    CONARY_FAKE_SURVEY_DIAGNOSTIC="${CONARY_FAKE_SURVEY_DIAGNOSTIC:-}" \
+    CONARY_FAKE_SURVEY_INSPECT_STATUS="${CONARY_FAKE_SURVEY_INSPECT_STATUS:-}" \
+    CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC="${CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC:-}" \
+    CONARY_FAKE_MUTATE_SURVEY_ON_START="${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" \
+        bash "$helper" survey-resolution "$@"
 }
 
 expect_fail() {
@@ -856,6 +1335,233 @@ test_export_native_oracle_inputs_uses_exact_public_candidates() {
         run_helper "$fake_root" export-native-oracle-inputs \
         "${export_id}-upper" "${fedora_sha^^}" "$ubuntu_sha" "$arch_sha"
     rm -f "$transport"
+}
+
+make_survey_fixture() {
+    local fake_root="$1"
+    local survey_id="$2"
+    local export_id="$3"
+    write_config "$fake_root"
+    chmod 0644 "$fake_root/etc/conary/remi.toml"
+    make_fake_survey_remi "$fake_root"
+    make_fake_benchmark_systemctl "$fake_root"
+    printf 'active\n' >"$fake_root/service-state"
+    : >"$fake_root/service-log"
+    printf 'ok\n' >"$fake_root/health"
+    make_survey_oracle_transport "$fake_root" "$survey_id" "$export_id"
+}
+
+test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
+    local survey_id="survey-success-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local output transport verification
+    # shellcheck disable=SC2016
+    grep -F 'SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"' \
+        "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
+    grep -F 'local readiness_attempts_remaining=30' "$helper" >/dev/null ||
+        fail "resolution survey lost its bounded readiness poll"
+    if grep -F 'transport_stage' "$helper" >/dev/null; then
+        fail "resolution survey duplicates its frozen output before archiving"
+    fi
+    # shellcheck disable=SC2016
+    grep -F -- '-C "$SURVEY_STAGING" manifest.json' "$helper" >/dev/null ||
+        fail "resolution survey does not archive its root-owned manifest directly"
+    # shellcheck disable=SC2016
+    grep -F -- '-C "$output" "${transport_members[@]}"' "$helper" >/dev/null ||
+        fail "resolution survey does not archive its frozen survey files directly"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    output="$(CONARY_FAKE_MUTATE_SURVEY_ON_START="${fake_root}/conary/evidence/resolution-surveys/${survey_id}/fedora-44.candidate-resolution-survey.json" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar")"
+    transport="/tmp/remi-resolution-survey-${survey_id}.tar"
+    [[ "$output" =~ ^Resolution\ survey:\ survey=${survey_id}\ export=${export_id}\ transport=${transport}\ sha256=[0-9a-f]{64}\ bytes=[1-9][0-9]*\ candidate_failures=0\ comparison_mismatches=0$ ]] ||
+        fail "resolution survey returned an unexpected publication line: $output"
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "resolution survey service ordering drifted: $(cat "$fake_root/service-log")"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ -f "$transport" && ! -L "$transport" && "$(stat -c '%a' "$transport")" == "600" ]]
+    [[ -d "$fake_root/conary/evidence/resolution-surveys/$survey_id" ]]
+    [[ "$(stat -c '%a' "$fake_root/conary/evidence/resolution-surveys/$survey_id")" == "700" ]]
+    [[ -d "$fake_root/conary/evidence/.remi-operator-staging" \
+        && "$(stat -c '%a' "$fake_root/conary/evidence/.remi-operator-staging")" == "750" ]]
+    if find "$fake_root/conary/evidence/.remi-operator-staging" \
+        -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        fail "resolution survey leaked capacity-domain operator staging"
+    fi
+    grep -F 'forged_after_restart' \
+        "$fake_root/conary/evidence/resolution-surveys/$survey_id/fedora-44.candidate-resolution-survey.json" >/dev/null ||
+        fail "survey restart did not exercise the service-user output mutation test"
+    grep -Fx -- "--config" "$fake_root/survey-args" >/dev/null
+    grep -Fx -- "fedora-44=$(printf 'a%.0s' {1..64})" "$fake_root/survey-args" >/dev/null
+    grep -Fx -- "ubuntu-26.04=$(printf 'b%.0s' {1..64})" "$fake_root/survey-args" >/dev/null
+    grep -Fx -- "arch=$(printf 'c%.0s' {1..64})" "$fake_root/survey-args" >/dev/null
+
+    verification="${tmpdir}/${survey_id}-verification.json"
+    python3 scripts/remi-resolution-survey-transport.py verify-output \
+        --survey-id "$survey_id" \
+        --export-id "$export_id" \
+        --input-evidence "$fake_root/survey-input-verification.json" \
+        --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        --transport "$transport" \
+        --evidence "$verification" >/dev/null
+    jq -e '
+        .schema_version == 2
+        and .counts == {
+          candidate_failures: 0,
+          comparison_mismatches: 0,
+          comparison_profiles: 3,
+          profiles: 3,
+          roots_walked: 3
+        }
+        and ([.profiles[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+    ' "$verification" >/dev/null
+}
+
+test_resolution_survey_findings_restart_and_succeed() {
+    local survey_id="survey-findings-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local output transport verification
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    output="$(CONARY_FAKE_SURVEY_FINDINGS=1 run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar")"
+    transport="/tmp/remi-resolution-survey-${survey_id}.tar"
+    [[ "$output" =~ candidate_failures=3\ comparison_mismatches=0$ ]] ||
+        fail "survey findings were not reported as a successful helper outcome"
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "survey findings did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    verification="${tmpdir}/${survey_id}-verification.json"
+    python3 scripts/remi-resolution-survey-transport.py verify-output \
+        --survey-id "$survey_id" --export-id "$export_id" \
+        --input-evidence "$fake_root/survey-input-verification.json" \
+        --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        --transport "$transport" --evidence "$verification" >/dev/null
+    jq -e '
+        .counts.candidate_failures == 3
+        and .counts.comparison_profiles == 0
+        and all(.profiles[]; .comparison == null)
+    ' "$verification" >/dev/null
+}
+
+test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap() {
+    local survey_id="survey-large-input-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local transport="/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    truncate -s $((32 * 1024 * 1024 * 1024 + 10240)) "$transport"
+
+    run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "$transport" >/dev/null
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "manifest-bound sparse survey transport did not complete in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+}
+
+test_resolution_survey_failure_sanitizes_diagnostic() {
+    local survey_id="survey-failure-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local stdout_file="${tmpdir}/${survey_id}.stdout"
+    local stderr_file="${tmpdir}/${survey_id}.stderr"
+    local private_diagnostic='/conary/private/candidates/secret-token'
+    local status
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    set +e
+    CONARY_FAKE_SURVEY_STATUS=42 \
+    CONARY_FAKE_SURVEY_DIAGNOSTIC="$private_diagnostic" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "unexpected survey failure succeeded"
+    grep -F 'resolution survey failed with status 42' "$stderr_file" >/dev/null ||
+        fail "unexpected survey failure lost its typed public diagnostic"
+    if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
+        fail "unexpected survey failure leaked raw Remi diagnostics"
+    fi
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "unexpected survey failure did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
+}
+
+test_resolution_survey_inspection_failure_sanitizes_diagnostic() {
+    local survey_id="survey-inspection-failure-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local stdout_file="${tmpdir}/${survey_id}.stdout"
+    local stderr_file="${tmpdir}/${survey_id}.stderr"
+    local private_diagnostic='/conary/private/candidates/inspection-secret'
+    local status
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    set +e
+    CONARY_FAKE_SURVEY_INSPECT_STATUS=43 \
+    CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC="$private_diagnostic" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "unexpected survey inspection failure succeeded"
+    grep -F 'could not inspect exact stopped-runtime candidate pointers' "$stderr_file" >/dev/null ||
+        fail "survey inspection failure lost its typed public diagnostic"
+    if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
+        fail "survey inspection failure leaked raw Remi diagnostics"
+    fi
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nstart remi' ]] ||
+        fail "survey inspection failure did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
+}
+
+test_resolution_survey_preflight_failure_cleans_staging() {
+    local survey_id="survey-preflight-cleanup-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    printf 'tampered\n' >>"$fake_root/usr/local/bin/remi"
+
+    expect_fail "resolution survey binary binding drift" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    if find "$fake_root/conary/evidence/.remi-operator-staging" \
+        -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        fail "survey preflight failure leaked a root staging directory"
+    fi
+    [[ ! -s "$fake_root/service-log" ]] ||
+        fail "survey preflight failure caused downtime"
+}
+
+test_resolution_survey_rejects_invalid_requests_before_downtime() {
+    local survey_id="survey-invalid-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local transport="/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    expect_fail "invalid resolution survey id" \
+        run_survey_helper "$fake_root" '../escape' "$export_id" "$transport"
+    expect_fail "resolution survey path not bound to id" \
+        run_survey_helper "$fake_root" "$survey_id" "$export_id" "/tmp/other.tar"
+    [[ ! -s "$fake_root/service-log" ]] || fail "invalid survey arguments caused downtime"
+
+    local unexpected="${tmpdir}/unexpected-member"
+    printf 'unexpected\n' >"$unexpected"
+    tar -rf "$transport" -C "$tmpdir" "$(basename "$unexpected")"
+    expect_fail "resolution survey transport with unexpected member" \
+        run_survey_helper "$fake_root" "$survey_id" "$export_id" "$transport"
+    [[ ! -s "$fake_root/service-log" ]] || fail "invalid survey transport caused downtime"
+    [[ ! -e "$fake_root/conary/evidence/resolution-surveys/$survey_id" ]]
 }
 
 run_valid_conversion_benchmark() {
@@ -1370,19 +2076,32 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
 test_install_helper_requires_exact_digest() {
     local fake_root="${tmpdir}/root-helper"
     local staged="${tmpdir}/staged-helper"
-    local digest
-    mkdir -p "$fake_root/usr/local/sbin"
+    local authority="${tmpdir}/protected-main-helper"
+    local digest malicious_digest
+    mkdir -p "$fake_root/usr/local/sbin" "$authority/deploy"
+    printf 'a%.0s' {1..40} >"$authority/main-commit"
+    cp "$helper" "$authority/deploy/remi-deploy-helper.sh"
     cp "$helper" "$staged"
     digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
 
-    run_helper "$fake_root" install-helper "$digest" "$staged"
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        run_helper "$fake_root" install-helper "$digest" "$staged"
     test -x "$fake_root/usr/local/sbin/conary-remi-deploy"
+    cmp -s "$helper" "$fake_root/usr/local/sbin/conary-remi-deploy"
 
     cp "$helper" "$staged"
-    expect_fail "helper digest mismatch" \
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        expect_fail "helper digest mismatch" \
         run_helper "$fake_root" install-helper \
         0000000000000000000000000000000000000000000000000000000000000000 \
         "$staged"
+
+    printf '#!/usr/bin/env bash\necho attacker-controlled\n' >"$staged"
+    malicious_digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        expect_fail "self-consistent untrusted helper" \
+        run_helper "$fake_root" install-helper "$malicious_digest" "$staged"
+    cmp -s "$helper" "$fake_root/usr/local/sbin/conary-remi-deploy"
 }
 
 test_verify_access_does_not_require_a_running_service() {
@@ -1413,6 +2132,13 @@ main() {
     test_deploy_remi_rejects_malformed_authority_root
     test_inspect_remi_storage_reports_bounded_numeric_evidence
     test_export_native_oracle_inputs_uses_exact_public_candidates
+    test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
+    test_resolution_survey_findings_restart_and_succeed
+    test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap
+    test_resolution_survey_failure_sanitizes_diagnostic
+    test_resolution_survey_inspection_failure_sanitizes_diagnostic
+    test_resolution_survey_preflight_failure_cleans_staging
+    test_resolution_survey_rejects_invalid_requests_before_downtime
     test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence
     test_conversion_benchmark_failure_restarts_without_publication
     test_conversion_benchmark_reserves_ssh_failure_status

@@ -501,6 +501,7 @@ grep -q '^slug: resolution$' "$tmp/real-resolution.out" \
 for native_parity_path in \
     .github/workflows/export-remi-native-oracle-inputs.yml \
     .github/workflows/produce-remi-native-oracles.yml \
+    .github/workflows/survey-remi-resolution.yml \
     crates/conary-core/build.rs \
     crates/conary-core/src/repository/architecture.rs \
     crates/conary-core/src/repository/catalog/parity/mod.rs \
@@ -511,6 +512,8 @@ for native_parity_path in \
     scripts/test-produce-native-oracle-lane.py \
     scripts/test-native-oracle-input-transport.py \
     scripts/verify-native-oracle-input-transport.py \
+    scripts/remi-resolution-survey-transport.py \
+    scripts/test-remi-resolution-survey-transport.py \
     apps/remi/src/server/universe_revision_inspection.rs; do
     "$script" --path "$native_parity_path" > "$tmp/real-native-parity.out"
     grep -q '^slug: native-parity$' "$tmp/real-native-parity.out" \
