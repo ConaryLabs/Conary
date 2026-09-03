@@ -5,7 +5,6 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
-use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -222,42 +221,29 @@ fn resolved_destination(path: &Path) -> Result<PathBuf> {
     } else {
         std::env::current_dir()?.join(path)
     };
-    let absolute = lexically_normalize_absolute(&absolute);
-    let mut existing = absolute.as_path();
-    let mut suffix = Vec::<OsString>::new();
-    while !existing.try_exists()? {
-        let Some(name) = existing.file_name() else {
-            break;
-        };
-        suffix.push(name.to_os_string());
-        existing = existing.parent().ok_or_else(|| {
-            Error::InvalidPath(format!(
-                "resolution destination {} has no existing ancestor",
-                path.display()
-            ))
-        })?;
-    }
-    let mut resolved = fs::canonicalize(existing)?;
-    for component in suffix.into_iter().rev() {
-        resolved.push(component);
-    }
-    Ok(resolved)
-}
-
-fn lexically_normalize_absolute(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
+    let mut resolved = PathBuf::new();
+    for component in absolute.components() {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                normalized.pop();
+                resolved.pop();
             }
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
-                normalized.push(component.as_os_str());
+            Component::Prefix(_) | Component::RootDir => {
+                resolved.push(component.as_os_str());
+            }
+            Component::Normal(name) => {
+                let candidate = resolved.join(name);
+                match fs::symlink_metadata(&candidate) {
+                    Ok(_) => resolved = fs::canonicalize(&candidate)?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        resolved.push(name);
+                    }
+                    Err(error) => return Err(error.into()),
+                }
             }
         }
     }
-    normalized
+    Ok(resolved)
 }
 
 pub(crate) struct OrderedResolutionMetrics {
@@ -907,6 +893,22 @@ mod tests {
 
         let bundle = real.join("strict-bundle");
         let evidence = alias.join("strict-bundle/implementation.json");
+        assert!(ensure_resolution_walk_evidence_outside_bundle(&bundle, &evidence).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn implementation_evidence_preserves_symlink_parent_component_semantics() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempfile::tempdir().unwrap();
+        let bundle = temporary.path().join("strict-bundle");
+        let nested = bundle.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        let alias = temporary.path().join("alias");
+        symlink(&nested, &alias).unwrap();
+
+        let evidence = alias.join("../implementation.json");
         assert!(ensure_resolution_walk_evidence_outside_bundle(&bundle, &evidence).is_err());
     }
 
