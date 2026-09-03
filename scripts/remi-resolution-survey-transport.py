@@ -1343,6 +1343,7 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         or limits["retained_failures"] > limits["failure_record_limit"]
     ):
         fail(f"{name} retention or evidence counts are inconsistent")
+
     successful = (
         count_values["resolved_roots"] + count_values["unresolved_roots"]
         + count_values["not_installable_roots"]
@@ -1427,11 +1428,82 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         fail(f"{name} retention or evidence counts are inconsistent")
 
 
+def reconstruct_candidate_manifest_sha256(
+    candidate_survey: dict[str, Any],
+    package_manifest: dict[str, Any],
+    name: str,
+) -> str:
+    if candidate_survey["total_failures"] != 0:
+        fail(f"{name} cannot reconstruct an incomplete candidate manifest")
+    artifact_digest = hashlib.sha256()
+    artifact_size = 0
+    closure_package_references = 0
+    unresolved_dependencies = 0
+    for item in candidate_survey["outcomes"]:
+        root = {
+            "root_package_key_sha256": item["root_package_key_sha256"],
+            "outcome": item["outcome"],
+        }
+        row = canonical_json(root) + b"\n"
+        artifact_digest.update(row)
+        artifact_size += len(row)
+        if artifact_size > U64_MAX:
+            fail(f"{name} reconstructed candidate artifact exceeds u64")
+        if item["outcome"]["status"] == "resolved":
+            closure_package_references += len(
+                item["outcome"]["closure_package_keys_sha256"]
+            )
+        elif item["outcome"]["status"] == "unresolved":
+            unresolved_dependencies += len(item["outcome"]["dependencies"])
+        if (
+            closure_package_references > U64_MAX
+            or unresolved_dependencies > U64_MAX
+        ):
+            fail(f"{name} reconstructed candidate counts exceed u64")
+    counts = candidate_survey["counts"]
+    artifact_counts = {
+        "roots": counts["roots_walked"],
+        "resolved_roots": counts["resolved_roots"],
+        "unresolved_roots": counts["unresolved_roots"],
+        "not_installable_roots": counts["not_installable_roots"],
+        "closure_package_references": closure_package_references,
+        "unresolved_dependencies": unresolved_dependencies,
+    }
+    implementation = package_manifest.get("implementation")
+    if (
+        not isinstance(implementation, dict)
+        or implementation.get("ecosystem")
+        != candidate_survey["implementation"]["ecosystem"]
+    ):
+        fail(f"{name} candidate and package implementations disagree")
+    candidate_manifest = {
+        "schema_version": 2,
+        "profile": candidate_survey["profile"],
+        "profile_revision_sha256": candidate_survey["profile_revision_sha256"],
+        "profile_logical_digest_sha256": package_manifest[
+            "profile_logical_digest_sha256"
+        ],
+        "members": package_manifest["members"],
+        "package_oracle_manifest_sha256": candidate_survey[
+            "package_oracle_manifest_sha256"
+        ],
+        "implementation": candidate_survey["implementation"],
+        "policy": candidate_survey["policy"],
+        "artifact": {
+            "sha256": artifact_digest.hexdigest(),
+            "size": artifact_size,
+            "counts": artifact_counts,
+        },
+    }
+    return sha256_bytes(canonical_json(candidate_manifest))
+
+
 def validate_comparison_survey(
     value: Any,
     profile: dict[str, Any],
     name: str,
     candidate_survey: dict[str, Any],
+    candidate_manifest_sha256: str,
 ) -> None:
     survey = exact_object(
         value,
@@ -1449,6 +1521,7 @@ def validate_comparison_survey(
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"] != profile["package_oracle_manifest_sha256"]
         or survey["oracle_manifest_sha256"] != profile["native_resolution_manifest_sha256"]
+        or survey["candidate_manifest_sha256"] != candidate_manifest_sha256
     ):
         fail(f"{name} identity or oracle binding drifted")
     require_rust_identity(survey["profile"], f"{name}.profile")
@@ -1607,7 +1680,7 @@ def forbid_private_paths(value: Any, label: str) -> None:
 
 def validate_input_evidence(
     path: Path, survey_id: str, export_id: str
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict[str, Any]]:
     value, _ = load_json(path, "resolution-survey input verification", canonical=True)
     evidence = exact_object(
         value,
@@ -1715,14 +1788,104 @@ def validate_input_evidence(
             profile["native_resolution_manifest_sha256"],
             f"input {profile_name} resolution oracle",
         )
-    require_sha256(evidence["manifest_sha256"], "input transport manifest")
+    manifest_sha256 = require_sha256(
+        evidence["manifest_sha256"], "input transport manifest"
+    )
     transport = exact_object(
         evidence["transport"], {"sha256", "size"}, "input oracle transport"
     )
     require_sha256(transport["sha256"], "input oracle transport digest")
     if exact_nonnegative_int(transport["size"], "input oracle transport size") == 0:
         fail("input oracle transport size must be positive")
-    return deployment, profiles
+    return deployment, profiles, manifest_sha256, transport
+
+
+def load_input_package_manifests(
+    path: Path,
+    expected_manifest_sha256: str,
+    expected_transport: dict[str, Any],
+    profiles: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    metadata = plain_file(path, "authenticated oracle transport")
+    if (
+        metadata.st_size != expected_transport["size"]
+        or hash_file(path) != expected_transport["sha256"]
+    ):
+        fail("oracle transport differs from authenticated input evidence")
+    try:
+        archive = tarfile.open(path, mode="r:")
+    except (OSError, tarfile.TarError) as error:
+        fail(f"oracle transport is not one uncompressed tar archive: {error}")
+    with archive:
+        members: dict[str, tarfile.TarInfo] = {}
+        for member in archive:
+            name = safe_member_name(member.name)
+            if name in members:
+                fail(f"oracle transport repeats member {name!r}")
+            if member.pax_headers or getattr(member, "sparse", None):
+                fail(f"oracle transport member {name!r} uses extended metadata")
+            members[name] = member
+            if len(members) > 1 + len(PUBLIC_PROFILES) * 4:
+                fail("oracle transport exceeds its fixed profile member inventory")
+        manifest_member = members.get("manifest.json")
+        if manifest_member is None:
+            fail("oracle transport has no manifest.json")
+        manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
+        if (
+            sha256_bytes(manifest_bytes) != expected_manifest_sha256
+            or canonical_json(decode_json(manifest_bytes, "oracle transport manifest"))
+            != manifest_bytes
+        ):
+            fail("oracle transport manifest differs from authenticated input evidence")
+        expected_names = {"manifest.json"}
+        package_manifests: dict[str, dict[str, Any]] = {}
+        for profile in profiles:
+            profile_name = profile["profile"]
+            package_name = f"{profile_name}/package-oracle/manifest.json"
+            expected_names.update(
+                {
+                    package_name,
+                    f"{profile_name}/package-oracle/packages.jsonl",
+                    f"{profile_name}/native-resolution/manifest.json",
+                    f"{profile_name}/native-resolution/roots.jsonl",
+                }
+            )
+            member = members.get(package_name)
+            if member is None:
+                fail(f"oracle transport omits {package_name}")
+            package_bytes = read_tar_member(archive, member, MAX_MANIFEST_BYTES)
+            if sha256_bytes(package_bytes) != profile["package_oracle_manifest_sha256"]:
+                fail(f"{profile_name} package manifest differs from authenticated input")
+            package = decode_json(package_bytes, f"{profile_name} package manifest")
+            if canonical_json(package) != package_bytes or not isinstance(package, dict):
+                fail(f"{profile_name} package manifest is not one canonical object")
+            if (
+                exact_u32(
+                    package.get("schema_version"),
+                    f"{profile_name} package manifest schema_version",
+                )
+                != 1
+                or package.get("profile") != profile_name
+                or package.get("profile_revision_sha256")
+                != profile["profile_revision_sha256"]
+            ):
+                fail(f"{profile_name} package manifest binding drifted")
+            require_sha256(
+                package.get("profile_logical_digest_sha256"),
+                f"{profile_name} profile logical digest",
+            )
+            if not isinstance(package.get("members"), list):
+                fail(f"{profile_name} package manifest members are malformed")
+            implementation = package.get("implementation")
+            if (
+                not isinstance(implementation, dict)
+                or implementation.get("ecosystem") != PROFILE_ECOSYSTEMS[profile_name]
+            ):
+                fail(f"{profile_name} package implementation binding drifted")
+            package_manifests[profile_name] = package
+        if set(members) != expected_names:
+            fail("oracle transport contains missing or unexpected members")
+    return package_manifests
 
 
 def verify_staged_output(
@@ -1732,6 +1895,7 @@ def verify_staged_output(
     export_id: str,
     input_deployment: dict[str, Any],
     input_profiles: list[dict[str, Any]],
+    package_manifests: dict[str, dict[str, Any]],
 ) -> None:
     metadata = plain_file(args.transport, "survey transport")
     try:
@@ -1898,6 +2062,7 @@ def verify_staged_output(
                 comparison,
                 {
                     "file",
+                    "candidate_manifest_sha256",
                     "counts",
                     "total_mismatches",
                     "mismatch_histogram",
@@ -1905,6 +2070,19 @@ def verify_staged_output(
                 },
                 f"{profile_name} comparison summary",
             )
+            expected_candidate_manifest_sha256 = reconstruct_candidate_manifest_sha256(
+                candidate_value,
+                package_manifests[profile_name],
+                candidate["file"],
+            )
+            if (
+                require_sha256(
+                    comparison["candidate_manifest_sha256"],
+                    f"{profile_name} comparison candidate manifest",
+                )
+                != expected_candidate_manifest_sha256
+            ):
+                fail(f"{profile_name} comparison summary binds another candidate manifest")
             comparison_name = comparison.get("file")
             expected_comparison_name = (
                 f"{profile_name}.native-resolution-comparison-survey.json"
@@ -1921,13 +2099,19 @@ def verify_staged_output(
                 {"mismatches"},
             ) as comparison_value:
                 validate_comparison_survey(
-                    comparison_value, profile, comparison_name, candidate_value
+                    comparison_value,
+                    profile,
+                    comparison_name,
+                    candidate_value,
+                    expected_candidate_manifest_sha256,
                 )
                 forbid_private_paths(comparison_value, comparison_name)
                 if (
                     comparison.get("counts") != comparison_value["counts"]
                     or comparison.get("total_mismatches")
                     != comparison_value["total_mismatches"]
+                    or comparison.get("candidate_manifest_sha256")
+                    != comparison_value["candidate_manifest_sha256"]
                     or comparison.get("mismatch_histogram")
                     != comparison_value["counts"]["mismatch_kinds"]
                     or comparison.get("outcome_histogram")
@@ -1978,8 +2162,19 @@ def verify_staged_output(
 def verify_output(args: argparse.Namespace) -> None:
     survey_id = require_identity(args.survey_id, "survey id")
     export_id = require_identity(args.export_id, "export id")
-    input_deployment, input_profiles = validate_input_evidence(
+    (
+        input_deployment,
+        input_profiles,
+        input_manifest_sha256,
+        input_transport,
+    ) = validate_input_evidence(
         args.input_evidence, survey_id, export_id
+    )
+    package_manifests = load_input_package_manifests(
+        args.oracle_transport,
+        input_manifest_sha256,
+        input_transport,
+        input_profiles,
     )
     with tempfile.TemporaryDirectory(prefix="remi-resolution-survey-verify-") as path:
         staging = Path(path)
@@ -1991,6 +2186,7 @@ def verify_output(args: argparse.Namespace) -> None:
             export_id,
             input_deployment,
             input_profiles,
+            package_manifests,
         )
 
 
@@ -2018,6 +2214,7 @@ def parse_args() -> argparse.Namespace:
     verify.add_argument("--survey-id", required=True)
     verify.add_argument("--export-id", required=True)
     verify.add_argument("--input-evidence", required=True, type=Path)
+    verify.add_argument("--oracle-transport", required=True, type=Path)
     verify.add_argument("--transport", required=True, type=Path)
     verify.add_argument("--evidence", required=True, type=Path)
     return parser.parse_args()

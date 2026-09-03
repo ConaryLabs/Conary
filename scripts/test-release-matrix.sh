@@ -262,6 +262,7 @@ create_release_policy_fixture() {
         "$repo/.github/actions/setup-rust-workspace" \
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
+        "$repo/apps/remi/src/server" \
         "$repo/docs/operations" \
         "$repo/site/src/lib" \
         "$repo/site/static" \
@@ -297,6 +298,8 @@ create_release_policy_fixture() {
         "$repo/scripts/produce-native-oracle-lane.py"
     cp "$REPO_ROOT/scripts/remi-resolution-survey-transport.py" \
         "$repo/scripts/remi-resolution-survey-transport.py"
+    cp "$REPO_ROOT/apps/remi/src/server/resolution_survey.rs" \
+        "$repo/apps/remi/src/server/resolution_survey.rs"
     cp "$REPO_ROOT/scripts/assemble-native-oracle-lanes.py" \
         "$repo/scripts/assemble-native-oracle-lanes.py"
     cp "$REPO_ROOT/scripts/native-oracle-lane-selection.py" \
@@ -2344,6 +2347,45 @@ test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
         "resolution survey whole-document output buffering"
 }
 
+test_check_release_matrix_rejects_helper_survey_document_slurp() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '            --slurpfile outcome "$outcome" '\''' \
+        $'            --slurpfile outcome "$outcome" \\\n            --slurpfile candidate "$candidate_file" '\'''
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey helper whole-document jq buffering"
+}
+
+test_check_release_matrix_rejects_unbound_comparison_candidate_manifest() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '        or survey["candidate_manifest_sha256"] != candidate_manifest_sha256' \
+        '        or False'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey comparison binds its reconstructed candidate manifest"
+}
+
+test_check_release_matrix_rejects_unreopened_survey_oracle_transport() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --oracle-transport "$ORACLE_TRANSPORT" \' \
+        '            --oracle-transport "$SURVEY_TRANSPORT" \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
+}
+
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3645,6 +3687,9 @@ main() {
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
         test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
         test_check_release_matrix_rejects_buffered_resolution_survey_documents
+        test_check_release_matrix_rejects_helper_survey_document_slurp
+        test_check_release_matrix_rejects_unbound_comparison_candidate_manifest
+        test_check_release_matrix_rejects_unreopened_survey_oracle_transport
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

@@ -183,6 +183,14 @@ class TransportFixture:
                 "schema_version": 1,
                 "profile": profile,
                 "profile_revision_sha256": self.candidates[profile],
+                "profile_logical_digest_sha256": "f" * 64,
+                "members": [],
+                "implementation": {
+                    "ecosystem": ECOSYSTEMS[profile],
+                    "name": "fixture",
+                    "version": "1",
+                    "projection_schema": 1,
+                },
                 "artifact": {
                     "sha256": digest(package_artifact),
                     "size": len(package_artifact),
@@ -482,35 +490,42 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             ],
         }
         TRANSPORT_TOOL.validate_comparison_survey(
-            comparison, profile, "comparison.json", candidate
+            comparison, profile, "comparison.json", candidate, candidate_manifest
         )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatches"][0]["candidate"]["outcome"] = resolved
         with self.assertRaisesRegex(ValueError, "equal outcomes"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["retained_mismatches"] = 0
         with self.assertRaisesRegex(ValueError, "retention counts"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatch_record_limit"] = 5001
         with self.assertRaisesRegex(ValueError, "retention counts"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["schema_version"] = True
         with self.assertRaisesRegex(ValueError, "unsigned 64-bit integer"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
+            )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["candidate_manifest_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "identity or oracle binding drifted"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
         malformed = json.loads(canonical(comparison))
@@ -518,7 +533,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         malformed["counts"]["matching_roots"] = 1
         with self.assertRaisesRegex(ValueError, "root population"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
         malformed = json.loads(canonical(comparison))
@@ -532,7 +547,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         ] = replacement_root
         with self.assertRaisesRegex(ValueError, "root differs from the candidate"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json", candidate
+                malformed, profile, "comparison.json", candidate, candidate_manifest
             )
 
     def test_build_input_binds_all_runs_and_oracle_bytes(self) -> None:
@@ -706,6 +721,8 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 EXPORT_ID,
                 "--input-evidence",
                 str(fixture.evidence),
+                "--oracle-transport",
+                str(fixture.transport),
                 "--transport",
                 str(output),
                 "--evidence",
@@ -759,6 +776,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertIn("histogram disagrees with failures", result.stderr)
 
             malformed_candidate = json.loads(valid_candidate)
+            malformed_candidate["counts"]["resolved_roots"] = 0
+            malformed_candidate["counts"]["not_installable_roots"] = 1
+            survey_files[first_name] = canonical(malformed_candidate)
+            write_output()
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("typed outcomes disagree with counts", result.stderr)
+
+            malformed_candidate = json.loads(valid_candidate)
             malformed_candidate["implementation"]["ecosystem"] = "rpm"
             survey_files[first_name] = canonical(malformed_candidate)
             write_output()
@@ -790,7 +816,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             fixture.evidence.write_bytes(canonical(wrong_input))
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("survey binding differs", result.stderr)
+            self.assertIn("package manifest binding drifted", result.stderr)
             fixture.evidence.write_bytes(input_evidence_bytes)
 
             tampered = bytearray(output.read_bytes())

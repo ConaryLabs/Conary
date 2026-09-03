@@ -23,6 +23,7 @@ native_oracle_lane_selector="scripts/native-oracle-lane-selection.py"
 native_oracle_producer_verifier="scripts/verify-native-oracle-producer.py"
 resolution_survey_transport="scripts/remi-resolution-survey-transport.py"
 remi_deploy_helper="deploy/remi-deploy-helper.sh"
+remi_resolution_survey="apps/remi/src/server/resolution_survey.rs"
 candidate_predeployment_filter="deploy/remi-predeployment-inspection.jq"
 candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
@@ -181,6 +182,7 @@ for required_file in \
     "$native_oracle_producer_verifier" \
     "$native_oracle_transport_verifier" \
     "$resolution_survey_transport" \
+    "$remi_resolution_survey" \
     "$candidate_predeployment_filter" \
     "$candidate_postdeployment_filter" \
     "$candidate_artifact_script" \
@@ -520,7 +522,7 @@ require_job_match "$resolution_survey_workflow" survey 'git show "\$\{WORKFLOW_S
 require_job_match "$resolution_survey_workflow" survey 'git fetch --no-tags origin main[\s\S]*git show "origin/main:deploy/remi-deploy-helper\.sh"[\s\S]*current_helper_sha256=[\s\S]*"\$helper_sha256" == "\$current_helper_sha256"[\s\S]*scp .*"\$helper"[\s\S]*git fetch --no-tags origin main[\s\S]*git show "origin/main:deploy/remi-deploy-helper\.sh"[\s\S]*preinstall_helper_sha256=[\s\S]*"\$helper_sha256" == "\$preinstall_helper_sha256"[\s\S]*conary-remi-deploy install-helper' 'resolution survey revalidates protected main immediately before helper installation'
 require_literal_count "$resolution_survey_workflow" 'git fetch --no-tags origin main' 3 'resolution survey initial and pre-install protected-main helper checks'
 require_literal_count "$resolution_survey_workflow" '[[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' 3 'resolution survey rejects stale workflow and verifier revisions at every main fetch'
-require_job_match "$resolution_survey_workflow" survey 'ssh_opts=\([\s\S]*BatchMode=yes[\s\S]*ConnectTimeout=30[\s\S]*IdentitiesOnly=yes[\s\S]*StrictHostKeyChecking=yes[\s\S]*ServerAliveInterval=30[\s\S]*ServerAliveCountMax=6[\s\S]*conary-remi-deploy survey-resolution[\s\S]*sha256sum "\$local_output"[\s\S]*remi-resolution-survey-transport\.py verify-output[\s\S]*--input-evidence resolution-survey-input-verification\.json' 'resolution survey fixed helper, fail-closed SSH, and independent output verification'
+require_job_match "$resolution_survey_workflow" survey 'ssh_opts=\([\s\S]*BatchMode=yes[\s\S]*ConnectTimeout=30[\s\S]*IdentitiesOnly=yes[\s\S]*StrictHostKeyChecking=yes[\s\S]*ServerAliveInterval=30[\s\S]*ServerAliveCountMax=6[\s\S]*conary-remi-deploy survey-resolution[\s\S]*sha256sum "\$local_output"[\s\S]*remi-resolution-survey-transport\.py verify-output[\s\S]*--input-evidence resolution-survey-input-verification\.json[\s\S]*--oracle-transport "\$ORACLE_TRANSPORT"' 'resolution survey fixed helper, fail-closed SSH, and independent output verification'
 require_job_match "$resolution_survey_workflow" survey 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*resolution-survey-verification\.json[\s\S]*resolution-survey-input-verification\.json[\s\S]*resolution-survey-oracle-set\.json[\s\S]*compression-level: 0[\s\S]*retention-days: 7[\s\S]*Record resolution survey counts and histograms[\s\S]*error_histogram[\s\S]*mismatch_histogram[\s\S]*outcome_histogram' 'resolution survey short-lived verified artifact and typed summary'
 require_literal_count "$resolution_survey_workflow" 'echo "- oracle run: \`$ORACLE_RUN_ID\`"' 1 'resolution survey escaped oracle run summary binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- GitHub artifact: \`$ARTIFACT_ID\`"' 1 'resolution survey escaped artifact summary binding'
@@ -533,9 +535,14 @@ require_match "$resolution_survey_transport" 'reject_duplicate_key[\s\S]*tarfile
 require_match "$resolution_survey_transport" 'copy_tar_member\([\s\S]*member\.size != expected_size[\s\S]*while chunk := stream\.read\(1024 \* 1024\)[\s\S]*copied > expected_size[\s\S]*digest\.hexdigest\(\) != expected_sha256' 'resolution survey file admission is chunked and confined to each declared authenticated extent'
 require_match "$resolution_survey_transport" 'class StreamingJsonArray[\s\S]*mmap\.mmap[\s\S]*decode_canonical_fragment[\s\S]*StreamingJsonDocument\([\s\S]*\{"outcomes", "failures"\}[\s\S]*\{"mismatches"\}' 'resolution survey verifier streams canonical root records without whole-document buffering'
 forbid_match "$resolution_survey_transport" 'file_bytes|read_bytes\(\).*candidate|read_bytes\(\).*comparison' 'resolution survey whole-document output buffering'
+require_match "$remi_resolution_survey" 'RemiResolutionSurveyProfileOutcome[\s\S]*RemiResolutionSurveyCandidateOutcome[\s\S]*RemiResolutionSurveyComparisonOutcome[\s\S]*candidate_manifest_sha256[\s\S]*profile_results' 'Remi resolution survey returns bounded per-profile manifest summaries'
+require_match "$remi_deploy_helper" 'profile_results[\s\S]*candidate_manifest_sha256[\s\S]*--slurpfile outcome "\$outcome"[\s\S]*\$result\.candidate\.counts[\s\S]*\$result\.comparison\.candidate_manifest_sha256' 'resolution survey helper builds transport summaries from bounded Remi outcome authority'
+forbid_match "$remi_deploy_helper" '--slurpfile (candidate|comparison)' 'resolution survey helper whole-document jq buffering'
 forbid_match "$resolution_survey_transport" 'MAX_SURVEY_TRANSPORT_BYTES|plain_file\(args\.transport, "survey transport",|member\.size > [0-9]+ \* 1024 \* 1024' 'resolution survey arbitrary aggregate output limit'
 forbid_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\) \{[\s\S]{0,500}transport_size' 'resolution survey arbitrary aggregate oracle input limit'
 require_match "$resolution_survey_transport" 'validate_input_evidence\([\s\S]*deployment != input_deployment[\s\S]*survey binding differs from authenticated input[\s\S]*--input-evidence' 'resolution survey output verifier exact authenticated input bindings'
+require_match "$resolution_survey_transport" 'load_input_package_manifests\([\s\S]*hash_file\(path\) != expected_transport\["sha256"\][\s\S]*oracle transport manifest differs from authenticated input evidence[\s\S]*package manifest differs from authenticated input' 'resolution survey reopens exact authenticated package manifests for candidate reconstruction'
+require_match "$resolution_survey_transport" 'reconstruct_candidate_manifest_sha256\([\s\S]*artifact_digest\.update\(row\)[\s\S]*candidate_manifest[\s\S]*validate_comparison_survey\([\s\S]*survey\["candidate_manifest_sha256"\] != candidate_manifest_sha256' 'resolution survey comparison binds its reconstructed candidate manifest'
 require_match "$resolution_survey_transport" 'workflow_commit = require_commit\(args\.workflow_commit[\s\S]*oracle_run\["head_sha"\] != workflow_commit[\s\S]*oracle_operator[\s\S]*workflow_run_attempt' 'resolution survey rejects stale oracle workflow authority'
 require_match "$resolution_survey_transport" 'validate_export_operator\([\s\S]*native-oracle-export-operator-v1\.json[\s\S]*workflow_commit_sha[\s\S]*export_run\["head_sha"\][\s\S]*protected-pinned-known-hosts-v1[\s\S]*attestation_sha256' 'resolution survey requires exact pinned export operator evidence'
 require_match "$resolution_survey_transport" 'validate_comparison_survey\([\s\S]*candidate_roots_walked[\s\S]*len\(candidate_survey\["outcomes"\]\) != roots[\s\S]*retained_candidate_bindings[\s\S]*for candidate_root in candidate_survey\["outcomes"\][\s\S]*candidate outcome differs from its survey[\s\S]*matched_roots != set\(retained_candidate_bindings\)' 'resolution survey comparison binds the exact candidate root population with bounded retained evidence'

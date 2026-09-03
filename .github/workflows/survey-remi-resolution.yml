@@ -471,6 +471,7 @@ jobs:
           CANDIDATE_FAILURES: ${{ steps.survey.outputs.candidate_failures }}
           COMPARISON_MISMATCHES: ${{ steps.survey.outputs.comparison_mismatches }}
           EXPORT_ID: ${{ steps.input.outputs.export_id }}
+          ORACLE_TRANSPORT: ${{ steps.input.outputs.transport }}
           SURVEY_ID: ${{ steps.input.outputs.survey_id }}
           SURVEY_TRANSPORT: ${{ steps.survey.outputs.transport }}
           TRANSPORT_BYTES: ${{ steps.survey.outputs.transport_bytes }}
@@ -482,6 +483,7 @@ jobs:
             --survey-id "$SURVEY_ID" \
             --export-id "$EXPORT_ID" \
             --input-evidence resolution-survey-input-verification.json \
+            --oracle-transport "$ORACLE_TRANSPORT" \
             --transport "$SURVEY_TRANSPORT" \
             --evidence resolution-survey-verification.json \
             >/dev/null
