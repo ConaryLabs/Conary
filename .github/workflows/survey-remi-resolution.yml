@@ -49,6 +49,10 @@ jobs:
             exit 1
           }
           git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "resolution-survey workflow revision is not current protected main" >&2
+            exit 1
+          }
           git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
             echo "resolution-survey operator must already be merged into origin/main" >&2
             exit 1
@@ -366,6 +370,10 @@ jobs:
           }
           helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
           git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "protected main advanced before helper validation" >&2
+            exit 1
+          }
           git show "origin/main:deploy/remi-deploy-helper.sh" > "$current_helper"
           [[ -s "$current_helper" && ! -L "$current_helper" ]] || {
             echo "protected main has no regular Remi deploy helper" >&2
@@ -403,6 +411,10 @@ jobs:
           remote_possible=1
           scp "${ssh_opts[@]}" "$helper" "${target}:${remote_helper}"
           git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "protected main advanced before helper installation" >&2
+            exit 1
+          }
           git show "origin/main:deploy/remi-deploy-helper.sh" > "$current_helper"
           preinstall_helper_sha256="$(sha256sum "$current_helper" | cut -d ' ' -f 1)"
           [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {

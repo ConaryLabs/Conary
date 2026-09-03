@@ -2070,7 +2070,20 @@ test_check_release_matrix_rejects_unprotected_resolution_survey_helper() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey protected merged-main operator boundary"
+        "resolution survey exact current protected-main operator boundary"
+}
+
+test_check_release_matrix_rejects_stale_resolution_survey_verifier() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
+        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey exact current protected-main operator boundary"
 }
 
 test_check_release_matrix_requires_resolution_survey_helper_install() {
@@ -3458,6 +3471,7 @@ main() {
         test_check_release_matrix_rejects_mutating_native_oracle_authority
         test_check_release_matrix_rejects_unserialized_resolution_survey
         test_check_release_matrix_rejects_unprotected_resolution_survey_helper
+        test_check_release_matrix_rejects_stale_resolution_survey_verifier
         test_check_release_matrix_requires_resolution_survey_helper_install
         test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
