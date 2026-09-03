@@ -653,9 +653,86 @@ def forbid_private_paths(value: Any, label: str) -> None:
         fail(f"{label} contains a private host path")
 
 
+def validate_input_evidence(
+    path: Path, survey_id: str, export_id: str
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    value, _ = load_json(path, "resolution-survey input verification", canonical=True)
+    evidence = exact_object(
+        value,
+        {
+            "schema_version",
+            "survey_id",
+            "export_id",
+            "workflow_runs",
+            "deployment",
+            "profiles",
+            "manifest_sha256",
+            "transport",
+        },
+        "resolution-survey input verification",
+    )
+    if (
+        evidence["schema_version"] != 1
+        or evidence["survey_id"] != survey_id
+        or evidence["export_id"] != export_id
+    ):
+        fail("resolution-survey input verification request binding drifted")
+    workflow_runs = exact_object(
+        evidence["workflow_runs"], {"oracle", "export", "deployment"}, "input workflow runs"
+    )
+    for name, run_id in workflow_runs.items():
+        if exact_nonnegative_int(run_id, f"input {name} run") == 0:
+            fail(f"input {name} run must be positive")
+    deployment = exact_object(
+        evidence["deployment"], {"commit_sha", "binary_sha256"}, "input deployment"
+    )
+    require_commit(deployment["commit_sha"], "input deployed commit")
+    require_sha256(deployment["binary_sha256"], "input binary digest")
+    profiles = evidence["profiles"]
+    if not isinstance(profiles, list) or len(profiles) != len(PUBLIC_PROFILES):
+        fail("resolution-survey input profiles are malformed")
+    for index, profile in enumerate(profiles):
+        profile = exact_object(
+            profile,
+            {
+                "profile",
+                "profile_revision_sha256",
+                "target_architecture",
+                "package_oracle_manifest_sha256",
+                "native_resolution_manifest_sha256",
+            },
+            f"input profile {index}",
+        )
+        profile_name = PUBLIC_PROFILES[index]
+        if (
+            profile["profile"] != profile_name
+            or profile["target_architecture"] != PROFILE_ARCHITECTURES[profile_name]
+        ):
+            fail("resolution-survey input profile order or architecture drifted")
+        require_sha256(profile["profile_revision_sha256"], f"input {profile_name} candidate")
+        require_sha256(
+            profile["package_oracle_manifest_sha256"], f"input {profile_name} package oracle"
+        )
+        require_sha256(
+            profile["native_resolution_manifest_sha256"],
+            f"input {profile_name} resolution oracle",
+        )
+    require_sha256(evidence["manifest_sha256"], "input transport manifest")
+    transport = exact_object(
+        evidence["transport"], {"sha256", "size"}, "input oracle transport"
+    )
+    require_sha256(transport["sha256"], "input oracle transport digest")
+    if exact_nonnegative_int(transport["size"], "input oracle transport size") == 0:
+        fail("input oracle transport size must be positive")
+    return deployment, profiles
+
+
 def verify_output(args: argparse.Namespace) -> None:
     survey_id = require_identity(args.survey_id, "survey id")
     export_id = require_identity(args.export_id, "export id")
+    input_deployment, input_profiles = validate_input_evidence(
+        args.input_evidence, survey_id, export_id
+    )
     metadata = plain_file(args.transport, "survey transport", MAX_SURVEY_TRANSPORT_BYTES)
     try:
         archive = tarfile.open(args.transport, mode="r:")
@@ -701,6 +778,8 @@ def verify_output(args: argparse.Namespace) -> None:
         )
         require_commit(deployment["commit_sha"], "survey deployed commit")
         require_sha256(deployment["binary_sha256"], "survey binary digest")
+        if deployment != input_deployment:
+            fail("survey deployment binding differs from authenticated input")
         profiles = manifest["profiles"]
         if (
             not isinstance(profiles, list)
@@ -738,7 +817,7 @@ def verify_output(args: argparse.Namespace) -> None:
     comparison_profiles = 0
     roots_walked = 0
     referenced_files: set[str] = set()
-    for profile in profiles:
+    for profile_index, profile in enumerate(profiles):
         profile = exact_object(
             profile,
             {
@@ -763,6 +842,18 @@ def verify_output(args: argparse.Namespace) -> None:
         )
         if profile["target_architecture"] != PROFILE_ARCHITECTURES[profile_name]:
             fail(f"{profile_name} survey architecture drifted")
+        if {
+            "profile": profile_name,
+            "profile_revision_sha256": profile["profile_revision_sha256"],
+            "target_architecture": profile["target_architecture"],
+            "package_oracle_manifest_sha256": profile[
+                "package_oracle_manifest_sha256"
+            ],
+            "native_resolution_manifest_sha256": profile[
+                "native_resolution_manifest_sha256"
+            ],
+        } != input_profiles[profile_index]:
+            fail(f"{profile_name} survey binding differs from authenticated input")
         candidate = profile["candidate"]
         candidate = exact_object(
             candidate,
@@ -895,6 +986,7 @@ def parse_args() -> argparse.Namespace:
     verify = subparsers.add_parser("verify-output")
     verify.add_argument("--survey-id", required=True)
     verify.add_argument("--export-id", required=True)
+    verify.add_argument("--input-evidence", required=True, type=Path)
     verify.add_argument("--transport", required=True, type=Path)
     verify.add_argument("--evidence", required=True, type=Path)
     return parser.parse_args()

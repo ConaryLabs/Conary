@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 67
+revision: 68
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -291,12 +291,15 @@ workflow.
   host-key discovery is forbidden and the selected host must match the pin. The
   helper authenticates every archive member before private root-owned staging,
   stops Remi, reads the exact candidate revisions from the stopped deployment's
-  own candidate pointers, runs `remi resolution-survey` as `conary`, and always
-  restores readiness before it interprets the command result. Recorded findings
-  are a successful operator result. The returned seven-day artifact contains
-  only canonical survey JSON, a digest/size/binding manifest, and public
-  verification records; the workflow has no refresh, conversion, proof,
-  promotion, activation, or publication authority.
+  own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
+  output into root-owned staging while Remi remains stopped, and always restores
+  readiness before it interprets the command result. Recorded findings are a
+  successful operator result. The returned seven-day artifact contains only
+  canonical survey JSON, a digest/size/binding manifest, and public verification
+  records; the runner independently requires those deployment, candidate,
+  architecture, and oracle bindings to equal its authenticated input record. The
+  workflow has no refresh, conversion, proof, promotion, activation, or
+  publication authority.
 - Exact production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and

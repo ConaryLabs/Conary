@@ -1160,6 +1160,41 @@ survey_resolution() {
         survey_status=$?
     fi
 
+    [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
+        die "resolution survey did not create its private output directory"
+    [[ "$(stat -c '%u' "$output")" == "$runtime_uid" ]] ||
+        die "resolution survey output directory has the wrong owner"
+    local source_file source_name source_mode frozen_output
+    frozen_output="${SURVEY_STAGING}/survey-output"
+    mkdir -m 0700 "$frozen_output"
+    [[ "$(stat -c '%u' "$frozen_output")" == "$control_uid" ]] ||
+        die "resolution-survey frozen output has the wrong owner"
+    while IFS= read -r source_file; do
+        source_name="$(basename "$source_file")"
+        case "$source_name" in
+            fedora-44.candidate-resolution-survey.json | \
+                fedora-44.native-resolution-comparison-survey.json | \
+                ubuntu-26.04.candidate-resolution-survey.json | \
+                ubuntu-26.04.native-resolution-comparison-survey.json | \
+                arch.candidate-resolution-survey.json | \
+                arch.native-resolution-comparison-survey.json) ;;
+            *) die "resolution survey output contains an unexpected file" ;;
+        esac
+        [[ -f "$source_file" && ! -L "$source_file" \
+            && "$(stat -c '%u' "$source_file")" == "$runtime_uid" ]] ||
+            die "resolution survey output is not owned plain data"
+        source_mode="$(stat -c '%a' "$source_file")"
+        [[ "$source_mode" == "600" ]] ||
+            die "resolution survey output file is not private"
+        install -m 0600 -- "$source_file" "${frozen_output}/${source_name}"
+        cmp -s -- "$source_file" "${frozen_output}/${source_name}" ||
+            die "resolution survey output changed while it was frozen"
+    done < <(find "$output" -mindepth 1 -maxdepth 1 -type f -printf '%p\n' | sort)
+    local unexpected_before_restart
+    unexpected_before_restart="$(find "$output" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
+    [[ -z "$unexpected_before_restart" ]] ||
+        die "resolution survey output contains a non-plain entry"
+
     if ! survey_start_and_probe; then
         die "failed to restore Remi after resolution survey"
     fi
@@ -1192,6 +1227,8 @@ survey_resolution() {
         die "resolution survey failed with status ${survey_status}"
     fi
 
+    # Everything below reads the root-owned snapshot made while Remi was stopped.
+    output="$frozen_output"
     [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
         die "resolution survey did not create its private output directory"
     local candidate_file comparison_file package_manifest_sha256 resolution_manifest_sha256

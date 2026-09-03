@@ -320,6 +320,7 @@ jobs:
           python3 scripts/remi-resolution-survey-transport.py verify-output \
             --survey-id "$SURVEY_ID" \
             --export-id "$EXPORT_ID" \
+            --input-evidence resolution-survey-input-verification.json \
             --transport "$SURVEY_TRANSPORT" \
             --evidence resolution-survey-verification.json \
             >/dev/null

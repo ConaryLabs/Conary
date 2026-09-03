@@ -383,6 +383,8 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 fixture.survey_id,
                 "--export-id",
                 EXPORT_ID,
+                "--input-evidence",
+                str(fixture.evidence),
                 "--transport",
                 str(output),
                 "--evidence",
@@ -390,7 +392,26 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             ]
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(json.loads(verification.read_bytes())["counts"]["candidate_failures"], 3)
+            self.assertEqual(
+                json.loads(verification.read_bytes())["counts"]["candidate_failures"], 3
+            )
+
+            input_evidence_bytes = fixture.evidence.read_bytes()
+            wrong_input = json.loads(input_evidence_bytes)
+            wrong_input["deployment"]["binary_sha256"] = "0" * 64
+            fixture.evidence.write_bytes(canonical(wrong_input))
+            verification.unlink(missing_ok=True)
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("deployment binding differs", result.stderr)
+
+            wrong_input = json.loads(input_evidence_bytes)
+            wrong_input["profiles"][0]["profile_revision_sha256"] = "0" * 64
+            fixture.evidence.write_bytes(canonical(wrong_input))
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("survey binding differs", result.stderr)
+            fixture.evidence.write_bytes(input_evidence_bytes)
 
             tampered = bytearray(output.read_bytes())
             marker = survey_files[sorted(survey_files)[0]]
@@ -398,7 +419,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertGreater(offset, 0)
             tampered[offset] = ord("[")
             output.write_bytes(tampered)
-            verification.unlink()
+            verification.unlink(missing_ok=True)
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("changed digest", result.stderr)

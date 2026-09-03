@@ -282,6 +282,10 @@ case "${1:-}" in
             exit 37
         fi
         printf 'active\n' >"$CONARY_FAKE_SERVICE_STATE"
+        if [[ -n "${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" ]]; then
+            printf '{"forged_after_restart":true}' >"$CONARY_FAKE_MUTATE_SURVEY_ON_START"
+            chmod 0600 "$CONARY_FAKE_MUTATE_SURVEY_ON_START"
+        fi
         ;;
     *) exit 2 ;;
 esac
@@ -521,6 +525,30 @@ make_survey_oracle_transport() {
         arch/native-resolution/manifest.json \
         arch/native-resolution/roots.jsonl
     chmod 0600 "$transport"
+    local input_verification
+    input_verification="$(jq -cnS \
+        --slurpfile input "$build/manifest.json" \
+        --arg manifest_sha256 "$(sha256sum "$build/manifest.json" | cut -d ' ' -f 1)" \
+        --arg transport_sha256 "$(sha256sum "$transport" | cut -d ' ' -f 1)" \
+        --argjson transport_size "$(stat -c '%s' "$transport")" '
+        {
+          schema_version:1,
+          survey_id:$input[0].survey_id,
+          export_id:$input[0].export_id,
+          workflow_runs:$input[0].workflow_runs,
+          deployment:$input[0].deployment,
+          profiles:[$input[0].profiles[] | {
+            profile,
+            profile_revision_sha256,
+            target_architecture,
+            package_oracle_manifest_sha256:.package_oracle.manifest_sha256,
+            native_resolution_manifest_sha256:.native_resolution.manifest_sha256
+          }],
+          manifest_sha256:$manifest_sha256,
+          transport:{sha256:$transport_sha256,size:$transport_size}
+        }
+    ')"
+    printf '%s' "$input_verification" >"${fake_root}/survey-input-verification.json"
     benchmark_tmp_paths+=("$transport" "/tmp/remi-resolution-survey-${survey_id}.tar")
 }
 
@@ -605,6 +633,7 @@ run_survey_helper() {
     CONARY_FAKE_FAIL_START="${fake_root}/fail-start" \
     CONARY_FAKE_SURVEY_ARGS="${fake_root}/survey-args" \
     CONARY_FAKE_SURVEY_FINDINGS="${CONARY_FAKE_SURVEY_FINDINGS:-0}" \
+    CONARY_FAKE_MUTATE_SURVEY_ON_START="${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" \
         bash "$helper" survey-resolution "$@"
 }
 
@@ -1130,7 +1159,8 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     local output transport verification
     make_survey_fixture "$fake_root" "$survey_id" "$export_id"
 
-    output="$(run_survey_helper "$fake_root" \
+    output="$(CONARY_FAKE_MUTATE_SURVEY_ON_START="${fake_root}/conary/evidence/resolution-surveys/${survey_id}/fedora-44.candidate-resolution-survey.json" \
+        run_survey_helper "$fake_root" \
         "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar")"
     transport="/tmp/remi-resolution-survey-${survey_id}.tar"
     [[ "$output" =~ ^Resolution\ survey:\ survey=${survey_id}\ export=${export_id}\ transport=${transport}\ sha256=[0-9a-f]{64}\ bytes=[1-9][0-9]*\ candidate_failures=0\ comparison_mismatches=0$ ]] ||
@@ -1141,6 +1171,9 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     [[ -f "$transport" && ! -L "$transport" && "$(stat -c '%a' "$transport")" == "600" ]]
     [[ -d "$fake_root/conary/evidence/resolution-surveys/$survey_id" ]]
     [[ "$(stat -c '%a' "$fake_root/conary/evidence/resolution-surveys/$survey_id")" == "700" ]]
+    grep -F 'forged_after_restart' \
+        "$fake_root/conary/evidence/resolution-surveys/$survey_id/fedora-44.candidate-resolution-survey.json" >/dev/null ||
+        fail "survey restart did not exercise the service-user output mutation test"
     grep -Fx -- "--config" "$fake_root/survey-args" >/dev/null
     grep -Fx -- "fedora-44=$(printf 'a%.0s' {1..64})" "$fake_root/survey-args" >/dev/null
     grep -Fx -- "ubuntu-26.04=$(printf 'b%.0s' {1..64})" "$fake_root/survey-args" >/dev/null
@@ -1150,6 +1183,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     python3 scripts/remi-resolution-survey-transport.py verify-output \
         --survey-id "$survey_id" \
         --export-id "$export_id" \
+        --input-evidence "$fake_root/survey-input-verification.json" \
         --transport "$transport" \
         --evidence "$verification" >/dev/null
     jq -e '
@@ -1183,6 +1217,7 @@ test_resolution_survey_findings_restart_and_succeed() {
     verification="${tmpdir}/${survey_id}-verification.json"
     python3 scripts/remi-resolution-survey-transport.py verify-output \
         --survey-id "$survey_id" --export-id "$export_id" \
+        --input-evidence "$fake_root/survey-input-verification.json" \
         --transport "$transport" --evidence "$verification" >/dev/null
     jq -e '
         .counts.candidate_failures == 3
