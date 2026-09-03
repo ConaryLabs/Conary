@@ -194,6 +194,9 @@ where
         let channel_capacity = worker_count.checked_mul(2).ok_or_else(|| {
             Error::ConfigError("resolution worker channel capacity exceeds usize".to_string())
         })?;
+        let max_in_flight = u64::try_from(channel_capacity).map_err(|_| {
+            Error::ConfigError("resolution worker channel capacity exceeds u64".to_string())
+        })?;
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
         let mut handles = Vec::with_capacity(worker_count);
@@ -275,6 +278,14 @@ where
         let mut dispatched = 0_u64;
         let mut next_worker = 0_usize;
         let walk = package_oracle.for_each_package(|root| {
+            while dispatched.saturating_sub(next_sequence) >= max_in_flight {
+                receive_and_emit(
+                    &result_receiver,
+                    &mut pending,
+                    &mut next_sequence,
+                    &mut emit,
+                )?;
+            }
             let sequence = dispatched;
             let mut job = (sequence, root);
             loop {
