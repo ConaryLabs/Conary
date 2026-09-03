@@ -1,6 +1,19 @@
 // conary-core/src/repository/client/tests.rs
 
 use super::*;
+
+#[tokio::test]
+async fn public_network_client_rejects_private_dns_answers_before_connecting() {
+    let client = RepositoryClient::new_public_network().unwrap();
+    let error = client
+        .download_to_bytes("http://localhost/repository.json")
+        .await
+        .expect_err("loopback resolution must be rejected");
+    assert!(
+        error.to_string().contains("private or link-local"),
+        "{error}"
+    );
+}
 use std::sync::Mutex;
 
 async fn read_http_request(stream: &mut tokio::net::TcpStream) -> String {

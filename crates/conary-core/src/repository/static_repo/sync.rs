@@ -21,11 +21,30 @@ pub(in crate::repository) async fn fetch_static_sync_snapshot(
     repo: &Repository,
     verified: &VerifiedTufState,
 ) -> Result<RepositorySyncSnapshot> {
+    fetch_static_sync_snapshot_with_network_policy(repo, verified, false).await
+}
+
+pub(in crate::repository) async fn fetch_static_sync_snapshot_public_network(
+    repo: &Repository,
+    verified: &VerifiedTufState,
+) -> Result<RepositorySyncSnapshot> {
+    fetch_static_sync_snapshot_with_network_policy(repo, verified, true).await
+}
+
+async fn fetch_static_sync_snapshot_with_network_policy(
+    repo: &Repository,
+    verified: &VerifiedTufState,
+    public_network_only: bool,
+) -> Result<RepositorySyncSnapshot> {
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let location = RepoLocation::parse(&repo.url)
-        .map_err(|error| Error::ConfigError(format!("Invalid static repository URL: {error}")))?;
+    let location = if public_network_only {
+        RepoLocation::parse_public_network(&repo.url)
+    } else {
+        RepoLocation::parse(&repo.url)
+    }
+    .map_err(|error| Error::ConfigError(format!("Invalid static repository URL: {error}")))?;
 
     let index_target = required_target(verified, INDEX_PATH)?;
     let index_bytes =

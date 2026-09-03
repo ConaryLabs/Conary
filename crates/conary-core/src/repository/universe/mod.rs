@@ -8,7 +8,7 @@ mod enrollment;
 mod index;
 mod metadata;
 
-pub use client::{RemiUniverseSyncOutcome, sync_remi_universe};
+pub use client::{RemiUniverseSyncOutcome, sync_remi_universe, sync_remi_universe_public_network};
 pub(crate) use enrollment::validate_remi_universe_root;
 pub use enrollment::{
     RemiUniverseEnrollmentOutcome, enroll_remi_universe_root, normalize_remi_endpoint,

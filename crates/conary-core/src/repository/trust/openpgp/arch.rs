@@ -23,6 +23,7 @@ mod corpus;
 pub(crate) mod testkeys;
 
 use crate::error::Result;
+use crate::repository::client::RepositoryClient;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -44,9 +45,10 @@ pub(super) async fn prepare(
     repository_name: &str,
     keyring_dir: &Path,
     keyring: &ArchKeyringTrust,
+    client: &RepositoryClient,
 ) -> Result<()> {
     keyring.validate()?;
-    let fetched = store::fetch_key_source(&keyring.url).await?;
+    let fetched = store::fetch_key_source(&keyring.url, client).await?;
     let source = extract_keyring_source(&fetched, keyring.format)?;
     ArchTrustSnapshot::authenticate(
         parse_certificates(&source.certificates, keyring)?,

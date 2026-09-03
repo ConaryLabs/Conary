@@ -19,7 +19,9 @@ use super::metadata::{
     PackageSecurityAdvisoryMetadata, RepositoryMetadata, SecurityAdvisorySourceMetadata,
 };
 use super::registry::{self, RepositoryFormat};
-use super::static_repo::sync::fetch_static_sync_snapshot;
+use super::static_repo::sync::{
+    fetch_static_sync_snapshot, fetch_static_sync_snapshot_public_network,
+};
 use super::trust::openpgp::PreparedOpenPgpTrust;
 use super::versioning::VersionScheme;
 use native::persist_native_sync_rows;
@@ -82,8 +84,9 @@ where
 pub(super) async fn fetch_repository_native_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
+    public_network_only: bool,
 ) -> Result<RepositorySyncSnapshot> {
-    let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
+    let parser = prepare_repository_native_parser(repo, keyring_dir, public_network_only).await?;
     let mut sink = crate::repository::parsers::CollectingRepositorySnapshotSink::create()?;
     let snapshot = parser.ingest_snapshot(&repo.url, &mut sink).await?;
     let (packages, authenticated_objects) = sink.finish();
@@ -122,6 +125,7 @@ pub(super) async fn fetch_repository_native_snapshot(
 pub(super) async fn prepare_repository_native_parser(
     repo: &Repository,
     keyring_dir: &Path,
+    public_network_only: bool,
 ) -> Result<registry::AnyParser> {
     let parser_config = repo.require_parser_config()?;
     repo.validate_stream_binding()?;
@@ -140,16 +144,23 @@ pub(super) async fn prepare_repository_native_parser(
         parser_config.format().as_str()
     );
 
-    let trust =
-        PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?)
-            .await?;
+    let trust = if public_network_only {
+        PreparedOpenPgpTrust::prepare_public_network(
+            &repo.name,
+            keyring_dir,
+            repo.require_trust_policy()?,
+        )
+        .await?
+    } else {
+        PreparedOpenPgpTrust::prepare(&repo.name, keyring_dir, repo.require_trust_policy()?).await?
+    };
     registry::create_parser(parser_config, trust)
 }
 
 /// Synchronize repository using native metadata format parsers
 async fn sync_repository_native(conn: &Connection, repo: &mut Repository) -> Result<usize> {
     let keyring_dir = keyring_dir_for_connection(conn)?;
-    let snapshot = fetch_repository_native_snapshot(repo, &keyring_dir).await?;
+    let snapshot = fetch_repository_native_snapshot(repo, &keyring_dir, false).await?;
     let count = persist_repository_sync_snapshot(conn, repo, snapshot)?;
 
     info!(
@@ -178,13 +189,16 @@ fn keyring_dir_for_connection(conn: &Connection) -> Result<PathBuf> {
 async fn fetch_repository_sync_snapshot(
     repo: &Repository,
     keyring_dir: &Path,
+    public_network_only: bool,
 ) -> Result<RepositorySyncSnapshot> {
     match repo.require_parser_config()?.format() {
-        RepositoryFormat::Json => fetch_repository_json_snapshot(repo).await,
+        RepositoryFormat::Json => fetch_repository_json_snapshot(repo, public_network_only).await,
         RepositoryFormat::Arch
         | RepositoryFormat::Debian
         | RepositoryFormat::Fedora
-        | RepositoryFormat::Eopkg => fetch_repository_native_snapshot(repo, keyring_dir).await,
+        | RepositoryFormat::Eopkg => {
+            fetch_repository_native_snapshot(repo, keyring_dir, public_network_only).await
+        }
         RepositoryFormat::Unspecified => Err(Error::InitError(format!(
             "repository '{}' has an unspecified parser configuration",
             repo.name
@@ -202,19 +216,58 @@ pub async fn sync_repository_from_db_path<W>(
 where
     W: RepositoryWriteAuthority,
 {
+    sync_repository_from_db_path_with_network_policy(db_path, repo, write_authority, false).await
+}
+
+/// Synchronize a Remi-managed external repository with public-address-only
+/// HTTP resolution pinned for each request.
+pub async fn sync_repository_from_db_path_public_network<W>(
+    db_path: PathBuf,
+    repo: Repository,
+    write_authority: W,
+) -> Result<usize>
+where
+    W: RepositoryWriteAuthority,
+{
+    sync_repository_from_db_path_with_network_policy(db_path, repo, write_authority, true).await
+}
+
+async fn sync_repository_from_db_path_with_network_policy<W>(
+    db_path: PathBuf,
+    repo: Repository,
+    write_authority: W,
+    public_network_only: bool,
+) -> Result<usize>
+where
+    W: RepositoryWriteAuthority,
+{
     info!("Synchronizing repository: {}", repo.name);
 
     if is_static_repository(&repo) {
-        return sync_static_repository_from_db_path(db_path, repo, write_authority).await;
+        return sync_static_repository_from_db_path(
+            db_path,
+            repo,
+            write_authority,
+            public_network_only,
+        )
+        .await;
     }
 
     if repo.tuf_enabled {
         let repo_id = repo
             .id
             .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-        let tuf_client =
+        let tuf_client = if public_network_only {
+            crate::trust::client::TufClient::new_public_network(
+                repo_id,
+                &repo.url,
+                repo.tuf_root_url.as_deref(),
+                crate::trust::client::TufUpdateMode::Generic,
+            )
+        } else {
             crate::trust::client::TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())
-                .map_err(|e| Error::TrustError(e.to_string()))?;
+        }
+        .map_err(|e| Error::TrustError(e.to_string()))?;
 
         let state_db_path = db_path.clone();
         let update_state = run_blocking_sync(move || {
@@ -225,9 +278,17 @@ where
         })
         .await?;
 
-        let tuf_client =
+        let tuf_client = if public_network_only {
+            crate::trust::client::TufClient::new_public_network(
+                repo_id,
+                &repo.url,
+                repo.tuf_root_url.as_deref(),
+                crate::trust::client::TufUpdateMode::Generic,
+            )
+        } else {
             crate::trust::client::TufClient::new(repo_id, &repo.url, repo.tuf_root_url.as_deref())
-                .map_err(|e| Error::TrustError(e.to_string()))?;
+        }
+        .map_err(|e| Error::TrustError(e.to_string()))?;
         let update_snapshot = tuf_client
             .fetch_update_snapshot(update_state)
             .await
@@ -251,11 +312,17 @@ where
     }
 
     let count = if repo.default_strategy.as_deref() == Some("remi") {
-        sync_repository_remi_from_db_path(db_path.clone(), repo.clone(), write_authority.clone())
-            .await?
+        sync_repository_remi_from_db_path(
+            db_path.clone(),
+            repo.clone(),
+            write_authority.clone(),
+            public_network_only,
+        )
+        .await?
     } else {
         let keyring_dir = crate::db::paths::keyring_dir(&db_path.display().to_string());
-        let snapshot = fetch_repository_sync_snapshot(&repo, &keyring_dir).await?;
+        let snapshot =
+            fetch_repository_sync_snapshot(&repo, &keyring_dir, public_network_only).await?;
 
         let persist_repo_id = repo
             .id
@@ -351,6 +418,7 @@ async fn sync_static_repository_from_db_path<W>(
     db_path: PathBuf,
     repo: Repository,
     write_authority: W,
+    public_network_only: bool,
 ) -> Result<usize>
 where
     W: RepositoryWriteAuthority,
@@ -372,11 +440,20 @@ where
         return Err(static_trust_not_established_error(&repo));
     }
 
-    let tuf_client = crate::trust::client::TufClient::new_static(
-        repo_id,
-        &repo.url,
-        repo.tuf_root_url.as_deref(),
-    )
+    let tuf_client = if public_network_only {
+        crate::trust::client::TufClient::new_public_network(
+            repo_id,
+            &repo.url,
+            repo.tuf_root_url.as_deref(),
+            crate::trust::client::TufUpdateMode::StaticRepo,
+        )
+    } else {
+        crate::trust::client::TufClient::new_static(
+            repo_id,
+            &repo.url,
+            repo.tuf_root_url.as_deref(),
+        )
+    }
     .map_err(|error| Error::TrustError(error.to_string()))?;
 
     let state_db_path = db_path.clone();
@@ -388,11 +465,20 @@ where
     })
     .await?;
 
-    let tuf_client = crate::trust::client::TufClient::new_static(
-        repo_id,
-        &repo.url,
-        repo.tuf_root_url.as_deref(),
-    )
+    let tuf_client = if public_network_only {
+        crate::trust::client::TufClient::new_public_network(
+            repo_id,
+            &repo.url,
+            repo.tuf_root_url.as_deref(),
+            crate::trust::client::TufUpdateMode::StaticRepo,
+        )
+    } else {
+        crate::trust::client::TufClient::new_static(
+            repo_id,
+            &repo.url,
+            repo.tuf_root_url.as_deref(),
+        )
+    }
     .map_err(|error| Error::TrustError(error.to_string()))?;
     let update_snapshot = tuf_client
         .fetch_update_snapshot(update_state)
@@ -415,7 +501,11 @@ where
         verified.targets.len()
     );
 
-    let snapshot = fetch_static_sync_snapshot(&repo, &verified).await?;
+    let snapshot = if public_network_only {
+        fetch_static_sync_snapshot_public_network(&repo, &verified).await?
+    } else {
+        fetch_static_sync_snapshot(&repo, &verified).await?
+    };
     let persist_db_path = db_path.clone();
     run_blocking_write(write_authority, move || {
         let conn = crate::db::open_fast(&persist_db_path)?;
@@ -580,8 +670,15 @@ fn json_repository_sync_snapshot(
     ))
 }
 
-async fn fetch_repository_json_snapshot(repo: &Repository) -> Result<RepositorySyncSnapshot> {
-    let client = RepositoryClient::new()?;
+async fn fetch_repository_json_snapshot(
+    repo: &Repository,
+    public_network_only: bool,
+) -> Result<RepositorySyncSnapshot> {
+    let client = if public_network_only {
+        RepositoryClient::new_public_network()?
+    } else {
+        RepositoryClient::new()?
+    };
     let metadata = client.fetch_metadata(&repo.url).await?;
     json_repository_sync_snapshot(repo, metadata)
 }
@@ -776,7 +873,7 @@ fn persist_static_sync_rows(
 
 /// Synchronize a repository whose declared metadata contract is Conary JSON.
 async fn sync_repository_json(conn: &Connection, repo: &mut Repository) -> Result<usize> {
-    let snapshot = fetch_repository_json_snapshot(repo).await?;
+    let snapshot = fetch_repository_json_snapshot(repo, false).await?;
     persist_repository_sync_snapshot(conn, repo, snapshot)
 }
 

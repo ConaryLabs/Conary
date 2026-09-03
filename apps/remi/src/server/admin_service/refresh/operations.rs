@@ -39,10 +39,13 @@ async fn refresh_loaded_repo(
 ) -> Result<RepoRefreshResult, ServiceError> {
     let name = repo.name.clone();
     let source_profile = repo.source_profile.clone();
-    let packages_synced =
-        conary_core::repository::sync_repository_from_db_path(db, repo, database_writer)
-            .await
-            .map_err(ServiceError::from)?;
+    let packages_synced = conary_core::repository::sync_repository_from_db_path_public_network(
+        db,
+        repo,
+        database_writer,
+    )
+    .await
+    .map_err(ServiceError::from)?;
 
     Ok(RepoRefreshResult {
         name,

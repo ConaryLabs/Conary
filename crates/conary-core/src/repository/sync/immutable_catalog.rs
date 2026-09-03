@@ -53,7 +53,7 @@ pub async fn fetch_native_source_catalog(
     repo: &Repository,
     keyring_dir: &Path,
 ) -> Result<SourceCatalogCandidateV1> {
-    let fetched = fetch_repository_native_snapshot(repo, keyring_dir).await?;
+    let fetched = fetch_repository_native_snapshot(repo, keyring_dir, false).await?;
     let RepositorySyncSnapshot::NativeRows {
         packages,
         snapshot,
@@ -191,7 +191,7 @@ async fn stream_native_source_catalog_inner(
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     durable_reuse: Option<DurableSourceCatalogReuseV1>,
 ) -> Result<VerifiedSourceCatalogCandidateV1> {
-    let parser = prepare_repository_native_parser(repo, keyring_dir).await?;
+    let parser = prepare_repository_native_parser(repo, keyring_dir, false).await?;
     let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
         repo,
         candidate_path,

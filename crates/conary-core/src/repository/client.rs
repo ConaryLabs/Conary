@@ -15,6 +15,7 @@ use reqwest::Client;
 use reqwest::header;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -137,6 +138,30 @@ pub fn validate_url_scheme(url: &str) -> Result<()> {
             url
         )))
     }
+}
+
+pub fn require_public_repository_ip(ip: IpAddr) -> Result<()> {
+    let forbidden = match ip {
+        IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            if let Some(mapped) = ip.to_ipv4_mapped() {
+                return require_public_repository_ip(IpAddr::V4(mapped));
+            }
+            let first = ip.segments()[0];
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+        }
+    };
+    if forbidden {
+        return Err(Error::ConfigError(format!(
+            "repository URL resolved to private or link-local address {ip}"
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn is_file_or_local_reference(url_or_path: &str) -> bool {
@@ -332,10 +357,6 @@ fn copy_local_file_bounded(
     Ok(())
 }
 
-pub async fn download_static_or_http_file(url_or_path: &str, dest_path: &Path) -> Result<()> {
-    download_static_or_http_file_with_expected_size(url_or_path, dest_path, None).await
-}
-
 pub(crate) async fn download_static_or_http_file_with_expected_size(
     url_or_path: &str,
     dest_path: &Path,
@@ -374,10 +395,12 @@ fn http_status_error(status: reqwest::StatusCode, url: &str) -> Error {
 }
 
 /// HTTP client wrapper with retry support
+#[derive(Clone)]
 pub struct RepositoryClient {
     client: Client,
     retry_policy: RetryConfig,
     timeouts: TimeoutConfig,
+    public_network_only: bool,
 }
 
 impl RepositoryClient {
@@ -397,7 +420,49 @@ impl RepositoryClient {
             client,
             retry_policy: RetryConfig::default(),
             timeouts,
+            public_network_only: false,
         })
+    }
+
+    /// Create a client whose HTTP requests resolve once, reject private
+    /// destinations, and connect only to the validated socket addresses.
+    pub fn new_public_network() -> Result<Self> {
+        let mut client = Self::new()?;
+        client.public_network_only = true;
+        Ok(client)
+    }
+
+    async fn client_for_url(&self, url: &str) -> Result<Client> {
+        if !self.public_network_only {
+            return Ok(self.client.clone());
+        }
+        let parsed = url::Url::parse(url)
+            .map_err(|error| Error::ConfigError(format!("invalid repository URL: {error}")))?;
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| Error::ConfigError("repository URL has no host".to_string()))?;
+        let port = parsed
+            .port_or_known_default()
+            .ok_or_else(|| Error::ConfigError("repository URL has no port".to_string()))?;
+        let addrs = tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|error| Error::DownloadError(format!("failed to resolve '{host}': {error}")))?
+            .collect::<Vec<SocketAddr>>();
+        if addrs.is_empty() {
+            return Err(Error::DownloadError(format!(
+                "DNS resolution for '{host}' returned no addresses"
+            )));
+        }
+        for addr in &addrs {
+            require_public_repository_ip(addr.ip())?;
+        }
+        Client::builder()
+            .connect_timeout(self.timeouts.connect)
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve_to_addrs(host, &addrs)
+            .build()
+            .map_err(|error| Error::InitError(http_client_builder_error_message(error)))
     }
 
     /// Set a custom retry config (builder pattern)
@@ -405,11 +470,6 @@ impl RepositoryClient {
     pub fn with_retry_policy(mut self, policy: RetryConfig) -> Self {
         self.retry_policy = policy;
         self
-    }
-
-    /// Get a reference to the inner HTTP client
-    pub fn inner(&self) -> &Client {
-        &self.client
     }
 
     /// Fetch repository metadata from URL with retry support
@@ -422,12 +482,12 @@ impl RepositoryClient {
         };
 
         info!("Fetching repository metadata from {}", metadata_url);
+        let client = self.client_for_url(&metadata_url).await?;
 
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match self
-                .client
+            match client
                 .get(&metadata_url)
                 .timeout(self.timeouts.metadata)
                 .send()
@@ -516,11 +576,11 @@ impl RepositoryClient {
         max_size: u64,
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
+        let client = self.client_for_url(url).await?;
 
         let max_attempts = self.retry_policy.max_attempts.max(1);
         for attempt in 1..=max_attempts {
-            let response = self
-                .client
+            let response = client
                 .get(url)
                 .header(header::ACCEPT_ENCODING, "identity")
                 .timeout(byte_download_timeout(&self.timeouts))
@@ -637,7 +697,7 @@ impl RepositoryClient {
             .map(|_| ())
     }
 
-    async fn download_file_with_size_limit(
+    pub(crate) async fn download_file_with_size_limit(
         &self,
         url: &str,
         dest_path: &Path,
@@ -728,6 +788,7 @@ impl RepositoryClient {
         let temp_path = dest_path.with_extension("tmp");
 
         let mut attempt = 0;
+        let client = self.client_for_url(url).await?;
         loop {
             attempt += 1;
 
@@ -741,10 +802,7 @@ impl RepositoryClient {
                 )));
             }
 
-            let mut request = self
-                .client
-                .get(url)
-                .header(header::ACCEPT_ENCODING, "identity");
+            let mut request = client.get(url).header(header::ACCEPT_ENCODING, "identity");
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",

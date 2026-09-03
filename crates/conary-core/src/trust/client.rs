@@ -75,6 +75,15 @@ impl TufClient {
         Self::new_with_mode(repo_id, repo_url, tuf_root_url, TufUpdateMode::Generic)
     }
 
+    pub(crate) fn new_public_network(
+        repo_id: i64,
+        repo_url: &str,
+        tuf_root_url: Option<&str>,
+        update_mode: TufUpdateMode,
+    ) -> TrustResult<Self> {
+        Self::new_with_network_policy(repo_id, repo_url, tuf_root_url, update_mode, true)
+    }
+
     /// Create a new static-repository TUF client.
     pub fn new_static(
         repo_id: i64,
@@ -91,10 +100,25 @@ impl TufClient {
         tuf_root_url: Option<&str>,
         update_mode: TufUpdateMode,
     ) -> TrustResult<Self> {
+        Self::new_with_network_policy(repo_id, repo_url, tuf_root_url, update_mode, false)
+    }
+
+    fn new_with_network_policy(
+        repo_id: i64,
+        repo_url: &str,
+        tuf_root_url: Option<&str>,
+        update_mode: TufUpdateMode,
+        public_network_only: bool,
+    ) -> TrustResult<Self> {
         let tuf_base_url = tuf_root_url
             .map(String::from)
             .unwrap_or_else(|| format!("{}/tuf", repo_url.trim_end_matches('/')));
-        let tuf_location = RepoLocation::parse(&tuf_base_url).map_err(|error| {
+        let tuf_location = if public_network_only {
+            RepoLocation::parse_public_network(&tuf_base_url)
+        } else {
+            RepoLocation::parse(&tuf_base_url)
+        }
+        .map_err(|error| {
             TrustError::FetchError(format!(
                 "Invalid TUF metadata location {tuf_base_url}: {error}"
             ))

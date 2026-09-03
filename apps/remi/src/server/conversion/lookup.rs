@@ -97,7 +97,7 @@ impl ConversionService {
         repository.package_format = package_format;
         repository.trust_policy = Some(trust_policy);
         let keyring = conary_core::db::paths::keyring_dir(&self.db_path.display().to_string());
-        let trust = DownloadOptions::for_repository(&repository, &keyring)?;
+        let trust = DownloadOptions::for_repository_public_network(&repository, &keyring)?;
         Ok((source.repo_pkg.clone(), trust))
     }
 
