@@ -24,7 +24,7 @@ CONFIG = {
         "conary-rpm-oracle",
         "conary-rpm-resolution-oracle",
         {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 1, "version": "0.7.36"},
-        {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 4, "version": "0.7.36"},
+        {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 5, "version": "0.7.36"},
     ),
     "ubuntu-26.04": (
         "amd64",
@@ -32,7 +32,7 @@ CONFIG = {
         "conary-debian-oracle",
         "conary-debian-resolution-oracle",
         {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 1, "version": "3.2.0"},
-        {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 2, "version": "3.2.0"},
+        {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 3, "version": "3.2.0"},
     ),
     "arch": (
         "x86_64",
@@ -40,7 +40,7 @@ CONFIG = {
         "conary-alpm-oracle",
         "conary-alpm-resolution-oracle",
         {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 1, "version": "15.0.0"},
-        {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 2, "version": "15.0.0"},
+        {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 3, "version": "15.0.0"},
     ),
 }
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -132,7 +132,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
             "policy": {"architecture": architecture},
             "profile": profile,
             "profile_revision_sha256": profile_revision,
-            "schema_version": 2,
+            "schema_version": 3,
         }
         resolution_manifest_bytes = canonical(resolution_manifest)
         (resolution_root / "manifest.json").write_bytes(resolution_manifest_bytes)
@@ -162,7 +162,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
                 "artifact": {"counts": resolution_counts, "name": "roots.jsonl", "sha256": EMPTY_SHA256, "size": 0},
                 "implementation": resolution_impl,
                 "manifest_sha256": sha256(resolution_manifest_bytes),
-                "schema_version": 2,
+                "schema_version": 3,
             },
             "resolution_implementation": {
                 "memory_budget_bytes": 8589934592,

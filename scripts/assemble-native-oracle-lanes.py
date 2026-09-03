@@ -32,7 +32,7 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "rpm",
             "name": "libsolv",
-            "projection_schema": 4,
+            "projection_schema": 5,
             "version": "0.7.36",
         },
     },
@@ -50,7 +50,7 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "debian",
             "name": "apt-pkg",
-            "projection_schema": 2,
+            "projection_schema": 3,
             "version": "3.2.0",
         },
     },
@@ -67,7 +67,7 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "alpm",
             "name": "libalpm",
-            "projection_schema": 2,
+            "projection_schema": 3,
         },
     },
 }
@@ -359,7 +359,7 @@ def verify_lane(
         evidence["resolution_oracle"],
         profile,
         profile_revision,
-        2,
+        3,
         lane["resolution_implementation"],
         f"{profile} resolution oracle",
     )

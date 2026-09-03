@@ -241,7 +241,7 @@ class TransportFixture:
             package_manifest_bytes = canonical(package_manifest)
             (package_root / "manifest.json").write_bytes(package_manifest_bytes)
             resolution_manifest = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "profile": profile,
                 "profile_revision_sha256": self.candidates[profile],
                 "profile_logical_digest_sha256": "f" * 64,
@@ -307,7 +307,7 @@ class TransportFixture:
                     },
                 },
                 "resolution_oracle": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "manifest_sha256": digest(resolution_manifest_bytes),
                     "artifact": {
                         "name": "roots.jsonl",
@@ -423,7 +423,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
             "ecosystem": ECOSYSTEMS[profile],
             "name": "conary-sat",
             "version": "1",
-            "projection_schema": 2,
+            "projection_schema": 3,
         },
         "policy": {
             "architecture": architecture,
@@ -476,6 +476,19 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_conflicting_closure_is_a_canonical_not_installable_reason(self) -> None:
+        root = "1" * 64
+        conflicting = {"status": "not_installable", "reason": "conflicting_closure"}
+        excluded = {"status": "not_installable", "reason": "architecture_excluded"}
+        self.assertEqual(
+            TRANSPORT_TOOL.validate_native_outcome(conflicting, root, "fixture"),
+            "not_installable",
+        )
+        self.assertNotEqual(
+            TRANSPORT_TOOL.native_outcome_sha256(conflicting),
+            TRANSPORT_TOOL.native_outcome_sha256(excluded),
+        )
+
     def test_oracle_transport_format_supports_members_larger_than_ustar(self) -> None:
         member = tarfile.TarInfo("fedora-44/package-oracle/packages.jsonl")
         member.size = 8 * 1024 * 1024 * 1024

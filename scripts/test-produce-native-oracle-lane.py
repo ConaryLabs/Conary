@@ -71,7 +71,7 @@ if "--package-oracle" not in args:
         "schema_version": 1,
     }
 else:
-    resolution_projection = {"rpm": 4, "debian": 2, "alpm": 2}[ecosystem]
+    resolution_projection = {"rpm": 5, "debian": 3, "alpm": 3}[ecosystem]
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
     policy = {"architecture": one("--architecture"), "architecture_admission": "native_only", "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"}
     package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
@@ -120,7 +120,7 @@ else:
         "profile": profile["profile"],
         "profile_logical_digest_sha256": "b" * 64,
         "profile_revision_sha256": revision_sha,
-        "schema_version": 2,
+        "schema_version": 3,
     }
 (output / "manifest.json").write_bytes(canonical(manifest))
 '''
@@ -151,7 +151,7 @@ class NativeOracleLaneTests(unittest.TestCase):
             int(resolution_pin.group(1)),
             constant(
                 parity_root / "resolution_contract.rs",
-                "NATIVE_RESOLUTION_ORACLE_SCHEMA_V2",
+                "NATIVE_RESOLUTION_ORACLE_SCHEMA_V3",
             ),
         )
 
@@ -263,9 +263,9 @@ class NativeOracleLaneTests(unittest.TestCase):
             hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
         )
         self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
-        self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
+        self.assertEqual(evidence["resolution_oracle"]["schema_version"], 3)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
-        self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 4)
+        self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 5)
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["name"], "libsolv")
         self.assertEqual(evidence["resolution_implementation"]["workers"], 2)
         self.assertEqual(
@@ -284,15 +284,15 @@ class NativeOracleLaneTests(unittest.TestCase):
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:
         for profile, architecture, projection_schema in (
-            ("fedora-44", "x86_64", 4),
-            ("ubuntu-26.04", "amd64", 2),
-            ("arch", "x86_64", 2),
+            ("fedora-44", "x86_64", 5),
+            ("ubuntu-26.04", "amd64", 3),
+            ("arch", "x86_64", 3),
         ):
             with self.subTest(profile=profile):
                 result = self.run_lane(profile, architecture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 evidence = json.loads(result.stdout)
-                self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
+                self.assertEqual(evidence["resolution_oracle"]["schema_version"], 3)
                 self.assertEqual(
                     evidence["resolution_oracle"]["implementation"]["projection_schema"],
                     projection_schema,

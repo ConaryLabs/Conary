@@ -481,7 +481,7 @@ def validate_lane(
         or exact_u32(
             resolution_value.get("schema_version"), f"{profile} resolution schema_version"
         )
-        != 2
+        != 3
         or resolution_value.get("profile") != profile
         or resolution_value.get("profile_revision_sha256") != candidate_sha256
         or resolution_value.get("policy", {}).get("architecture") != architecture
@@ -1241,7 +1241,7 @@ def validate_implementation(value: Any, profile: str, label: str) -> None:
     if (
         implementation["ecosystem"] != PROFILE_ECOSYSTEMS[profile]
         or implementation["name"] != "conary-sat"
-        or implementation["projection_schema"] != 2
+        or implementation["projection_schema"] != 3
     ):
         fail(f"{label} differs from the fixed Conary candidate producer")
 
@@ -1340,7 +1340,7 @@ def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
             previous_key = key
     elif status == "not_installable":
         outcome = exact_object(value, {"status", "reason"}, label)
-        if outcome["reason"] != "architecture_excluded":
+        if outcome["reason"] not in ("architecture_excluded", "conflicting_closure"):
             fail(f"{label} not-installable reason is unsupported")
     else:
         fail(f"{label} has an unsupported outcome status")
@@ -1364,7 +1364,9 @@ def update_native_outcome_digest(digest: Any, outcome: dict[str, Any]) -> None:
             digest.update(canonical_json(value))
         digest.update(b'],"status":"unresolved"}')
     else:
-        digest.update(b'{"reason":"architecture_excluded","status":"not_installable"}')
+        digest.update(b'{"reason":')
+        digest.update(canonical_json(outcome["reason"]))
+        digest.update(b',"status":"not_installable"}')
 
 
 def native_outcome_sha256(outcome: dict[str, Any]) -> str:
@@ -1694,7 +1696,7 @@ def reconstruct_candidate_manifest_sha256(
     ):
         fail(f"{name} candidate and package implementations disagree")
     candidate_manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile": candidate_survey["profile"],
         "profile_revision_sha256": candidate_survey["profile_revision_sha256"],
         "profile_logical_digest_sha256": package_manifest[
@@ -2209,7 +2211,7 @@ def load_input_package_manifests(
                     resolution["schema_version"],
                     f"{profile_name} resolution schema_version",
                 )
-                != 2
+                != 3
                 or resolution["profile"] != profile_name
                 or resolution["profile_revision_sha256"]
                 != profile["profile_revision_sha256"]

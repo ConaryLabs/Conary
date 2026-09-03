@@ -380,7 +380,7 @@ for index in 0 1 2; do
             ecosystem:$ecosystem,
             name:"conary-sat",
             version:"1",
-            projection_schema:2
+            projection_schema:3
           },
           policy:{
             architecture:$architecture,

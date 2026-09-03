@@ -2079,8 +2079,8 @@ test_check_release_matrix_rejects_native_oracle_implementation_pin_drift() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        'projection_schema:4,version:"0.7.36"' \
-        'projection_schema:5,version:"0.7.36"'
+        'projection_schema:5,version:"0.7.36"' \
+        'projection_schema:4,version:"0.7.36"'
 
     assert_check_release_matrix_fails \
         "$repo" \
