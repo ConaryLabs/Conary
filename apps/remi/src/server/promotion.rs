@@ -76,6 +76,7 @@ struct ActiveUniverseBinding {
 #[derive(Debug)]
 enum ActiveUniverseManifest {
     Current(RemiUniverseManifestV2),
+    ObsoleteUniverseSchema,
     ObsoleteProfileSchema,
 }
 
@@ -169,7 +170,7 @@ pub(crate) async fn activate_remi_promotion(
         &canonical_map,
         &config.repository_keys_dir,
     )?;
-    let bundle = publish_candidate_files(
+    publish_candidate_files(
         &config.catalog_candidate_dir,
         &config.catalog_dir,
         &candidate,
@@ -181,7 +182,6 @@ pub(crate) async fn activate_remi_promotion(
             &config.db_path,
             &profiles,
             &candidate,
-            &bundle,
             active.as_ref(),
             &promotion_evidence_sha256,
             &conversion_crawl_sha256,
@@ -526,6 +526,9 @@ fn load_active_universe(conn: &Connection) -> Result<Option<ActiveUniverseBindin
                 super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => {
                     ActiveUniverseManifest::Current(manifest)
                 }
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteUniverseSchema { .. } => {
+                    ActiveUniverseManifest::ObsoleteUniverseSchema
+                }
                 super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => {
                     ActiveUniverseManifest::ObsoleteProfileSchema
                 }
@@ -591,12 +594,10 @@ fn build_signed_candidate(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 fn activate_transaction(
     db_path: &Path,
     profiles: &[PromotionProfile],
     candidate: &SignedUniverseCandidate,
-    _bundle: &Path,
     expected_active: Option<&ActiveUniverseBinding>,
     promotion_evidence_sha256: &str,
     conversion_crawl_sha256: &str,

@@ -104,7 +104,7 @@ impl PublicationCoordinator {
         scope: RepositoryRefreshScope,
         force: bool,
         accept_completed_after: Option<i64>,
-    ) -> RepositoryRefreshAdmission {
+    ) -> anyhow::Result<RepositoryRefreshAdmission> {
         self.admit_repository_refresh_with_clock(
             scope,
             force,
@@ -120,9 +120,9 @@ impl PublicationCoordinator {
         force: bool,
         accept_completed_after: Option<i64>,
         clock: Clock,
-    ) -> RepositoryRefreshAdmission
+    ) -> anyhow::Result<RepositoryRefreshAdmission>
     where
-        Clock: FnOnce() -> i64,
+        Clock: FnOnce() -> anyhow::Result<i64>,
     {
         let guard = self.lock_owned().await;
         let mut state = self.refresh_state();
@@ -136,25 +136,27 @@ impl PublicationCoordinator {
             execution.coalesced = true;
             drop(state);
             drop(guard);
-            return RepositoryRefreshAdmission::Coalesced(execution);
+            return Ok(RepositoryRefreshAdmission::Coalesced(execution));
         }
 
         state.generation = state
             .generation
             .checked_add(1)
-            .expect("repository refresh generation overflowed");
+            .ok_or_else(|| anyhow::anyhow!("repository refresh generation overflowed"))?;
         let generation = state.generation;
         drop(state);
 
-        RepositoryRefreshAdmission::Execute(RepositoryRefreshPermit {
-            coordinator: Arc::clone(self),
-            guard: Some(guard),
-            generation,
-            scope,
-            force,
-            started_at: clock(),
-            recorded: false,
-        })
+        Ok(RepositoryRefreshAdmission::Execute(
+            RepositoryRefreshPermit {
+                coordinator: Arc::clone(self),
+                guard: Some(guard),
+                generation,
+                scope,
+                force,
+                started_at: clock()?,
+                recorded: false,
+            },
+        ))
     }
 
     fn refresh_state(&self) -> std::sync::MutexGuard<'_, RepositoryRefreshState> {
@@ -180,8 +182,9 @@ impl RepositoryRefreshPermit {
     pub(crate) fn complete(
         mut self,
         batch: RepoRefreshBatch,
-    ) -> (OwnedMutexGuard<()>, RepositoryRefreshExecution) {
-        self.complete_at(batch, unix_timestamp())
+    ) -> anyhow::Result<(OwnedMutexGuard<()>, RepositoryRefreshExecution)> {
+        let finished_at = unix_timestamp()?;
+        Ok(self.complete_at(batch, finished_at))
     }
 
     fn complete_at(
@@ -206,9 +209,10 @@ impl RepositoryRefreshPermit {
     }
 
     /// Record a top-level refresh error before returning the publication guard.
-    pub(crate) fn fail(mut self) -> OwnedMutexGuard<()> {
-        self.record_terminal(RepositoryRefreshTerminalState::Error, unix_timestamp());
-        self.guard.take().expect("refresh permit lost its guard")
+    pub(crate) fn fail(mut self) -> anyhow::Result<OwnedMutexGuard<()>> {
+        let finished_at = unix_timestamp()?;
+        self.record_terminal(RepositoryRefreshTerminalState::Error, finished_at);
+        Ok(self.guard.take().expect("refresh permit lost its guard"))
     }
 
     fn record_terminal(
@@ -244,19 +248,28 @@ impl RepositoryRefreshPermit {
 impl Drop for RepositoryRefreshPermit {
     fn drop(&mut self) {
         if !self.recorded {
-            self.record_terminal(RepositoryRefreshTerminalState::Incomplete, unix_timestamp());
+            match unix_timestamp() {
+                Ok(finished_at) => {
+                    self.record_terminal(RepositoryRefreshTerminalState::Incomplete, finished_at)
+                }
+                Err(error) => {
+                    self.coordinator.refresh_state().latest = None;
+                    self.recorded = true;
+                    tracing::error!(%error, "could not timestamp incomplete repository refresh");
+                }
+            }
         }
     }
 }
 
-fn unix_timestamp() -> i64 {
-    i64::try_from(
+fn unix_timestamp() -> anyhow::Result<i64> {
+    Ok(i64::try_from(
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .expect("system clock is before the Unix epoch")
+            .map_err(|error| anyhow::anyhow!("system clock is before the Unix epoch: {error}"))?
             .as_secs(),
     )
-    .expect("Unix timestamp exceeds i64")
+    .map_err(|_| anyhow::anyhow!("Unix timestamp exceeds i64"))?)
 }
 
 #[cfg(test)]
@@ -288,8 +301,9 @@ mod tests {
         started_at: i64,
     ) -> RepositoryRefreshAdmission {
         coordinator
-            .admit_repository_refresh_with_clock(scope, force, floor, || started_at)
+            .admit_repository_refresh_with_clock(scope, force, floor, || Ok(started_at))
             .await
+            .expect("admit repository refresh")
     }
 
     #[tokio::test]
@@ -359,7 +373,7 @@ mod tests {
                 panic!("ineligible refresh was coalesced");
             };
             assert_eq!(permit.generation, expected_generation);
-            drop(permit.fail());
+            drop(permit.fail().expect("timestamp failed refresh"));
         }
 
         let pre_floor = Arc::new(PublicationCoordinator::default());

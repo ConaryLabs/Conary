@@ -538,6 +538,7 @@ fn inspect_active_universe(
         &manifest_json,
     )? {
         crate::server::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => manifest,
+        crate::server::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteUniverseSchema { .. } => return Ok(None),
         crate::server::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => return Ok(None),
     };
     manifest.validate().map_err(anyhow::Error::from)?;

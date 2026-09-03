@@ -208,6 +208,7 @@ async fn refresh_repositories_coordinated(
     match coordinator
         .admit_repository_refresh(scope.clone(), force, accept_completed_after)
         .await
+        .map_err(|error| ServiceError::Internal(error.to_string()))?
     {
         RepositoryRefreshAdmission::Coalesced(execution) => {
             if scope == RepositoryRefreshScope::All {
@@ -226,7 +227,9 @@ async fn refresh_repositories_coordinated(
             };
             match result {
                 Ok(batch) => {
-                    let (publication_guard, execution) = permit.complete(batch);
+                    let (publication_guard, execution) = permit
+                        .complete(batch)
+                        .map_err(|error| ServiceError::Internal(error.to_string()))?;
                     if scope == RepositoryRefreshScope::All {
                         record_repository_readiness(state, Ok(&execution.batch)).await;
                     }
@@ -234,7 +237,9 @@ async fn refresh_repositories_coordinated(
                     Ok(execution)
                 }
                 Err(error) => {
-                    let publication_guard = permit.fail();
+                    let publication_guard = permit
+                        .fail()
+                        .map_err(|clock_error| ServiceError::Internal(clock_error.to_string()))?;
                     if scope == RepositoryRefreshScope::All {
                         record_repository_readiness(state, Err(&error)).await;
                     }

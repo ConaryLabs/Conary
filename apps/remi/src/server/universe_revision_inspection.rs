@@ -1,6 +1,6 @@
 // apps/remi/src/server/universe_revision_inspection.rs
 
-//! Typed inspection of stored universe revisions across profile-schema hard cuts.
+//! Typed inspection of stored universe revisions across schema hard cuts.
 
 use anyhow::{Context, Result, bail};
 use conary_core::repository::catalog::PROFILE_REVISION_SCHEMA_V3;
@@ -9,6 +9,7 @@ use conary_core::repository::universe::{REMI_UNIVERSE_SCHEMA_V2, RemiUniverseMan
 #[derive(Debug)]
 pub(crate) enum StoredUniverseManifestV2 {
     Current(RemiUniverseManifestV2),
+    ObsoleteUniverseSchema { found: u32, required: u32 },
     ObsoleteProfileSchema,
 }
 
@@ -38,10 +39,16 @@ pub(crate) fn inspect_stored_universe_manifest_v2(
     {
         bail!("stored Remi universe pointer disagrees with its manifest authority");
     }
-    if universe_schema != REMI_UNIVERSE_SCHEMA_V2 {
+    if universe_schema > REMI_UNIVERSE_SCHEMA_V2 {
         bail!(
-            "stored Remi universe schema must be {REMI_UNIVERSE_SCHEMA_V2}, got {universe_schema}"
+            "stored Remi universe schema {universe_schema} is newer than required schema {REMI_UNIVERSE_SCHEMA_V2}"
         );
+    }
+    if universe_schema < REMI_UNIVERSE_SCHEMA_V2 {
+        return Ok(StoredUniverseManifestV2::ObsoleteUniverseSchema {
+            found: universe_schema,
+            required: REMI_UNIVERSE_SCHEMA_V2,
+        });
     }
 
     let mut obsolete = false;

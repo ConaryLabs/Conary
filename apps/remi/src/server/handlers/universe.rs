@@ -58,7 +58,7 @@ pub async fn get_manifest_target(
     let Some(sha256) = manifest.strip_suffix(".json").map(str::to_string) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if !is_sha256(&sha256) {
+    if !conary_core::hash::is_canonical_sha256(&sha256) {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let (db_path, catalog_dir) = {
@@ -80,7 +80,7 @@ pub async fn get_object_target(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(sha256): Path<String>,
 ) -> Response {
-    if !is_sha256(&sha256) {
+    if !conary_core::hash::is_canonical_sha256(&sha256) {
         return StatusCode::BAD_REQUEST.into_response();
     }
     let (db_path, catalog_dir) = {
@@ -152,15 +152,17 @@ fn resolve_metadata_file(
     requested: &str,
 ) -> Result<Option<PublicFile>> {
     let conn = open_handler_db(db_path)?;
-    let active = conn
-        .query_row(
-            "SELECT manifest_sha256 FROM remi_active_universe_revision WHERE singleton = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    let Some(active) = active else {
-        return Ok(None);
+    let active = match crate::server::public_universe::PublicUniverseSnapshot::load(db_path)? {
+        crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) => {
+            universe.identity().manifest_sha256.clone()
+        }
+        crate::server::public_universe::PublicUniverseLoadOutcome::NoActiveUniverse
+        | crate::server::public_universe::PublicUniverseLoadOutcome::ObsoleteUniverseSchema {
+            ..
+        }
+        | crate::server::public_universe::PublicUniverseLoadOutcome::ObsoleteProfileSchema => {
+            return Ok(None);
+        }
     };
     require_sha256(&active, "active universe manifest")?;
     let bundle = universe_bundle_path(catalog_dir, &active);
@@ -299,15 +301,8 @@ fn resolve_object_target(
     }))
 }
 
-fn is_sha256(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
 fn require_sha256(value: &str, label: &str) -> Result<()> {
-    if !is_sha256(value) {
+    if !conary_core::hash::is_canonical_sha256(value) {
         bail!("{label} is not one lowercase SHA-256 digest");
     }
     Ok(())
@@ -315,13 +310,11 @@ fn require_sha256(value: &str, label: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn public_digest_paths_are_strict_lowercase_sha256() {
-        assert!(is_sha256(&"a".repeat(64)));
-        assert!(!is_sha256(&"A".repeat(64)));
-        assert!(!is_sha256(&"a".repeat(63)));
-        assert!(!is_sha256("../root.json"));
+        assert!(conary_core::hash::is_canonical_sha256(&"a".repeat(64)));
+        assert!(!conary_core::hash::is_canonical_sha256(&"A".repeat(64)));
+        assert!(!conary_core::hash::is_canonical_sha256(&"a".repeat(63)));
+        assert!(!conary_core::hash::is_canonical_sha256("../root.json"));
     }
 }

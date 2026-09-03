@@ -399,6 +399,12 @@ impl SearchEngine {
         Ok(count)
     }
 
+    /// Retire any previously bound search projection after a failed rebuild.
+    /// The Tantivy bytes may still exist, but they are not serving authority.
+    pub(crate) fn mark_unavailable(&self) {
+        *self.authority.write() = None;
+    }
+
     pub(crate) fn search_public_universe(
         &self,
         expected: &PublicUniverseIdentity,
