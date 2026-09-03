@@ -358,7 +358,9 @@ impl NativeResolutionRootV1 {
 /// Canonical digest used to bind an unresolved solver result to the exact
 /// requirement group in the package-fact oracle.
 pub fn native_requirement_group_sha256(group: &CatalogRequirementGroupV1) -> Result<String> {
-    let bytes = crate::json::canonical_json(group).map_err(|error| {
+    let mut group = group.clone();
+    group.canonicalize()?;
+    let bytes = crate::json::canonical_json(&group).map_err(|error| {
         Error::ParseError(format!(
             "serialize native resolution requirement group: {error}"
         ))

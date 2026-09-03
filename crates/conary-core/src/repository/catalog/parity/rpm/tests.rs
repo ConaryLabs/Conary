@@ -1639,7 +1639,7 @@ impl ObservedRoot {
     }
 }
 
-/// Produce both oracles under schema 4 and return the named root's outcome
+/// Produce both oracles under schema 5 and return the named root's outcome
 /// with every projected package.
 fn resolve_named_root(
     directory: &tempfile::TempDir,
@@ -1981,6 +1981,45 @@ fn resolution_producer_binds_missing_prerequisite_group_exactly() {
                 requiring_package_key_sha256: package.package_key_sha256,
                 requirement_group_sha256: expected_group,
             }]
+        }
+    );
+}
+
+#[test]
+fn resolution_producer_binds_missing_compound_group_after_canonical_atom_sort() {
+    let directory = tempfile::tempdir().unwrap();
+    let checksum = digest('a');
+    let root_format = r#"
+    <rpm:provides><rpm:entry name="compound-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="(missing-compound >= 0.6.3 with missing-compound &lt; 0.7.0~)"/></rpm:requires>"#;
+    let mut root = PackageFixture::simple("compound-root", &checksum);
+    root.format = root_format;
+    let metadata = vec![write_metadata(directory.path(), "fedora-core", &[root])];
+    let snapshots = vec![source_snapshot(
+        "fedora-core",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 1;
+
+    let observed = resolve_named_root(&directory, &profile, &snapshots, &metadata, "compound-root");
+    let package = observed.package("compound-root");
+    let group = package
+        .requirement_groups
+        .iter()
+        .find(|group| {
+            group.native_text.as_deref()
+                == Some("(missing-compound >= 0.6.3 with missing-compound < 0.7.0~)")
+        })
+        .unwrap();
+    assert_eq!(
+        observed.outcome,
+        NativeResolutionOutcomeV1::Unresolved {
+            dependencies: vec![NativeUnresolvedDependencyV1 {
+                requiring_package_key_sha256: package.package_key_sha256.clone(),
+                requirement_group_sha256: native_requirement_group_sha256(group).unwrap(),
+            }],
         }
     );
 }
