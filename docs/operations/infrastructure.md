@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 93
+revision: 94
 summary: Document non-secret CI, release, deployment, hosting, agent-operation, and production evidence workflows; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -80,9 +80,10 @@ workflow.
 ### Remi
 
 - Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
-- Use the normal admin account (`<admin>@ssh.conary.io`) plus passwordless,
-  least-privilege `sudo`; root SSH login is not part of the supported deploy
-  path.
+- Use the normal admin account (`<admin>@ssh.conary.io`) recorded in the ignored
+  `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> plus passwordless,
+  least-privilege `sudo`;
+  root SSH login is not part of the supported deploy path.
 - Exclude `target/`, `.git/`, and `.worktrees/`
 - The durable deploy entry point is the root-owned helper installed at
   `/usr/local/sbin/conary-remi-deploy`, with the sudo policy tracked in
