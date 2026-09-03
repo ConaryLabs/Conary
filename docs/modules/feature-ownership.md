@@ -1113,7 +1113,8 @@ claimed.
 
 **Docs to update:** `docs/operations/release-artifact-matrix.md`;
 `docs/operations/infrastructure.md`;
-`docs/roadmaps/external-tester-milestone.md`;
+`docs/roadmaps/development-roadmap.md`;
+`docs/roadmaps/launch-status.json`;
 `docs/llms/subsystem-map.md`.
 
 **Safety notes:** published tags and releases are immutable evidence. The

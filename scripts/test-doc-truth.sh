@@ -248,12 +248,6 @@ EOF
 }
 EOF
 
-    cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
-# External Tester Milestone
-
-The publication gate for synchronized suite `v0.10.1` is complete.
-EOF
-
     cat > "$root/docs/operations/external-tester-outreach.md" <<'EOF'
 ---
 last_updated: 2026-07-25
@@ -665,10 +659,6 @@ break_detailed_roadmap_milestone() {
     sed -i '/first external tester milestone/d' "$1/docs/roadmaps/development-roadmap.md"
 }
 
-break_tracker_release_version() {
-    sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/roadmaps/external-tester-milestone.md"
-}
-
 break_outreach_release_version() {
     sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/operations/external-tester-outreach.md"
 }
@@ -868,7 +858,6 @@ expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core
 expect_failure "preview status drift" break_preview_status 'early preview warning'
 expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
 expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
-expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference|completed publication gate'
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
 expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'

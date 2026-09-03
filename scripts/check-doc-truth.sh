@@ -519,24 +519,13 @@ check_release_doc_versions() {
     local truth_doc
     local -a release_truth_docs=(
         "docs/operations/release-artifact-matrix.md"
-        "docs/roadmaps/external-tester-milestone.md"
     )
     for truth_doc in "${release_truth_docs[@]}"; do
         [[ -f "$truth_doc" ]] || continue
-        case "$truth_doc" in
-            docs/operations/release-artifact-matrix.md)
-                require_match \
-                    "$truth_doc" \
-                    "Version \`${published_version}\` is the current immutable release authority" \
-                    "published release authority ${current_tag}"
-                ;;
-            docs/roadmaps/external-tester-milestone.md)
-                require_match \
-                    "$truth_doc" \
-                    "publication gate for synchronized suite \`${current_tag}\` is complete" \
-                    "completed publication gate ${current_tag}"
-                ;;
-        esac
+        require_match \
+            "$truth_doc" \
+            "Version \`${published_version}\` is the current immutable release authority" \
+            "published release authority ${current_tag}"
         if [[ "$prepared_tag" != "$current_tag" ]]; then
             if ! rg -q -- "$prepared_tag" "$truth_doc"; then
                 report_error "$truth_doc has stale conary release reference; expected prepared target ${prepared_tag}"

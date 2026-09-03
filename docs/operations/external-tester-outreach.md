@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-31
-revision: 11
+last_updated: 2026-09-03
+revision: 12
 status: postponed
 target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -193,7 +193,8 @@ failed attempts are useful evidence.
   the released binary on supported hosts.
 - [x] Deploy the exact release sites and independently verify live status and
   body claims.
-- [x] Update the release artifact matrix and milestone tracker with exact
+- [x] Update the release artifact matrix, roadmap W8, and launch status with
+  exact
   release, deployment, and Remi population evidence.
 - [x] Publish and independently verify the synchronized `v0.16.1` suite that
   contains the supported-host fixes, then replace every release version and
@@ -216,7 +217,7 @@ failed attempts are useful evidence.
 
 ## Closeout
 
-After the milestone tracker records the durable venue, date, pinned release,
-and tester findings, move any stable product truth to its canonical owner and
-delete this draft. Published copy remains at its venue; Git history retains
-the planning record.
+After roadmap W8 and `docs/roadmaps/launch-status.json` record the durable
+venue, date, pinned release, and tester findings, move any stable product truth
+to its canonical owner and delete this draft. Published copy remains at its
+venue; Git history retains the planning record.
