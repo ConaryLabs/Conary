@@ -430,6 +430,16 @@ for index in 0 1 2; do
     ')"
     printf '%s' "$candidate" >"$output/$profile.candidate-resolution-survey.json"
     chmod 0600 "$output/$profile.candidate-resolution-survey.json"
+    implementation_evidence="$(jq -cnS '{
+      schema_version:1,
+      workers:2,
+      worker_load_milliseconds:[12,13],
+      memory_budget_bytes:8589934592,
+      measured_worker_rss_bytes:1610612736
+    }')"
+    printf '%s' "$implementation_evidence" \
+        >"$output/$profile.candidate-resolution-implementation.json"
+    chmod 0600 "$output/$profile.candidate-resolution-implementation.json"
     comparison_result=null
     if (( failures == 0 )); then
         candidate_root="$(jq -cnS --arg root "$(printf 'e%.0s' {1..64})" '
@@ -480,6 +490,9 @@ for index in 0 1 2; do
         ')"
         printf '%s' "$comparison" >"$output/$profile.native-resolution-comparison-survey.json"
         chmod 0600 "$output/$profile.native-resolution-comparison-survey.json"
+        printf '%s' "$implementation_evidence" \
+            >"$output/$profile.comparison-resolution-implementation.json"
+        chmod 0600 "$output/$profile.comparison-resolution-implementation.json"
         comparison_profiles=$((comparison_profiles + 1))
         comparison_result="$(jq -cnS --argjson comparison "$comparison" '
             {
@@ -1394,7 +1407,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
         --transport "$transport" \
         --evidence "$verification" >/dev/null
     jq -e '
-        .schema_version == 1
+        .schema_version == 2
         and .counts == {
           candidate_failures: 0,
           comparison_mismatches: 0,

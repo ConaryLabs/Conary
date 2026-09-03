@@ -11,6 +11,8 @@ mod resolution_compare;
 mod resolution_comparison_survey;
 mod resolution_contract;
 mod resolution_io;
+mod resolution_parallel;
+mod resolution_root;
 mod resolution_survey;
 mod survey_support;
 
@@ -26,20 +28,25 @@ mod debian;
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V2, AlpmParityMemberInput,
-    produce_alpm_parity_oracle, produce_alpm_resolution_oracle, produce_alpm_resolution_survey,
+    produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
+    produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
+    produce_alpm_resolution_survey_with_workers,
 };
 
 #[cfg(feature = "native-rpm-oracle")]
 pub use rpm::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V4, RpmParityMemberInput,
-    produce_rpm_parity_oracle, produce_rpm_resolution_oracle, produce_rpm_resolution_survey,
+    produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+    produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey,
+    produce_rpm_resolution_survey_with_workers,
 };
 
 #[cfg(feature = "native-debian-oracle")]
 pub use debian::{
     DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
-    produce_debian_resolution_survey,
+    produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey,
+    produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
 };
 
 pub use crate::repository::architecture::{
@@ -47,8 +54,10 @@ pub use crate::repository::architecture::{
 };
 pub use candidate_resolution::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,
-    produce_conary_resolution_candidate, produce_conary_resolution_comparison_survey,
-    produce_conary_resolution_survey,
+    produce_conary_resolution_candidate, produce_conary_resolution_candidate_with_workers,
+    produce_conary_resolution_comparison_survey,
+    produce_conary_resolution_comparison_survey_with_workers, produce_conary_resolution_survey,
+    produce_conary_resolution_survey_with_workers,
 };
 pub use candidate_resolution_survey::{
     CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, CONARY_RESOLUTION_SURVEY_FAILURE_LIMIT,
@@ -105,6 +114,12 @@ pub use resolution_io::{
     NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
     NativeResolutionOracleReader, NativeResolutionOracleWriter,
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+};
+#[cfg(test)]
+pub(crate) use resolution_parallel::resolution_test_capacity;
+pub use resolution_parallel::{
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    ensure_resolution_walk_evidence_outside_bundle, write_resolution_walk_implementation_evidence,
 };
 pub use resolution_survey::{
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,

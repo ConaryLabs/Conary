@@ -164,7 +164,14 @@ class NativeOracleAssemblyTests(unittest.TestCase):
                 "manifest_sha256": sha256(resolution_manifest_bytes),
                 "schema_version": 2,
             },
-            "schema_version": 3,
+            "resolution_implementation": {
+                "memory_budget_bytes": 8589934592,
+                "measured_worker_rss_bytes": 536870912,
+                "schema_version": 1,
+                "worker_load_milliseconds": [12, 13],
+                "workers": 2,
+            },
+            "schema_version": 4,
             "target_architecture": architecture,
             "transport_sha256": TRANSPORT_SHA256,
         }
@@ -228,6 +235,23 @@ class NativeOracleAssemblyTests(unittest.TestCase):
         result = self.run_assembler()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("arch lane binding drifted", result.stderr)
+
+    def test_rejects_obsolete_lane_evidence_schema(self) -> None:
+        evidence = self.evidence("fedora-44")
+        evidence["schema_version"] = 3
+        self.rewrite_evidence("fedora-44", evidence)
+        result = self.run_assembler()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("fedora-44 lane binding drifted", result.stderr)
+
+    def test_rejects_schema_three_lane_without_worker_evidence(self) -> None:
+        evidence = self.evidence("fedora-44")
+        evidence["schema_version"] = 3
+        del evidence["resolution_implementation"]
+        self.rewrite_evidence("fedora-44", evidence)
+        result = self.run_assembler()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("incomplete or unknown fields", result.stderr)
 
     def test_rejects_non_descendant_producer(self) -> None:
         evidence = self.evidence("fedora-44")

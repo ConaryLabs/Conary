@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
-    DebianParityMemberInput, ProfileRevisionV2, SourceSnapshotV1, produce_debian_resolution_oracle,
-    produce_debian_resolution_survey,
+    DebianParityMemberInput, ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest,
+    SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
+    produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey_with_workers,
+    run_debian_resolution_worker, write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -48,9 +50,44 @@ struct Arguments {
     /// New diagnostics-only NativeResolutionSurveyV1 JSON file.
     #[arg(long)]
     survey: Option<PathBuf>,
+
+    /// Worker processes; defaults to detected CPU and measured memory capacity.
+    #[arg(long)]
+    workers: Option<ResolutionWorkerCount>,
+
+    /// New JSON file recording worker count and per-worker pool-load time.
+    #[arg(long)]
+    implementation_evidence: PathBuf,
+}
+
+#[derive(Debug, Parser)]
+struct WorkerArguments {
+    #[arg(long)]
+    architecture: String,
+    #[arg(long)]
+    package_index: PathBuf,
+    #[arg(long, required = true)]
+    solver_input: Vec<PathBuf>,
 }
 
 fn main() {
+    let mut raw = std::env::args_os();
+    let program = raw.next().unwrap_or_default();
+    if raw
+        .next()
+        .is_some_and(|argument| argument == "--internal-resolution-worker")
+    {
+        let arguments = WorkerArguments::parse_from(std::iter::once(program).chain(raw));
+        if let Err(error) = run_debian_resolution_worker(
+            &arguments.solver_input,
+            &arguments.package_index,
+            &arguments.architecture,
+        ) {
+            eprintln!("conary-debian-resolution-oracle worker: {error:#}");
+            std::process::exit(1);
+        }
+        return;
+    }
     if let Err(error) = run(Arguments::parse()) {
         eprintln!("conary-debian-resolution-oracle: {error:#}");
         std::process::exit(1);
@@ -58,6 +95,10 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<()> {
+    if let Some(output) = &arguments.output {
+        ensure_resolution_walk_evidence_outside_bundle(output, &arguments.implementation_evidence)
+            .context("validate Debian resolution implementation evidence destination")?;
+    }
     let members = arguments.source_snapshot.len();
     if arguments.packages.len() != members {
         bail!(
@@ -79,35 +120,48 @@ fn run(arguments: Arguments) -> Result<()> {
             packages,
         })
         .collect::<Vec<_>>();
-    match (arguments.output, arguments.survey) {
+    let worker_request = arguments.workers.map_or(
+        ResolutionWorkerRequest::Automatic,
+        ResolutionWorkerRequest::explicit,
+    );
+    let mut survey_failures = None;
+    let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
-            produce_debian_resolution_oracle(
+            let (_, evidence) = produce_debian_resolution_oracle_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce Debian resolution oracle")?;
+            evidence
         }
         (None, Some(output)) => {
-            let survey = produce_debian_resolution_survey(
+            let (survey, evidence) = produce_debian_resolution_survey_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce Debian resolution survey")?;
             if survey.total_failures != 0 {
-                bail!(
-                    "Debian resolution survey recorded {} failed roots; inventory written to {}",
-                    survey.total_failures,
-                    output.display()
-                );
+                survey_failures = Some((survey.total_failures, output));
             }
+            evidence
         }
         _ => unreachable!("clap requires exactly one resolution destination"),
+    };
+    write_resolution_walk_implementation_evidence(&arguments.implementation_evidence, &evidence)
+        .context("write Debian resolution implementation evidence")?;
+    if let Some((failures, output)) = survey_failures {
+        bail!(
+            "Debian resolution survey recorded {failures} failed roots; inventory written to {}",
+            output.display()
+        );
     }
     Ok(())
 }

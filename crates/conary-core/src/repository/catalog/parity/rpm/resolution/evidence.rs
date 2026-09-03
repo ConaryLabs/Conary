@@ -3,9 +3,10 @@
 //! Byte-bounded projection of libsolv problem evidence.
 
 use super::{
-    PackageResolutionIndex, SOLVER_RULE_INFARCH, SOLVER_RULE_JOB, SOLVER_RULE_JOB_UNSUPPORTED,
-    SOLVER_RULE_PKG_NOT_INSTALLABLE, SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP,
-    SOLVER_RULE_PKG_REQUIRES, SOLVER_RULE_STRICT_REPO_PRIORITY,
+    PackageResolutionIndexReader, SOLVER_RULE_INFARCH, SOLVER_RULE_JOB,
+    SOLVER_RULE_JOB_UNSUPPORTED, SOLVER_RULE_PKG_NOT_INSTALLABLE,
+    SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP, SOLVER_RULE_PKG_REQUIRES,
+    SOLVER_RULE_STRICT_REPO_PRIORITY,
 };
 use crate::error::Result;
 use crate::repository::catalog::parity::resolution_survey::NativeExplanationBudget;
@@ -20,7 +21,7 @@ use super::super::ffi::{SolvProblem, SolvProblemRule};
 
 pub(super) fn rpm_explanation(
     pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     source_problems: &[SolvProblem],
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
@@ -63,7 +64,7 @@ pub(super) fn explanation_builds() -> usize {
 
 fn append_problems(
     pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     problems: &mut Vec<NativeResolutionSurveyRpmProblemV1>,
     source_problems: &[SolvProblem],
     budget: &mut NativeExplanationBudget,
@@ -90,7 +91,7 @@ fn append_problems(
 
 fn project_rule(
     pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     rule: &SolvProblemRule,
 ) -> NativeResolutionSurveyRpmRuleV1 {
     let (from, from_unavailable_reason) = rpm_package_field(pool, package_index, rule.from_index);
@@ -120,7 +121,7 @@ fn withheld() -> NativeResolutionSurveyNativeExplanationV1 {
 
 fn rpm_package_field(
     pool: &SolvPool,
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     index: Option<usize>,
 ) -> (Option<NativeResolutionSurveyRpmPackageV1>, Option<String>) {
     let Some(index) = index else {
@@ -219,8 +220,7 @@ mod tests {
     #[test]
     fn rpm_explanation_withholds_multi_problem_root_when_budget_expires() {
         let pool = SolvPool::create().unwrap();
-        let package_index = PackageResolutionIndex {
-            _scratch: tempfile::tempdir().unwrap(),
+        let package_index = PackageResolutionIndexReader {
             connection: Connection::open_in_memory().unwrap(),
         };
         let problems = (1..=3)

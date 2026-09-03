@@ -39,7 +39,7 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
-MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 2
+MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 4
 SURVEY_RECORD_LIMIT = 5_000
 SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
 ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT
@@ -315,6 +315,33 @@ def validate_artifact_binding(
     }
 
 
+def validate_resolution_implementation(value: Any, label: str) -> dict[str, Any]:
+    evidence = exact_object(
+        value,
+        {
+            "schema_version",
+            "workers",
+            "worker_load_milliseconds",
+            "memory_budget_bytes",
+            "measured_worker_rss_bytes",
+        },
+        label,
+    )
+    if exact_u32(evidence["schema_version"], f"{label} schema_version") != 1:
+        fail(f"{label} schema_version is unsupported")
+    workers = exact_positive_int(evidence["workers"], f"{label} workers")
+    loads = evidence["worker_load_milliseconds"]
+    if not isinstance(loads, list) or len(loads) != workers:
+        fail(f"{label} worker load count differs from workers")
+    for index, load in enumerate(loads):
+        exact_nonnegative_int(load, f"{label} worker load {index}")
+    exact_positive_int(evidence["memory_budget_bytes"], f"{label} memory budget")
+    exact_positive_int(
+        evidence["measured_worker_rss_bytes"], f"{label} measured worker RSS"
+    )
+    return evidence
+
+
 def validate_lane(
     root: Path,
     profile: str,
@@ -356,6 +383,7 @@ def validate_lane(
             "target_architecture",
             "package_oracle",
             "resolution_oracle",
+            "resolution_implementation",
         },
         f"{profile} lane evidence",
     )
@@ -372,8 +400,11 @@ def validate_lane(
         if binary["name"] != expected_name:
             fail(f"{profile} {kind} producer name drifted")
         require_sha256(binary["sha256"], f"{profile} {kind} producer digest")
+    validate_resolution_implementation(
+        evidence["resolution_implementation"], f"{profile} resolution implementation"
+    )
     if (
-        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 3
+        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 4
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != deployment_run_id
         or evidence["export_run_id"] != export_run_id
@@ -2579,7 +2610,7 @@ def verify_staged_output(
             "survey manifest",
         )
         if (
-            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 1
+            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 2
             or manifest["survey_id"] != survey_id
             or manifest["export_id"] != export_id
         ):
@@ -2665,7 +2696,13 @@ def verify_staged_output(
         candidate = profile["candidate"]
         candidate = exact_object(
             candidate,
-            {"file", "counts", "total_failures", "error_histogram"},
+            {
+                "file",
+                "implementation_file",
+                "counts",
+                "total_failures",
+                "error_histogram",
+            },
             f"{profile_name} candidate summary",
         )
         expected_candidate_name = f"{profile_name}.candidate-resolution-survey.json"
@@ -2675,6 +2712,37 @@ def verify_staged_output(
         ):
             fail(f"{profile_name} candidate survey file binding is missing")
         referenced_files.add(candidate["file"])
+        candidate_implementation_name = candidate["implementation_file"]
+        expected_candidate_implementation_name = (
+            f"{profile_name}.candidate-resolution-implementation.json"
+        )
+        if (
+            candidate_implementation_name != expected_candidate_implementation_name
+            or candidate_implementation_name not in file_entries
+        ):
+            fail(f"{profile_name} candidate implementation file binding is missing")
+        referenced_files.add(candidate_implementation_name)
+        candidate_implementation_path = staging / candidate_implementation_name
+        implementation_size, implementation_sha256 = file_entries[
+            candidate_implementation_name
+        ]
+        copy_declared_survey_member(
+            args.transport,
+            candidate_implementation_name,
+            candidate_implementation_path,
+            implementation_size,
+            implementation_sha256,
+        )
+        forbid_private_path_bytes(candidate_implementation_path, candidate_implementation_name)
+        implementation, _ = load_json(
+            candidate_implementation_path,
+            f"{profile_name} candidate implementation",
+            canonical=True,
+        )
+        validate_resolution_implementation(
+            implementation, f"{profile_name} candidate implementation"
+        )
+        candidate_implementation_path.unlink()
         candidate_path = staging / candidate["file"]
         candidate_size, candidate_sha256 = file_entries[candidate["file"]]
         copy_declared_survey_member(
@@ -2724,6 +2792,7 @@ def verify_staged_output(
                 comparison,
                 {
                     "file",
+                    "implementation_file",
                     "candidate_manifest_sha256",
                     "counts",
                     "total_mismatches",
@@ -2755,6 +2824,39 @@ def verify_staged_output(
             ):
                 fail(f"{profile_name} comparison survey file binding is missing")
             referenced_files.add(comparison_name)
+            comparison_implementation_name = comparison["implementation_file"]
+            expected_comparison_implementation_name = (
+                f"{profile_name}.comparison-resolution-implementation.json"
+            )
+            if (
+                comparison_implementation_name != expected_comparison_implementation_name
+                or comparison_implementation_name not in file_entries
+            ):
+                fail(f"{profile_name} comparison implementation file binding is missing")
+            referenced_files.add(comparison_implementation_name)
+            comparison_implementation_path = staging / comparison_implementation_name
+            implementation_size, implementation_sha256 = file_entries[
+                comparison_implementation_name
+            ]
+            copy_declared_survey_member(
+                args.transport,
+                comparison_implementation_name,
+                comparison_implementation_path,
+                implementation_size,
+                implementation_sha256,
+            )
+            forbid_private_path_bytes(
+                comparison_implementation_path, comparison_implementation_name
+            )
+            implementation, _ = load_json(
+                comparison_implementation_path,
+                f"{profile_name} comparison implementation",
+                canonical=True,
+            )
+            validate_resolution_implementation(
+                implementation, f"{profile_name} comparison implementation"
+            )
+            comparison_implementation_path.unlink()
             comparison_path = staging / comparison_name
             comparison_size, comparison_sha256 = file_entries[comparison_name]
             copy_declared_survey_member(
@@ -2833,7 +2935,7 @@ def verify_staged_output(
     forbid_private_paths(manifest, "survey manifest")
 
     evidence = {
-        "schema_version": 1,
+        "schema_version": 2,
         "survey_id": survey_id,
         "export_id": export_id,
         "deployment": deployment,

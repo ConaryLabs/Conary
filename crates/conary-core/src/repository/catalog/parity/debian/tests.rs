@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use super::ffi::{AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
+    CatalogArtifactV1, CatalogCountsV1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionOutcomeV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
     NativeResolutionSurveyNativeExplanationV1, NativeUnresolvedDependencyV1,
     PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
@@ -19,6 +20,37 @@ use crate::repository::{OpenPgpTrustRoot, RepositoryParserConfig, RepositoryTrus
 
 fn digest(byte: char) -> String {
     byte.to_string().repeat(64)
+}
+
+#[test]
+fn automatic_library_walk_falls_back_without_worker_executable() {
+    let two = crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap();
+    let missing = || {
+        Err(Error::ConfigError(
+            "test worker executable is unavailable".to_string(),
+        ))
+    };
+
+    let (workers, executable) = super::resolution::select_debian_worker_launch(
+        crate::repository::catalog::parity::ResolutionWorkerRequest::Automatic,
+        two,
+        missing(),
+    )
+    .unwrap();
+    assert_eq!(workers.get(), 1);
+    assert!(executable.is_none());
+
+    let error = super::resolution::select_debian_worker_launch(
+        crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(two),
+        two,
+        missing(),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("worker executable is unavailable")
+    );
 }
 
 fn packages_fixture(shared_checksum: &str, include_primary: bool) -> Vec<u8> {
@@ -769,6 +801,7 @@ fn apt_pkg_resolves_shadowed_exact_roots_with_compatible_native_versions() {
 
 #[test]
 fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let high_packages = [
         resolution_stanza(
@@ -833,14 +866,41 @@ fn resolution_producer_emits_native_precedence_closures_and_typed_missing_groups
     let resolution_output = directory.path().join("resolution-oracle");
     resolution::reset_explanation_builds();
 
-    let manifest = produce_debian_resolution_oracle(
+    let serial = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(1).unwrap(),
+    );
+    let parallel = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap(),
+    );
+    let (manifest, _) = produce_debian_resolution_oracle_with_workers(
         &profile,
         &inputs(&snapshots, &packages),
         &package_output,
         "amd64",
         &resolution_output,
+        serial,
     )
     .unwrap();
+    let parallel_output = directory.path().join("parallel-resolution-oracle");
+    produce_debian_resolution_oracle_with_workers(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &parallel_output,
+        parallel,
+    )
+    .unwrap();
+    for name in [
+        NATIVE_RESOLUTION_ROOT_FILE_NAME,
+        NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    ] {
+        assert_eq!(
+            fs::read(resolution_output.join(name)).unwrap(),
+            fs::read(parallel_output.join(name)).unwrap(),
+            "Debian strict resolution byte drift in {name}"
+        );
+    }
 
     assert_eq!(manifest.implementation.name, "apt-pkg");
     assert_eq!(manifest.implementation.version, "3.2.0");
@@ -1460,6 +1520,7 @@ fn resolution_producer_rejects_conflicts_and_incompatible_roots() {
 
 #[test]
 fn resolution_survey_records_all_failures_and_isolates_later_roots() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
     let directory = tempfile::tempdir().unwrap();
     let package_text = [
         resolution_stanza(
@@ -1486,14 +1547,37 @@ fn resolution_survey_records_all_failures_and_isolates_later_roots() {
     produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
         .unwrap();
 
-    let survey = produce_debian_resolution_survey(
+    let serial_survey_path = directory.path().join("survey.json");
+    let parallel_survey_path = directory.path().join("parallel-survey.json");
+    let serial = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(1).unwrap(),
+    );
+    let parallel = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap(),
+    );
+    let (survey, _) = produce_debian_resolution_survey_with_workers(
         &profile,
         &inputs(&snapshots, &packages),
         &package_output,
         "amd64",
-        &directory.path().join("survey.json"),
+        &serial_survey_path,
+        serial,
     )
     .unwrap();
+    produce_debian_resolution_survey_with_workers(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &parallel_survey_path,
+        parallel,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(&serial_survey_path).unwrap(),
+        fs::read(&parallel_survey_path).unwrap(),
+        "Debian survey JSON changed with worker scheduling"
+    );
 
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);

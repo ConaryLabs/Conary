@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
+summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 53
+revision: 54
 status: active
 ---
 
@@ -102,6 +102,14 @@ discard an already validated survey. Survey artifacts are named separately,
 carry the export/deployment/producer/image/schema/implementation/binary-digest
 bindings, and remain diagnostics-only. Their type can never satisfy assembly,
 comparison, promotion, activation, or publication.
+
+Native-resolution survey binding evidence is schema 2, and strict native-oracle
+lane evidence is schema 4. Those versions add the required worker count,
+per-worker pool-load timings, measured worker RSS, and admitted memory budget.
+This is a hard cut: schema-1 survey bindings and schema-3 strict lanes are
+obsolete non-authority and must be regenerated. In particular, the first
+subset production after this cut must rebuild all three strict lanes before
+later subset runs may retain an unselected lane.
 
 Dispatch input `lanes` is an optional comma-separated, non-empty,
 duplicate-free subset of `fedora-44,ubuntu-26.04,arch`; its default is that
@@ -453,6 +461,59 @@ clears result storage and constructs fresh dependency caches per root, and
 libalpm releases every transaction before the next root. A failed root
 therefore cannot contaminate a later solve.
 
+Every strict and survey root walk is parallel behind one bounded,
+sequence-numbered sink. Input dispatch follows package-oracle order and only
+the parent/calling thread updates writers, collectors, histograms, record caps,
+or the 64 MiB explanation budget. The next sequence goes to the first available
+worker, so an uneven solve cannot strand idle capacity behind a busy worker's
+private queue. Results may finish out of order, but the sink does not observe
+root `n + 1` before root `n`; strict mode stops dispatch after the first failing
+canonical root, drains workers, and returns that failure.
+Consequently worker scheduling cannot change `roots.jsonl`, manifest bytes or
+digests, survey JSON, counts, histograms, caps, or budget decisions.
+
+RPM and ALPM use threads with a private libsolv pool or libalpm handle and a
+private read-only SQLite index connection per worker. Conary workers likewise
+open one read-only SQLite connection apiece and construct fresh resolvo state
+per root. apt-pkg configuration and system pointers are process-global, so the
+Debian lane uses child processes; each builds its own cache and solver from the
+same staged authenticated `Packages` inputs. No native handle crosses a thread
+or process boundary.
+
+`--workers <positive-integer>` is a typed input on all three native resolution
+binaries and on `remi resolution-survey`. Omission selects the minimum of
+`available_parallelism()`, the cgroup-v2 CPU quota, root count, and memory
+capacity. Memory capacity subtracts `memory.current` from every bounded
+cgroup-v2 ancestor (or uses host `MemAvailable`), reserves 25% of that remaining
+capacity, caps the worker-pool budget at 8 GiB, and divides it by the retained
+Fedora single-pool allowance of 1.5 GiB (rounded above the measured 1,271,280
+KiB one-worker root-walk RSS observation). Native binaries require a separate
+`--implementation-evidence <FILE>` destination. Its create-only schema-1 JSON
+records the selected worker count, every worker's pool/cache load milliseconds,
+the effective memory budget, and the measured allowance; those run-dependent
+facts never enter canonical oracle or survey bytes.
+
+The retained Fedora measurement used the fresh export from successful
+`export-remi-native-oracle-inputs` run `33699383309`, profile-manifest SHA-256
+`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`,
+and all 101,187 roots. Both passes used release binary SHA-256
+`407485a67107802a670561db60b4fbcb3cc2f05a11c6b0baef58bbdd4e387198`
+from commit `23f702c3` inside `conary-oracle-fedora-slice6`. The observed 12 CPUs
+and 8 GiB worker budget made five workers the automatic capacity.
+
+| Workers | Wall seconds | User seconds | System seconds | Peak RSS KiB | Per-worker pool load ms |
+| ---: | ---: | ---: | ---: | ---: | :--- |
+| 1 | 10,832.801 | 3,231.511 | 184.536 | 1,656,556 | 26,540 |
+| 5 | 6,774.840 | 3,458.632 | 192.119 | 3,801,984 | 31,460; 31,540; 31,676; 31,479; 31,519 |
+
+The five-worker end-to-end speedup was 1.60x. Both runs recorded the same 45
+typed failures and produced byte-identical 167,998-byte survey JSON with
+SHA-256
+`0fd754eed04d6cd9bfa5e7a58d392b1eec4c9b3bf4b31b91805e833c3826874c`.
+The mandatory authenticated package-oracle reprojection was storage-bound and
+varied between the sequential runs, so wall time is retained with CPU, RSS,
+and pool-load evidence rather than treated as an isolated solver benchmark.
+
 Survey JSON is a diagnostics aid only. It never creates `manifest.json` or
 `roots.jsonl`, is not a `NativeResolutionOracleV1` bundle, and has no parity,
 comparison, promotion-proof, activation, or publication authority. Promotion
@@ -471,6 +532,8 @@ cargo run -p conary-core --features native-rpm-oracle \
   --primary primary.xml.gz --filelists filelists.xml.zst \
   --package-oracle rpm-oracle \
   --architecture x86_64 \
+  --workers 4 \
+  --implementation-evidence rpm-resolution-implementation.json \
   --survey rpm-resolution-survey.json
 ```
 
@@ -530,11 +593,14 @@ remi resolution-survey \
   --architecture fedora-44=x86_64 \
   --architecture ubuntu-26.04=amd64 \
   --architecture arch=x86_64 \
+  --workers 4 \
   --output-dir <new-private-survey-directory>
 ```
 
 The output directory is create-only and mode `0700` on Unix; each canonical
-survey file is create-only and mode `0600`. A profile with candidate failures
+survey file is create-only and mode `0600`. Per-profile candidate and
+comparison implementation JSON files record the selected workers and their
+load times separately from those canonical surveys. A profile with candidate failures
 cannot produce a complete candidate bundle, so its comparison survey is
 skipped while later profiles are still surveyed. Complete candidates are
 materialized only below an automatically removed temporary directory. The
@@ -577,7 +643,12 @@ staging diagnostic that is never transported or logged. It accepts status `101`
 only when the typed outcome records
 at least one finding, polls `/health/ready` to a bounded successful result
 regardless of those findings, and returns only survey JSON
-plus a digest, size, deployment, candidate, and oracle binding manifest. The
+and separate resolution-walk implementation JSON plus a digest, size,
+deployment, candidate, and oracle binding manifest. Survey transport manifest
+and verification evidence schema 2 bind every candidate/comparison survey to
+its implementation file; the independent reader validates the worker count,
+per-worker load-time vector, effective memory budget, and retained worker RSS
+allowance. The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
 relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
@@ -655,6 +726,7 @@ cargo run -p conary-core --features native-alpm-oracle \
   --source-snapshot multilib-source.json --database multilib.db \
   --package-oracle alpm-oracle \
   --architecture x86_64 \
+  --implementation-evidence alpm-resolution-implementation.json \
   --output alpm-resolution-oracle
 ```
 
@@ -699,6 +771,7 @@ cargo run -p conary-core --features native-rpm-oracle \
   --primary primary.xml.gz --filelists filelists.xml.zst \
   --package-oracle rpm-oracle \
   --architecture x86_64 \
+  --implementation-evidence rpm-resolution-implementation.json \
   --output rpm-resolution-oracle
 ```
 
@@ -766,6 +839,7 @@ cargo run -p conary-core --features native-debian-oracle \
   --source-snapshot ubuntu-updates-source.json --packages updates-Packages.xz \
   --package-oracle debian-oracle \
   --architecture amd64 \
+  --implementation-evidence debian-resolution-implementation.json \
   --output debian-resolution-oracle
 ```
 

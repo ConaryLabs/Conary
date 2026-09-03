@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 161
-summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded private diagnostics-only all-roots native and Conary resolution surveys, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 162
+summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded deterministic parallel private diagnostics-only all-roots native and Conary resolution surveys with isolated solvers and recorded worker evidence, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
 # Remi
@@ -795,6 +795,13 @@ result only when the export run used its own exact current-main operator
 revision. Callers cannot supply paths, profile order, conversion commands, or
 publication operations.
 
+The diagnostics survey binding is schema 2 and the strict per-ecosystem lane
+evidence is schema 4. Both require the resolution worker count, measured
+per-worker load times and RSS admission inputs. Schema-1 survey bindings and
+schema-3 lanes predate that scheduling evidence and are fenced as obsolete;
+operators must regenerate all three strict lanes once before retained-lane
+subset production can resume.
+
 ```text
 remi native-oracle-input \
   --db /conary/metadata/conary.db \
@@ -1035,6 +1042,60 @@ diagnostics only: Remi comparison, proof, activation, and publication do not
 accept it as authority. The command exits non-zero after writing any non-empty
 failure inventory.
 
+Strict and survey producers dispatch exact roots to a bounded worker set and
+reassemble results by package-oracle sequence before touching the writer or
+collector. That single ordered sink keeps bundle bytes, manifest digests,
+survey counts and histograms, the 5,000-record cap, and the 64 MiB explanation
+budget identical to a one-worker run. Each next root goes to the first worker
+that becomes available, preserving capacity when solve times are uneven. A
+strict failure stops further dispatch, then returns the first failure in
+canonical order after draining workers.
+
+RPM threads each own a libsolv pool loaded from the staged authenticated
+metadata; ALPM threads each own a private staged libalpm root and handle;
+Conary threads each own a read-only projected-catalog SQLite connection and
+fresh per-root resolvo state. Debian uses processes because apt-pkg's
+configuration and system objects are process-global. Each Debian worker builds
+its own apt cache from the same staged authenticated inputs and opens the
+projection index read-only.
+
+All three oracle binaries and `remi resolution-survey` accept typed
+`--workers <n>`. The automatic value is bounded by Rust available parallelism,
+the cgroup-v2 CPU quota, root count, and memory capacity. Worker memory uses a
+1.5 GiB Fedora pool allowance, rounded above a retained 1,271,280 KiB
+one-worker root-walk RSS observation; the effective budget subtracts
+`memory.current` from every bounded cgroup-v2 ancestor (or uses host
+`MemAvailable`), reserves 25% of the remaining memory, and never exceeds 8 GiB.
+Native binaries write selected worker count, effective budget, retained pool
+allowance, and per-worker pool/cache load milliseconds to the required separate
+`--implementation-evidence` JSON file. Remi writes equivalent per-profile
+candidate and comparison implementation files. Scheduling evidence therefore
+remains comparable without contaminating canonical survey or oracle bytes.
+
+The fresh Fedora export from successful
+`export-remi-native-oracle-inputs` run `33699383309` supplied 101,187 roots for
+the retained full-scale measurement. The profile-manifest SHA-256 was
+`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`;
+both passes used release binary SHA-256
+`407485a67107802a670561db60b4fbcb3cc2f05a11c6b0baef58bbdd4e387198`
+from commit `23f702c3` in `conary-oracle-fedora-slice6`. The observed 12 CPUs
+and 8 GiB worker budget made five workers the automatic capacity.
+
+| Workers | Wall seconds | User seconds | System seconds | Peak RSS KiB | Per-worker pool load ms |
+| ---: | ---: | ---: | ---: | ---: | :--- |
+| 1 | 10,832.801 | 3,231.511 | 184.536 | 1,656,556 | 26,540 |
+| 5 | 6,774.840 | 3,458.632 | 192.119 | 3,801,984 | 31,460; 31,540; 31,676; 31,479; 31,519 |
+
+That is a 1.60x end-to-end wall-time speedup. Each run recorded the same 45
+typed failures, and their 167,998-byte canonical survey files were identical:
+SHA-256
+`0fd754eed04d6cd9bfa5e7a58d392b1eec4c9b3bf4b31b91805e833c3826874c`.
+The mandatory package-oracle reprojection was storage-bound and varied between
+the sequential runs, which is why CPU, RSS, and per-worker load evidence remains
+beside wall time. On the largest checked-in RPM fixture, one worker took 930 ms
+and two workers took 986 ms; strict bundle bytes and survey JSON were identical,
+and the tiny load-bound input correctly showed no speedup.
+
 `ConaryResolutionSurveyV1` schema 1 applies that collector discipline to the
 Conary SAT candidate. It binds the exact schema-3 profile revision,
 package-oracle manifest, `conary-sat` implementation, native-only policy, and
@@ -1086,13 +1147,16 @@ remi resolution-survey \
   --architecture fedora-44=x86_64 \
   --architecture ubuntu-26.04=amd64 \
   --architecture arch=x86_64 \
+  --workers 4 \
   --output-dir <new-private-survey-directory>
 ```
 
-The command writes `<profile>.candidate-resolution-survey.json`. When that
+The command writes `<profile>.candidate-resolution-survey.json` and
+`<profile>.candidate-resolution-implementation.json`. When that
 profile has no hard candidate failures it builds a strict candidate only in an
 automatically removed temporary directory and writes
-`<profile>.native-resolution-comparison-survey.json`; otherwise comparison for
+`<profile>.native-resolution-comparison-survey.json` plus
+`<profile>.comparison-resolution-implementation.json`; otherwise comparison for
 that profile is skipped because no complete candidate exists. All profiles are
 still visited, and the command returns Remi's top-level failure status `101`
 after reporting any findings.
@@ -1157,6 +1221,11 @@ verification plus the authenticated three-lane assembly for seven days. The
 independent reader enforces every typed Rust survey field, outcome, histogram,
 the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
 mismatch-evidence relationship.
+Transport manifest and verification evidence schema 2 additionally bind each
+candidate and comparison survey to its separate implementation-evidence file.
+The independent reader reopens those files and verifies the selected worker
+count, exact per-worker load-time vector, effective memory budget, and retained
+per-worker RSS allowance before accepting the survey artifact.
 Comparison counts must cover the exact zero-failure candidate root population;
 every retained mismatch root, identity, and candidate outcome must match that
 candidate survey.

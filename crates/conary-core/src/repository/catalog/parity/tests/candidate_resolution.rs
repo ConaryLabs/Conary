@@ -255,6 +255,82 @@ fn complete_candidate_crawl_reopens_and_matches_native_resolution() {
 }
 
 #[test]
+fn serial_and_parallel_candidate_outputs_are_byte_identical() {
+    let _capacity = crate::repository::catalog::parity::resolution_test_capacity(2);
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let candidate = candidate_fixture(ecosystem);
+    let package_oracle = oracle(&candidate, ecosystem, rows(&candidate));
+    let native = write_native_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        &expected_roots(&candidate),
+    );
+    let outputs = tempfile::tempdir().unwrap();
+    let serial = outputs.path().join("serial");
+    let parallel = outputs.path().join("parallel");
+    let one = ResolutionWorkerRequest::explicit(ResolutionWorkerCount::new(1).unwrap());
+    let two = ResolutionWorkerRequest::explicit(ResolutionWorkerCount::new(2).unwrap());
+
+    produce_conary_resolution_candidate_with_workers(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        architecture(ecosystem),
+        &serial,
+        one,
+    )
+    .unwrap();
+    produce_conary_resolution_candidate_with_workers(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        native.path(),
+        architecture(ecosystem),
+        &parallel,
+        two,
+    )
+    .unwrap();
+    for name in [
+        NATIVE_RESOLUTION_ROOT_FILE_NAME,
+        NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    ] {
+        assert_eq!(
+            fs::read(serial.join(name)).unwrap(),
+            fs::read(parallel.join(name)).unwrap(),
+            "candidate bundle byte drift in {name}"
+        );
+    }
+
+    let serial_survey = outputs.path().join("serial-survey.json");
+    let parallel_survey = outputs.path().join("parallel-survey.json");
+    produce_conary_resolution_survey_with_workers(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        architecture(ecosystem),
+        &serial_survey,
+        one,
+    )
+    .unwrap();
+    produce_conary_resolution_survey_with_workers(
+        &candidate.profile,
+        &candidate.reader,
+        package_oracle._directory.path(),
+        architecture(ecosystem),
+        &parallel_survey,
+        two,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(serial_survey).unwrap(),
+        fs::read(parallel_survey).unwrap(),
+        "candidate survey JSON changed with worker scheduling"
+    );
+}
+
+#[test]
 fn candidate_producer_rejects_operator_architecture_before_writing_roots() {
     let ecosystem = NativeParityEcosystemV1::Rpm;
     let candidate = candidate_fixture(ecosystem);

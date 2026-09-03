@@ -8,8 +8,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
-    ProfileRevisionV2, RpmParityMemberInput, SourceSnapshotV1, produce_rpm_resolution_oracle,
-    produce_rpm_resolution_survey,
+    ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest, RpmParityMemberInput,
+    SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
+    produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey_with_workers,
+    write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -52,6 +54,14 @@ struct Arguments {
     /// New diagnostics-only NativeResolutionSurveyV1 JSON file.
     #[arg(long)]
     survey: Option<PathBuf>,
+
+    /// Worker processes/threads; defaults to detected CPU and measured memory capacity.
+    #[arg(long)]
+    workers: Option<ResolutionWorkerCount>,
+
+    /// New JSON file recording worker count and per-worker pool-load time.
+    #[arg(long)]
+    implementation_evidence: PathBuf,
 }
 
 fn main() {
@@ -62,6 +72,10 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<()> {
+    if let Some(output) = &arguments.output {
+        ensure_resolution_walk_evidence_outside_bundle(output, &arguments.implementation_evidence)
+            .context("validate RPM resolution implementation evidence destination")?;
+    }
     let members = arguments.source_snapshot.len();
     if arguments.primary.len() != members || arguments.filelists.len() != members {
         bail!(
@@ -88,35 +102,48 @@ fn run(arguments: Arguments) -> Result<()> {
             },
         )
         .collect::<Vec<_>>();
-    match (arguments.output, arguments.survey) {
+    let worker_request = arguments.workers.map_or(
+        ResolutionWorkerRequest::Automatic,
+        ResolutionWorkerRequest::explicit,
+    );
+    let mut survey_failures = None;
+    let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
-            produce_rpm_resolution_oracle(
+            let (_, evidence) = produce_rpm_resolution_oracle_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce RPM resolution oracle")?;
+            evidence
         }
         (None, Some(output)) => {
-            let survey = produce_rpm_resolution_survey(
+            let (survey, evidence) = produce_rpm_resolution_survey_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce RPM resolution survey")?;
             if survey.total_failures != 0 {
-                bail!(
-                    "RPM resolution survey recorded {} failed roots; inventory written to {}",
-                    survey.total_failures,
-                    output.display()
-                );
+                survey_failures = Some((survey.total_failures, output));
             }
+            evidence
         }
         _ => unreachable!("clap requires exactly one resolution destination"),
+    };
+    write_resolution_walk_implementation_evidence(&arguments.implementation_evidence, &evidence)
+        .context("write RPM resolution implementation evidence")?;
+    if let Some((failures, output)) = survey_failures {
+        bail!(
+            "RPM resolution survey recorded {failures} failed roots; inventory written to {}",
+            output.display()
+        );
     }
     Ok(())
 }

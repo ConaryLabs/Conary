@@ -14,6 +14,7 @@ use super::resolution_contract::{
     NativeResolutionOutcomeV1, NativeResolutionPolicyV1, NativeResolutionRootV1,
 };
 use super::resolution_io::NativeResolutionOracleWriter;
+pub(super) use super::resolution_root::{NativeRootResolutionError, NativeRootResolutionResult};
 use crate::error::{Error, Result};
 
 #[allow(unused_imports)] // Consumed by feature-gated native explanation builders.
@@ -502,47 +503,6 @@ pub struct NativeResolutionSurveyAlpmConflictV1 {
     pub reason: String,
 }
 
-#[allow(dead_code)] // Shared by feature-gated native producer root loops.
-pub(super) struct NativeRootResolutionError {
-    error: Error,
-    reason: NativeResolutionSurveyErrorReasonV1,
-    explanation: NativeResolutionSurveyNativeExplanationV1,
-}
-
-#[allow(dead_code)]
-impl NativeRootResolutionError {
-    pub(super) fn new(
-        error: Error,
-        reason: NativeResolutionSurveyErrorReasonV1,
-        explanation: NativeResolutionSurveyNativeExplanationV1,
-    ) -> Box<Self> {
-        Box::new(Self {
-            error,
-            reason,
-            explanation,
-        })
-    }
-
-    #[cfg(feature = "native-alpm-oracle")]
-    pub(super) fn replace_error(
-        &mut self,
-        error: Error,
-        reason: NativeResolutionSurveyErrorReasonV1,
-    ) {
-        self.error = error;
-        self.reason = reason;
-    }
-
-    #[cfg(feature = "native-alpm-oracle")]
-    pub(super) fn error_message(&self) -> String {
-        self.error.to_string()
-    }
-}
-
-#[allow(dead_code)]
-pub(super) type NativeRootResolutionResult =
-    std::result::Result<NativeResolutionOutcomeV1, Box<NativeRootResolutionError>>;
-
 #[allow(dead_code)]
 pub(super) enum RootOutcomeSink<'a> {
     Strict(&'a mut NativeResolutionOracleWriter),
@@ -660,11 +620,18 @@ impl NativeResolutionSurveyCollector {
             error,
             reason,
             explanation,
+            wire_identity,
         } = failure;
         self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
         self.counts.failed_roots = checked_increment(self.counts.failed_roots)?;
+        let (error_variant, error_message) = wire_identity.unwrap_or_else(|| {
+            (
+                NativeResolutionSurveyErrorVariantV1::from_error(&error),
+                error.to_string(),
+            )
+        });
         let kind = NativeResolutionSurveyErrorKindV1 {
-            error_variant: NativeResolutionSurveyErrorVariantV1::from_error(&error),
+            error_variant,
             reason,
         };
         let count = self.histogram.entry(kind.clone()).or_default();
@@ -678,7 +645,7 @@ impl NativeResolutionSurveyCollector {
                 release: root.package_release.clone(),
                 architecture: root.architecture.clone(),
                 error_kind: kind,
-                error_message: error.to_string(),
+                error_message,
                 native_explanation,
             });
         }

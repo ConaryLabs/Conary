@@ -1251,10 +1251,16 @@ survey_resolution() {
         source_name="$(basename "$source_file")"
         case "$source_name" in
             fedora-44.candidate-resolution-survey.json | \
+                fedora-44.candidate-resolution-implementation.json | \
                 fedora-44.native-resolution-comparison-survey.json | \
+                fedora-44.comparison-resolution-implementation.json | \
                 ubuntu-26.04.candidate-resolution-survey.json | \
+                ubuntu-26.04.candidate-resolution-implementation.json | \
                 ubuntu-26.04.native-resolution-comparison-survey.json | \
+                ubuntu-26.04.comparison-resolution-implementation.json | \
                 arch.candidate-resolution-survey.json | \
+                arch.candidate-resolution-implementation.json | \
+                arch.comparison-resolution-implementation.json | \
                 arch.native-resolution-comparison-survey.json) ;;
             *) die "resolution survey output contains an unexpected file" ;;
         esac
@@ -1328,26 +1334,39 @@ survey_resolution() {
     output="$frozen_output"
     [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
         die "resolution survey did not create its private output directory"
-    local candidate_file comparison_file profile_failures
+    local candidate_file candidate_implementation_file comparison_file
+    local comparison_implementation_file profile_failures
     for profile in fedora-44 ubuntu-26.04 arch; do
         candidate_file="${output}/${profile}.candidate-resolution-survey.json"
+        candidate_implementation_file="${output}/${profile}.candidate-resolution-implementation.json"
         [[ -f "$candidate_file" && ! -L "$candidate_file" && "$(stat -c '%a' "$candidate_file")" == "600" ]] ||
             die "${profile} candidate survey is not a private plain file"
+        [[ -f "$candidate_implementation_file" && ! -L "$candidate_implementation_file" \
+            && "$(stat -c '%a' "$candidate_implementation_file")" == "600" ]] ||
+            die "${profile} candidate implementation evidence is not a private plain file"
         profile_failures="$(jq -r --arg profile "$profile" \
             '.profile_results[] | select(.profile == $profile) | .candidate.total_failures' \
             "$outcome")"
         comparison_file="${output}/${profile}.native-resolution-comparison-survey.json"
+        comparison_implementation_file="${output}/${profile}.comparison-resolution-implementation.json"
         if [[ "$profile_failures" == "0" ]]; then
             [[ -f "$comparison_file" && ! -L "$comparison_file" && "$(stat -c '%a' "$comparison_file")" == "600" ]] ||
                 die "${profile} comparison survey is not a private plain file"
+            [[ -f "$comparison_implementation_file" && ! -L "$comparison_implementation_file" \
+                && "$(stat -c '%a' "$comparison_implementation_file")" == "600" ]] ||
+                die "${profile} comparison implementation evidence is not a private plain file"
         else
             [[ ! -e "$comparison_file" && ! -L "$comparison_file" ]] ||
                 die "${profile} comparison survey exists despite candidate failures"
+            [[ ! -e "$comparison_implementation_file" && ! -L "$comparison_implementation_file" ]] ||
+                die "${profile} comparison implementation evidence exists despite candidate failures"
         fi
     done
     local unexpected
     unexpected="$(find "$output" -mindepth 1 -maxdepth 1 -type f \
         ! -name '*.candidate-resolution-survey.json' \
+        ! -name '*.candidate-resolution-implementation.json' \
+        ! -name '*.comparison-resolution-implementation.json' \
         ! -name '*.native-resolution-comparison-survey.json' -print -quit)"
     [[ -z "$unexpected" ]] || die "resolution survey output contains an unexpected file"
     unexpected="$(find "$output" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
@@ -1375,7 +1394,9 @@ survey_resolution() {
         jq -n -cS \
             --arg profile "$profile" \
             --arg candidate_file "${profile}.candidate-resolution-survey.json" \
+            --arg candidate_implementation_file "${profile}.candidate-resolution-implementation.json" \
             --arg comparison_file "${profile}.native-resolution-comparison-survey.json" \
+            --arg comparison_implementation_file "${profile}.comparison-resolution-implementation.json" \
             --slurpfile input "$input_manifest" \
             --slurpfile outcome "$outcome" '
             ($input[0].profiles[] | select(.profile == $profile)) as $binding
@@ -1388,12 +1409,14 @@ survey_resolution() {
                 native_resolution_manifest_sha256: $binding.native_resolution.manifest_sha256,
                 candidate: {
                   file: $candidate_file,
+                  implementation_file: $candidate_implementation_file,
                   counts: $result.candidate.counts,
                   total_failures: $result.candidate.total_failures,
                   error_histogram: $result.candidate.counts.error_kinds
                 },
                 comparison: (if $result.comparison == null then null else {
                   file: $comparison_file,
+                  implementation_file: $comparison_implementation_file,
                   candidate_manifest_sha256: $result.comparison.candidate_manifest_sha256,
                   counts: $result.comparison.counts,
                   total_mismatches: $result.comparison.total_mismatches,
@@ -1413,7 +1436,7 @@ survey_resolution() {
         --slurpfile files "$inventory" \
         --slurpfile outcome "$outcome" '
         {
-          schema_version: 1,
+          schema_version: 2,
           survey_id: $survey_id,
           export_id: $export_id,
           deployment: $input[0].deployment,

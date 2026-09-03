@@ -50,6 +50,8 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_SCHEMA = 2
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
+NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -343,6 +345,41 @@ def write_resolution_survey(
     return survey
 
 
+def resolution_implementation_evidence(path: Path) -> dict[str, Any]:
+    evidence, _ = load_canonical(path, "resolution implementation evidence")
+    evidence = require_keys(
+        evidence,
+        {
+            "schema_version",
+            "workers",
+            "worker_load_milliseconds",
+            "memory_budget_bytes",
+            "measured_worker_rss_bytes",
+        },
+        "resolution implementation evidence",
+    )
+    if (
+        evidence["schema_version"] != 1
+        or not isinstance(evidence["workers"], int)
+        or isinstance(evidence["workers"], bool)
+        or evidence["workers"] < 1
+        or not isinstance(evidence["worker_load_milliseconds"], list)
+        or len(evidence["worker_load_milliseconds"]) != evidence["workers"]
+        or any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in evidence["worker_load_milliseconds"]
+        )
+        or not isinstance(evidence["memory_budget_bytes"], int)
+        or isinstance(evidence["memory_budget_bytes"], bool)
+        or evidence["memory_budget_bytes"] < 1
+        or not isinstance(evidence["measured_worker_rss_bytes"], int)
+        or isinstance(evidence["measured_worker_rss_bytes"], bool)
+        or evidence["measured_worker_rss_bytes"] < 1
+    ):
+        raise ValueError("resolution implementation evidence is malformed")
+    return evidence
+
+
 def oracle_evidence(
     directory: Path,
     artifact_name: str,
@@ -426,6 +463,8 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
 
     with tempfile.TemporaryDirectory(prefix="native-oracle-lane-", dir=output_root.parent) as temporary:
         staging = Path(temporary)
+        resolution_implementation_path = staging / "resolution-implementation.json"
+        survey_implementation_path = staging / "survey-resolution-implementation.json"
         profile_manifest = staging / "profile.json"
         profile_manifest.write_bytes(canonical_json(profile["revision"]))
         source_paths: list[Path] = []
@@ -459,6 +498,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
             "--survey", str(survey_path),
+            "--implementation-evidence", str(survey_implementation_path),
         ]
         survey = write_resolution_survey(
             survey_command,
@@ -467,8 +507,11 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             lane,
             package["manifest_sha256"],
         )
+        survey_implementation = resolution_implementation_evidence(
+            survey_implementation_path
+        )
         survey_manifest = {
-            "schema_version": 1,
+            "schema_version": NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA,
             "artifact_type": "native-resolution-survey-diagnostics",
             "deployment_run_id": arguments.deployment_run_id,
             "export_run_id": arguments.export_run_id,
@@ -487,6 +530,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "target_architecture": target_architecture,
             "package_oracle": package,
             "survey": survey,
+            "resolution_implementation": survey_implementation,
         }
         (survey_output_root / "manifest.json").write_bytes(
             canonical_json(survey_manifest)
@@ -495,8 +539,12 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
             "--output", str(resolution_output),
+            "--implementation-evidence", str(resolution_implementation_path),
         ))
         invoke(resolution_command, "native resolution producer")
+        resolution_implementation = resolution_implementation_evidence(
+            resolution_implementation_path
+        )
 
     if package_binary != producer_binary(
         arguments.package_producer,
@@ -519,7 +567,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         package["manifest_sha256"],
     )
     evidence = {
-        "schema_version": 3,
+        "schema_version": NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA,
         "artifact_type": "native-oracle-lane",
         "deployment_run_id": arguments.deployment_run_id,
         "export_run_id": arguments.export_run_id,
@@ -538,6 +586,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         "target_architecture": target_architecture,
         "package_oracle": package,
         "resolution_oracle": resolution,
+        "resolution_implementation": resolution_implementation,
     }
     evidence_bytes = canonical_json(evidence)
     (output_root / "evidence.json").write_bytes(evidence_bytes)

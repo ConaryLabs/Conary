@@ -72,6 +72,7 @@ LANES = {
     },
 }
 MAX_JSON_BYTES = 16 * 1024 * 1024
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
 
 
 def canonical_json(value: Any) -> bytes:
@@ -238,6 +239,40 @@ def verify_binary(value: Any, expected_name: str, label: str) -> dict[str, str]:
     return value
 
 
+def verify_resolution_walk_evidence(value: Any, label: str) -> dict[str, Any]:
+    value = require_keys(
+        value,
+        {
+            "schema_version",
+            "workers",
+            "worker_load_milliseconds",
+            "memory_budget_bytes",
+            "measured_worker_rss_bytes",
+        },
+        label,
+    )
+    if (
+        value["schema_version"] != 1
+        or not isinstance(value["workers"], int)
+        or isinstance(value["workers"], bool)
+        or value["workers"] < 1
+        or not isinstance(value["worker_load_milliseconds"], list)
+        or len(value["worker_load_milliseconds"]) != value["workers"]
+        or any(
+            not isinstance(item, int) or isinstance(item, bool) or item < 0
+            for item in value["worker_load_milliseconds"]
+        )
+        or not isinstance(value["memory_budget_bytes"], int)
+        or isinstance(value["memory_budget_bytes"], bool)
+        or value["memory_budget_bytes"] < 1
+        or not isinstance(value["measured_worker_rss_bytes"], int)
+        or isinstance(value["measured_worker_rss_bytes"], bool)
+        or value["measured_worker_rss_bytes"] < 1
+    ):
+        raise ValueError(f"{label} is malformed")
+    return value
+
+
 def verify_lane(
     root: Path,
     profile: str,
@@ -269,12 +304,13 @@ def verify_lane(
         "target_architecture",
         "package_oracle",
         "resolution_oracle",
+        "resolution_implementation",
     }
     require_keys(evidence, expected_keys, f"{profile} evidence")
     lane = LANES[profile]
     producer_commit = require_commit(evidence["producer_commit"], f"{profile} producer commit")
     if (
-        evidence["schema_version"] != 3
+        evidence["schema_version"] != NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != arguments.deployment_run_id
         or evidence["export_run_id"] != arguments.export_run_id
@@ -296,6 +332,9 @@ def verify_lane(
     verify_binary(binaries["package"], lane["package_binary"], f"{profile} package binary")
     verify_binary(
         binaries["resolution"], lane["resolution_binary"], f"{profile} resolution binary"
+    )
+    verify_resolution_walk_evidence(
+        evidence["resolution_implementation"], f"{profile} resolution implementation"
     )
     git_is_ancestor(
         repository,

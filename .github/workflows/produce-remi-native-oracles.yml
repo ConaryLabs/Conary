@@ -406,7 +406,7 @@ jobs:
             --arg resolution_sha256 "$resolution_sha256" \
             --arg survey_sha256 "$survey_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 1 and
+            .schema_version == 2 and
             .artifact_type == "native-resolution-survey-diagnostics" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
@@ -420,7 +420,11 @@ jobs:
             .package_oracle.schema_version == 1 and
             .survey.schema_version == 2 and
             .survey.sha256 == $survey_sha256 and
-            .survey.size > 0
+            .survey.size > 0 and
+            .resolution_implementation.schema_version == 1 and
+            .resolution_implementation.workers >= 1 and
+            (.resolution_implementation.worker_load_milliseconds | length) ==
+              .resolution_implementation.workers
           ' "$manifest" >/dev/null
           jq -e --arg profile "$PROFILE" --arg sha256 "$survey_sha256" '
             .schema_version == 2 and
@@ -496,7 +500,7 @@ jobs:
             --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
             --arg resolution_sha256 "$resolution_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 3 and
+            .schema_version == 4 and
             .artifact_type == "native-oracle-lane" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
@@ -508,7 +512,11 @@ jobs:
             .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
             .lane_image == $lane_image and
             .package_oracle.schema_version == 1 and
-            .resolution_oracle.schema_version == 2
+            .resolution_oracle.schema_version == 2 and
+            .resolution_implementation.schema_version == 1 and
+            .resolution_implementation.workers >= 1 and
+            (.resolution_implementation.worker_load_milliseconds | length) ==
+              .resolution_implementation.workers
           ' "$evidence" >/dev/null
           case "$PROFILE" in
             fedora-44)
@@ -564,7 +572,10 @@ jobs:
               "- export_id: `\(.export_id)`\n" +
               "- profile_revision: `\(.profile_revision_sha256)`\n" +
               "- package_manifest: `\(.package_oracle.manifest_sha256)`\n" +
+              "- package_rows: `\(.package_oracle.artifact.counts.packages)`\n" +
               "- survey_failures: `\(.survey.total_failures)`\n" +
+              "- resolution_workers: `\(.resolution_implementation.workers)`\n" +
+              "- worker_load_ms: `\(.resolution_implementation.worker_load_milliseconds | join(\",\"))`\n" +
               "- implementation: `\(.package_oracle.implementation.name) \(.package_oracle.implementation.version)`"
             ' "$survey_manifest"
             echo "- survey_artifact_digest: \`$SURVEY_ARTIFACT_DIGEST\`"

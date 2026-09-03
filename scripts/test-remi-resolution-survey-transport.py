@@ -282,7 +282,7 @@ class TransportFixture:
                 "resolution": {"name": resolution_binary, "sha256": str(index + 3) * 64},
             }
             evidence = {
-                "schema_version": 3,
+                "schema_version": 4,
                 "artifact_type": "native-oracle-lane",
                 "deployment_run_id": int(DEPLOYMENT_RUN_ID),
                 "export_run_id": int(EXPORT_RUN_ID),
@@ -315,6 +315,13 @@ class TransportFixture:
                         "size": len(resolution_artifact),
                         "counts": resolution_manifest["artifact"]["counts"],
                     },
+                },
+                "resolution_implementation": {
+                    "schema_version": 1,
+                    "workers": 2,
+                    "worker_load_milliseconds": [12, 13],
+                    "memory_budget_bytes": 8 * 1024 * 1024 * 1024,
+                    "measured_worker_rss_bytes": 1536 * 1024 * 1024,
                 },
             }
             write_json(lane / "evidence.json", evidence)
@@ -851,6 +858,9 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             for binding in input_manifest["profiles"]:
                 profile = binding["profile"]
                 name = f"{profile}.candidate-resolution-survey.json"
+                implementation_name = (
+                    f"{profile}.candidate-resolution-implementation.json"
+                )
                 value = candidate_survey(
                     profile,
                     binding["profile_revision_sha256"],
@@ -858,6 +868,16 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 )
                 data = canonical(value)
                 survey_files[name] = data
+                implementation = canonical(
+                    {
+                        "schema_version": 1,
+                        "workers": 2,
+                        "worker_load_milliseconds": [12, 13],
+                        "memory_budget_bytes": 8 * 1024 * 1024 * 1024,
+                        "measured_worker_rss_bytes": 1536 * 1024 * 1024,
+                    }
+                )
+                survey_files[implementation_name] = implementation
                 profiles.append(
                     {
                         "profile": profile,
@@ -867,6 +887,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                         "native_resolution_manifest_sha256": binding["native_resolution"]["manifest_sha256"],
                         "candidate": {
                             "file": name,
+                            "implementation_file": implementation_name,
                             "counts": value["counts"],
                             "total_failures": 1,
                             "error_histogram": value["counts"]["error_kinds"],
@@ -875,7 +896,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     }
                 )
             manifest = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "survey_id": fixture.survey_id,
                 "export_id": EXPORT_ID,
                 "deployment": input_manifest["deployment"],
@@ -933,7 +954,11 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 json.loads(verification.read_bytes())["counts"]["candidate_failures"], 3
             )
 
-            first_name = sorted(survey_files)[0]
+            first_name = sorted(
+                name
+                for name in survey_files
+                if name.endswith(".candidate-resolution-survey.json")
+            )[0]
             valid_candidate = survey_files[first_name]
             with TRANSPORT_TOOL.StreamingJsonDocument(
                 root / first_name,
@@ -964,7 +989,23 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unsigned 64-bit integer", result.stderr)
-            manifest["schema_version"] = 1
+            manifest["schema_version"] = 2
+
+            first_implementation = sorted(
+                name
+                for name in survey_files
+                if name.endswith(".candidate-resolution-implementation.json")
+            )[0]
+            valid_implementation = survey_files[first_implementation]
+            malformed_implementation = json.loads(valid_implementation)
+            malformed_implementation["workers"] = 3
+            survey_files[first_implementation] = canonical(malformed_implementation)
+            write_output()
+            verification.unlink(missing_ok=True)
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("worker load count differs from workers", result.stderr)
+            survey_files[first_implementation] = valid_implementation
 
             for malformed_count in (False, 0.0):
                 manifest["counts"]["comparison_profiles"] = malformed_count

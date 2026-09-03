@@ -75,6 +75,13 @@ else:
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
     policy = {"architecture": one("--architecture"), "architecture_admission": "native_only", "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"}
     package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
+    Path(one("--implementation-evidence")).write_bytes(canonical({
+        "memory_budget_bytes": 8589934592,
+        "measured_worker_rss_bytes": 536870912,
+        "schema_version": 1,
+        "worker_load_milliseconds": [12, 13],
+        "workers": 2,
+    }))
     if "--survey" in args:
         survey = {
             "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 0, "resolved_roots": 0, "roots_walked": 0, "unresolved_roots": 0},
@@ -240,7 +247,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(evidence["artifact_type"], "native-oracle-lane")
         self.assertEqual(evidence["deployment_run_id"], 123)
         self.assertEqual(evidence["export_run_id"], 456)
@@ -260,6 +267,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 4)
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["name"], "libsolv")
+        self.assertEqual(evidence["resolution_implementation"]["workers"], 2)
         self.assertEqual(
             (self.root / "output-fedora-44" / "evidence.json").read_bytes(),
             canonical(evidence),
@@ -267,10 +275,12 @@ class NativeOracleLaneTests(unittest.TestCase):
         survey_root = self.root / "survey-fedora-44"
         survey = json.loads((survey_root / "survey.json").read_bytes())
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
+        self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
         self.assertEqual(manifest["survey"]["sha256"], digest(survey))
         self.assertEqual(manifest["survey"]["schema_version"], 2)
+        self.assertEqual(manifest["resolution_implementation"]["workers"], 2)
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:
         for profile, architecture, projection_schema in (
