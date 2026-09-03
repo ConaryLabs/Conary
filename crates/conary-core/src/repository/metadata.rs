@@ -19,10 +19,11 @@ pub struct RepositoryMetadata {
     pub packages: Vec<PackageMetadata>,
 }
 
-/// Trusted advisory source declaration for a JSON repository index.
+/// Feed-authored advisory source description for a JSON repository index.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityAdvisorySourceMetadata {
     pub name: String,
+    /// Diagnostic claim from the feed. Never local trust authority.
     pub trust: String,
     pub url: Option<String>,
 }
@@ -74,6 +75,7 @@ pub struct PackageMetadata {
 pub struct PackageSecurityAdvisoryMetadata {
     pub id: String,
     pub source: Option<String>,
+    /// Diagnostic claim from the feed. Never local trust authority.
     pub source_trust: Option<String>,
     pub severity: Option<String>,
     #[serde(default)]

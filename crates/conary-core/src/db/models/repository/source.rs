@@ -19,6 +19,11 @@ use crate::repository::supported_profiles::{
 use crate::repository::{RepositoryFormat, RepositoryParserConfig, RepositoryTrustPolicy};
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// Operator-owned policy for security-advisory metadata from a repository.
+///
+/// `Supported` is the explicit local authorization to classify repository
+/// packages as security updates. Repository-published metadata cannot change
+/// this policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecurityAdvisorySupport {
     Unknown,
@@ -43,7 +48,7 @@ impl SecurityAdvisorySupport {
         }
     }
 
-    pub fn is_supported(self) -> bool {
+    pub fn authorizes_security_advisories(self) -> bool {
         self == Self::Supported
     }
 }
@@ -123,7 +128,8 @@ pub struct Repository {
     pub tuf_root_version: Option<i64>,
     /// URL for fetching TUF root metadata (if different from repo URL)
     pub tuf_root_url: Option<String>,
-    /// Whether this source publishes security-advisory metadata Conary can trust.
+    /// Operator-owned security-advisory policy. `Supported` authorizes advisory
+    /// metadata; feed-authored trust claims never do.
     pub security_advisory_support: SecurityAdvisorySupport,
     /// Exact package-manager metadata grammar used by this source.
     pub package_format: RepositoryFormat,

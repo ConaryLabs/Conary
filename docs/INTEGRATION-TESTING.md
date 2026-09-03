@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-27
-revision: 61
-summary: Document trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-09-03
+revision: 62
+summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -835,12 +835,14 @@ Focused Goal 3 security advisory pipeline proof:
 
 - `cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4`
 
-The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture,
-serves JSON repository metadata with a trusted `security_advisory_source`,
-proves an `unknown` source refuses before mutation, then syncs the same
-repository as `--security-advisories supported` and verifies persisted severity,
-CVE, advisory ID, fixed version, and source-trust metadata before
-`conary update --security` applies the trusted fix.
+The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture
+and serves JSON repository metadata with a feed-authored
+`security_advisory_source`. Feed `trust` and `source_trust` strings are
+diagnostic only. The suite proves an `unknown` local source refuses before
+mutation, then syncs the same repository after the operator authorizes it with
+`--security-advisories supported`. It verifies persisted severity, CVE,
+advisory ID, fixed version, and feed trust-claim metadata before
+`conary update --security` applies the locally authorized fix.
 
 Fresh Goal 3 evidence from May 19, 2026:
 

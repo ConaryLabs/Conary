@@ -195,6 +195,11 @@ impl ImageTools {
                 }
             }
             ImageFormat::Iso => {
+                if self.mkfs_fat.is_none() {
+                    return Err(ImageError::ToolNotFound(
+                        "mkfs.fat (for ISO EFI image creation)".to_string(),
+                    ));
+                }
                 if self.xorriso.is_none() {
                     return Err(ImageError::ToolNotFound(
                         "xorriso (for ISO creation)".to_string(),
@@ -777,6 +782,10 @@ menuentry "Conary Linux (Live, Text Mode)" {
 
     /// Create EFI boot image for ISO
     fn create_efi_image(&self, output: &Path) -> Result<(), ImageError> {
+        let mkfs_fat = self.tools.mkfs_fat.as_ref().ok_or_else(|| {
+            ImageError::ToolNotFound("mkfs.fat (for ISO EFI image creation)".to_string())
+        })?;
+
         // Create a small FAT image for EFI boot
         let size_mb = 4; // 4MB is enough for EFI
 
@@ -784,12 +793,17 @@ menuentry "Conary Linux (Live, Text Mode)" {
         let file = File::create(output)?;
         file.set_len(size_mb * 1024 * 1024)?;
 
-        // Format as FAT
-        if let Some(ref mkfs_fat) = self.tools.mkfs_fat {
-            let _ = Command::new(mkfs_fat)
-                .args(["-F", "12"])
-                .arg(output)
-                .output();
+        let format_output = Command::new(mkfs_fat)
+            .args(["-F", "12"])
+            .arg(output)
+            .output()
+            .map_err(|error| ImageError::CommandFailed(format!("mkfs.fat: {error}")))?;
+        if !format_output.status.success() {
+            return Err(ImageError::CreationFailed(format!(
+                "mkfs.fat exited with {}: {}",
+                format_output.status,
+                String::from_utf8_lossy(&format_output.stderr).trim()
+            )));
         }
 
         Ok(())

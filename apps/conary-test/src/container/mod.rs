@@ -1,6 +1,8 @@
 // conary-test/src/container/mod.rs
 
 pub mod backend;
+mod build_output;
+mod exec_pid;
 mod exec_supervisor;
 pub mod image;
 pub mod lifecycle;
