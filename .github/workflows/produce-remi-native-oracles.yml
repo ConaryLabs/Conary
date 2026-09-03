@@ -47,11 +47,13 @@ jobs:
       - name: Check out protected oracle operator
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Require a protected-main workflow revision
         env:
           PRODUCER_COMMIT: ${{ inputs.producer_commit }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "$PRODUCER_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
@@ -60,6 +62,15 @@ jobs:
           }
           [[ "$GITHUB_REF" == refs/heads/main ]] || {
             echo "native-oracle production must be dispatched from main" >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ && "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "native-oracle production checkout does not match its workflow authority" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "native-oracle production operator must equal the current protected main" >&2
             exit 1
           }
       - name: Validate exact lane subset
@@ -79,6 +90,7 @@ jobs:
         env:
           EXPORT_RUN_ID: ${{ inputs.export_run_id }}
           GH_TOKEN: ${{ github.token }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
           [[ "$EXPORT_RUN_ID" =~ ^[1-9][0-9]*$ ]] || {
@@ -87,12 +99,13 @@ jobs:
           }
           source_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EXPORT_RUN_ID}")"
           printf '%s\n' "$source_run" > "${RUNNER_TEMP}/native-oracle-export-run.json"
-          jq -e --arg repository "$GITHUB_REPOSITORY" '
+          jq -e --arg repository "$GITHUB_REPOSITORY" --arg workflow_sha "$WORKFLOW_SHA" '
             .event == "workflow_dispatch" and
             .status == "completed" and
             .conclusion == "success" and
             .head_branch == "main" and
             .head_repository.full_name == $repository and
+            .head_sha == $workflow_sha and
             .path == ".github/workflows/export-remi-native-oracle-inputs.yml"
           ' <<<"$source_run" >/dev/null
           artifacts="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EXPORT_RUN_ID}/artifacts")"

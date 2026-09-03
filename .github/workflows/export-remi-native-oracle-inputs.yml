@@ -49,8 +49,8 @@ jobs:
             exit 1
           }
           git fetch --no-tags origin main
-          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
-            echo "export operator must already be merged into origin/main" >&2
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "export operator must equal the current protected main" >&2
             exit 1
           }
 
@@ -224,6 +224,11 @@ jobs:
             -o ServerAliveCountMax=6
           )
 
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {
+            echo "export operator changed before the production SSH boundary" >&2
+            exit 1
+          }
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
           remote_transport_possible=1

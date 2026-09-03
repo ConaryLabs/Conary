@@ -296,6 +296,8 @@ class TransportFixture:
             "FieldmouseWorks/Conary",
             "--oracle-run-id",
             ORACLE_RUN_ID,
+            "--workflow-commit",
+            "a" * 40,
             "--oracle-run",
             str(self.oracle_run),
             "--oracle-artifacts",
@@ -504,6 +506,14 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             evidence = json.loads(fixture.evidence.read_bytes())
             self.assertEqual(evidence["workflow_runs"], {"oracle": 300, "export": 200, "deployment": 100})
             self.assertEqual(
+                evidence["oracle_operator"],
+                {
+                    "workflow_commit_sha": "a" * 40,
+                    "workflow_run_id": 300,
+                    "workflow_run_attempt": 1,
+                },
+            )
+            self.assertEqual(
                 evidence["export_operator"]["workflow_commit_sha"], "a" * 40
             )
             self.assertEqual(evidence["deployment"]["binary_sha256"], BINARY_SHA256)
@@ -524,6 +534,17 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 )
 
     def test_build_input_rejects_run_and_lane_binding_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            value = json.loads(fixture.oracle_run.read_bytes())
+            value["head_sha"] = "b" * 40
+            write_json(fixture.oracle_run, value)
+            result = subprocess.run(
+                fixture.command(), text=True, capture_output=True, check=False
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("exact current-main operator", result.stderr)
+
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
             value = json.loads(fixture.oracle_run.read_bytes())

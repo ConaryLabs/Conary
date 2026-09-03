@@ -550,6 +550,7 @@ def validate_export_operator(
 def build_input(args: argparse.Namespace) -> None:
     survey_id = require_identity(args.survey_id, "survey id")
     oracle_id = require_run_id(args.oracle_run_id, "oracle run id")
+    workflow_commit = require_commit(args.workflow_commit, "survey workflow commit")
     repository = args.repository
     if not isinstance(repository, str) or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
         fail("repository must be one explicit owner/name")
@@ -562,6 +563,11 @@ def build_input(args: argparse.Namespace) -> None:
         ".github/workflows/produce-remi-native-oracles.yml",
         "oracle run",
     )
+    oracle_attempt = exact_positive_int(
+        oracle_run.get("run_attempt"), "oracle run attempt"
+    )
+    if oracle_run["head_sha"] != workflow_commit:
+        fail("oracle run does not use the survey's exact current-main operator")
     oracle_artifacts, _ = load_json(args.oracle_artifacts, "oracle artifact metadata")
     oracle_names = unexpired_artifact_names(oracle_artifacts, "oracle run")
     assembly_value, assembly_bytes = load_json(
@@ -778,6 +784,11 @@ def build_input(args: argparse.Namespace) -> None:
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": manifest["workflow_runs"],
+        "oracle_operator": {
+            "workflow_commit_sha": workflow_commit,
+            "workflow_run_id": oracle_id,
+            "workflow_run_attempt": oracle_attempt,
+        },
         "oracle_assembly": {"sha256": sha256_bytes(assembly_bytes)},
         "export_operator": export_operator,
         "deployment": manifest["deployment"],
@@ -1301,6 +1312,7 @@ def validate_input_evidence(
             "survey_id",
             "export_id",
             "workflow_runs",
+            "oracle_operator",
             "oracle_assembly",
             "export_operator",
             "deployment",
@@ -1322,6 +1334,20 @@ def validate_input_evidence(
     for name, run_id in workflow_runs.items():
         if exact_nonnegative_int(run_id, f"input {name} run") == 0:
             fail(f"input {name} run must be positive")
+    oracle_operator = exact_object(
+        evidence["oracle_operator"],
+        {"workflow_commit_sha", "workflow_run_id", "workflow_run_attempt"},
+        "input oracle operator",
+    )
+    if (
+        oracle_operator["workflow_run_id"] != workflow_runs["oracle"]
+        or exact_nonnegative_int(
+            oracle_operator["workflow_run_attempt"], "input oracle run attempt"
+        )
+        == 0
+    ):
+        fail("input oracle operator binding drifted")
+    require_commit(oracle_operator["workflow_commit_sha"], "input oracle operator commit")
     oracle_assembly = exact_object(
         evidence["oracle_assembly"], {"sha256"}, "input oracle assembly"
     )
@@ -1637,6 +1663,7 @@ def parse_args() -> argparse.Namespace:
     build.add_argument("--survey-id", required=True)
     build.add_argument("--repository", required=True)
     build.add_argument("--oracle-run-id", required=True)
+    build.add_argument("--workflow-commit", required=True)
     build.add_argument("--oracle-run", required=True, type=Path)
     build.add_argument("--oracle-artifacts", required=True, type=Path)
     build.add_argument("--assembly-evidence", required=True, type=Path)

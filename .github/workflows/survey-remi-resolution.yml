@@ -261,6 +261,7 @@ jobs:
           DEPLOYMENT_RUN_ID: ${{ steps.source.outputs.deployment_run_id }}
           EXPORT_RUN_ID: ${{ steps.source.outputs.export_run_id }}
           ORACLE_RUN_ID: ${{ inputs.oracle_run_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -270,6 +271,7 @@ jobs:
             --survey-id "$survey_id" \
             --repository "$GITHUB_REPOSITORY" \
             --oracle-run-id "$ORACLE_RUN_ID" \
+            --workflow-commit "$WORKFLOW_SHA" \
             --oracle-run oracle-run.json \
             --oracle-artifacts oracle-artifacts.json \
             --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \

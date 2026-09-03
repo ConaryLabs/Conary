@@ -1789,6 +1789,41 @@ test_check_release_matrix_rejects_unprotected_native_oracle_source() {
         "native-oracle export exact successful protected deployment source"
 }
 
+test_check_release_matrix_rejects_stale_native_oracle_export_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
+        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
+        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export initial and pre-SSH current-main revalidation"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    python3 - "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+needle = '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {'
+position = text.rfind(needle)
+if position < 0:
+    raise SystemExit("fixture could not find pre-SSH current-main revalidation")
+replacement = '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
+path.write_text(text[:position] + replacement + text[position + len(needle):])
+PY
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle export initial and pre-SSH current-main revalidation"
+}
+
 test_check_release_matrix_requires_pinned_native_oracle_export_host() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -1851,7 +1886,7 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle export protected production operator boundary"
+        "native-oracle export exact current protected-main operator boundary"
 }
 
 test_check_release_matrix_rejects_unserialized_native_oracle_export() {
@@ -1916,7 +1951,33 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_production() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production protected-main and full producer SHA authorization"
+        "native-oracle production exact current protected-main and full producer SHA authorization"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_production_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        '          ref: main'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact current protected-main and full producer SHA authorization"
+}
+
+test_check_release_matrix_rejects_stale_native_oracle_export_source() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .head_sha == $workflow_sha and' \
+        '            (.head_sha | test("^[0-9a-f]{40}$")) and'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact current-main successful protected export source"
 }
 
 test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
@@ -1942,7 +2003,7 @@ test_check_release_matrix_rejects_malformed_native_oracle_producer_commit() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production protected-main and full producer SHA authorization"
+        "native-oracle production exact current protected-main and full producer SHA authorization"
 }
 
 test_check_release_matrix_rejects_non_descendant_native_oracle_producer() {
@@ -2101,6 +2162,19 @@ test_check_release_matrix_rejects_stale_resolution_survey_verifier() {
         "resolution survey exact current protected-main operator boundary"
 }
 
+test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if oracle_run["head_sha"] != workflow_commit:' \
+        '    if oracle_run["head_sha"] != oracle_run["head_sha"]:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey rejects stale oracle workflow authority"
+}
+
 test_check_release_matrix_requires_resolution_survey_helper_install() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2176,7 +2250,7 @@ test_check_release_matrix_rejects_unbound_resolution_survey_assembly() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey downloads and authenticates every exact assembled input"
+        "resolution survey downloads and authenticates every exact current-operator assembled input"
 }
 
 test_check_release_matrix_rejects_resolution_survey_set_digest_bypass() {
@@ -3490,6 +3564,8 @@ main() {
         test_check_release_matrix_rejects_missing_candidate_storage_evidence
         test_check_release_matrix_rejects_missing_candidate_failure_artifact
         test_check_release_matrix_rejects_unprotected_native_oracle_source
+        test_check_release_matrix_rejects_stale_native_oracle_export_operator
+        test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh
         test_check_release_matrix_requires_pinned_native_oracle_export_host
         test_check_release_matrix_rejects_live_native_oracle_export_host_discovery
         test_check_release_matrix_rejects_unattested_native_oracle_export
@@ -3500,6 +3576,8 @@ main() {
         test_check_release_matrix_rejects_unmerged_deployed_candidate
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_nonproduction_native_oracle_production
+        test_check_release_matrix_rejects_stale_native_oracle_production_operator
+        test_check_release_matrix_rejects_stale_native_oracle_export_source
         test_check_release_matrix_rejects_unbound_native_oracle_producer_source
         test_check_release_matrix_rejects_malformed_native_oracle_producer_commit
         test_check_release_matrix_rejects_non_descendant_native_oracle_producer
@@ -3514,6 +3592,7 @@ main() {
         test_check_release_matrix_rejects_unserialized_resolution_survey
         test_check_release_matrix_rejects_unprotected_resolution_survey_helper
         test_check_release_matrix_rejects_stale_resolution_survey_verifier
+        test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
         test_check_release_matrix_requires_resolution_survey_helper_install
         test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
