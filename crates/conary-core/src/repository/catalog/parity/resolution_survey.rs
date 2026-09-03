@@ -548,8 +548,77 @@ impl NativeRootResolutionError {
         reason: NativeResolutionSurveyErrorReasonV1,
         explanation: NativeResolutionSurveyNativeExplanationV1,
     ) -> Box<Self> {
+        let error = match variant {
+            NativeResolutionSurveyErrorVariantV1::IoError => {
+                Error::IoError(strip_error_prefix(&message, ""))
+            }
+            NativeResolutionSurveyErrorVariantV1::InitError => Error::InitError(
+                strip_error_prefix(&message, "Failed to initialize database: "),
+            ),
+            NativeResolutionSurveyErrorVariantV1::MissingId => {
+                Error::MissingId(strip_error_prefix(&message, "Missing ID: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::VersionParse => {
+                Error::VersionParse(strip_error_prefix(&message, "Version parse error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::ConfigError => {
+                Error::ConfigError(strip_error_prefix(&message, "Configuration error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::DatabaseNotFound => Error::DatabaseNotFound(
+                strip_error_prefix(&message, "Database not found at path: "),
+            ),
+            NativeResolutionSurveyErrorVariantV1::DownloadError => {
+                Error::DownloadError(strip_error_prefix(&message, "Download failed: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::ConflictError => {
+                Error::ConflictError(strip_error_prefix(&message, "Conflict: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::ParseError => {
+                Error::ParseError(strip_error_prefix(&message, "Parse error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::InvalidPath => {
+                Error::InvalidPath(strip_error_prefix(&message, "Invalid path: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::PathTraversal => {
+                Error::PathTraversal(strip_error_prefix(&message, "Path traversal detected: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::NotFound => {
+                Error::NotFound(strip_error_prefix(&message, "Not found: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::RecoveryFailed => {
+                Error::RecoveryFailed(strip_error_prefix(&message, "Recovery failed: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::TimeoutError => {
+                Error::TimeoutError(strip_error_prefix(&message, "Timeout: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::ResolutionError => {
+                Error::ResolutionError(strip_error_prefix(&message, "Resolution error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::NotImplemented => {
+                Error::NotImplemented(strip_error_prefix(&message, "Not implemented: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::Capability => {
+                Error::Capability(strip_error_prefix(&message, "Capability error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::Federation => {
+                Error::Federation(strip_error_prefix(&message, "Federation error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::Cancelled => {
+                Error::Cancelled(strip_error_prefix(&message, "Operation cancelled: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::InternalError => {
+                Error::InternalError(strip_error_prefix(&message, "Internal error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::TrustError => {
+                Error::TrustError(strip_error_prefix(&message, "Trust error: "))
+            }
+            NativeResolutionSurveyErrorVariantV1::PoolOverflow => {
+                Error::PoolOverflow(strip_error_prefix(&message, "Resolver pool overflow: "))
+            }
+            _ => Error::ResolutionError(message.clone()),
+        };
         Box::new(Self {
-            error: Error::ResolutionError(message.clone()),
+            error,
             reason,
             explanation,
             wire_identity: Some((variant, message)),
@@ -571,6 +640,10 @@ impl NativeRootResolutionError {
     pub(super) fn error_message(&self) -> String {
         self.error.to_string()
     }
+}
+
+fn strip_error_prefix(message: &str, prefix: &str) -> String {
+    message.strip_prefix(prefix).unwrap_or(message).to_string()
 }
 
 #[allow(dead_code)]

@@ -23,8 +23,8 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
-    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
+    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
     walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
@@ -214,9 +214,10 @@ fn produce_rpm_resolution(
     let package_index =
         PackageResolutionIndex::create(profile, inputs, &index_pool, &package_oracle)?;
     drop(index_pool);
+    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
     let workers = worker_request.resolve(
         package_oracle.manifest().artifact.counts.packages,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
 
@@ -256,7 +257,7 @@ fn produce_rpm_resolution(
             }
             Ok(ResolutionProduct::Oracle((
                 manifest,
-                implementation_evidence(workers, metrics)?,
+                implementation_evidence(workers, metrics, memory_budget_bytes)?,
             )))
         }
         ResolutionDestination::Survey(output) => {
@@ -279,7 +280,7 @@ fn produce_rpm_resolution(
             write_native_resolution_survey(output, &survey)?;
             Ok(ResolutionProduct::Survey((
                 survey,
-                implementation_evidence(workers, metrics)?,
+                implementation_evidence(workers, metrics, memory_budget_bytes)?,
             )))
         }
     }
@@ -363,11 +364,12 @@ fn load_resolution_pool(
 fn implementation_evidence(
     workers: ResolutionWorkerCount,
     metrics: OrderedResolutionMetrics,
+    memory_budget_bytes: u64,
 ) -> Result<ResolutionWalkImplementationEvidenceV1> {
     ResolutionWalkImplementationEvidenceV1::new(
         workers,
         metrics.worker_load_milliseconds,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )
 }

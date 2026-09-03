@@ -26,8 +26,8 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
-    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
+    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
     walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
@@ -212,9 +212,10 @@ fn produce_debian_resolution(
     let staged = stage_verified_packages(inputs, staging.path())?;
     let solver_inputs = stage_solver_inputs(&staged, staging.path())?;
     let package_index = PackageResolutionIndex::create(&package_oracle)?;
+    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
     let workers = worker_request.resolve(
         package_oracle.manifest().artifact.counts.packages,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
 
@@ -254,7 +255,7 @@ fn produce_debian_resolution(
             }
             Ok(ResolutionProduct::Oracle((
                 manifest,
-                implementation_evidence(workers, metrics)?,
+                implementation_evidence(workers, metrics, memory_budget_bytes)?,
             )))
         }
         ResolutionDestination::Survey(output) => {
@@ -276,7 +277,7 @@ fn produce_debian_resolution(
             write_native_resolution_survey(output, &survey)?;
             Ok(ResolutionProduct::Survey((
                 survey,
-                implementation_evidence(workers, metrics)?,
+                implementation_evidence(workers, metrics, memory_budget_bytes)?,
             )))
         }
     }
@@ -291,6 +292,26 @@ fn walk_resolution_roots(
     workers: ResolutionWorkerCount,
 ) -> Result<OrderedResolutionMetrics> {
     let explanation_byte_limit = sink.explanation_byte_limit();
+    if workers.get() == 1 {
+        let started = std::time::Instant::now();
+        let mut apt = AptResolution::open(solver_inputs, &policy.architecture)?;
+        let package_index = PackageResolutionIndexReader::open(package_index.database())?;
+        let load_milliseconds = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        package_oracle.for_each_package(|root| {
+            let projected = DebianResolutionRoot::from(&root);
+            let result = resolve_exact_root(
+                &mut apt,
+                &package_index,
+                &projected,
+                policy,
+                sink.explanation_byte_limit(),
+            );
+            sink.root(&root, result)
+        })?;
+        return Ok(OrderedResolutionMetrics {
+            worker_load_milliseconds: vec![load_milliseconds],
+        });
+    }
     let executable = debian_worker_executable()?;
     walk_ordered_parallel(
         package_oracle,
@@ -312,11 +333,12 @@ fn walk_resolution_roots(
 fn implementation_evidence(
     workers: ResolutionWorkerCount,
     metrics: OrderedResolutionMetrics,
+    memory_budget_bytes: u64,
 ) -> Result<ResolutionWalkImplementationEvidenceV1> {
     ResolutionWalkImplementationEvidenceV1::new(
         workers,
         metrics.worker_load_milliseconds,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )
 }

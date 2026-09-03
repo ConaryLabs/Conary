@@ -37,8 +37,8 @@ use super::resolution_io::{
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
 };
 use super::resolution_parallel::{
-    RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
-    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest, walk_ordered_parallel,
+    RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::db::models::{
     Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
@@ -234,9 +234,10 @@ fn produce_conary_resolution_bundle(
     ResolutionWalkImplementationEvidenceV1,
 )> {
     let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
     let workers = worker_request.resolve(
         package_oracle.manifest().artifact.counts.packages,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
     fs::create_dir(output)?;
@@ -259,7 +260,7 @@ fn produce_conary_resolution_bundle(
     let evidence = ResolutionWalkImplementationEvidenceV1::new(
         workers,
         metrics.worker_load_milliseconds,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
     Ok((manifest, evidence))
@@ -305,9 +306,10 @@ pub fn produce_conary_resolution_survey_with_workers(
     })?;
     let policy = resolution_policy(architecture);
     let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
     let workers = worker_request.resolve(
         package_oracle.manifest().artifact.counts.packages,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
     let implementation = conary_implementation(package_oracle.manifest());
@@ -329,7 +331,7 @@ pub fn produce_conary_resolution_survey_with_workers(
     let evidence = ResolutionWalkImplementationEvidenceV1::new(
         workers,
         metrics.worker_load_milliseconds,
-        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        memory_budget_bytes,
         RESOLUTION_WORKER_RSS_BYTES,
     )?;
     Ok((survey, evidence))

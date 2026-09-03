@@ -19,10 +19,11 @@ use crate::error::{Error, Result};
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const PROC_SELF_CGROUP: &str = "/proc/self/cgroup";
+const PROC_MEMINFO: &str = "/proc/meminfo";
 
-// Replaced by the retained Fedora measurement before #824 is ready.
-pub(crate) const RESOLUTION_WALK_MEMORY_BUDGET_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-pub(crate) const RESOLUTION_WORKER_RSS_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+// Rounded above the retained 1,271,280 KiB single-pool Fedora observation.
+pub(crate) const RESOLUTION_WORKER_RSS_BYTES: u64 = 1536 * 1024 * 1024;
 
 /// Validated operator request for resolution workers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,7 +171,7 @@ enum WorkerMessage<R> {
     },
     Root {
         sequence: u64,
-        root: NativeParityPackageV1,
+        root: Box<NativeParityPackageV1>,
         result: R,
     },
 }
@@ -228,7 +229,7 @@ where
                     if result_sender
                         .send(WorkerMessage::Root {
                             sequence,
-                            root,
+                            root: Box::new(root),
                             result,
                         })
                         .is_err()
@@ -388,7 +389,7 @@ fn retain_result<R>(
             "resolution worker repeated readiness".to_string(),
         ));
     };
-    if pending.insert(sequence, (root, result)).is_some() {
+    if pending.insert(sequence, (*root, result)).is_some() {
         return Err(Error::InternalError(format!(
             "resolution worker repeated root sequence {sequence}"
         )));
@@ -430,6 +431,24 @@ fn detected_cpu_limit() -> Result<usize> {
     Ok(quota.map_or(available, |quota| available.min(quota.max(1))))
 }
 
+pub(crate) fn resolution_walk_memory_budget_bytes() -> Result<u64> {
+    let detected = detected_memory_limit()?.unwrap_or(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES);
+    Ok(RESOLUTION_WALK_MEMORY_BUDGET_CEILING_BYTES.min(detected.saturating_mul(3) / 4))
+}
+
+fn detected_memory_limit() -> Result<Option<u64>> {
+    let cgroup = unified_cgroup_path(Path::new(PROC_SELF_CGROUP))?
+        .map(|path| cgroup_memory_limit(Path::new(CGROUP_ROOT), &path))
+        .transpose()?
+        .flatten();
+    let host = host_memory_bytes(Path::new(PROC_MEMINFO))?;
+    Ok(match (cgroup, host) {
+        (Some(cgroup), Some(host)) => Some(cgroup.min(host)),
+        (Some(cgroup), None) => Some(cgroup),
+        (None, host) => host,
+    })
+}
+
 fn unified_cgroup_path(proc_self_cgroup: &Path) -> Result<Option<PathBuf>> {
     let contents = match std::fs::read_to_string(proc_self_cgroup) {
         Ok(contents) => contents,
@@ -464,6 +483,60 @@ fn cgroup_cpu_limit(root: &Path, relative: &Path) -> Result<Option<usize>> {
         }
     }
     Ok(limit)
+}
+
+fn cgroup_memory_limit(root: &Path, relative: &Path) -> Result<Option<u64>> {
+    let mut current = root.join(relative);
+    let mut limit = None;
+    loop {
+        let path = current.join("memory.max");
+        match std::fs::read_to_string(&path) {
+            Ok(contents) if contents.trim() == "max" => {}
+            Ok(contents) => {
+                let value = contents.trim().parse::<u64>().map_err(|error| {
+                    Error::ConfigError(format!("parse cgroup memory.max: {error}"))
+                })?;
+                if value == 0 {
+                    return Err(Error::ConfigError(
+                        "cgroup memory.max must be positive or max".to_string(),
+                    ));
+                }
+                limit = Some(limit.map_or(value, |existing: u64| existing.min(value)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        if current == root || !current.pop() || !current.starts_with(root) {
+            break;
+        }
+    }
+    Ok(limit)
+}
+
+fn host_memory_bytes(meminfo: &Path) -> Result<Option<u64>> {
+    let contents = match std::fs::read_to_string(meminfo) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let Some(line) = contents.lines().find(|line| line.starts_with("MemTotal:")) else {
+        return Err(Error::ConfigError(
+            "/proc/meminfo omits MemTotal".to_string(),
+        ));
+    };
+    let mut fields = line.split_whitespace();
+    let _label = fields.next();
+    let kib = fields
+        .next()
+        .ok_or_else(|| Error::ConfigError("MemTotal omits its value".to_string()))?
+        .parse::<u64>()
+        .map_err(|error| Error::ConfigError(format!("parse MemTotal: {error}")))?;
+    if fields.next() != Some("kB") || fields.next().is_some() {
+        return Err(Error::ConfigError("MemTotal must use kB units".to_string()));
+    }
+    kib.checked_mul(1024)
+        .map(Some)
+        .ok_or_else(|| Error::ConfigError("MemTotal bytes exceed u64".to_string()))
 }
 
 fn parse_cpu_max(value: &str) -> Result<Option<usize>> {
@@ -554,5 +627,50 @@ mod tests {
             cgroup_cpu_limit(directory.path(), Path::new("user.slice/test.scope")).unwrap(),
             Some(3)
         );
+    }
+
+    #[test]
+    fn takes_tightest_cgroup_memory_ancestor() {
+        let directory = tempfile::tempdir().unwrap();
+        let child = directory.path().join("user.slice/test.scope");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(directory.path().join("memory.max"), "8589934592\n").unwrap();
+        std::fs::write(
+            directory.path().join("user.slice/memory.max"),
+            "4294967296\n",
+        )
+        .unwrap();
+        std::fs::write(child.join("memory.max"), "max\n").unwrap();
+        assert_eq!(
+            cgroup_memory_limit(directory.path(), Path::new("user.slice/test.scope")).unwrap(),
+            Some(4 * 1024 * 1024 * 1024)
+        );
+    }
+
+    #[test]
+    fn parses_host_memory_kib() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("meminfo");
+        std::fs::write(&file, "MemTotal:       16384 kB\nMemFree: 1 kB\n").unwrap();
+        assert_eq!(host_memory_bytes(&file).unwrap(), Some(16 * 1024 * 1024));
+    }
+
+    #[test]
+    fn implementation_evidence_is_canonical_and_create_only() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("implementation.json");
+        let evidence = ResolutionWalkImplementationEvidenceV1::new(
+            ResolutionWorkerCount::new(2).unwrap(),
+            vec![11, 13],
+            8 * 1024 * 1024 * 1024,
+            1536 * 1024 * 1024,
+        )
+        .unwrap();
+        write_resolution_walk_implementation_evidence(&path, &evidence).unwrap();
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            crate::json::canonical_json(&evidence).unwrap()
+        );
+        assert!(write_resolution_walk_implementation_evidence(&path, &evidence).is_err());
     }
 }
