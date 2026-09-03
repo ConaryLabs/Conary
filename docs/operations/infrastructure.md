@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 81
+revision: 82
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -255,7 +255,10 @@ workflow.
   earlier reopen cannot expose a later selected resource to concurrent GC. The
   workflow invokes the fixed helper operation through a production SSH boundary
   authenticated by the protected `REMI_SSH_KNOWN_HOSTS` pin; live host-key
-  discovery is forbidden. It removes only the staged `/tmp` transport after
+  discovery is forbidden. Its workflow commit must equal freshly fetched
+  protected `main` both at authorization and immediately before SSH; an old
+  run cannot be rerun to mint fresh export authority after `main` advances.
+  It removes only the staged `/tmp` transport after
   download and records a typed operator attestation bound to the export run's
   exact protected workflow commit.
   The runner independently rejects unsafe tar members, noncanonical or
@@ -283,7 +286,9 @@ workflow.
   requires the artifact-owned deployed commit to remain merged into `main`.
   It also requires the export's canonical operator attestation to bind its
   exact run commit and attempt to the protected pinned-host-key SSH contract;
-  pre-attestation exports cannot become strict oracle authority.
+  that export commit must equal the producer's exact current protected-main
+  workflow commit. Pre-attestation and stale-operator exports cannot become
+  strict oracle authority.
   Each lane checks out that exact clean producer source, never a workflow head,
   then runs in the release-pinned Fedora 44, Ubuntu 26.04, or
   Arch image with libsolv 0.7.36, apt-pkg 3.2.0, or the archived libalpm state.
@@ -306,7 +311,9 @@ workflow.
   missing lanes, digest drift, and survey substitution fail closed.
 - The protected `survey-remi-resolution` workflow consumes one successful
   `produce-remi-native-oracles` run and resolves its exact export and deployment
-  runs from its canonical assembled three-lane evidence. It independently
+  runs from its canonical assembled three-lane evidence. The oracle run head
+  must equal the survey's own exact current protected-main operator commit, so
+  a historical producer rerun is not admissible. It independently
   authenticates the assembled artifact archive and every referenced strict lane
   archive, including a retained same-export lane from an earlier successful
   producer run, before reopening every package and resolution oracle. Their

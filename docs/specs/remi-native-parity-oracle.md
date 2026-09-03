@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 43
+revision: 44
 status: active
 ---
 
@@ -52,6 +52,10 @@ requires the artifact-owned deployed commit to be merged. The export's
 canonical operator attestation must bind its exact run ID, attempt, workflow
 commit, export identity, and `protected-pinned-known-hosts-v1` contract. An
 older export without that attestation cannot become strict oracle authority.
+The export operator must equal freshly fetched protected `main` at initial
+authorization and immediately before SSH. Production accepts the export only
+when its run head equals the producer workflow's own exact current-main commit,
+so rerunning a historical workflow cannot mint new input authority.
 Dispatch also names
 one explicit full `producer_commit`; operators use the deployed commit by
 default and name a newer commit only for an intended producer advance. The
@@ -546,7 +550,8 @@ identity.
 The protected production consumer is `.github/workflows/survey-remi-resolution.yml`.
 Its single `oracle_run_id` selects one successful three-lane
 `produce-remi-native-oracles` run. The workflow authenticates that run's
-assembled three-lane artifact, derives and reopens the exact export and
+head as its own exact current protected-main operator commit, then authenticates
+the assembled three-lane artifact and derives and reopens the exact export and
 deployment runs, then verifies the API metadata, successful producer job, and
 archive digest for each referenced strict lane. Retained same-export lanes from
 earlier successful runs remain valid only through those bindings. It
