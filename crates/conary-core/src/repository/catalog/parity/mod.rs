@@ -12,6 +12,7 @@ mod resolution_comparison_survey;
 mod resolution_contract;
 mod resolution_io;
 mod resolution_parallel;
+mod resolution_root;
 mod resolution_survey;
 mod survey_support;
 
