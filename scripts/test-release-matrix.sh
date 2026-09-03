@@ -1826,6 +1826,19 @@ test_check_release_matrix_rejects_unattested_native_oracle_export() {
         "resolution survey requires exact pinned export operator evidence"
 }
 
+test_check_release_matrix_rejects_unattested_native_oracle_production_input() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .ssh_host_key_contract == "protected-pinned-known-hosts-v1"' \
+        '            .ssh_host_key_contract == "live-discovery"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production requires the export pinned-SSH operator attestation"
+}
+
 test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -2213,7 +2226,20 @@ test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey file admission derives from the bounded transport size"
+        "resolution survey file admission derives from the actual transport extent"
+}
+
+test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    metadata = plain_file(args.transport, "survey transport")' \
+        '    metadata = plain_file(args.transport, "survey transport", 640 * 1024 * 1024)'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey arbitrary aggregate output limit"
 }
 
 test_check_release_matrix_rejects_mutating_resolution_survey() {
@@ -3452,6 +3478,7 @@ main() {
         test_check_release_matrix_requires_pinned_native_oracle_export_host
         test_check_release_matrix_rejects_live_native_oracle_export_host_discovery
         test_check_release_matrix_rejects_unattested_native_oracle_export
+        test_check_release_matrix_rejects_unattested_native_oracle_production_input
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
         test_check_release_matrix_rejects_unserialized_native_oracle_export
         test_check_release_matrix_rejects_workflow_head_as_deployed_candidate
@@ -3482,6 +3509,7 @@ main() {
         test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass
         test_check_release_matrix_rejects_executable_resolution_survey_summary
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
+        test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_mutating_resolution_survey
         test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection

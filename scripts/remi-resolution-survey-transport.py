@@ -37,7 +37,6 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
-MAX_SURVEY_TRANSPORT_BYTES = 640 * 1024 * 1024
 SURVEY_RECORD_LIMIT = 5_000
 SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
 U32_MAX = 2**32 - 1
@@ -1399,7 +1398,7 @@ def verify_output(args: argparse.Namespace) -> None:
     input_deployment, input_profiles = validate_input_evidence(
         args.input_evidence, survey_id, export_id
     )
-    metadata = plain_file(args.transport, "survey transport", MAX_SURVEY_TRANSPORT_BYTES)
+    metadata = plain_file(args.transport, "survey transport")
     try:
         archive = tarfile.open(args.transport, mode="r:")
     except (OSError, tarfile.TarError) as error:

@@ -86,6 +86,7 @@ jobs:
             exit 1
           }
           source_run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EXPORT_RUN_ID}")"
+          printf '%s\n' "$source_run" > "${RUNNER_TEMP}/native-oracle-export-run.json"
           jq -e --arg repository "$GITHUB_REPOSITORY" '
             .event == "workflow_dispatch" and
             .status == "completed" and
@@ -119,6 +120,12 @@ jobs:
           export_root="${RUNNER_TEMP}/native-oracle-export"
           inspection="${export_root}/remi-deployment-inspection.json"
           verification="${export_root}/native-oracle-input-verification.json"
+          operator="${export_root}/native-oracle-export-operator-v1.json"
+          source_run="${RUNNER_TEMP}/native-oracle-export-run.json"
+          [[ -f "$operator" && ! -L "$operator" ]] || {
+            echo "native-oracle export operator attestation must be one regular file" >&2
+            exit 1
+          }
           mapfile -t transports < <(find "$export_root" -maxdepth 1 -type f -name 'native-oracle-input-*.tar' -print)
           [[ "${#transports[@]}" -eq 1 ]] || {
             echo "export artifact must contain exactly one native-oracle transport" >&2
@@ -139,6 +146,37 @@ jobs:
             (.transport.sha256 | test("^[0-9a-f]{64}$")) and
             .transport.size > 0
           ' "$verification" >/dev/null
+          export_id="$(jq -er '.export_id' "$verification")"
+          [[ "$(jq -cS . "$operator")" == "$(cat "$operator")" ]] || {
+            echo "native-oracle export operator attestation is not canonical" >&2
+            exit 1
+          }
+          jq -e \
+            --arg export_id "$export_id" \
+            --argjson export_run_id "$EXPORT_RUN_ID" \
+            --slurpfile source "$source_run" '
+            (keys == [
+              "export_id",
+              "schema_version",
+              "ssh_host_key_contract",
+              "workflow_commit_sha",
+              "workflow_run_attempt",
+              "workflow_run_id"
+            ]) and
+            .schema_version == 1 and
+            .export_id == $export_id and
+            (.workflow_commit_sha | test("^[0-9a-f]{40}$")) and
+            .workflow_run_id == $export_run_id and
+            (.workflow_run_attempt | type) == "number" and
+            .workflow_run_attempt > 0 and
+            (.workflow_run_attempt | floor) == .workflow_run_attempt and
+            .workflow_run_attempt == $source[0].run_attempt and
+            .workflow_commit_sha == $source[0].head_sha and
+            .ssh_host_key_contract == "protected-pinned-known-hosts-v1"
+          ' "$operator" >/dev/null || {
+            echo "native-oracle export lacks its exact pinned SSH operator attestation" >&2
+            exit 1
+          }
           deployed_commit="$(jq -er '.deployment.commit_sha' "$inspection")"
           deployment_run_id="${ARTIFACT_NAME#remi-native-oracle-input-}"
           deployment_run_id="${deployment_run_id%-${EXPORT_RUN_ID}}"
@@ -157,7 +195,6 @@ jobs:
             ]
           ' "$verification" >/dev/null
           git merge-base --is-ancestor "$deployed_commit" origin/main
-          export_id="$(jq -er '.export_id' "$verification")"
           transport_sha256="$(jq -er '.transport.sha256' "$verification")"
           python3 scripts/verify-native-oracle-input-transport.py \
             --transport "${transports[0]}" \
