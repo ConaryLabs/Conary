@@ -46,9 +46,14 @@ cat >"$tmpdir/bin/ssh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'ssh %s\n' "$*" >>"$DEPLOY_SITES_TEST_LOG"
+[[ "$1" == "-F" && "$2" == "$DEPLOY_SITES_TEST_CONFIG" ]] || {
+    echo "missing pinned SSH config" >&2
+    exit 9
+}
+shift 2
 host="$1"
 shift
-[[ "$host" == "peter@ssh.conary.io" ]] || {
+[[ "$host" == "deploy-user@example.test" ]] || {
     echo "unexpected host: $host" >&2
     exit 9
 }
@@ -78,8 +83,8 @@ cat >"$tmpdir/bin/rsync" <<'SH'
 set -euo pipefail
 printf 'rsync %s\n' "$*" >>"$DEPLOY_SITES_TEST_LOG"
 case "$*" in
-    *"site/build/ peter@ssh.conary.io:/tmp/conary-site.deploy.TEST/"*) ;;
-    *"web/build/ peter@ssh.conary.io:/tmp/conary-web.deploy.TEST/"*) ;;
+    *"-e ssh -F $DEPLOY_SITES_TEST_CONFIG"*"site/build/ deploy-user@example.test:/tmp/conary-site.deploy.TEST/"*) ;;
+    *"-e ssh -F $DEPLOY_SITES_TEST_CONFIG"*"web/build/ deploy-user@example.test:/tmp/conary-web.deploy.TEST/"*) ;;
     *)
         echo "unexpected rsync invocation: $*" >&2
         exit 9
@@ -91,13 +96,15 @@ chmod +x "$tmpdir/bin/npm" "$tmpdir/bin/ssh" "$tmpdir/bin/rsync"
 
 PATH="$tmpdir/bin:$PATH" \
 DEPLOY_SITES_TEST_LOG="$log" \
-REMI_HOST="peter@ssh.conary.io" \
+DEPLOY_SITES_TEST_CONFIG="$tmpdir/ssh-config" \
+REMI_HOST="deploy-user@example.test" \
+REMI_SSH_CONFIG="$tmpdir/ssh-config" \
 REMI_DEPLOY_HELPER="/usr/local/sbin/conary-remi-deploy" \
     bash "$repo/deploy/deploy-sites.sh" site >/tmp/deploy-sites-site.out
 
 grep -q 'deploy-site site /tmp/conary-site.deploy.TEST' "$log" ||
     fail "site deploy did not call the deploy helper"
-grep -q 'site/build/ peter@ssh.conary.io:/tmp/conary-site.deploy.TEST/' "$log" ||
+grep -q 'site/build/ deploy-user@example.test:/tmp/conary-site.deploy.TEST/' "$log" ||
     fail "site deploy did not stage build output with rsync"
 grep -q '^npm site run check$' "$log" ||
     fail "site deploy did not run the frontend check"
@@ -108,13 +115,15 @@ grep -q '^npm site run build$' "$log" ||
 
 PATH="$tmpdir/bin:$PATH" \
 DEPLOY_SITES_TEST_LOG="$log" \
-REMI_HOST="peter@ssh.conary.io" \
+DEPLOY_SITES_TEST_CONFIG="$tmpdir/ssh-config" \
+REMI_HOST="deploy-user@example.test" \
+REMI_SSH_CONFIG="$tmpdir/ssh-config" \
 REMI_DEPLOY_HELPER="/usr/local/sbin/conary-remi-deploy" \
     bash "$repo/deploy/deploy-sites.sh" packages >/tmp/deploy-sites-packages.out
 
 grep -q 'deploy-site web /tmp/conary-web.deploy.TEST' "$log" ||
     fail "packages deploy did not call the deploy helper"
-grep -q 'web/build/ peter@ssh.conary.io:/tmp/conary-web.deploy.TEST/' "$log" ||
+grep -q 'web/build/ deploy-user@example.test:/tmp/conary-web.deploy.TEST/' "$log" ||
     fail "packages deploy did not stage build output with rsync"
 grep -q '^npm web run check$' "$log" ||
     fail "packages deploy did not run the frontend check"

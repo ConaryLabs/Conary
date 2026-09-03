@@ -134,6 +134,7 @@ EXPECTED_STEP_ORDER = [
     "Download exact sanitized deployment evidence",
     "Reopen exact deployment and candidate identities",
     "Acquire and authenticate exact source bytes",
+    "Configure pinned production SSH",
     "Run through the fixed production helper",
     "Upload public-sanitized benchmark failure evidence",
     "Upload public-sanitized benchmark evidence",
@@ -154,7 +155,7 @@ REVIEWED_RUN_BLOCK_SHA256 = {
     "Acquire and authenticate exact source bytes":
         "4e8c8e91fb4b79803aed47afc34c1e51034f7e9ccc45a23fd213df924c6d0856",
     "Run through the fixed production helper":
-        "54c7f158610b4bd9287877edb9192357858160674b9a3de1995ce6bad5fe378b",
+        "6e520d13ad8d4886b2a184d83ca00e499597709c329930961d62c487ca5e69bb",
     "Record exact production benchmark evidence":
         "b2b00b12d066a9a746fe71f18779d1017b1205e8f9c84f9b03bb4e6cd589fce2",
     "Fail closed on unsuccessful benchmark result":
@@ -208,8 +209,9 @@ EXPECTED_RUN_ENV = {
         "DEPLOYMENT_RUN_ID": "${{ inputs.deployment_run_id }}",
         "PACKAGE_KEY_SHA256": "${{ inputs.package_key_sha256 }}",
         "PROFILE": "${{ inputs.profile }}",
-        "REMI_SSH_KNOWN_HOSTS": "${{ secrets.REMI_SSH_KNOWN_HOSTS }}",
-        "REMI_SSH_KEY": "${{ secrets.REMI_SSH_KEY }}",
+        "REMI_SSH_CONFIG": "${{ steps.production-ssh.outputs.config-path }}",
+        "REMI_SSH_KEY_PATH": "${{ steps.production-ssh.outputs.key-path }}",
+        "REMI_SSH_KNOWN_HOSTS_PATH": "${{ steps.production-ssh.outputs.known-hosts-path }}",
         "REMI_SSH_TARGET": "${{ secrets.REMI_SSH_TARGET }}",
         "REMI_VERSION": "${{ steps.authority.outputs.version }}",
         "REVISION": "${{ steps.authority.outputs.revision }}",
@@ -344,6 +346,31 @@ def validate_action_steps(steps: dict[str, dict[str, Any]]) -> None:
             "persist-credentials": False,
         },
         "conversion benchmark exact workflow-revision checkout ref",
+    )
+
+    production_ssh = steps["Configure pinned production SSH"]
+    exact_keys(
+        production_ssh,
+        {"name", "id", "uses", "with"},
+        "conversion benchmark pinned production SSH step",
+    )
+    require(
+        production_ssh["id"] == "production-ssh"
+        and production_ssh["uses"]
+        == "./.github/actions/setup-pinned-production-ssh",
+        "conversion benchmark pinned production SSH action",
+    )
+    require(
+        exact_mapping(
+            production_ssh["with"],
+            "conversion benchmark pinned production SSH inputs",
+        )
+        == {
+            "private-key": "${{ secrets.REMI_SSH_KEY }}",
+            "known-hosts": "${{ secrets.REMI_SSH_KNOWN_HOSTS }}",
+            "target": "${{ secrets.REMI_SSH_TARGET }}",
+        },
+        "conversion benchmark pinned production SSH host identity",
     )
 
     download = steps["Download exact sanitized deployment evidence"]
