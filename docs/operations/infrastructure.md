@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 80
+revision: 81
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -338,10 +338,10 @@ workflow.
   records, including the authenticated three-lane assembly. Raw deployment
   inspection and survey stderr remain confined to mode-`0600` root-controlled
   staging, are destroyed during helper cleanup, and are never written to SSH or
-  workflow logs; public failures use typed helper messages. The verifier places
-  no invented aggregate ceiling on survey transport that the producer contract
-  does not establish; each member is still confined to the actual plain archive
-  extent. The runner
+  workflow logs; public failures use typed helper messages. Neither helper
+  input admission nor runner output verification places an invented aggregate
+  ceiling on survey transport that the producer contract does not establish;
+  each member remains confined to the actual plain archive extent. The runner
   independently enforces the complete typed Rust survey schemas, retention and
   evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and
