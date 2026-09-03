@@ -19,6 +19,7 @@
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <exception>
 #include <iterator>
 #include <limits>
@@ -724,8 +725,14 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
     dependency_cache.allow_exact_root(root.ParentPkg());
     bool const marked = dependency_cache.MarkInstall(root.ParentPkg(), false, 0, true, false);
     dependency_cache.MarkProtected(root.ParentPkg());
+    // Apt's "3.0" EDSP branch is in-process. Its only non-conflict false result is the
+    // configured solver timeout; exceptions cross the outer C++ error boundary.
+    std::time_t const solve_started = std::time(nullptr);
     bool const resolved = marked && EDSP::ResolveExternal(
         "3.0", dependency_cache, EDSP::Request::FORBID_REMOVE, nullptr);
+    std::time_t const solve_elapsed = std::time(nullptr) - solve_started;
+    int const solve_timeout = _config->FindI("APT::Solver::Timeout", 10);
+    bool const timed_out = marked && !resolved && solve_elapsed >= solve_timeout;
     std::string const solver_errors = apt_errors();
     if (resolved && dependency_cache.BrokenCount() == 0) {
         if (!collect_resolved_closure(handle, dependency_cache, root)) {
@@ -735,6 +742,13 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
             return false;
         }
         return true;
+    }
+    if (!marked || timed_out) {
+        handle.error = "apt-pkg solver3 did not complete the exact-root solve";
+        if (!solver_errors.empty()) {
+            handle.error.append(": ").append(solver_errors);
+        }
+        return false;
     }
     handle.closure.clear();
     if (!collect_direct_root_missing(handle, dependency_cache, root)) {
