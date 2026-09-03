@@ -337,7 +337,7 @@ fn walk_resolution_roots(
         },
         |worker, root, byte_limit| worker.resolve(root, byte_limit),
         |root, result| {
-            sink.root(root, result)?;
+            sink.root(root, result?)?;
             Ok(sink.explanation_byte_limit())
         },
     )

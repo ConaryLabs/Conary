@@ -8,7 +8,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 
-use super::{PackageResolutionIndexReader, debian_unavailable, resolve_exact_root};
+use super::{PackageResolutionIndexReader, resolve_exact_root};
 use crate::error::{Error, Result};
 use crate::repository::catalog::parity::resolution_parallel::{
     ResolutionWorkerCount, ResolutionWorkerRequest,
@@ -121,40 +121,33 @@ impl DebianResolutionProcess {
         &mut self,
         root: &NativeParityPackageV1,
         explanation_byte_limit: u64,
-    ) -> NativeRootResolutionResult {
+    ) -> Result<NativeRootResolutionResult> {
         let request = DebianResolutionWorkerRequest {
             root: root.into(),
             explanation_byte_limit,
         };
-        if let Err(error) = write_worker_message(&mut self.input, &request) {
-            return Err(NativeRootResolutionError::new(
-                error,
-                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
-                debian_unavailable(),
-            ));
-        }
-        match read_worker_response(&mut self.output) {
-            Ok(DebianResolutionWorkerResponse::Outcome { outcome }) => Ok(outcome),
-            Ok(DebianResolutionWorkerResponse::Failure {
-                error,
-                reason,
-                explanation,
-            }) => Err(NativeRootResolutionError::from_wire(
-                error,
-                reason,
-                explanation,
-            )),
-            Ok(DebianResolutionWorkerResponse::Ready) => Err(NativeRootResolutionError::new(
-                Error::InternalError("Debian worker repeated readiness".to_string()),
-                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
-                debian_unavailable(),
-            )),
-            Err(error) => Err(NativeRootResolutionError::new(
-                error,
-                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
-                debian_unavailable(),
-            )),
-        }
+        write_worker_message(&mut self.input, &request)?;
+        classify_worker_response(read_worker_response(&mut self.output))
+    }
+}
+
+fn classify_worker_response(
+    response: Result<DebianResolutionWorkerResponse>,
+) -> Result<NativeRootResolutionResult> {
+    match response? {
+        DebianResolutionWorkerResponse::Outcome { outcome } => Ok(Ok(outcome)),
+        DebianResolutionWorkerResponse::Failure {
+            error,
+            reason,
+            explanation,
+        } => Ok(Err(NativeRootResolutionError::from_wire(
+            error,
+            reason,
+            explanation,
+        ))),
+        DebianResolutionWorkerResponse::Ready => Err(Error::InternalError(
+            "Debian worker repeated readiness".to_string(),
+        )),
     }
 }
 
@@ -271,5 +264,21 @@ pub fn run_debian_resolution_worker(
             }
         };
         write_worker_message(&mut output, &response)?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transport_failure_is_terminal_instead_of_a_root_failure() {
+        let result = classify_worker_response(Err(Error::InternalError(
+            "worker transport closed".to_string(),
+        )));
+
+        assert!(
+            matches!(result, Err(Error::InternalError(message)) if message == "worker transport closed")
+        );
     }
 }
