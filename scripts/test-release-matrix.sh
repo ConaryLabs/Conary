@@ -2492,6 +2492,19 @@ test_check_release_matrix_rejects_duplicate_survey_transport_copy() {
         "resolution survey archives the frozen root-owned snapshot without another full copy"
 }
 
+test_check_release_matrix_rejects_tmp_survey_oracle_duplication() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    local survey_staging_root="${evidence_root}/.remi-operator-staging"' \
+        '    local survey_staging_root="/tmp/remi-resolution-survey-staging"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey materializes unbounded oracles on the evidence capacity domain"
+}
+
 test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3804,6 +3817,7 @@ main() {
         test_check_release_matrix_rejects_unrecomputed_native_comparison
         test_check_release_matrix_rejects_untyped_survey_aggregate_counts
         test_check_release_matrix_rejects_duplicate_survey_transport_copy
+        test_check_release_matrix_rejects_tmp_survey_oracle_duplication
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
         test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
         test_check_release_matrix_rejects_mutating_resolution_survey

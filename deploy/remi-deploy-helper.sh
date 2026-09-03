@@ -1061,9 +1061,22 @@ survey_resolution() {
     [[ ! -e "$public_transport" && ! -L "$public_transport" ]] ||
         die "resolution-survey transport already exists: $public_transport"
 
+    install_owned_dir 0750 "$evidence_root"
+    local survey_staging_root="${evidence_root}/.remi-operator-staging"
+    if [[ ! -e "$survey_staging_root" && ! -L "$survey_staging_root" ]]; then
+        mkdir -m 0750 "$survey_staging_root"
+        if [[ -z "$ROOT" ]]; then
+            chown root:conary "$survey_staging_root"
+        fi
+    fi
+    [[ -d "$survey_staging_root" && ! -L "$survey_staging_root" \
+        && "$(stat -c '%a' "$survey_staging_root")" == "750" \
+        && "$(stat -c '%u' "$survey_staging_root")" == "$control_uid" ]] ||
+        die "resolution-survey operator staging root is not a private root-owned directory"
+
     SURVEY_REMI_STOPPED=0
     SURVEY_TRANSPORT_NEXT=""
-    SURVEY_STAGING="$(mktemp -d "/tmp/remi-resolution-survey-${survey_id}.XXXXXX")"
+    SURVEY_STAGING="$(mktemp -d "${survey_staging_root}/resolution-survey-${survey_id}.XXXXXX")"
     trap 'survey_restore_and_exit "$?"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -1096,7 +1109,6 @@ survey_resolution() {
     observed_binary_sha256="$(sha256sum "$bin" | cut -d ' ' -f 1)"
     [[ "$observed_binary_sha256" == "$(jq -r '.deployment.binary_sha256' "$input_manifest")" ]] ||
         die "installed Remi binary differs from the oracle deployment binding"
-    install_owned_dir 0750 "$evidence_root"
     if [[ ! -e "$survey_root" && ! -L "$survey_root" ]]; then
         install_owned_dir 0700 "$survey_root"
     fi

@@ -540,6 +540,8 @@ require_match "$remi_deploy_helper" 'profile_results[\s\S]*candidate_manifest_sh
 forbid_match "$remi_deploy_helper" '--slurpfile (candidate|comparison)' 'resolution survey helper whole-document jq buffering'
 require_match "$remi_deploy_helper" 'tar -cf "\$SURVEY_TRANSPORT_NEXT"[\s\S]*-C "\$SURVEY_STAGING" manifest\.json[\s\S]*-C "\$output" "\$\{transport_members\[@\]\}"' 'resolution survey archives the frozen root-owned snapshot without another full copy'
 forbid_match "$remi_deploy_helper" 'transport_stage|install -m 0600 "\$candidate_file"' 'resolution survey duplicate host-side transport staging'
+require_match "$remi_deploy_helper" 'survey_staging_root="\$\{evidence_root\}/\.remi-operator-staging"[\s\S]*resolution-survey operator staging root is not a private root-owned directory[\s\S]*mktemp -d "\$\{survey_staging_root\}/resolution-survey-\$\{survey_id\}' 'resolution survey materializes unbounded oracles on the evidence capacity domain'
+forbid_match "$remi_deploy_helper" 'mktemp -d "/tmp/remi-resolution-survey-\$\{survey_id\}' 'resolution survey unbounded oracle duplication in tmp'
 forbid_match "$resolution_survey_transport" 'MAX_SURVEY_TRANSPORT_BYTES|plain_file\(args\.transport, "survey transport",|member\.size > [0-9]+ \* 1024 \* 1024' 'resolution survey arbitrary aggregate output limit'
 forbid_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\) \{[\s\S]{0,500}transport_size' 'resolution survey arbitrary aggregate oracle input limit'
 require_match "$resolution_survey_transport" 'validate_input_evidence\([\s\S]*deployment != input_deployment[\s\S]*survey binding differs from authenticated input[\s\S]*--input-evidence' 'resolution survey output verifier exact authenticated input bindings'

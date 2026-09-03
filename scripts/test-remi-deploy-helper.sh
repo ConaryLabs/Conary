@@ -1371,6 +1371,12 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     [[ -f "$transport" && ! -L "$transport" && "$(stat -c '%a' "$transport")" == "600" ]]
     [[ -d "$fake_root/conary/evidence/resolution-surveys/$survey_id" ]]
     [[ "$(stat -c '%a' "$fake_root/conary/evidence/resolution-surveys/$survey_id")" == "700" ]]
+    [[ -d "$fake_root/conary/evidence/.remi-operator-staging" \
+        && "$(stat -c '%a' "$fake_root/conary/evidence/.remi-operator-staging")" == "750" ]]
+    if find "$fake_root/conary/evidence/.remi-operator-staging" \
+        -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        fail "resolution survey leaked capacity-domain operator staging"
+    fi
     grep -F 'forged_after_restart' \
         "$fake_root/conary/evidence/resolution-surveys/$survey_id/fedora-44.candidate-resolution-survey.json" >/dev/null ||
         fail "survey restart did not exercise the service-user output mutation test"
@@ -1515,8 +1521,8 @@ test_resolution_survey_preflight_failure_cleans_staging() {
     expect_fail "resolution survey binary binding drift" \
         run_survey_helper "$fake_root" \
         "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
-    if find /tmp -maxdepth 1 -name "remi-resolution-survey-${survey_id}.*" -print -quit |
-        grep -q .; then
+    if find "$fake_root/conary/evidence/.remi-operator-staging" \
+        -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
         fail "survey preflight failure leaked a root staging directory"
     fi
     [[ ! -s "$fake_root/service-log" ]] ||
