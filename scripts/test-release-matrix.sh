@@ -2204,6 +2204,19 @@ test_check_release_matrix_requires_resolution_survey_helper_install() {
         "resolution survey installs its exact protected helper before staging survey input"
 }
 
+test_check_release_matrix_rejects_caller_authorized_helper_update() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '    install -m 0755 "${staging}/helper" "$next"' \
+        '    install -m 0755 "$source" "$next"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "Remi helper updates require exact current protected-main bytes from root-trusted HTTPS authority"
+}
+
 test_check_release_matrix_rejects_resolution_survey_helper_downgrade() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3808,6 +3821,7 @@ main() {
         test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
         test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots
         test_check_release_matrix_requires_resolution_survey_helper_install
+        test_check_release_matrix_rejects_caller_authorized_helper_update
         test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
         test_check_release_matrix_rejects_live_resolution_survey_host_discovery

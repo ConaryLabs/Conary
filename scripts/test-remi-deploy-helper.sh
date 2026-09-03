@@ -2063,19 +2063,32 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
 test_install_helper_requires_exact_digest() {
     local fake_root="${tmpdir}/root-helper"
     local staged="${tmpdir}/staged-helper"
-    local digest
-    mkdir -p "$fake_root/usr/local/sbin"
+    local authority="${tmpdir}/protected-main-helper"
+    local digest malicious_digest
+    mkdir -p "$fake_root/usr/local/sbin" "$authority/deploy"
+    printf 'a%.0s' {1..40} >"$authority/main-commit"
+    cp "$helper" "$authority/deploy/remi-deploy-helper.sh"
     cp "$helper" "$staged"
     digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
 
-    run_helper "$fake_root" install-helper "$digest" "$staged"
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        run_helper "$fake_root" install-helper "$digest" "$staged"
     test -x "$fake_root/usr/local/sbin/conary-remi-deploy"
+    cmp -s "$helper" "$fake_root/usr/local/sbin/conary-remi-deploy"
 
     cp "$helper" "$staged"
-    expect_fail "helper digest mismatch" \
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        expect_fail "helper digest mismatch" \
         run_helper "$fake_root" install-helper \
         0000000000000000000000000000000000000000000000000000000000000000 \
         "$staged"
+
+    printf '#!/usr/bin/env bash\necho attacker-controlled\n' >"$staged"
+    malicious_digest="$(sha256sum "$staged" | cut -d ' ' -f 1)"
+    CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT="$authority" \
+        expect_fail "self-consistent untrusted helper" \
+        run_helper "$fake_root" install-helper "$malicious_digest" "$staged"
+    cmp -s "$helper" "$fake_root/usr/local/sbin/conary-remi-deploy"
 }
 
 test_verify_access_does_not_require_a_running_service() {

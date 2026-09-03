@@ -74,6 +74,11 @@ validate_sha256() {
     [[ "$value" =~ ^[0-9a-f]{64}$ ]] || die "invalid SHA-256 digest"
 }
 
+validate_commit() {
+    local value="$1"
+    [[ "$value" =~ ^[0-9a-f]{40}$ ]] || die "invalid commit SHA"
+}
+
 validate_site_target() {
     local target="$1"
     case "$target" in
@@ -526,6 +531,49 @@ publish_test_artifact() {
         "$filename" "$expected_sha" "$size"
 }
 
+protected_main_commit() {
+    local test_authority="${CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT:-}"
+    local commit
+    if [[ -n "$test_authority" ]]; then
+        [[ -n "$ROOT" ]] || die "protected-main test authority requires a fake root"
+        [[ -d "$test_authority" && ! -L "$test_authority" \
+            && -f "${test_authority}/main-commit" \
+            && ! -L "${test_authority}/main-commit" ]] ||
+            die "protected-main test authority is malformed"
+        commit="$(<"${test_authority}/main-commit")"
+    else
+        commit="$(curl -fsS --proto '=https' --tlsv1.2 --max-time 60 \
+            --retry 2 --retry-connrefused --max-filesize 1048576 \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            https://api.github.com/repos/FieldmouseWorks/Conary/commits/main \
+            | jq -er '.sha')" || die "could not resolve protected-main helper authority"
+    fi
+    validate_commit "$commit"
+    printf '%s' "$commit"
+}
+
+fetch_protected_main_helper() {
+    local commit="$1"
+    local destination="$2"
+    local test_authority="${CONARY_REMI_DEPLOY_TEST_PROTECTED_MAIN_ROOT:-}"
+    validate_commit "$commit"
+    if [[ -n "$test_authority" ]]; then
+        [[ -n "$ROOT" ]] || die "protected-main test authority requires a fake root"
+        local canonical="${test_authority}/deploy/remi-deploy-helper.sh"
+        [[ -f "$canonical" && ! -L "$canonical" ]] ||
+            die "protected-main test helper is not plain data"
+        install -m 0600 "$canonical" "$destination"
+    else
+        curl -fsS --proto '=https' --tlsv1.2 --max-time 60 \
+            --retry 2 --retry-connrefused --max-filesize 1048576 \
+            --output "$destination" \
+            "https://raw.githubusercontent.com/FieldmouseWorks/Conary/${commit}/deploy/remi-deploy-helper.sh" ||
+            die "could not fetch the exact protected-main helper"
+        chmod 0600 "$destination"
+    fi
+}
+
 install_helper() {
     local expected_sha="$1"
     local source
@@ -533,16 +581,29 @@ install_helper() {
     source="$(real_tmp_path "$2")"
     [[ -f "$source" && ! -L "$source" ]] || die "helper source is not a plain file: $source"
 
-    local actual_sha target next
+    local actual_sha target next staging main_commit canonical_sha256
     actual_sha="$(sha256sum "$source" | cut -d ' ' -f 1)"
     [[ "$actual_sha" == "$expected_sha" ]] || die "helper SHA-256 mismatch"
-    bash -n "$source" || die "helper shell validation failed"
+
+    staging="$(mktemp -d /tmp/conary-remi-helper.XXXXXX)"
+    chmod 0700 "$staging"
+    trap 'rm -rf -- "$staging"' EXIT
+    main_commit="$(protected_main_commit)"
+    fetch_protected_main_helper "$main_commit" "${staging}/helper"
+    canonical_sha256="$(sha256sum "${staging}/helper" | cut -d ' ' -f 1)"
+    [[ "$canonical_sha256" == "$expected_sha" ]] ||
+        die "helper digest is not authorized by current protected main"
+    [[ "$(protected_main_commit)" == "$main_commit" ]] ||
+        die "protected main advanced during helper authorization"
+    bash -n "${staging}/helper" || die "protected-main helper shell validation failed"
 
     target="$(root_path /usr/local/sbin/conary-remi-deploy)"
     next="${target}.next.$$"
-    install -m 0755 "$source" "$next"
+    install -m 0755 "${staging}/helper" "$next"
     mv "$next" "$target"
     rm -f "$source"
+    rm -rf -- "$staging"
+    trap - EXIT
 }
 
 inspect_remi() {
