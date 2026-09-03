@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import stat
@@ -22,18 +23,24 @@ LANES = {
     "fedora-44": {
         "ecosystem": "rpm",
         "implementation": "libsolv",
+        "package_binary": "conary-rpm-oracle",
+        "resolution_binary": "conary-rpm-resolution-oracle",
         "roles": ("rpm_primary", "rpm_filelists"),
         "flags": ("--primary", "--filelists"),
     },
     "ubuntu-26.04": {
         "ecosystem": "debian",
         "implementation": "apt-pkg",
+        "package_binary": "conary-debian-oracle",
+        "resolution_binary": "conary-debian-resolution-oracle",
         "roles": ("debian_packages",),
         "flags": ("--packages",),
     },
     "arch": {
         "ecosystem": "alpm",
         "implementation": "libalpm",
+        "package_binary": "conary-alpm-oracle",
+        "resolution_binary": "conary-alpm-resolution-oracle",
         "roles": ("arch_database",),
         "flags": ("--database",),
     },
@@ -118,6 +125,17 @@ def sha256_file(path: Path) -> str:
         while chunk := source.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def producer_binary(path: Path, expected_name: str, label: str) -> dict[str, str]:
+    if path.name != expected_name:
+        raise ValueError(f"{label} must be named {expected_name}")
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} must be a regular file, never a symlink")
+    if not os.access(path, os.X_OK):
+        raise ValueError(f"{label} must be executable")
+    return {"name": expected_name, "sha256": sha256_file(path)}
 
 
 def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], dict[str, Any], str]:
@@ -267,6 +285,16 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     input_root = arguments.input_root.resolve()
     output_root = arguments.output_root.resolve()
     lane = LANES[arguments.profile]
+    package_binary = producer_binary(
+        arguments.package_producer,
+        lane["package_binary"],
+        "native package producer",
+    )
+    resolution_binary = producer_binary(
+        arguments.resolution_producer,
+        lane["resolution_binary"],
+        "native resolution producer",
+    )
     manifest, profile, input_manifest_sha256 = validate_input(input_root, arguments.profile)
     target_architecture = profile["revision"]["target_architecture"]
     if arguments.architecture != target_architecture:
@@ -310,6 +338,17 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         ))
         invoke(resolution_command, "native resolution producer")
 
+    if package_binary != producer_binary(
+        arguments.package_producer,
+        lane["package_binary"],
+        "native package producer",
+    ) or resolution_binary != producer_binary(
+        arguments.resolution_producer,
+        lane["resolution_binary"],
+        "native resolution producer",
+    ):
+        raise ValueError("native producer binary changed during lane production")
+
     package = oracle_evidence(
         package_output,
         "packages.jsonl",
@@ -328,9 +367,14 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         package["manifest_sha256"],
     )
     evidence = {
-        "schema_version": 1,
+        "schema_version": 2,
         "export_id": arguments.export_id,
         "deployed_commit": arguments.deployed_commit,
+        "producer_commit": arguments.producer_commit,
+        "producer_binaries": {
+            "package": package_binary,
+            "resolution": resolution_binary,
+        },
         "input_manifest_sha256": input_manifest_sha256,
         "profile": arguments.profile,
         "profile_revision_sha256": profile["profile_revision_sha256"],
@@ -353,8 +397,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--export-id", required=True)
     parser.add_argument("--deployed-commit", required=True)
+    parser.add_argument("--producer-commit", required=True)
     arguments = parser.parse_args()
     require_commit(arguments.deployed_commit, "deployed commit")
+    require_commit(arguments.producer_commit, "producer commit")
     if re.fullmatch(r"[a-z0-9][a-z0-9.-]*", arguments.export_id) is None:
         raise ValueError("export ID must be a lowercase public identity")
     return arguments

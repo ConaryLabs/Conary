@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 28
+revision: 29
 status: active
 ---
 
@@ -47,18 +47,37 @@ operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
 apt-pkg implementation remains the sole native fact and resolution authority.
 
 The protected production producer accepts only one successful exact export
-run. It independently reopens the transport and deployment evidence, requires
-the artifact-owned deployed commit to be merged, and checks out that commit as
-producer source separately from the protected workflow/operator checkout.
+run. It independently reopens the transport and deployment evidence and
+requires the artifact-owned deployed commit to be merged. Dispatch also names
+one explicit full `producer_commit`; operators use the deployed commit by
+default and name a newer commit only for an intended producer advance. The
+workflow fetches `origin/main`, requires the producer commit to descend from
+the deployed commit and already be an ancestor of `origin/main`, then checks
+out that exact clean tree separately from the protected workflow/operator
+checkout. Floating branches, workflow heads, malformed SHAs, unmerged commits,
+non-descendants, and dirty producer trees are inadmissible.
 Three pinned container lanes derive every member and object argument from the
 canonical input contract: Fedora 44 uses libsolv 0.7.36, Ubuntu 26.04 uses
 apt-pkg 3.2.0, and Arch uses the pinned archive/libalpm image. A lane succeeds
 only after both its package-fact producer and exact-architecture resolution
 producer complete their strict output reopen. Short-lived sanitized evidence
 binds both manifests and artifacts to the input manifest, profile revision,
-export identity, implementation version, architecture, and deployed commit.
+export identity, implementation version, architecture, deployed commit,
+producer commit, and independently recomputed SHA-256 digests of both producer
+binaries.
 The operation is read-only and carries no refresh, conversion, proof,
 activation, or public-pointer authority.
+
+The accepted producer-binding decision deliberately separates immutable input
+authority from producer implementation provenance. A merged descendant may fix
+producer-only behavior without forcing a semantically identical Remi deploy
+and export, while the exact export continues to own every candidate, source,
+and metadata byte. Merged provenance alone grants no schema latitude: package
+schema 1, resolution schema 2, and every ecosystem implementation/projection
+pin remain mandatory. A future three-lane set may contain different producer
+commits per lane only when each is a merged descendant of the same deployed
+commit and every lane passes those identical pins; each lane records its own
+commit and binary digests.
 
 `NativeParityOracleV1` is the sole parity manifest authority. It binds the
 exact profile revision digest, profile logical digest, ordered source members,

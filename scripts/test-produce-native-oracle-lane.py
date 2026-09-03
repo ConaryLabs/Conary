@@ -19,6 +19,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRODUCER = REPO_ROOT / "scripts" / "produce-native-oracle-lane.py"
 COMMIT = "a" * 40
+PRODUCER_COMMIT = "b" * 40
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
@@ -165,12 +166,19 @@ class NativeOracleLaneTests(unittest.TestCase):
     def write_manifest(self) -> None:
         (self.input / "manifest.json").write_bytes(canonical(self.manifest))
 
-    def run_lane(self, profile: str = "fedora-44", architecture: str = "x86_64") -> subprocess.CompletedProcess[str]:
+    def run_lane(
+        self,
+        profile: str = "fedora-44",
+        architecture: str = "x86_64",
+        producer_commit: str = PRODUCER_COMMIT,
+    ) -> subprocess.CompletedProcess[str]:
         ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
         package = self.root / f"conary-{ecosystem}-oracle"
         resolution = self.root / f"conary-{ecosystem}-resolution-oracle"
-        package.symlink_to(self.fake)
-        resolution.symlink_to(self.fake)
+        package.write_text(FAKE_PRODUCER)
+        resolution.write_text(FAKE_PRODUCER)
+        package.chmod(package.stat().st_mode | stat.S_IXUSR)
+        resolution.chmod(resolution.stat().st_mode | stat.S_IXUSR)
         return subprocess.run(
             [
                 sys.executable,
@@ -183,6 +191,7 @@ class NativeOracleLaneTests(unittest.TestCase):
                 "--output-root", str(self.root / f"output-{profile}"),
                 "--export-id", "slice6-test",
                 "--deployed-commit", COMMIT,
+                "--producer-commit", producer_commit,
             ],
             text=True,
             capture_output=True,
@@ -194,6 +203,17 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
+        self.assertEqual(evidence["schema_version"], 2)
+        self.assertEqual(evidence["deployed_commit"], COMMIT)
+        self.assertEqual(evidence["producer_commit"], PRODUCER_COMMIT)
+        self.assertEqual(
+            evidence["producer_binaries"]["package"]["sha256"],
+            hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
+        )
+        self.assertEqual(
+            evidence["producer_binaries"]["resolution"]["sha256"],
+            hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
+        )
         self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
         self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
@@ -256,6 +276,39 @@ class NativeOracleLaneTests(unittest.TestCase):
         result = self.run_lane(architecture="amd64")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("architecture must match profile authority x86_64", result.stderr)
+
+    def test_rejects_malformed_producer_commit(self) -> None:
+        result = self.run_lane(producer_commit="main")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("producer commit must be a full lowercase commit digest", result.stderr)
+
+    def test_rejects_symlinked_producer_binary(self) -> None:
+        ecosystem = "rpm"
+        package = self.root / f"conary-{ecosystem}-oracle"
+        resolution = self.root / f"conary-{ecosystem}-resolution-oracle"
+        package.symlink_to(self.fake)
+        resolution.write_text(FAKE_PRODUCER)
+        resolution.chmod(resolution.stat().st_mode | stat.S_IXUSR)
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PRODUCER),
+                "--input-root", str(self.input),
+                "--profile", "fedora-44",
+                "--architecture", "x86_64",
+                "--package-producer", str(package),
+                "--resolution-producer", str(resolution),
+                "--output-root", str(self.root / "output-symlink"),
+                "--export-id", "slice6-test",
+                "--deployed-commit", COMMIT,
+                "--producer-commit", PRODUCER_COMMIT,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be a regular file, never a symlink", result.stderr)
 
 
 if __name__ == "__main__":

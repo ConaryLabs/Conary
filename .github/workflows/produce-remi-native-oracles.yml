@@ -7,6 +7,10 @@ on:
         description: Successful protected export-remi-native-oracle-inputs run
         required: true
         type: string
+      producer_commit:
+        description: Full merged producer commit SHA; use the deployed commit by default
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -25,6 +29,7 @@ jobs:
     outputs:
       artifact_name: ${{ steps.authority.outputs.artifact_name }}
       deployed_commit: ${{ steps.authority.outputs.deployed_commit }}
+      producer_commit: ${{ steps.producer.outputs.producer_commit }}
       export_id: ${{ steps.authority.outputs.export_id }}
       fedora_candidate: ${{ steps.authority.outputs.fedora_candidate }}
       ubuntu_candidate: ${{ steps.authority.outputs.ubuntu_candidate }}
@@ -36,8 +41,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Require a protected-main workflow revision
+        env:
+          PRODUCER_COMMIT: ${{ inputs.producer_commit }}
         run: |
           set -euo pipefail
+          [[ "$PRODUCER_COMMIT" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "producer_commit must be one full lowercase 40-hex SHA" >&2
+            exit 1
+          }
           [[ "$GITHUB_REF" == refs/heads/main ]] || {
             echo "native-oracle production must be dispatched from main" >&2
             exit 1
@@ -140,6 +151,22 @@ jobs:
             echo "ubuntu_candidate=$ubuntu_candidate"
             echo "arch_candidate=$arch_candidate"
           } >> "$GITHUB_OUTPUT"
+      - name: Authorize exact merged descendant producer commit
+        id: producer
+        env:
+          DEPLOYED_COMMIT: ${{ steps.authority.outputs.deployed_commit }}
+          PRODUCER_COMMIT: ${{ inputs.producer_commit }}
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$PRODUCER_COMMIT" || {
+            echo "producer_commit must descend from the deployed commit" >&2
+            exit 1
+          }
+          git merge-base --is-ancestor "$PRODUCER_COMMIT" origin/main || {
+            echo "producer_commit must already be merged into origin/main" >&2
+            exit 1
+          }
+          echo "producer_commit=$PRODUCER_COMMIT" >> "$GITHUB_OUTPUT"
 
   produce:
     name: native oracle (${{ matrix.profile }})
@@ -209,20 +236,20 @@ jobs:
         with:
           path: operator
           persist-credentials: false
-      - name: Check out exact deployed producer source
+      - name: Check out exact authorized producer source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           path: producer
-          ref: ${{ needs.authorize.outputs.deployed_commit }}
+          ref: ${{ needs.authorize.outputs.producer_commit }}
           persist-credentials: false
       - name: Require exact clean producer source
         working-directory: producer
         env:
-          DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$DEPLOYED_COMMIT" ]]
-          [[ -z "$(git status --porcelain --untracked-files=all)" ]]
+          [[ "$(git rev-parse HEAD)" == "$PRODUCER_COMMIT" ]]
+          [[ -z "$(git status --porcelain)" ]]
       - name: Download exact exported native metadata
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -247,7 +274,7 @@ jobs:
             --expected-candidate "arch=${ARCH_CANDIDATE}" \
             --output-dir "${RUNNER_TEMP}/native-input" \
             --evidence "${RUNNER_TEMP}/native-input-verification.json"
-      - name: Build exact deployed native producers
+      - name: Build exact authorized native producers
         working-directory: producer
         run: >-
           cargo build --release -p conary-core
@@ -257,6 +284,7 @@ jobs:
       - name: Produce and reopen complete native oracle lane
         env:
           DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
           EXPORT_ID: ${{ needs.authorize.outputs.export_id }}
         run: |
           set -euo pipefail
@@ -269,17 +297,35 @@ jobs:
             --output-root "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}" \
             --export-id "$EXPORT_ID" \
             --deployed-commit "$DEPLOYED_COMMIT" \
+            --producer-commit "$PRODUCER_COMMIT" \
             > "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}.json"
           cmp \
             "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}.json" \
             <(jq -c . "${RUNNER_TEMP}/native-oracles-${{ matrix.profile }}/evidence.json")
       - name: Require pinned native implementation identity
         env:
+          DEPLOYED_COMMIT: ${{ needs.authorize.outputs.deployed_commit }}
+          PACKAGE_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.package_bin }}
           PROFILE: ${{ matrix.profile }}
+          PRODUCER_COMMIT: ${{ needs.authorize.outputs.producer_commit }}
+          RESOLUTION_PRODUCER: ${{ github.workspace }}/producer/target/release/${{ matrix.resolution_bin }}
         run: |
           set -euo pipefail
           evidence="${RUNNER_TEMP}/native-oracles-${PROFILE}/evidence.json"
-          jq -e '
+          package_sha256="$(sha256sum "$PACKAGE_PRODUCER" | cut -d ' ' -f 1)"
+          resolution_sha256="$(sha256sum "$RESOLUTION_PRODUCER" | cut -d ' ' -f 1)"
+          jq -e \
+            --arg deployed_commit "$DEPLOYED_COMMIT" \
+            --arg package_name "${PACKAGE_PRODUCER##*/}" \
+            --arg package_sha256 "$package_sha256" \
+            --arg producer_commit "$PRODUCER_COMMIT" \
+            --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
+            --arg resolution_sha256 "$resolution_sha256" '
+            .schema_version == 2 and
+            .deployed_commit == $deployed_commit and
+            .producer_commit == $producer_commit and
+            .producer_binaries.package == {name:$package_name,sha256:$package_sha256} and
+            .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
             .package_oracle.schema_version == 1 and
             .resolution_oracle.schema_version == 2
           ' "$evidence" >/dev/null
@@ -328,6 +374,9 @@ jobs:
             echo
             jq -r '
               "- deployed_commit: `\(.deployed_commit)`\n" +
+              "- producer_commit: `\(.producer_commit)`\n" +
+              "- package_producer_sha256: `\(.producer_binaries.package.sha256)`\n" +
+              "- resolution_producer_sha256: `\(.producer_binaries.resolution.sha256)`\n" +
               "- export_id: `\(.export_id)`\n" +
               "- profile_revision: `\(.profile_revision_sha256)`\n" +
               "- package_manifest: `\(.package_oracle.manifest_sha256)`\n" +

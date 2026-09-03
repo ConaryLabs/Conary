@@ -1836,7 +1836,7 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_production() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production protected-main authorization"
+        "native-oracle production protected-main and full producer SHA authorization"
 }
 
 test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
@@ -1844,12 +1844,116 @@ test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '          ref: ${{ needs.authorize.outputs.deployed_commit }}' \
+        '          ref: ${{ needs.authorize.outputs.producer_commit }}' \
         '          ref: ${{ github.sha }}'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle production exact deployed producer source and typed lane adapter"
+        "native-oracle production exact clean producer source and typed lane adapter"
+}
+
+test_check_release_matrix_rejects_malformed_native_oracle_producer_commit() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '[[ "$PRODUCER_COMMIT" =~ ^[0-9a-f]{40}$ ]]' \
+        '[[ -n "$PRODUCER_COMMIT" ]]'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production protected-main and full producer SHA authorization"
+}
+
+test_check_release_matrix_rejects_non_descendant_native_oracle_producer() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          git merge-base --is-ancestor "$DEPLOYED_COMMIT" "$PRODUCER_COMMIT" || {' \
+        '          true || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production merged descendant producer predicate"
+}
+
+test_check_release_matrix_rejects_unmerged_native_oracle_producer() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          git merge-base --is-ancestor "$PRODUCER_COMMIT" origin/main || {' \
+        '          true || {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production merged descendant producer predicate"
+}
+
+test_check_release_matrix_rejects_dirty_native_oracle_producer() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '          [[ -z "$(git status --porcelain)" ]]' \
+        '          true'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact clean producer source and typed lane adapter"
+}
+
+test_check_release_matrix_rejects_missing_native_oracle_binary_digest() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and' \
+        '            true and'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact producer commit and binary digest evidence"
+}
+
+test_check_release_matrix_rejects_native_oracle_lane_schema_drift() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .schema_version == 2 and' \
+        '            .schema_version == 1 and'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact lane, package, resolution, and implementation schemas"
+}
+
+test_check_release_matrix_rejects_native_oracle_implementation_pin_drift() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        'projection_schema:4,version:"0.7.36"' \
+        'projection_schema:5,version:"0.7.36"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact lane, package, resolution, and implementation schemas"
+}
+
+test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .producer_commit == $producer_commit and' \
+        '            .producer_commit == .deployed_commit and'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "native-oracle production exact producer commit and binary digest evidence"
 }
 
 test_check_release_matrix_rejects_container_native_oracle_shell() {
@@ -3049,6 +3153,14 @@ main() {
         test_check_release_matrix_rejects_loose_native_oracle_transport
         test_check_release_matrix_rejects_nonproduction_native_oracle_production
         test_check_release_matrix_rejects_unbound_native_oracle_producer_source
+        test_check_release_matrix_rejects_malformed_native_oracle_producer_commit
+        test_check_release_matrix_rejects_non_descendant_native_oracle_producer
+        test_check_release_matrix_rejects_unmerged_native_oracle_producer
+        test_check_release_matrix_rejects_dirty_native_oracle_producer
+        test_check_release_matrix_rejects_missing_native_oracle_binary_digest
+        test_check_release_matrix_rejects_native_oracle_lane_schema_drift
+        test_check_release_matrix_rejects_native_oracle_implementation_pin_drift
+        test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence
         test_check_release_matrix_rejects_container_native_oracle_shell
         test_check_release_matrix_rejects_mutating_native_oracle_authority
         test_check_release_matrix_rejects_unserialized_site_deployment
