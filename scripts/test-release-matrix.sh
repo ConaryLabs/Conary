@@ -1899,6 +1899,32 @@ test_check_release_matrix_rejects_unserialized_resolution_survey() {
         "resolution survey exact oracle input, read-only permissions, and shared serialization"
 }
 
+test_check_release_matrix_requires_pinned_resolution_survey_host() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey requires the protected pinned production SSH host identity"
+}
+
+test_check_release_matrix_rejects_live_resolution_survey_host_discovery() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '          ssh_opts=(' \
+        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey live SSH host-key discovery"
+}
+
 test_check_release_matrix_rejects_mutating_resolution_survey() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3100,6 +3126,8 @@ main() {
         test_check_release_matrix_rejects_container_native_oracle_shell
         test_check_release_matrix_rejects_mutating_native_oracle_authority
         test_check_release_matrix_rejects_unserialized_resolution_survey
+        test_check_release_matrix_requires_pinned_resolution_survey_host
+        test_check_release_matrix_rejects_live_resolution_survey_host_discovery
         test_check_release_matrix_rejects_mutating_resolution_survey
         test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_unserialized_site_deployment

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 66
+revision: 67
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -287,6 +287,8 @@ workflow.
   binary, candidate revision, export manifest, and typed architecture bindings
   to agree, then invokes only the root-owned helper action
   `survey-resolution <survey-id> <export-id> <oracle-transport-path>`. The
+  production environment supplies an exact `REMI_SSH_KNOWN_HOSTS` pin; live
+  host-key discovery is forbidden and the selected host must match the pin. The
   helper authenticates every archive member before private root-owned staging,
   stops Remi, reads the exact candidate revisions from the stopped deployment's
   own candidate pointers, runs `remi resolution-survey` as `conary`, and always

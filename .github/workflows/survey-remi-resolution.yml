@@ -200,6 +200,7 @@ jobs:
         id: survey
         env:
           INPUT_TRANSPORT: ${{ steps.input.outputs.transport }}
+          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
           REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           SURVEY_ID: ${{ steps.input.outputs.survey_id }}
@@ -211,6 +212,10 @@ jobs:
             echo "REMI_SSH_KEY is required" >&2
             exit 1
           }
+          [[ -n "${REMI_SSH_KNOWN_HOSTS:-}" ]] || {
+            echo "REMI_SSH_KNOWN_HOSTS is required" >&2
+            exit 1
+          }
           target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
           [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
             echo "REMI_SSH_TARGET must be one explicit user and DNS host" >&2
@@ -220,10 +225,11 @@ jobs:
           remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
           key="${RUNNER_TEMP}/remi-resolution-survey-key"
+          known_hosts="${RUNNER_TEMP}/remi-resolution-survey-known-hosts"
           remote_possible=0
           cleanup() {
             status=$?
-            rm -f -- "$key"
+            rm -f -- "$key" "$known_hosts"
             if (( remote_possible == 1 )); then
               set +e
               # Every interpolated remote value is typed above.
@@ -236,18 +242,23 @@ jobs:
           }
           trap cleanup EXIT
 
+          umask 077
           printf '%s\n' "$REMI_SSH_KEY" > "$key"
-          chmod 0600 "$key" "$INPUT_TRANSPORT"
+          ssh-keygen -y -f "$key" >/dev/null
           host="${target#*@}"
-          mkdir -p ~/.ssh
-          chmod 0700 ~/.ssh
-          ssh-keyscan -H "$host" >> ~/.ssh/known_hosts 2>/dev/null
+          printf '%s\n' "$REMI_SSH_KNOWN_HOSTS" > "$known_hosts"
+          chmod 0600 "$key" "$known_hosts" "$INPUT_TRANSPORT"
+          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then
+            echo "pinned production SSH host identity does not bind $host" >&2
+            exit 1
+          fi
           ssh_opts=(
             -i "$key"
             -o BatchMode=yes
             -o ConnectTimeout=30
             -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$known_hosts"
             -o ServerAliveInterval=30
             -o ServerAliveCountMax=6
           )
