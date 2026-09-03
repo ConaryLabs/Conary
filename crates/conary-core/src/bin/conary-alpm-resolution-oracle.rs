@@ -9,8 +9,9 @@ use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
     AlpmParityMemberInput, ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest,
-    SourceSnapshotV1, produce_alpm_resolution_oracle_with_workers,
-    produce_alpm_resolution_survey_with_workers, write_resolution_walk_implementation_evidence,
+    SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
+    produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey_with_workers,
+    write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -67,6 +68,10 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<()> {
+    if let Some(output) = &arguments.output {
+        ensure_resolution_walk_evidence_outside_bundle(output, &arguments.implementation_evidence)
+            .context("validate ALPM resolution implementation evidence destination")?;
+    }
     if arguments.source_snapshot.len() != arguments.database.len() {
         bail!(
             "received {} source snapshots but {} ALPM databases",

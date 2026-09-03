@@ -9,8 +9,9 @@ use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
     ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest, RpmParityMemberInput,
-    SourceSnapshotV1, produce_rpm_resolution_oracle_with_workers,
-    produce_rpm_resolution_survey_with_workers, write_resolution_walk_implementation_evidence,
+    SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
+    produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey_with_workers,
+    write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -71,6 +72,10 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<()> {
+    if let Some(output) = &arguments.output {
+        ensure_resolution_walk_evidence_outside_bundle(output, &arguments.implementation_evidence)
+            .context("validate RPM resolution implementation evidence destination")?;
+    }
     let members = arguments.source_snapshot.len();
     if arguments.primary.len() != members || arguments.filelists.len() != members {
         bail!(

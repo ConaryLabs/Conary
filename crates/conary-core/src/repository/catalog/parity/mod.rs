@@ -118,7 +118,7 @@ pub use resolution_io::{
 pub(crate) use resolution_parallel::resolution_test_capacity;
 pub use resolution_parallel::{
     ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
-    write_resolution_walk_implementation_evidence,
+    ensure_resolution_walk_evidence_outside_bundle, write_resolution_walk_implementation_evidence,
 };
 pub use resolution_survey::{
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,

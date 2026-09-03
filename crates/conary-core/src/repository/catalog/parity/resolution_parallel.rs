@@ -5,11 +5,12 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::BTreeMap;
-use std::fs::OpenOptions;
+use std::ffi::OsString;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -192,6 +193,71 @@ pub fn write_resolution_walk_implementation_evidence(
     file.write_all(&bytes)?;
     file.sync_all()?;
     Ok(())
+}
+
+/// Reject an implementation-evidence destination inside a strict bundle.
+///
+/// The comparison resolves existing ancestors before checking containment, so
+/// relative paths, parent components, and symlinked parents cannot alias the
+/// bundle while evading the exact-layout boundary.
+pub fn ensure_resolution_walk_evidence_outside_bundle(
+    bundle: &Path,
+    evidence: &Path,
+) -> Result<()> {
+    let bundle = resolved_destination(bundle)?;
+    let evidence = resolved_destination(evidence)?;
+    if evidence.starts_with(&bundle) {
+        return Err(Error::ConfigError(format!(
+            "resolution implementation evidence {} must remain outside strict bundle {}",
+            evidence.display(),
+            bundle.display()
+        )));
+    }
+    Ok(())
+}
+
+fn resolved_destination(path: &Path) -> Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let absolute = lexically_normalize_absolute(&absolute);
+    let mut existing = absolute.as_path();
+    let mut suffix = Vec::<OsString>::new();
+    while !existing.try_exists()? {
+        let Some(name) = existing.file_name() else {
+            break;
+        };
+        suffix.push(name.to_os_string());
+        existing = existing.parent().ok_or_else(|| {
+            Error::InvalidPath(format!(
+                "resolution destination {} has no existing ancestor",
+                path.display()
+            ))
+        })?;
+    }
+    let mut resolved = fs::canonicalize(existing)?;
+    for component in suffix.into_iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn lexically_normalize_absolute(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+    normalized
 }
 
 pub(crate) struct OrderedResolutionMetrics {
@@ -790,6 +856,41 @@ mod tests {
             crate::json::canonical_json(&evidence).unwrap()
         );
         assert!(write_resolution_walk_implementation_evidence(&path, &evidence).is_err());
+    }
+
+    #[test]
+    fn implementation_evidence_must_remain_outside_strict_bundle() {
+        let directory = tempfile::tempdir().unwrap();
+        let bundle = directory.path().join("strict-bundle");
+        let sibling = directory.path().join("implementation.json");
+
+        ensure_resolution_walk_evidence_outside_bundle(&bundle, &sibling).unwrap();
+        let error = ensure_resolution_walk_evidence_outside_bundle(
+            &bundle,
+            &bundle.join("nested/../implementation.json"),
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("must remain outside strict bundle")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn implementation_evidence_resolves_symlinked_parent_aliases() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let real = directory.path().join("real");
+        let alias = directory.path().join("alias");
+        std::fs::create_dir(&real).unwrap();
+        symlink(&real, &alias).unwrap();
+
+        let bundle = real.join("strict-bundle");
+        let evidence = alias.join("strict-bundle/implementation.json");
+        assert!(ensure_resolution_walk_evidence_outside_bundle(&bundle, &evidence).is_err());
     }
 
     #[test]

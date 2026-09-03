@@ -9,9 +9,9 @@ use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
     DebianParityMemberInput, ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest,
-    SourceSnapshotV1, produce_debian_resolution_oracle_with_workers,
-    produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
-    write_resolution_walk_implementation_evidence,
+    SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
+    produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey_with_workers,
+    run_debian_resolution_worker, write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -95,6 +95,10 @@ fn main() {
 }
 
 fn run(arguments: Arguments) -> Result<()> {
+    if let Some(output) = &arguments.output {
+        ensure_resolution_walk_evidence_outside_bundle(output, &arguments.implementation_evidence)
+            .context("validate Debian resolution implementation evidence destination")?;
+    }
     let members = arguments.source_snapshot.len();
     if arguments.packages.len() != members {
         bail!(
