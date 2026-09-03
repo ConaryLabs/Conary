@@ -44,6 +44,7 @@ pub struct TufClient {
     tuf_base_url: String,
     tuf_location: RepoLocation,
     update_mode: TufUpdateMode,
+    public_network_only: bool,
 }
 
 /// Blocking DB state required before an async TUF update.
@@ -113,12 +114,7 @@ impl TufClient {
         let tuf_base_url = tuf_root_url
             .map(String::from)
             .unwrap_or_else(|| format!("{}/tuf", repo_url.trim_end_matches('/')));
-        let tuf_location = if public_network_only {
-            RepoLocation::parse_public_network(&tuf_base_url)
-        } else {
-            RepoLocation::parse(&tuf_base_url)
-        }
-        .map_err(|error| {
+        let tuf_location = RepoLocation::parse(&tuf_base_url).map_err(|error| {
             TrustError::FetchError(format!(
                 "Invalid TUF metadata location {tuf_base_url}: {error}"
             ))
@@ -129,6 +125,7 @@ impl TufClient {
             tuf_base_url,
             tuf_location,
             update_mode,
+            public_network_only,
         })
     }
 
@@ -498,18 +495,30 @@ impl TufClient {
         }
 
         if allow_not_found {
-            return self
-                .tuf_location
-                .try_fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
-                .await
-                .map_err(|error| {
-                    TrustError::FetchError(format!("Failed to fetch {filename}: {error}"))
-                });
+            let fetched = if self.public_network_only {
+                self.tuf_location
+                    .try_fetch_bytes_public_network(filename, Self::MAX_TUF_METADATA_SIZE)
+                    .await
+            } else {
+                self.tuf_location
+                    .try_fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
+                    .await
+            };
+            return fetched.map_err(|error| {
+                TrustError::FetchError(format!("Failed to fetch {filename}: {error}"))
+            });
         }
 
-        self.tuf_location
-            .fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
-            .await
+        let fetched = if self.public_network_only {
+            self.tuf_location
+                .fetch_bytes_public_network(filename, Self::MAX_TUF_METADATA_SIZE)
+                .await
+        } else {
+            self.tuf_location
+                .fetch_bytes(filename, Self::MAX_TUF_METADATA_SIZE)
+                .await
+        };
+        fetched
             .map(Some)
             .map_err(|error| TrustError::FetchError(format!("Failed to fetch {filename}: {error}")))
     }

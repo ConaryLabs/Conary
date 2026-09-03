@@ -9,29 +9,15 @@ use super::paths::validate_repo_relative_path;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoLocation {
-    Http {
-        base: String,
-        public_network_only: bool,
-    },
-    File {
-        root: PathBuf,
-    },
+    Http { base: String },
+    File { root: PathBuf },
 }
 
 impl RepoLocation {
     pub fn parse(input: &str) -> Result<Self> {
-        Self::parse_with_network_policy(input, false)
-    }
-
-    pub(crate) fn parse_public_network(input: &str) -> Result<Self> {
-        Self::parse_with_network_policy(input, true)
-    }
-
-    fn parse_with_network_policy(input: &str, public_network_only: bool) -> Result<Self> {
         if input.starts_with("http://") || input.starts_with("https://") {
             return Ok(Self::Http {
                 base: input.trim_end_matches('/').to_string(),
-                public_network_only,
             });
         }
 
@@ -60,7 +46,29 @@ impl RepoLocation {
     }
 
     pub async fn fetch_bytes(&self, relative: &str, limit: u64) -> Result<Vec<u8>> {
-        match self.try_fetch_bytes(relative, limit).await? {
+        self.fetch_bytes_with_network_policy(relative, limit, false)
+            .await
+    }
+
+    pub(crate) async fn fetch_bytes_public_network(
+        &self,
+        relative: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>> {
+        self.fetch_bytes_with_network_policy(relative, limit, true)
+            .await
+    }
+
+    async fn fetch_bytes_with_network_policy(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Vec<u8>> {
+        match self
+            .try_fetch_bytes_with_network_policy(relative, limit, public_network_only)
+            .await?
+        {
             Some(bytes) => Ok(bytes),
             None => bail!(
                 "static repo path not found: {}",
@@ -70,23 +78,43 @@ impl RepoLocation {
     }
 
     pub async fn try_fetch_bytes(&self, relative: &str, limit: u64) -> Result<Option<Vec<u8>>> {
+        self.try_fetch_bytes_with_network_policy(relative, limit, false)
+            .await
+    }
+
+    pub(crate) async fn try_fetch_bytes_public_network(
+        &self,
+        relative: &str,
+        limit: u64,
+    ) -> Result<Option<Vec<u8>>> {
+        self.try_fetch_bytes_with_network_policy(relative, limit, true)
+            .await
+    }
+
+    async fn try_fetch_bytes_with_network_policy(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Option<Vec<u8>>> {
         validate_repo_relative_path(relative)?;
 
         match self {
-            Self::Http { .. } => self.try_fetch_http_bytes(relative, limit).await,
+            Self::Http { .. } => {
+                self.try_fetch_http_bytes(relative, limit, public_network_only)
+                    .await
+            }
             Self::File { root } => try_fetch_file_bytes(root.join(relative), limit).await,
         }
     }
 
-    async fn try_fetch_http_bytes(&self, relative: &str, limit: u64) -> Result<Option<Vec<u8>>> {
+    async fn try_fetch_http_bytes(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Option<Vec<u8>>> {
         let url = self.join_display(relative)?;
-        let public_network_only = matches!(
-            self,
-            Self::Http {
-                public_network_only: true,
-                ..
-            }
-        );
         let client = if public_network_only {
             crate::repository::client::RepositoryClient::new_public_network()?
         } else {

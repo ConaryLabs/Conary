@@ -39,16 +39,18 @@ async fn fetch_static_sync_snapshot_with_network_policy(
     let repo_id = repo
         .id
         .ok_or_else(|| Error::InitError("Repository has no ID".to_string()))?;
-    let location = if public_network_only {
-        RepoLocation::parse_public_network(&repo.url)
-    } else {
-        RepoLocation::parse(&repo.url)
-    }
-    .map_err(|error| Error::ConfigError(format!("Invalid static repository URL: {error}")))?;
+    let location = RepoLocation::parse(&repo.url)
+        .map_err(|error| Error::ConfigError(format!("Invalid static repository URL: {error}")))?;
 
     let index_target = required_target(verified, INDEX_PATH)?;
-    let index_bytes =
-        fetch_verified_target(&location, INDEX_PATH, index_target, MAX_STATIC_INDEX_BYTES).await?;
+    let index_bytes = fetch_verified_target(
+        &location,
+        INDEX_PATH,
+        index_target,
+        MAX_STATIC_INDEX_BYTES,
+        public_network_only,
+    )
+    .await?;
     let index = parse_static_index(&index_bytes)?;
 
     if index.index_version != verified.targets_version {
@@ -64,6 +66,7 @@ async fn fetch_static_sync_snapshot_with_network_policy(
         PACKAGE_KEYS_PATH,
         package_keys_target,
         MAX_PACKAGE_KEYS_BYTES,
+        public_network_only,
     )
     .await?;
     let package_keys = parse_package_keys(&package_keys_bytes)?;
@@ -103,10 +106,14 @@ async fn fetch_verified_target(
     path: &str,
     target: &TargetDescription,
     limit: u64,
+    public_network_only: bool,
 ) -> Result<Vec<u8>> {
-    let bytes = location
-        .fetch_bytes(path, limit)
-        .await
+    let fetched = if public_network_only {
+        location.fetch_bytes_public_network(path, limit).await
+    } else {
+        location.fetch_bytes(path, limit).await
+    };
+    let bytes = fetched
         .map_err(|error| Error::DownloadError(format!("Failed to fetch static {path}: {error}")))?;
     verify_target_bytes(path, target, &bytes)?;
     Ok(bytes)
