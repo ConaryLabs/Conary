@@ -4,7 +4,7 @@
 
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -274,6 +274,7 @@ enum WorkerMessage<R> {
         error: Error,
     },
     Root {
+        worker: usize,
         sequence: u64,
         root: Box<NativeParityPackageV1>,
         result: Result<R>,
@@ -299,12 +300,7 @@ where
 {
     std::thread::scope(|scope| {
         let worker_count = workers.get();
-        let channel_capacity = worker_count.checked_mul(2).ok_or_else(|| {
-            Error::ConfigError("resolution worker channel capacity exceeds usize".to_string())
-        })?;
-        let max_in_flight = u64::try_from(channel_capacity).map_err(|_| {
-            Error::ConfigError("resolution worker channel capacity exceeds u64".to_string())
-        })?;
+        let channel_capacity = worker_count;
         let explanation_byte_limit = Arc::new(AtomicU64::new(explanation_byte_limit));
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
@@ -360,6 +356,7 @@ where
                     };
                     if result_sender
                         .send(WorkerMessage::Root {
+                            worker,
                             sequence,
                             root: Box::new(root),
                             result,
@@ -402,49 +399,47 @@ where
             return Err(error);
         }
 
+        let mut available_workers = (0..worker_count).collect::<VecDeque<_>>();
         let mut pending = BTreeMap::new();
         let mut next_sequence = 0_u64;
         let mut dispatched = 0_u64;
-        let mut next_worker = 0_usize;
         let walk = package_oracle.for_each_package(|root| {
-            while dispatched.saturating_sub(next_sequence) >= max_in_flight {
+            while available_workers.is_empty() {
                 receive_and_emit(
                     &result_receiver,
                     &mut pending,
+                    &mut available_workers,
                     &mut next_sequence,
                     explanation_byte_limit.as_ref(),
                     &mut emit,
                 )?;
             }
             let sequence = dispatched;
-            let mut job = (sequence, root);
-            loop {
-                match job_senders[next_worker].try_send(job) {
-                    Ok(()) => break,
-                    Err(TrySendError::Full(returned)) => {
-                        job = returned;
-                        receive_and_emit(
-                            &result_receiver,
-                            &mut pending,
-                            &mut next_sequence,
-                            explanation_byte_limit.as_ref(),
-                            &mut emit,
-                        )?;
-                    }
-                    Err(TrySendError::Disconnected(_)) => {
-                        return Err(Error::InternalError(format!(
-                            "resolution worker {next_worker} stopped before accepting root {sequence}"
-                        )));
-                    }
+            let worker = available_workers.pop_front().ok_or_else(|| {
+                Error::InternalError(
+                    "resolution dispatcher omitted an available worker".to_string(),
+                )
+            })?;
+            match job_senders[worker].try_send((sequence, root)) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    return Err(Error::InternalError(format!(
+                        "available resolution worker {worker} retained an earlier root"
+                    )));
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    return Err(Error::InternalError(format!(
+                        "resolution worker {worker} stopped before accepting root {sequence}"
+                    )));
                 }
             }
             dispatched = dispatched.checked_add(1).ok_or_else(|| {
                 Error::ConfigError("resolution root sequence exceeds u64".to_string())
             })?;
-            next_worker = (next_worker + 1) % worker_count;
             drain_available(
                 &result_receiver,
                 &mut pending,
+                &mut available_workers,
                 &mut next_sequence,
                 explanation_byte_limit.as_ref(),
                 &mut emit,
@@ -458,6 +453,7 @@ where
                     receive_and_emit(
                         &result_receiver,
                         &mut pending,
+                        &mut available_workers,
                         &mut next_sequence,
                         explanation_byte_limit.as_ref(),
                         &mut emit,
@@ -493,6 +489,7 @@ where
 fn receive_and_emit<R>(
     receiver: &Receiver<WorkerMessage<R>>,
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
+    available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
     explanation_byte_limit: &AtomicU64,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
@@ -500,20 +497,21 @@ fn receive_and_emit<R>(
     let message = receiver
         .recv()
         .map_err(|_| Error::InternalError("resolution worker result channel closed".to_string()))?;
-    retain_result(message, pending)?;
+    retain_result(message, pending, available_workers)?;
     emit_ready(pending, next_sequence, explanation_byte_limit, emit)
 }
 
 fn drain_available<R>(
     receiver: &Receiver<WorkerMessage<R>>,
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
+    available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
     explanation_byte_limit: &AtomicU64,
     emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
 ) -> Result<()> {
     loop {
         match receiver.try_recv() {
-            Ok(message) => retain_result(message, pending)?,
+            Ok(message) => retain_result(message, pending, available_workers)?,
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => break,
         }
@@ -524,8 +522,10 @@ fn drain_available<R>(
 fn retain_result<R>(
     message: WorkerMessage<R>,
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
+    available_workers: &mut VecDeque<usize>,
 ) -> Result<()> {
     let WorkerMessage::Root {
+        worker,
         sequence,
         root,
         result,
@@ -540,6 +540,7 @@ fn retain_result<R>(
             "resolution worker repeated root sequence {sequence}"
         )));
     }
+    available_workers.push_back(worker);
     Ok(())
 }
 
@@ -909,6 +910,27 @@ mod tests {
 
         assert_eq!(next_sequence, 1);
         assert_eq!(explanation_byte_limit.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn completed_worker_becomes_next_dispatch_target() {
+        let mut pending = BTreeMap::new();
+        let mut available_workers = VecDeque::new();
+
+        retain_result(
+            WorkerMessage::Root {
+                worker: 3,
+                sequence: 7,
+                root: Box::new(root()),
+                result: Ok(()),
+            },
+            &mut pending,
+            &mut available_workers,
+        )
+        .unwrap();
+
+        assert_eq!(available_workers.pop_front(), Some(3));
+        assert!(pending.contains_key(&7));
     }
 
     #[test]
