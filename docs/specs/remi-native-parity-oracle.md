@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 52
+revision: 53
 status: active
 ---
 
@@ -589,9 +589,11 @@ compares every authority binding with its authenticated input verification, and
 its seven-day artifact
 also retains the authenticated three-lane assembly. Neither helper input
 admission nor runner output verification imposes an aggregate transport limit
-absent from the producer contract. The runner chunk-copies and authenticates
-each declared member into private mode-`0700` staging, maps those files
-read-only, and decodes large root-record arrays one canonical record at a time.
+absent from the producer contract. The uncompressed input archive uses GNU
+base-256 tar headers to avoid USTAR's unsupported 8-GiB per-member ceiling
+without admitting PAX metadata. The runner chunk-copies and authenticates each
+declared member into private mode-`0700` staging, maps those files read-only,
+and decodes large root-record arrays one canonical record at a time.
 Its comparison join keeps only the fixed retained-mismatch envelope rather
 than indexing the complete candidate population. Remi returns bounded
 per-profile summaries to the helper, including the comparison candidate
