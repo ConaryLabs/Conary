@@ -1066,11 +1066,21 @@ survey_resolution() {
     [[ ! -e "$public_transport" && ! -L "$public_transport" ]] ||
         die "resolution-survey transport already exists: $public_transport"
 
+    SURVEY_REMI_STOPPED=0
+    SURVEY_TRANSPORT_NEXT=""
     SURVEY_STAGING="$(mktemp -d "/tmp/remi-resolution-survey-${survey_id}.XXXXXX")"
+    trap 'survey_restore_and_exit "$?"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     chmod 0750 "$SURVEY_STAGING"
     if [[ -z "$ROOT" ]]; then
         chown root:conary "$SURVEY_STAGING"
     fi
+    local diagnostic="${SURVEY_STAGING}/diagnostic.log"
+    : >"$diagnostic"
+    chmod 0600 "$diagnostic"
+    [[ "$(stat -c '%u' "$diagnostic")" == "$control_uid" ]] ||
+        die "resolution survey diagnostic staging has the wrong owner"
     local input_manifest="${SURVEY_STAGING}/oracle-manifest.json"
     survey_validate_oracle_transport "$survey_id" "$export_id" "$oracle_transport" "$input_manifest"
 
@@ -1106,19 +1116,14 @@ survey_resolution() {
     [[ "$(stat -c '%u' "$survey_root")" == "$runtime_uid" ]] ||
         die "resolution-survey evidence root has the wrong owner"
 
-    SURVEY_REMI_STOPPED=0
-    SURVEY_TRANSPORT_NEXT=""
-    trap 'survey_restore_and_exit "$?"' EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-
     survey_systemctl is-active --quiet remi ||
         die "Remi must be active before a production resolution survey"
     SURVEY_REMI_STOPPED=1
     survey_systemctl stop remi || die "failed to stop Remi for resolution survey"
 
     local inspection="${SURVEY_STAGING}/candidate-inspection.json"
-    "$bin" deployment inspect --config "$config" --require-private-candidates >"$inspection" ||
+    "$bin" deployment inspect --config "$config" --require-private-candidates \
+        >"$inspection" 2>>"$diagnostic" ||
         die "could not inspect exact stopped-runtime candidate pointers"
     jq -e '
         .configured_profiles == 3
@@ -1152,19 +1157,14 @@ survey_resolution() {
     command+=(--output-dir "$output")
 
     local outcome="${SURVEY_STAGING}/outcome.json"
-    local diagnostic="${SURVEY_STAGING}/diagnostic.log"
-    : >"$diagnostic"
-    chmod 0600 "$diagnostic"
-    [[ "$(stat -c '%u' "$diagnostic")" == "$control_uid" ]] ||
-        die "resolution survey diagnostic staging has the wrong owner"
     local survey_status=0
     if [[ -z "$ROOT" ]]; then
-        if runuser -u conary -- "${command[@]}" >"$outcome" 2>"$diagnostic"; then
+        if runuser -u conary -- "${command[@]}" >"$outcome" 2>>"$diagnostic"; then
             survey_status=0
         else
             survey_status=$?
         fi
-    elif "${command[@]}" >"$outcome" 2>"$diagnostic"; then
+    elif "${command[@]}" >"$outcome" 2>>"$diagnostic"; then
         survey_status=0
     else
         survey_status=$?

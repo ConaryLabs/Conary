@@ -303,6 +303,10 @@ set -euo pipefail
 if [[ "${1:-}" == "deployment" && "${2:-}" == "inspect" ]]; then
     [[ "$(cat "$CONARY_FAKE_SERVICE_STATE")" == "stopped" ]]
     printf 'inspect\n' >>"$CONARY_FAKE_SERVICE_LOG"
+    if [[ -n "${CONARY_FAKE_SURVEY_INSPECT_STATUS:-}" ]]; then
+        printf '%s\n' "${CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC:-unexpected inspection failure}" >&2
+        exit "$CONARY_FAKE_SURVEY_INSPECT_STATUS"
+    fi
     jq -cn '
       {
         configured_profiles: 3,
@@ -363,7 +367,15 @@ for index in 0 1 2; do
           profile:$profile,
           profile_revision_sha256:$revision,
           package_oracle_manifest_sha256:$package,
-          policy:{architecture:$architecture},
+          implementation:{ecosystem:"rpm",name:"conary",version:"1",projection_schema:1},
+          policy:{
+            architecture:$architecture,
+            architecture_admission:"native_only",
+            installed_state:"empty",
+            roots:"every_exact_package",
+            positive_requirements:"required_only",
+            provider_selection:"native_precedence"
+          },
           target_architecture:$architecture,
           counts:{
             roots_walked:1,
@@ -373,7 +385,24 @@ for index in 0 1 2; do
             failed_roots:$failures,
             error_kinds:(if $failures == 1 then [{kind:{error_variant:"config_error",reason:"solver_failed"},count:1}] else [] end)
           },
-          total_failures:$failures
+          outcomes:(if $failures == 0 then [{
+            root_package_key_sha256:("e" * 64),
+            name:"example",
+            version:"1",
+            release:"1",
+            architecture:$architecture,
+            outcome:{status:"resolved",closure_package_keys_sha256:[("e" * 64)]}
+          }] else [] end),
+          failure_record_limit:5000,
+          total_failures:$failures,
+          retained_failures:0,
+          truncated:($failures > 0),
+          evidence_byte_limit:67108864,
+          retained_evidence_bytes:0,
+          retained_explanations:0,
+          withheld_explanations:0,
+          truncated_evidence:false,
+          failures:[]
         }
     ')"
     printf '%s' "$candidate" >"$output/$profile.candidate-resolution-survey.json"
@@ -390,7 +419,11 @@ for index in 0 1 2; do
               oracle_manifest_sha256:$resolution,
               candidate_manifest_sha256:("d" * 64),
               counts:{roots_walked:1,matching_roots:1,mismatched_roots:0,mismatch_kinds:[],outcome_kind_pairs:[]},
-              total_mismatches:0
+              mismatch_record_limit:5000,
+              total_mismatches:0,
+              retained_mismatches:0,
+              truncated:false,
+              mismatches:[]
             }
         ')"
         printf '%s' "$comparison" >"$output/$profile.native-resolution-comparison-survey.json"
@@ -646,6 +679,8 @@ run_survey_helper() {
     CONARY_FAKE_SURVEY_FINDINGS="${CONARY_FAKE_SURVEY_FINDINGS:-0}" \
     CONARY_FAKE_SURVEY_STATUS="${CONARY_FAKE_SURVEY_STATUS:-}" \
     CONARY_FAKE_SURVEY_DIAGNOSTIC="${CONARY_FAKE_SURVEY_DIAGNOSTIC:-}" \
+    CONARY_FAKE_SURVEY_INSPECT_STATUS="${CONARY_FAKE_SURVEY_INSPECT_STATUS:-}" \
+    CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC="${CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC:-}" \
     CONARY_FAKE_MUTATE_SURVEY_ON_START="${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" \
         bash "$helper" survey-resolution "$@"
 }
@@ -1275,6 +1310,55 @@ test_resolution_survey_failure_sanitizes_diagnostic() {
     [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
 }
 
+test_resolution_survey_inspection_failure_sanitizes_diagnostic() {
+    local survey_id="survey-inspection-failure-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local stdout_file="${tmpdir}/${survey_id}.stdout"
+    local stderr_file="${tmpdir}/${survey_id}.stderr"
+    local private_diagnostic='/conary/private/candidates/inspection-secret'
+    local status
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    set +e
+    CONARY_FAKE_SURVEY_INSPECT_STATUS=43 \
+    CONARY_FAKE_SURVEY_INSPECT_DIAGNOSTIC="$private_diagnostic" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "unexpected survey inspection failure succeeded"
+    grep -F 'could not inspect exact stopped-runtime candidate pointers' "$stderr_file" >/dev/null ||
+        fail "survey inspection failure lost its typed public diagnostic"
+    if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
+        fail "survey inspection failure leaked raw Remi diagnostics"
+    fi
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nstart remi' ]] ||
+        fail "survey inspection failure did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
+}
+
+test_resolution_survey_preflight_failure_cleans_staging() {
+    local survey_id="survey-preflight-cleanup-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    printf 'tampered\n' >>"$fake_root/usr/local/bin/remi"
+
+    expect_fail "resolution survey binary binding drift" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    if find /tmp -maxdepth 1 -name "remi-resolution-survey-${survey_id}.*" -print -quit |
+        grep -q .; then
+        fail "survey preflight failure leaked a root staging directory"
+    fi
+    [[ ! -s "$fake_root/service-log" ]] ||
+        fail "survey preflight failure caused downtime"
+}
+
 test_resolution_survey_rejects_invalid_requests_before_downtime() {
     local survey_id="survey-invalid-$$"
     local export_id="slice6-export-$$"
@@ -1855,6 +1939,8 @@ main() {
     test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
     test_resolution_survey_findings_restart_and_succeed
     test_resolution_survey_failure_sanitizes_diagnostic
+    test_resolution_survey_inspection_failure_sanitizes_diagnostic
+    test_resolution_survey_preflight_failure_cleans_staging
     test_resolution_survey_rejects_invalid_requests_before_downtime
     test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence
     test_conversion_benchmark_failure_restarts_without_publication
