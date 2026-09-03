@@ -88,6 +88,9 @@ pub struct ConaryProvider<'db> {
     compiled_requirement_groups:
         HashMap<(u32, u32), std::collections::BTreeSet<types::RepositoryRequirementGroupIdentity>>,
 
+    /// Positive groups omitted only by the exact-root conflict-precedence probe.
+    ignored_requirement_groups: HashSet<types::RepositoryRequirementGroupIdentity>,
+
     /// Boolean conditions referenced by compiled conditional requirements.
     pub(super) conditions: Vec<Condition>,
 
@@ -163,6 +166,7 @@ impl<'db> ConaryProvider<'db> {
             relations: HashMap::new(),
             compiled_dependencies: HashMap::new(),
             compiled_requirement_groups: HashMap::new(),
+            ignored_requirement_groups: HashSet::new(),
             conditions: Vec::new(),
             condition_cache: HashMap::new(),
             provider_expression_name_ids: HashSet::new(),
@@ -180,6 +184,13 @@ impl<'db> ConaryProvider<'db> {
 
     pub fn set_root_request_names(&mut self, names: impl IntoIterator<Item = String>) {
         self.root_request_names = names.into_iter().collect();
+    }
+
+    pub(crate) fn ignore_requirement_groups(
+        &mut self,
+        groups: impl IntoIterator<Item = types::RepositoryRequirementGroupIdentity>,
+    ) {
+        self.ignored_requirement_groups.extend(groups);
     }
 
     pub fn expand_root_request_names_with_canonical_equivalents(&mut self) {

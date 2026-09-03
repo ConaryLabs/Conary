@@ -56,7 +56,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for apt-pkg transaction selections and broken strong groups.
-pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 const CREATE_INDEX: &str = "
 CREATE TABLE packages (
@@ -228,7 +228,7 @@ fn produce_debian_resolution(
         ecosystem: NativeParityEcosystemV1::Debian,
         name: "apt-pkg".to_string(),
         version: PINNED_APT_PKG_VERSION.to_string(),
-        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -457,6 +457,9 @@ fn resolve_exact_root(
                 dependencies: dependencies.into_iter().collect(),
             })
         }
+        AptResolutionOutcome::ConflictingClosure => Ok(NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+        }),
     }
 }
 
@@ -532,6 +535,7 @@ fn debian_explanation(
             }
             explanation
         }
+        AptResolutionOutcome::ConflictingClosure => debian_unavailable(),
     }
 }
 

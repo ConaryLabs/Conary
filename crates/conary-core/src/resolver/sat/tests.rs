@@ -382,6 +382,67 @@ fn exact_repository_root_reports_terminal_missing_edge_of_required_helper() {
     );
 }
 
+fn exact_conflict_fixture(include_missing: bool) -> SatExactResolution {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let root = insert_rpm_repo_package(&conn, repository_id, "conflict-root", "1-1");
+    let replacement = insert_rpm_repo_package(&conn, repository_id, "conflict-root", "2-1");
+    let mut provide = RepositoryProvide::new(
+        replacement,
+        "virtual-conflict-root-new".to_string(),
+        None,
+        "virtual".to_string(),
+        None,
+        VersionScheme::Rpm,
+    );
+    provide.insert(&conn).unwrap();
+    insert_repo_requirement_group(
+        &conn,
+        root,
+        "virtual-conflict-root-new",
+        None,
+        Some("virtual-conflict-root-new"),
+    );
+    if include_missing {
+        insert_repo_requirement_group(
+            &conn,
+            replacement,
+            "missing-beside-conflict",
+            None,
+            Some("missing-beside-conflict"),
+        );
+    }
+
+    solve_exact_repository_package_with_policy(
+        &conn,
+        root,
+        "x86_64",
+        &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn exact_repository_root_returns_typed_conflicting_closure() {
+    assert_eq!(
+        exact_conflict_fixture(false),
+        SatExactResolution::ConflictingClosure
+    );
+}
+
+#[test]
+fn exact_repository_root_conflict_dominates_missing_dependency() {
+    assert_eq!(
+        exact_conflict_fixture(true),
+        SatExactResolution::ConflictingClosure
+    );
+}
+
 #[test]
 fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
     let (_dir, conn) = setup_test_db();

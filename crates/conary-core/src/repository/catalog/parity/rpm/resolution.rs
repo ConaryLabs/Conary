@@ -50,12 +50,15 @@ mod evidence;
 use evidence::rpm_explanation;
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V4: u32 = 4;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V5: u32 = 5;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
 const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
 const SOLVER_RULE_PKG_CONFLICTS: i32 = 0x105;
+const SOLVER_RULE_PKG_SAME_NAME: i32 = 0x106;
+const SOLVER_RULE_PKG_OBSOLETES: i32 = 0x107;
+const SOLVER_RULE_PKG_IMPLICIT_OBSOLETES: i32 = 0x108;
 const SOLVER_RULE_JOB: i32 = 0x400;
 const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
 const SOLVER_RULE_INFARCH: i32 = 0x600;
@@ -225,7 +228,7 @@ fn produce_rpm_resolution(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V4,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V5,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -602,16 +605,9 @@ fn resolve_exact_root(
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "libsolv closure for '{}' omits its exact root",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    NativeResolutionSurveyNativeExplanationV1::Rpm {
-                        problems: Vec::new(),
-                    },
-                ));
+                return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                });
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
                 closure_package_keys_sha256: closure.into_iter().collect(),
@@ -642,6 +638,23 @@ fn unresolved_outcome(
     policy: &NativeResolutionPolicyV1,
     problems: &[SolvProblem],
 ) -> Result<NativeResolutionOutcomeV1> {
+    if problems
+        .iter()
+        .flat_map(|problem| &problem.rules)
+        .any(|rule| {
+            matches!(
+                rule.rule_type,
+                SOLVER_RULE_PKG_CONFLICTS
+                    | SOLVER_RULE_PKG_SAME_NAME
+                    | SOLVER_RULE_PKG_OBSOLETES
+                    | SOLVER_RULE_PKG_IMPLICIT_OBSOLETES
+            )
+        })
+    {
+        return Ok(NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+        });
+    }
     if let Some(outcome) = architecture_excluded_outcome(root_index, root, policy, problems)? {
         return Ok(outcome);
     }
@@ -877,7 +890,10 @@ fn project_unresolved_problem(
                     root.name, architecture
                 )));
             }
-            SOLVER_RULE_PKG_CONFLICTS => {
+            SOLVER_RULE_PKG_CONFLICTS
+            | SOLVER_RULE_PKG_SAME_NAME
+            | SOLVER_RULE_PKG_OBSOLETES
+            | SOLVER_RULE_PKG_IMPLICIT_OBSOLETES => {
                 return Err(Error::ConflictError(format!(
                     "libsolv found exact root '{}' unsatisfiable with problem rule {:#x} (from={:?}, to={:?}, dependency={})",
                     root.name, rule.rule_type, rule.from_index, rule.to_index, rule.dependency

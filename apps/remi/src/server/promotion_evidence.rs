@@ -10,7 +10,7 @@ use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapsh
 use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::repository::catalog::{
     CatalogPackageRecordV1, CatalogReader, NATIVE_PARITY_COMPARISON_SCHEMA_V1,
-    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NativeParityComparisonV1, NativeResolutionComparisonV1,
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3, NativeParityComparisonV1, NativeResolutionComparisonV1,
     ProfileRevisionV2, compare_native_parity_oracle, compare_native_resolution_oracle,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     verify_registered_profile_catalog_bundle_complete,
@@ -122,7 +122,7 @@ impl RemiPromotionProfileEvidenceV1 {
             "promotion package parity differs from its exact profile candidate"
         );
         ensure!(
-            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2
+            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3
                 && self.resolution_parity.profile == self.profile
                 && self.resolution_parity.profile_revision_sha256 == self.profile_revision_sha256
                 && self.resolution_parity.package_oracle_manifest_sha256
@@ -851,7 +851,7 @@ pub(crate) mod tests {
             catalog_size: 1,
             package_parity: comparison,
             resolution_parity: NativeResolutionComparisonV1 {
-                schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
+                schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
                 profile: "fedora-44".to_string(),
                 profile_revision_sha256: "a".repeat(64),
                 package_oracle_manifest_sha256: "b".repeat(64),

@@ -1216,7 +1216,7 @@ fn resolution_producer_excludes_strict_priority_multilib_root() {
 }
 
 #[test]
-fn resolution_producer_rejects_strict_provider_conflict_without_residual_probe() {
+fn resolution_producer_types_mixed_missing_and_strict_provider_conflict() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let root_format = r#"
@@ -1283,42 +1283,33 @@ fn resolution_producer_rejects_strict_provider_conflict_without_residual_probe()
             .join("strict-residual-conflict-survey.json"),
     )
     .unwrap();
-    let failure = survey
-        .failures
+    let outcome = survey
+        .outcomes
         .iter()
-        .find(|failure| failure.name == "shadow-chain-root")
+        .find(|outcome| outcome.name == "shadow-chain-root")
         .unwrap();
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } = &failure.native_explanation
-    else {
-        panic!("RPM survey failure must carry libsolv problems");
-    };
-    assert_eq!(problems.len(), 1);
-    assert!(
-        problems[0]
-            .rules
-            .iter()
-            .any(|rule| rule.rule_type_numeric == 0xd00)
-    );
-    assert!(
-        problems[0]
-            .rules
-            .iter()
-            .any(|rule| rule.rule_type_numeric == 0x105)
-    );
-    let conflict = produce_rpm_resolution_oracle(
+    assert!(matches!(
+        outcome.outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+        }
+    ));
+    assert!(survey.failures.is_empty());
+    let manifest = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
         &package_output,
         "x86_64",
         &directory.path().join("strict-residual-conflict-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(conflict, Error::ConflictError(_)));
-    assert!(conflict.to_string().contains("problem rule 0x105"));
+    .unwrap();
+    assert!(manifest.artifact.counts.not_installable_roots >= 1);
 }
 
 #[test]
-fn resolution_producer_rejects_root_conflict_inside_strict_priority_problem() {
+fn resolution_producer_types_root_conflict_inside_strict_priority_problem() {
+    // Reduced from Fedora survey run 33730360529's sssd-common/libsss_certmap
+    // root-party SOLVER_RULE_PKG_CONFLICTS shape.
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd'].map(digest);
     let root_format = r#"
@@ -1362,16 +1353,127 @@ fn resolution_producer_rejects_root_conflict_inside_strict_priority_problem() {
     let package_output = directory.path().join("package-oracle");
     produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
 
-    let conflict = produce_rpm_resolution_oracle(
+    let manifest = produce_rpm_resolution_oracle(
         &profile,
         &inputs(&snapshots, &metadata),
         &package_output,
         "x86_64",
         &directory.path().join("strict-root-conflict-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(conflict, Error::ConflictError(_)));
-    assert!(conflict.to_string().contains("problem rule 0x105"));
+    .unwrap();
+    assert!(manifest.artifact.counts.not_installable_roots >= 1);
+}
+
+#[test]
+fn resolution_producer_types_fedora_same_name_obsoletes_and_root_displacement_shapes() {
+    // Reduced from Fedora survey run 33730360529: gap-pkg-* supplied the
+    // same-name rules, nss/vtk-openmpi supplied obsoletes rules, and
+    // fedora-obsolete-packages supplied the successful root-displacement shape.
+    let directory = tempfile::tempdir().unwrap();
+    let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
+    let mut same_name_v1 = PackageFixture::simple("same-name-root", &checksums[0]);
+    same_name_v1.version = "1";
+    same_name_v1.format = r#"
+    <rpm:provides><rpm:entry name="same-name-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="same-name-helper"/></rpm:requires>"#;
+    let mut same_name_v2 = PackageFixture::simple("same-name-root", &checksums[1]);
+    same_name_v2.version = "2";
+    same_name_v2.format = r#"
+    <rpm:provides>
+      <rpm:entry name="same-name-root"/>
+      <rpm:entry name="same-name-helper"/>
+    </rpm:provides>"#;
+    let mut obsolete_root = PackageFixture::simple("obsolete-root", &checksums[2]);
+    obsolete_root.format = r#"
+    <rpm:provides><rpm:entry name="obsolete-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="obsolete-root-helper"/></rpm:requires>"#;
+    let mut obsolete_replacer = PackageFixture::simple("obsolete-replacer", &checksums[3]);
+    obsolete_replacer.format = r#"
+    <rpm:provides>
+      <rpm:entry name="obsolete-replacer"/>
+      <rpm:entry name="obsolete-root-helper"/>
+    </rpm:provides>
+    <rpm:obsoletes><rpm:entry name="obsolete-root"/></rpm:obsoletes>"#;
+    let mut displaced_root = PackageFixture::simple("displaced-root", &checksums[4]);
+    displaced_root.format = r#"
+    <rpm:provides><rpm:entry name="displaced-root"/></rpm:provides>
+    <rpm:requires><rpm:entry name="displacing-helper"/></rpm:requires>"#;
+    let mut displacer = PackageFixture::simple("displacer", &checksums[5]);
+    displacer.format = r#"
+    <rpm:provides>
+      <rpm:entry name="displacer"/>
+      <rpm:entry name="displacing-helper"/>
+    </rpm:provides>
+    <rpm:obsoletes><rpm:entry name="displaced-root"/></rpm:obsoletes>"#;
+    let packages = [
+        same_name_v1,
+        same_name_v2,
+        obsolete_root,
+        obsolete_replacer,
+        displaced_root,
+        displacer,
+    ];
+    let metadata = vec![write_metadata(directory.path(), "fedora-core", &packages)];
+    let snapshots = vec![source_snapshot(
+        "fedora-core",
+        &metadata[0].0,
+        &metadata[0].1,
+    )];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = packages.len() as u64;
+    let package_output = directory.path().join("package-oracle");
+    produce_rpm_parity_oracle(&profile, &inputs(&snapshots, &metadata), &package_output).unwrap();
+    let survey = produce_rpm_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    assert!(survey.failures.is_empty());
+    let resolution_output = directory.path().join("resolution-oracle");
+    produce_rpm_resolution_oracle(
+        &profile,
+        &inputs(&snapshots, &metadata),
+        &package_output,
+        "x86_64",
+        &resolution_output,
+    )
+    .unwrap();
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut target_keys = std::collections::BTreeSet::new();
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "obsolete-root"
+                || package.name == "displaced-root"
+                || (package.name == "same-name-root" && package.version.starts_with("1-"))
+            {
+                target_keys.insert(package.package_key_sha256);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(target_keys.len(), 3);
+    let resolution_reader =
+        verify_native_resolution_oracle_bundle(&resolution_output, &profile, &package_reader)
+            .unwrap();
+    let mut observed = 0;
+    resolution_reader
+        .for_each_root(|root| {
+            if target_keys.contains(&root.root_package_key_sha256) {
+                assert!(matches!(
+                    root.outcome,
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+                    }
+                ));
+                observed += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(observed, 3);
 }
 
 #[test]
@@ -1687,7 +1789,7 @@ fn resolution_producer_excludes_cross_machine_provider_from_provider_index() {
 }
 
 #[test]
-fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
+fn resolution_producer_types_conflicts_and_rejects_architecture_and_input_drift() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b'].map(digest);
     let root_format = r#"
@@ -1718,9 +1820,8 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
         "x86_64",
         &directory.path().join("conflict-resolution"),
     )
-    .unwrap_err();
-    assert!(matches!(conflict, Error::ConflictError(_)));
-    assert!(conflict.to_string().contains("problem rule"));
+    .unwrap();
+    assert_eq!(conflict.artifact.counts.not_installable_roots, 1);
 
     let mismatched_output = directory.path().join("architecture-resolution");
     let architecture = produce_rpm_resolution_oracle(
@@ -1774,7 +1875,7 @@ fn resolution_producer_rejects_conflicts_architecture_and_input_drift() {
 }
 
 #[test]
-fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
+fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots() {
     let directory = tempfile::tempdir().unwrap();
     let checksums = ['a', 'b', 'c', 'd'].map(digest);
     let mut conflict = PackageFixture::simple("conflict-root", &checksums[0]);
@@ -1812,70 +1913,22 @@ fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
     assert_eq!(survey.counts.roots_walked, 4);
     assert_eq!(survey.counts.resolved_roots, 2);
     assert_eq!(survey.counts.unresolved_roots, 0);
-    assert_eq!(survey.counts.not_installable_roots, 1);
-    assert_eq!(survey.counts.failed_roots, 1);
-    assert_eq!(survey.total_failures, 1);
+    assert_eq!(survey.counts.not_installable_roots, 2);
+    assert_eq!(survey.counts.failed_roots, 0);
+    assert_eq!(survey.total_failures, 0);
     assert!(!survey.truncated);
-    assert_eq!(survey.failures.len(), 1);
-    let conflict_failure = survey
-        .failures
+    assert!(survey.failures.is_empty());
+    let conflict_outcome = survey
+        .outcomes
         .iter()
-        .find(|failure| failure.name == "conflict-root")
+        .find(|outcome| outcome.name == "conflict-root")
         .unwrap();
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } =
-        &conflict_failure.native_explanation
-    else {
-        panic!("RPM survey failure must carry libsolv problems");
-    };
-    assert!(!problems.is_empty());
-    let rules = problems
-        .iter()
-        .flat_map(|problem| &problem.rules)
-        .collect::<Vec<_>>();
-    assert!(rules.iter().any(|rule| {
-        rule.rule_type_numeric == 0x105
-            && rule.rule_type_symbolic == "SOLVER_RULE_PKG_CONFLICTS"
-            && rule.from.as_ref().is_some_and(|package| {
-                package.name == "conflict-root"
-                    && package.evr == "1.0-1.fc44"
-                    && package.architecture == "x86_64"
-            })
-            && rule
-                .to
-                .as_ref()
-                .is_some_and(|package| package.name == "blocker")
-            && rule.dependency.as_deref() == Some("blocker")
-    }));
-    let job_rule = rules
-        .iter()
-        .find(|rule| rule.rule_type_numeric == 0x400)
-        .expect("RPM survey explanation must retain the exact-root JOB rule");
-    assert_eq!(job_rule.rule_type_symbolic, "SOLVER_RULE_JOB");
-    assert_eq!(job_rule.dependency_id, None);
-    assert_eq!(job_rule.dependency, None);
-    assert_eq!(
-        job_rule.dependency_unavailable_reason.as_deref(),
-        Some("solver_rule_job_dep_is_job_index")
-    );
-    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
-    let mut root_order = Vec::new();
-    package_reader
-        .for_each_package(|root| {
-            root_order.push(root.name);
-            Ok(())
-        })
-        .unwrap();
-    let failure_names = survey
-        .failures
-        .iter()
-        .map(|failure| failure.name.clone())
-        .collect::<std::collections::BTreeSet<_>>();
-    assert!(root_order.iter().enumerate().any(|(index, name)| {
-        failure_names.contains(name)
-            && root_order[index + 1..]
-                .iter()
-                .any(|later| !failure_names.contains(later))
-    }));
+    assert!(matches!(
+        conflict_outcome.outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+        }
+    ));
     assert!(!directory.path().join("manifest.json").exists());
     assert!(!directory.path().join("roots.jsonl").exists());
 
@@ -1886,9 +1939,8 @@ fn resolution_survey_records_all_failures_rules_and_later_healthy_roots() {
         "x86_64",
         &directory.path().join("strict-resolution"),
     )
-    .unwrap_err();
-    assert_eq!(strict.to_string(), survey.failures[0].error_message);
-    assert!(strict.to_string().contains("problem rule 0x105"));
+    .unwrap();
+    assert_eq!(strict.artifact.counts.not_installable_roots, 2);
 }
 
 #[test]

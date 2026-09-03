@@ -27,7 +27,7 @@ mod debian;
 
 #[cfg(feature = "native-alpm-oracle")]
 pub use alpm::{
-    ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V2, AlpmParityMemberInput,
+    ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V3, AlpmParityMemberInput,
     produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
     produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
     produce_alpm_resolution_survey_with_workers,
@@ -35,7 +35,7 @@ pub use alpm::{
 
 #[cfg(feature = "native-rpm-oracle")]
 pub use rpm::{
-    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V4, RpmParityMemberInput,
+    RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V5, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
     produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey,
     produce_rpm_resolution_survey_with_workers,
@@ -43,7 +43,7 @@ pub use rpm::{
 
 #[cfg(feature = "native-debian-oracle")]
 pub use debian::{
-    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
+    DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
     produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey,
     produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
@@ -53,7 +53,7 @@ pub use crate::repository::architecture::{
     NativeMachineEndiannessV1, NativeMachineIdentityV1, NativeResolutionArchitectureDecisionV1,
 };
 pub use candidate_resolution::{
-    CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, ConaryResolutionCandidateV1,
+    CONARY_RESOLUTION_PROJECTION_SCHEMA_V3, ConaryResolutionCandidateV1,
     produce_conary_resolution_candidate, produce_conary_resolution_candidate_with_workers,
     produce_conary_resolution_comparison_survey,
     produce_conary_resolution_comparison_survey_with_workers, produce_conary_resolution_survey,
@@ -87,7 +87,7 @@ pub use io::{
     write_native_parity_oracle_manifest,
 };
 pub use resolution_compare::{
-    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NativeResolutionComparisonError,
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3, NativeResolutionComparisonError,
     NativeResolutionComparisonV1, NativeResolutionMismatchV1, NativeResolutionOutcomeKindV1,
     compare_native_resolution_oracle,
 };
@@ -103,7 +103,7 @@ pub use resolution_comparison_survey::{
     write_native_resolution_comparison_survey,
 };
 pub use resolution_contract::{
-    NATIVE_RESOLUTION_ORACLE_SCHEMA_V2, NativeResolutionArchitectureAdmissionV1,
+    NATIVE_RESOLUTION_ORACLE_SCHEMA_V3, NativeResolutionArchitectureAdmissionV1,
     NativeResolutionArtifactV1, NativeResolutionCountsV1, NativeResolutionInstalledStateV1,
     NativeResolutionNotInstallableReasonV1, NativeResolutionOracleV1, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,

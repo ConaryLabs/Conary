@@ -307,6 +307,68 @@ fn closure_unresolved_and_outcome_drift_are_typed() {
 }
 
 #[test]
+fn conflicting_closure_matches_by_reason_and_differs_from_unresolved() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let (candidate, package_oracle, roots) = fixtures(ecosystem);
+    let mut conflicting = roots.clone();
+    conflicting[1].outcome = NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+    };
+    let native = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "libsolv",
+        &conflicting,
+        true,
+    );
+    let matching = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-resolvo",
+        &conflicting,
+        true,
+    );
+    let comparison = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &matching.reader,
+    )
+    .unwrap();
+    assert_eq!(comparison.counts.not_installable_roots, 1);
+
+    let unresolved = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-resolvo",
+        &roots,
+        true,
+    );
+    let error = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &unresolved.reader,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        NativeResolutionComparisonError::Mismatch(mismatch)
+            if matches!(
+                mismatch.as_ref(),
+                NativeResolutionMismatchV1::ResolutionOutcome {
+                    oracle: NativeResolutionOutcomeKindV1::NotInstallable,
+                    candidate: NativeResolutionOutcomeKindV1::Unresolved,
+                    ..
+                }
+            )
+    ));
+}
+
+#[test]
 fn missing_and_extra_roots_are_typed_before_complete_coverage_rejection() {
     let ecosystem = NativeParityEcosystemV1::Alpm;
     let (candidate, package_oracle, roots) = fixtures(ecosystem);

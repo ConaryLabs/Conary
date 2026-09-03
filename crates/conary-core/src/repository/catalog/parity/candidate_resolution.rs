@@ -53,7 +53,7 @@ use crate::resolver::sat::{
 };
 
 /// Projection contract for the Conary SAT candidate evidence producer.
-pub const CONARY_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const CONARY_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 /// Produced candidate manifest and its exact successful native comparison.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -344,7 +344,7 @@ fn conary_implementation(
         ecosystem: package_oracle.implementation.ecosystem,
         name: "conary-sat".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: CONARY_RESOLUTION_PROJECTION_SCHEMA_V3,
     }
 }
 
@@ -648,6 +648,11 @@ impl CandidateResolutionWorker {
                 }
                 Ok(NativeResolutionOutcomeV1::Unresolved {
                     dependencies: unresolved.into_iter().collect(),
+                })
+            }
+            SatExactResolution::ConflictingClosure => {
+                Ok(NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
                 })
             }
         }

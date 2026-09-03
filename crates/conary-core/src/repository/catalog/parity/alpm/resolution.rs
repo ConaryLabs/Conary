@@ -37,18 +37,17 @@ use crate::repository::catalog::parity::{
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
-    NativeResolutionSurveyAlpmConflictV1, NativeResolutionSurveyAlpmMissingV1,
-    NativeResolutionSurveyAlpmPackageV1, NativeResolutionSurveyAlpmResultV1,
-    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
-    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
-    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyAlpmMissingV1, NativeResolutionSurveyAlpmPackageV1,
+    NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyErrorReasonV1,
+    NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libalpm transaction results.
-pub const ALPM_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const ALPM_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 /// Produce and independently reopen one strict ALPM resolution parity bundle.
 pub fn produce_alpm_resolution_oracle(
@@ -194,7 +193,7 @@ fn produce_alpm_resolution(
         ecosystem: NativeParityEcosystemV1::Alpm,
         name: "libalpm".to_string(),
         version: alpm::version().to_string(),
-        projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
 
     match destination {
@@ -660,15 +659,10 @@ fn resolve_initialized_transaction(
                         },
                     ));
                 }
-                Some(PrepareData::ConflictingDeps(conflicts)) => {
-                    return Err(NativeRootResolutionError::new(
-                        Error::ConflictError(format!(
-                            "libalpm found a package conflict while resolving exact root '{}'",
-                            root.name
-                        )),
-                        NativeResolutionSurveyErrorReasonV1::NativePackageConflict,
-                        alpm_conflict_explanation(conflicts.iter(), explanation_byte_limit),
-                    ));
+                Some(PrepareData::ConflictingDeps(_)) => {
+                    return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    });
                 }
                 None => {
                     return Err(NativeRootResolutionError::new(
@@ -686,7 +680,7 @@ fn resolve_initialized_transaction(
 
     match preparation {
         Preparation::Prepared => {
-            let closure = transaction_packages(alpm, profile, inputs, root)
+            let closure = transaction_packages(alpm, profile, inputs)
                 .map_err(|error| {
                     NativeRootResolutionError::new(
                         error,
@@ -697,21 +691,16 @@ fn resolve_initialized_transaction(
                 .into_values()
                 .collect::<BTreeSet<_>>();
             if !closure.contains(&root.package_key_sha256) {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "libalpm prepared closure for '{}' omits its exact root",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    alpm_prepared_explanation(alpm, explanation_byte_limit),
-                ));
+                return Ok(NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                });
             }
             Ok(NativeResolutionOutcomeV1::Resolved {
                 closure_package_keys_sha256: closure.into_iter().collect(),
             })
         }
         Preparation::Unsatisfied(missing) => {
-            let packages = transaction_packages(alpm, profile, inputs, root).map_err(|error| {
+            let packages = transaction_packages(alpm, profile, inputs).map_err(|error| {
                 NativeRootResolutionError::new(
                     error,
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
@@ -726,7 +715,13 @@ fn resolve_initialized_transaction(
                     .bind_required_group(
                         &requiring_name,
                         &requirement_group_sha256,
-                        packages.get(&requiring_name).map(String::as_str),
+                        packages
+                            .get(&requiring_name)
+                            .map(String::as_str)
+                            .or_else(|| {
+                                (requiring_name == root.name)
+                                    .then_some(root.package_key_sha256.as_str())
+                            }),
                     )
                     .map_err(|error| {
                         NativeRootResolutionError::new(
@@ -813,43 +808,6 @@ fn alpm_unsatisfied_explanation<'a>(
     explanation
 }
 
-fn alpm_conflict_explanation<'a>(
-    conflicts: impl IntoIterator<Item = &'a alpm::Conflict>,
-    byte_limit: u64,
-) -> NativeResolutionSurveyNativeExplanationV1 {
-    record_explanation_build();
-    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
-        result: NativeResolutionSurveyAlpmResultV1::Conflicts {
-            conflicts: Vec::new(),
-        },
-    };
-    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
-    else {
-        return evidence_withheld();
-    };
-    let NativeResolutionSurveyNativeExplanationV1::Alpm {
-        result:
-            NativeResolutionSurveyAlpmResultV1::Conflicts {
-                conflicts: retained,
-            },
-    } = &mut explanation
-    else {
-        unreachable!("new ALPM explanation has the wrong result")
-    };
-    for conflict in conflicts {
-        let entry = NativeResolutionSurveyAlpmConflictV1 {
-            package1: alpm_package_explanation(conflict.package1()),
-            package2: alpm_package_explanation(conflict.package2()),
-            reason: conflict.reason().to_string(),
-        };
-        if !budget.retain(&entry, !retained.is_empty()) {
-            return evidence_withheld();
-        }
-        retained.push(entry);
-    }
-    explanation
-}
-
 fn alpm_package_explanation(package: &Package) -> NativeResolutionSurveyAlpmPackageV1 {
     NativeResolutionSurveyAlpmPackageV1 {
         name: package.name().to_string(),
@@ -896,10 +854,8 @@ fn transaction_packages(
     alpm: &Alpm,
     profile: &ProfileRevisionV2,
     inputs: &[AlpmParityMemberInput<'_>],
-    root: &NativeParityPackageV1,
 ) -> Result<BTreeMap<String, String>> {
     let mut packages = BTreeMap::new();
-    packages.insert(root.name.clone(), root.package_key_sha256.clone());
     for package in alpm.trans_add().iter() {
         let projected = project_transaction_package(profile, inputs, package)?;
         if let Some(existing) =

@@ -109,6 +109,95 @@ pub enum SatExactResolution {
     Unresolved {
         dependencies: Vec<SatUnresolvedDependency>,
     },
+    ConflictingClosure,
+}
+
+fn conflict_graph_has_conflict_class(
+    graph: &resolvo::conflict::ConflictGraph<resolvo::SolvableId>,
+) -> bool {
+    graph
+        .graph
+        .edge_references()
+        .any(|edge| matches!(edge.weight(), resolvo::conflict::ConflictEdge::Conflict(_)))
+        || graph
+            .graph
+            .node_weights()
+            .any(|node| matches!(node, resolvo::conflict::ConflictNode::Excluded(_)))
+}
+
+fn exact_root_has_hidden_conflict(
+    conn: &Connection,
+    root_name: &str,
+    repository_package_id: i64,
+    architecture: &str,
+    policy: &ResolutionPolicy,
+    initial_missing: &[SatUnresolvedDependency],
+) -> Result<bool> {
+    use crate::resolver::provider::types::RepositoryRequirementGroupIdentity;
+
+    let requests = vec![(root_name.to_string(), VersionConstraint::Any)];
+    let mut ignored = initial_missing
+        .iter()
+        .map(|dependency| RepositoryRequirementGroupIdentity {
+            repository_package_id: dependency.repository_package_id,
+            repository_requirement_group_id: dependency.repository_requirement_group_id,
+        })
+        .collect::<BTreeSet<_>>();
+
+    loop {
+        let mut provider = install::build_provider_for_install_ignoring_groups(
+            conn,
+            &requests,
+            policy,
+            ignored.iter().copied(),
+        )?;
+        provider.set_native_architecture(architecture);
+        let exact = provider.intern_exact_repository_package(root_name, repository_package_id)?;
+        let mut solver = Solver::new(provider);
+        match solver.solve(Problem::new().requirements(vec![exact.into()])) {
+            Ok(solvable_ids) => {
+                let relation_plan =
+                    relations::plan_selected_relations(solver.provider(), &solvable_ids)?;
+                return Ok(relation_plan.conflict.is_some() || !relation_plan.removals.is_empty());
+            }
+            Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
+                let graph = conflict.graph(&solver);
+                if conflict_graph_has_conflict_class(&graph) {
+                    return Ok(true);
+                }
+                let Some(unresolved) = graph.unresolved_node else {
+                    return Ok(false);
+                };
+                let mut discovered = BTreeSet::new();
+                for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
+                    let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight()
+                    else {
+                        return Ok(true);
+                    };
+                    let resolvo::conflict::ConflictNode::Solvable(requiring) =
+                        graph.graph[edge.source()]
+                    else {
+                        continue;
+                    };
+                    discovered.extend(
+                        solver
+                            .provider()
+                            .unresolved_requirement_groups(requiring, requirement),
+                    );
+                }
+                let previous = ignored.len();
+                ignored.extend(discovered);
+                if ignored.len() == previous {
+                    return Ok(false);
+                }
+            }
+            Err(UnsolvableOrCancelled::Cancelled(_)) => {
+                return Err(Error::InitError(
+                    "Dependency resolution was cancelled".to_string(),
+                ));
+            }
+        }
+    }
 }
 
 /// Solve an install request using the SAT solver with an explicit source-selection policy.
@@ -168,7 +257,8 @@ pub fn solve_install_with_policy(
 /// Unlike the user-facing name/version request, this root constraint cannot
 /// select a different release, architecture, repository, or package variant.
 /// Missing positive dependency groups are returned as persisted typed
-/// authority; package conflicts and other solver failures remain hard errors.
+/// authority; root-reachable conflicts are a separate typed outcome and only
+/// unattributed solver failures remain hard errors.
 pub fn solve_exact_repository_package_with_policy(
     conn: &Connection,
     repository_package_id: i64,
@@ -253,6 +343,9 @@ fn solve_exact_repository_package_with_policy_inner(
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
             let graph = conflict.graph(&solver);
             let projected = (|| {
+                if conflict_graph_has_conflict_class(&graph) {
+                    return Ok(SatExactResolution::ConflictingClosure);
+                }
                 let Some(unresolved) = graph.unresolved_node else {
                     return Err(Error::ConflictError(format!(
                         "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
@@ -289,9 +382,18 @@ fn solve_exact_repository_package_with_policy_inner(
                         "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
                     )));
                 }
-                Ok(SatExactResolution::Unresolved {
-                    dependencies: dependencies.into_iter().collect(),
-                })
+                let dependencies = dependencies.into_iter().collect::<Vec<_>>();
+                if exact_root_has_hidden_conflict(
+                    conn,
+                    &root.name,
+                    repository_package_id,
+                    architecture,
+                    policy,
+                    &dependencies,
+                )? {
+                    return Ok(SatExactResolution::ConflictingClosure);
+                }
+                Ok(SatExactResolution::Unresolved { dependencies })
             })();
             if projected.is_err() {
                 on_failure(&graph, solver.provider());

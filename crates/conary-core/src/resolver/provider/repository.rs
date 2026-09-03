@@ -88,6 +88,11 @@ impl ConaryProvider<'_> {
             &pkg_with_repo.package,
             &pkg_with_repo.repository,
         )?;
+        sub_deps.retain(|dependency| {
+            dependency
+                .requirement_group
+                .is_none_or(|group| !self.ignored_requirement_groups.contains(&group))
+        });
         let relations = load_repo_relations(self.conn, &pkg_with_repo.package)?;
         sub_deps.extend(
             relations

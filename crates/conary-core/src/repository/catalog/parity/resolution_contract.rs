@@ -13,7 +13,7 @@ use crate::repository::architecture::{
 };
 use crate::repository::versioning::VersionScheme;
 
-pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V2: u32 = 2;
+pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V3: u32 = 3;
 
 /// The fixed solver policy whose output may become release evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,7 +180,7 @@ impl NativeResolutionOracleV1 {
             ));
         }
         let manifest = Self {
-            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V2,
+            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V3,
             profile: profile.profile.clone(),
             profile_revision_sha256: profile.manifest_sha256()?,
             profile_logical_digest_sha256: profile.logical_digest_sha256.clone(),
@@ -195,10 +195,10 @@ impl NativeResolutionOracleV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V2 {
+        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 {
             return Err(Error::ConfigError(format!(
                 "native resolution oracle schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V2
+                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V3
             )));
         }
         validate_identity(&self.profile, "native resolution profile")?;
@@ -292,6 +292,7 @@ pub enum NativeResolutionOutcomeV1 {
 #[serde(rename_all = "snake_case")]
 pub enum NativeResolutionNotInstallableReasonV1 {
     ArchitectureExcluded,
+    ConflictingClosure,
 }
 
 /// One canonical row for every package in the bound package oracle.
@@ -348,9 +349,7 @@ impl NativeResolutionRootV1 {
                     previous = Some(dependency);
                 }
             }
-            NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            } => {}
+            NativeResolutionOutcomeV1::NotInstallable { .. } => {}
         }
         Ok(())
     }
