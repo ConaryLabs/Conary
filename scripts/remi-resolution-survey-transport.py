@@ -42,6 +42,7 @@ MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 2
 SURVEY_RECORD_LIMIT = 5_000
 SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
+ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
 NATIVE_ECOSYSTEMS = {"rpm", "debian", "alpm"}
@@ -782,7 +783,9 @@ def build_input(args: argparse.Namespace) -> None:
     manifest_path = args.output.with_name(f".{args.output.name}.manifest-{os.getpid()}")
     try:
         write_new(manifest_path, manifest_bytes)
-        with tarfile.open(temporary, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        with tarfile.open(
+            temporary, mode="w", format=ORACLE_TRANSPORT_TAR_FORMAT
+        ) as archive:
             tar_add_plain(archive, manifest_path, "manifest.json")
             for name, path in files:
                 tar_add_plain(archive, path, name)

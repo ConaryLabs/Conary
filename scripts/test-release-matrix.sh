@@ -2178,6 +2178,19 @@ test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator() {
         "resolution survey rejects stale oracle workflow authority"
 }
 
+test_check_release_matrix_rejects_ustar_resolution_survey_input() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT' \
+        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.USTAR_FORMAT'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey input transport supports unbounded member sizes"
+}
+
 test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3819,6 +3832,7 @@ main() {
         test_check_release_matrix_rejects_unprotected_resolution_survey_helper
         test_check_release_matrix_rejects_stale_resolution_survey_verifier
         test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
+        test_check_release_matrix_rejects_ustar_resolution_survey_input
         test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots
         test_check_release_matrix_requires_resolution_survey_helper_install
         test_check_release_matrix_rejects_caller_authorized_helper_update

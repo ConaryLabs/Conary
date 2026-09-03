@@ -469,6 +469,14 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_oracle_transport_format_supports_members_larger_than_ustar(self) -> None:
+        member = tarfile.TarInfo("fedora-44/package-oracle/packages.jsonl")
+        member.size = 8 * 1024 * 1024 * 1024
+        header = member.tobuf(format=TRANSPORT_TOOL.ORACLE_TRANSPORT_TAR_FORMAT)
+        self.assertEqual(len(header), tarfile.BLOCKSIZE)
+        with self.assertRaises(ValueError):
+            member.tobuf(format=tarfile.USTAR_FORMAT)
+
     def test_complete_comparison_schema_and_mismatch_evidence(self) -> None:
         root_sha256 = "7" * 64
         oracle_manifest = "8" * 64
