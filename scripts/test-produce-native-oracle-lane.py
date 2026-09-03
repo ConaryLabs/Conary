@@ -247,7 +247,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
-        self.assertEqual(evidence["schema_version"], 3)
+        self.assertEqual(evidence["schema_version"], 4)
         self.assertEqual(evidence["artifact_type"], "native-oracle-lane")
         self.assertEqual(evidence["deployment_run_id"], 123)
         self.assertEqual(evidence["export_run_id"], 456)
@@ -275,6 +275,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         survey_root = self.root / "survey-fedora-44"
         survey = json.loads((survey_root / "survey.json").read_bytes())
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
+        self.assertEqual(manifest["schema_version"], 2)
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
         self.assertEqual(manifest["survey"]["sha256"], digest(survey))

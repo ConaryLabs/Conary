@@ -50,6 +50,8 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_SCHEMA = 2
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
+NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -509,7 +511,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             survey_implementation_path
         )
         survey_manifest = {
-            "schema_version": 1,
+            "schema_version": NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA,
             "artifact_type": "native-resolution-survey-diagnostics",
             "deployment_run_id": arguments.deployment_run_id,
             "export_run_id": arguments.export_run_id,
@@ -565,7 +567,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         package["manifest_sha256"],
     )
     evidence = {
-        "schema_version": 3,
+        "schema_version": NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA,
         "artifact_type": "native-oracle-lane",
         "deployment_run_id": arguments.deployment_run_id,
         "export_run_id": arguments.export_run_id,

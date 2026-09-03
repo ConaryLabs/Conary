@@ -791,6 +791,13 @@ helper operation, and independently reopens every transported manifest and
 object byte before retaining the short-lived handoff artifact. Callers cannot
 supply paths, profile order, conversion commands, or publication operations.
 
+The diagnostics survey binding is schema 2 and the strict per-ecosystem lane
+evidence is schema 4. Both require the resolution worker count, measured
+per-worker load times and RSS admission inputs. Schema-1 survey bindings and
+schema-3 lanes predate that scheduling evidence and are fenced as obsolete;
+operators must regenerate all three strict lanes once before retained-lane
+subset production can resume.
+
 ```text
 remi native-oracle-input \
   --db /conary/metadata/conary.db \

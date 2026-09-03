@@ -72,6 +72,7 @@ LANES = {
     },
 }
 MAX_JSON_BYTES = 16 * 1024 * 1024
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
 
 
 def canonical_json(value: Any) -> bytes:
@@ -309,7 +310,7 @@ def verify_lane(
     lane = LANES[profile]
     producer_commit = require_commit(evidence["producer_commit"], f"{profile} producer commit")
     if (
-        evidence["schema_version"] != 3
+        evidence["schema_version"] != NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != arguments.deployment_run_id
         or evidence["export_run_id"] != arguments.export_run_id

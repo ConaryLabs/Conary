@@ -95,6 +95,14 @@ carry the export/deployment/producer/image/schema/implementation/binary-digest
 bindings, and remain diagnostics-only. Their type can never satisfy assembly,
 comparison, promotion, activation, or publication.
 
+Native-resolution survey binding evidence is schema 2, and strict native-oracle
+lane evidence is schema 4. Those versions add the required worker count,
+per-worker pool-load timings, measured worker RSS, and admitted memory budget.
+This is a hard cut: schema-1 survey bindings and schema-3 strict lanes are
+obsolete non-authority and must be regenerated. In particular, the first
+subset production after this cut must rebuild all three strict lanes before
+later subset runs may retain an unselected lane.
+
 Dispatch input `lanes` is an optional comma-separated, non-empty,
 duplicate-free subset of `fedora-44,ubuntu-26.04,arch`; its default is that
 complete canonical set. Each successful strict artifact is named by exact
