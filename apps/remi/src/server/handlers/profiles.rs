@@ -180,8 +180,8 @@ mod tests {
         assert!(is_valid_profile_hash(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
         ));
-        // Uppercase hex is also valid (hex digits include A-F)
-        assert!(is_valid_profile_hash(
+        // Uppercase is non-canonical and cannot name the lowercase CAS path.
+        assert!(!is_valid_profile_hash(
             "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
         ));
     }
