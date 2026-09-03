@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 32
+revision: 33
 status: active
 ---
 
@@ -633,30 +633,28 @@ forced version and runs with non-strict pinning against the complete
 authenticated version universe. Native policy still orders dependency choices,
 so the highest-precedence candidate is selected whenever it permits a complete
 transaction; a lower authenticated version remains eligible only when the
-forced exact root cannot close with the candidate. The preliminary native
-candidate transaction remains the fast resolved result or contributes typed
-no-target evidence. Any failure with a satisfying authenticated target enters
-the complete-version solver through a fresh dependency cache that never reuses
-the failed candidate state.
+forced exact root cannot close with the candidate.
 Required and pre-required groups participate in resolution; weak groups do
-not. Successful native transactions become exact closure package keys. A
-required group with no satisfying authenticated target version becomes an
-exact requiring-package key and canonical required-group digest, whether the
-target name is absent or exists only at incompatible versions. When the
-complete solver cannot retain its transaction, the producer follows apt-pkg's
-typed satisfying targets through every alternative and reports the terminal
-required or pre-required groups only when every branch ends at a no-target
-group. Each `AptMissingRequirement` carries the requiring package identity,
-relation kind, and parser-owned native dependency text; the Rust boundary binds
-that text to the exact package-oracle group recorded by the same Debian parser,
-without textual normalization. A branch with a viable authenticated closure
-does not become missing merely because candidate policy preferred a different
-version. The selected path accumulates across sibling required groups before a
-missing frontier is emitted, and the producer checks every apt-pkg negative
-relation on that complete frontier. A conflict or break between the exact root
-and a helper, between an ancestor and descendant, or between sibling helpers
-remains a fatal native solver classification. A policy-excluded exact root
-becomes the typed architecture-excluded outcome before apt-pkg resolution. The
+not. Successful native transactions become exact closure package keys. When
+the complete solver fails, the producer inspects the retained protected exact
+root in apt-pkg's post-solver dependency cache. A broken root-level required or
+pre-required group becomes typed missing evidence only when apt-pkg exposes no
+authenticated candidate version satisfying any alternative, as decided by
+`DepIterator::IsSatisfied`. This covers both an absent target name and a target
+name available only at incompatible versions. Each `AptMissingRequirement`
+carries the exact-root identity, relation kind, and parser-owned native
+dependency text; the Rust boundary binds that text to the exact package-oracle
+group recorded by the same Debian parser, without textual normalization.
+
+Pinned apt-pkg 3.2.0 does not expose solver3's typed failure reason graph as a
+public API: solver state, work, trail, and clause registration are protected or
+private, `DependencySolver` is final, and its exported reason interface renders
+strings. Diagnostic text is not parsed into authority. Consequently a failure
+that cannot be attributed from a broken hard dependency on the retained exact
+root remains a fatal native solver classification. This includes transitive
+no-candidate dependencies as well as conflict-, break-, policy-, or
+version-coexistence failures. A policy-excluded exact root becomes the typed
+architecture-excluded outcome before apt-pkg resolution. The
 Ubuntu 26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is
 likewise configured with only `APT::Architecture(s)=amd64`, while
 `Architecture: all` remains admitted.
