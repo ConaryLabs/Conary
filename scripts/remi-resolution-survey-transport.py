@@ -1174,7 +1174,12 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
         fail(f"{name} retention or evidence counts are inconsistent")
 
 
-def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -> None:
+def validate_comparison_survey(
+    value: Any,
+    profile: dict[str, Any],
+    name: str,
+    candidate_survey: dict[str, Any],
+) -> None:
     survey = exact_object(
         value,
         {
@@ -1209,6 +1214,14 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
     mismatched = exact_nonnegative_int(counts["mismatched_roots"], f"{name}.counts.mismatched_roots")
     if matching + mismatched > U64_MAX or matching + mismatched != roots:
         fail(f"{name} root counts are inconsistent")
+    candidate_roots_walked = exact_nonnegative_int(
+        candidate_survey["counts"]["roots_walked"], "candidate roots walked"
+    )
+    candidate_roots = {
+        item["root_package_key_sha256"]: item for item in candidate_survey["outcomes"]
+    }
+    if roots != candidate_roots_walked or len(candidate_roots) != candidate_roots_walked:
+        fail(f"{name} root population differs from the candidate survey")
     mismatch_keys: list[int] = []
     mismatch_total = 0
     if not isinstance(counts["mismatch_kinds"], list):
@@ -1253,6 +1266,7 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
         or survey["truncated"] != (limits["retained_mismatches"] < limits["total_mismatches"])
     ):
         fail(f"{name} mismatch retention counts are inconsistent")
+    retained_root_keys: list[str] = []
     for index, item in enumerate(mismatches):
         mismatch = exact_object(item, {"root", "kind", "oracle", "candidate"}, f"{name} mismatch {index}")
         root = exact_object(
@@ -1261,9 +1275,23 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
             f"{name} mismatch {index} root",
         )
         root_sha256 = require_sha256(root["package_key_sha256"], f"{name} mismatch {index} root digest")
+        retained_root_keys.append(root_sha256)
         for key in ("name", "version", "release"):
             require_rust_identity(root[key], f"{name} mismatch {index} root.{key}")
         require_optional_string(root["architecture"], f"{name} mismatch {index} root.architecture")
+        candidate_root = candidate_roots.get(root_sha256)
+        if candidate_root is None or {
+            "name": root["name"],
+            "version": root["version"],
+            "release": root["release"],
+            "architecture": root["architecture"],
+        } != {
+            "name": candidate_root["name"],
+            "version": candidate_root["version"],
+            "release": candidate_root["release"],
+            "architecture": candidate_root["architecture"],
+        }:
+            fail(f"{name} mismatch {index} root differs from the candidate survey")
         typed: dict[str, tuple[str, dict[str, Any]]] = {}
         for side, manifest_key in (("oracle", "oracle_manifest_sha256"), ("candidate", "candidate_manifest_sha256")):
             evidence = exact_object(mismatch[side], {"manifest_sha256", "outcome"}, f"{name} mismatch {index} {side}")
@@ -1275,6 +1303,8 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
             )
         if typed["oracle"][1] == typed["candidate"][1]:
             fail(f"{name} mismatch {index} retains equal outcomes")
+        if typed["candidate"][1] != candidate_root["outcome"]:
+            fail(f"{name} mismatch {index} candidate outcome differs from its survey")
         if typed["oracle"][0] != typed["candidate"][0]:
             expected_kind = "resolution_outcome"
         elif typed["oracle"][0] == "resolved":
@@ -1285,6 +1315,8 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
             expected_kind = "not_installable_reason"
         if mismatch["kind"] != expected_kind:
             fail(f"{name} mismatch {index} kind disagrees with its evidence")
+    if retained_root_keys != sorted(set(retained_root_keys)):
+        fail(f"{name} retained mismatch roots are noncanonical")
 
 
 def forbid_private_paths(value: Any, label: str) -> None:
@@ -1603,7 +1635,9 @@ def verify_output(args: argparse.Namespace) -> None:
         )
         if canonical_json(comparison_value) != comparison_data:
             fail(f"{profile_name} comparison survey is not canonical JSON")
-        validate_comparison_survey(comparison_value, profile, comparison_name)
+        validate_comparison_survey(
+            comparison_value, profile, comparison_name, candidate_value
+        )
         if (
             comparison.get("counts") != comparison_value["counts"]
             or comparison.get("total_mismatches") != comparison_value["total_mismatches"]

@@ -422,6 +422,19 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 }
             ],
         }
+        candidate = {
+            "counts": {"roots_walked": 1},
+            "outcomes": [
+                {
+                    "root_package_key_sha256": root_sha256,
+                    "name": "example",
+                    "version": "1:2.0~rc1",
+                    "release": "1.fc44",
+                    "architecture": "x86_64",
+                    "outcome": unresolved,
+                }
+            ],
+        }
         comparison = {
             "schema_version": 1,
             "profile": profile["profile"],
@@ -468,34 +481,51 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 }
             ],
         }
-        TRANSPORT_TOOL.validate_comparison_survey(comparison, profile, "comparison.json")
+        TRANSPORT_TOOL.validate_comparison_survey(
+            comparison, profile, "comparison.json", candidate
+        )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatches"][0]["candidate"]["outcome"] = resolved
         with self.assertRaisesRegex(ValueError, "equal outcomes"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json"
+                malformed, profile, "comparison.json", candidate
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["retained_mismatches"] = 0
         with self.assertRaisesRegex(ValueError, "retention counts"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json"
+                malformed, profile, "comparison.json", candidate
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatch_record_limit"] = 5001
         with self.assertRaisesRegex(ValueError, "retention counts"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json"
+                malformed, profile, "comparison.json", candidate
             )
 
         malformed = json.loads(canonical(comparison))
         malformed["schema_version"] = True
         with self.assertRaisesRegex(ValueError, "unsigned 64-bit integer"):
             TRANSPORT_TOOL.validate_comparison_survey(
-                malformed, profile, "comparison.json"
+                malformed, profile, "comparison.json", candidate
+            )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["counts"]["roots_walked"] = 2
+        malformed["counts"]["matching_roots"] = 1
+        with self.assertRaisesRegex(ValueError, "root population"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json", candidate
+            )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["mismatches"][0]["root"]["package_key_sha256"] = "b" * 64
+        with self.assertRaisesRegex(ValueError, "root differs from the candidate"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json", candidate
             )
 
     def test_build_input_binds_all_runs_and_oracle_bytes(self) -> None:

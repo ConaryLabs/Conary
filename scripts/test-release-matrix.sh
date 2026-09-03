@@ -2175,6 +2175,19 @@ test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator() {
         "resolution survey rejects stale oracle workflow authority"
 }
 
+test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        '    if roots != candidate_roots_walked or len(candidate_roots) != candidate_roots_walked:' \
+        '    if False:'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey comparison binds the exact candidate root population"
+}
+
 test_check_release_matrix_requires_resolution_survey_helper_install() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3593,6 +3606,7 @@ main() {
         test_check_release_matrix_rejects_unprotected_resolution_survey_helper
         test_check_release_matrix_rejects_stale_resolution_survey_verifier
         test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
+        test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots
         test_check_release_matrix_requires_resolution_survey_helper_install
         test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
