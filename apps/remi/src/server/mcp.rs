@@ -125,7 +125,7 @@ pub struct AddPeerParams {
     /// Peer tier: "leaf", "cell_hub", or "region_hub". Defaults to "leaf".
     #[serde(default)]
     pub tier: Option<String>,
-    /// Pinned SHA-256 TLS certificate fingerprint for HTTPS peers.
+    /// Declared SHA-256 TLS fingerprint used as HTTPS peer identity.
     #[serde(default)]
     pub tls_fingerprint: Option<String>,
 }
@@ -426,11 +426,11 @@ impl RemiMcpServer {
 
     /// Add a federation peer by endpoint URL.
     ///
-    /// HTTPS peers require a pinned TLS certificate fingerprint, which becomes
-    /// the peer ID. HTTP peers use a hash of the endpoint.
+    /// HTTPS peers require a declared TLS fingerprint as their peer ID. The
+    /// dormant implementation does not yet verify it against the transport.
     /// Returns an error if the peer already exists.
     #[tool(
-        description = "Add a federation peer by endpoint URL. HTTPS peers require a pinned TLS certificate fingerprint, which becomes the peer ID. HTTP peers use a SHA-256 hash of the endpoint. Returns an error if the peer already exists. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
+        description = "Add a dormant federation peer by endpoint URL. For HTTPS the declared TLS fingerprint becomes the peer ID, but this implementation does not verify it against the transport. HTTP peers use a SHA-256 hash of the endpoint. Returns an error if the peer already exists. Risk: high. Requires plan-then-apply confirmation in the LLM-native operations contract before this tool remains exposed in the stateless MCP mutation surface."
     )]
     async fn add_peer(
         &self,

@@ -212,8 +212,8 @@ pub struct FederationConfig {
     #[serde(default)]
     pub tier_allowlists: TierAllowlists,
 
-    /// Pinned TLS certificate fingerprints for HTTPS federation peers,
-    /// keyed by exact endpoint URL.
+    /// Declared TLS fingerprint identities for HTTPS federation peers, keyed
+    /// by exact endpoint URL. These are not transport verification.
     #[serde(default)]
     pub peer_tls_fingerprints: HashMap<String, String>,
 

@@ -980,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint() {
+    fn test_prepare_discovered_peer_rejects_https_without_declared_fingerprint() {
         let config = FederationConfig::default();
         let result = Federation::prepare_discovered_peer(&config, true, &discovered_peer());
 
