@@ -616,7 +616,9 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
     def test_build_input_binds_all_runs_and_oracle_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
-            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            command = fixture.command()
+            command.append("--consume-lane-files")
+            result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             evidence = json.loads(fixture.evidence.read_bytes())
             self.assertEqual(evidence["workflow_runs"], {"oracle": 300, "export": 200, "deployment": 100})
@@ -647,6 +649,11 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                         )
                     ],
                 )
+            for lane in fixture.lanes.values():
+                self.assertFalse((lane / "package-oracle" / "manifest.json").exists())
+                self.assertFalse((lane / "package-oracle" / "packages.jsonl").exists())
+                self.assertFalse((lane / "resolution-oracle" / "manifest.json").exists())
+                self.assertFalse((lane / "resolution-oracle" / "roots.jsonl").exists())
 
     def test_build_input_rejects_run_and_lane_binding_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

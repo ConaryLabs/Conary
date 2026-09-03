@@ -2295,6 +2295,19 @@ test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass() {
         "resolution survey independently authenticates every assembled strict lane artifact"
 }
 
+test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '            --consume-lane-files \' \
+        '            # retain every extracted lane member'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey releases authenticated lane archives and members while building its transport"
+}
+
 test_check_release_matrix_rejects_executable_resolution_survey_summary() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3802,6 +3815,7 @@ main() {
         test_check_release_matrix_rejects_unbound_resolution_survey_assembly
         test_check_release_matrix_rejects_resolution_survey_set_digest_bypass
         test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass
+        test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads
         test_check_release_matrix_rejects_executable_resolution_survey_summary
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
         test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema

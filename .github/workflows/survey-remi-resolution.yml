@@ -121,6 +121,7 @@ jobs:
                   raise SystemExit("unsafe assembled oracle artifact member")
               source.extractall(destination)
           PY
+          rm -f -- "$set_archive"
           assembly="$RUNNER_TEMP/oracle-set/evidence.json"
           export_run_id="$(jq -er .export_run_id "$assembly")"
           deployment_run_id="$(jq -er .deployment_run_id "$assembly")"
@@ -214,6 +215,7 @@ jobs:
                   seen.add(path)
               source.extractall(destination)
           PY
+            rm -f -- "$lane_archive"
           done
 
           gh api \
@@ -284,9 +286,11 @@ jobs:
             --lane "fedora-44=$RUNNER_TEMP/oracles/fedora-44" \
             --lane "ubuntu-26.04=$RUNNER_TEMP/oracles/ubuntu-26.04" \
             --lane "arch=$RUNNER_TEMP/oracles/arch" \
+            --consume-lane-files \
             --output "$transport" \
             --evidence resolution-survey-input-verification.json \
             >/dev/null
+          rm -rf -- "$RUNNER_TEMP/oracles"
           install -m 0600 \
             "$RUNNER_TEMP/oracle-set/evidence.json" \
             resolution-survey-oracle-set.json

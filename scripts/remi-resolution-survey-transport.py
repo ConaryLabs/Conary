@@ -786,6 +786,8 @@ def build_input(args: argparse.Namespace) -> None:
             tar_add_plain(archive, manifest_path, "manifest.json")
             for name, path in files:
                 tar_add_plain(archive, path, name)
+                if args.consume_lane_files:
+                    path.unlink()
         os.chmod(temporary, 0o600)
         os.replace(temporary, args.output)
     finally:
@@ -2896,6 +2898,7 @@ def parse_args() -> argparse.Namespace:
     build.add_argument("--deployment-run", required=True, type=Path)
     build.add_argument("--export-root", required=True, type=Path)
     build.add_argument("--lane", action="append", default=[], required=True)
+    build.add_argument("--consume-lane-files", action="store_true")
     build.add_argument("--output", required=True, type=Path)
     build.add_argument("--evidence", required=True, type=Path)
     verify = subparsers.add_parser("verify-output")
