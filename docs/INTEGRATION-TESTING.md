@@ -20,6 +20,14 @@ domain in `crates/conary-core`.
 - A built conary binary (`cargo build -p conary`)
 - The conary-test app crate (`cargo build -p conary-test`)
 
+Conary CLI integration controls are available only in binaries built with the
+non-default `test-hooks` Cargo feature, and `apps/conary/src/test_hooks.rs`
+owns their complete typed environment snapshot. Run hook-dependent package
+tests with `cargo test -p conary --features test-hooks`; the static integration
+artifact builder enables that feature explicitly for `conary-test` manifests,
+while ordinary and release binaries reject any `CONARY_TEST_*` variable at
+startup instead of honoring or silently ignoring it.
+
 ## Running Tests
 
 ```bash

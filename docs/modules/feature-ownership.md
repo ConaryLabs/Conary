@@ -107,6 +107,7 @@ while preserving live-mutation labels, dry-run bypasses, command risk checks,
 and top-level command UX.
 
 **Start here:** `apps/conary/src/dispatch.rs`;
+`apps/conary/src/app.rs`; `apps/conary/src/test_hooks.rs`;
 `apps/conary/src/dispatch/root.rs`;
 `apps/conary/src/dispatch/root/try_preflight.rs`;
 `apps/conary/src/dispatch/context.rs`;
@@ -119,11 +120,14 @@ and top-level command UX.
 tests that exercise CLI surfaces.
 
 **Paths:** `apps/conary/src/dispatch.rs`;
+`apps/conary/src/app.rs`; `apps/conary/src/test_hooks.rs`;
 `apps/conary/src/dispatch/*`; `apps/conary/src/cli/*`;
 `apps/conary/src/command_risk.rs`; `apps/conary/src/command_risk/*`;
 `apps/conary/src/live_host_safety.rs`.
 
 **Focused proof:** `cargo check -p conary`;
+`cargo test -p conary --test test_hook_ownership`;
+`cargo test -p conary --features test-hooks --test test_hook_ownership`;
 `cargo test -p conary --lib cli::tests`;
 `cargo test -p conary --test live_host_mutation_safety`;
 `cargo run -p conary -- system completions bash >/dev/null`.
