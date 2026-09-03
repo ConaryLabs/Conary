@@ -2360,6 +2360,19 @@ test_check_release_matrix_rejects_helper_survey_document_slurp() {
         "resolution survey helper whole-document jq buffering"
 }
 
+test_check_release_matrix_rejects_nonportable_helper_summary_jq() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/deploy/remi-deploy-helper.sh" \
+        '                comparison: (if $result.comparison == null then null else {' \
+        '                comparison: if $result.comparison == null then null else {'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "resolution survey helper builds portable transport summaries from bounded Remi outcome authority"
+}
+
 test_check_release_matrix_rejects_unbound_comparison_candidate_manifest() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3688,6 +3701,7 @@ main() {
         test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
         test_check_release_matrix_rejects_buffered_resolution_survey_documents
         test_check_release_matrix_rejects_helper_survey_document_slurp
+        test_check_release_matrix_rejects_nonportable_helper_summary_jq
         test_check_release_matrix_rejects_unbound_comparison_candidate_manifest
         test_check_release_matrix_rejects_unreopened_survey_oracle_transport
         test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit

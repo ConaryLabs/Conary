@@ -1319,14 +1319,14 @@ survey_resolution() {
                   total_failures: $result.candidate.total_failures,
                   error_histogram: $result.candidate.counts.error_kinds
                 },
-                comparison: if $result.comparison == null then null else {
+                comparison: (if $result.comparison == null then null else {
                   file: $comparison_file,
                   candidate_manifest_sha256: $result.comparison.candidate_manifest_sha256,
                   counts: $result.comparison.counts,
                   total_mismatches: $result.comparison.total_mismatches,
                   mismatch_histogram: $result.comparison.counts.mismatch_kinds,
                   outcome_histogram: $result.comparison.counts.outcome_kind_pairs
-                } end
+                } end)
               }
         ' >>"${profiles_json}.jsonl"
     done
