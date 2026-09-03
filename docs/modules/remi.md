@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 163
+revision: 164
 summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded deterministic parallel private diagnostics-only all-roots native and Conary resolution surveys with isolated solvers and recorded worker evidence, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
 ---
 
@@ -22,6 +22,14 @@ they are backed by profile route metadata rather than a local hard-coded
 `SUPPORTED_DISTROS` list.
 
 ## Package Source Authority
+
+Source-format identity, relations, payload, configuration, lifecycle, and
+consumer projections are owned by
+[`source-package-authority.md`](../specs/source-package-authority.md) and are
+not repeated here. This section starts at Remi's authenticated repository
+ingestion boundary.
+
+### Source Manifests And Trust
 
 Hosted package sources are declared in `deploy/remi-repositories.toml` and
 loaded by `apps/remi/src/server/repository_manifest.rs`. Every source names one
@@ -67,6 +75,8 @@ names, URL substrings, file extensions, route-family aliases, and SQL `LIKE`
 expressions are not source, parser, or trust authority. A configured native
 parser or trust failure is an error for that source; it does not silently retry
 the URL as another metadata format or continue unsigned.
+
+### Source And Profile Catalogs
 
 Native refresh writes immutable candidate package authority outside the
 operational database.
@@ -115,6 +125,8 @@ comparison. Member precedence never hides a different version, release, or
 architecture. Member order, repository names, and catalog insertion order never
 select a package.
 
+### Sink Projection And Capacity Admission
+
 `RepositorySnapshotSink` projection schema 2 is the only native parser output
 contract. Each parser gives the sink the exact run-local file that supplied
 every authenticated metadata-object fact; the immutable sink transfers those
@@ -150,6 +162,8 @@ and it keeps one prepared destination statement per relation table for the
 entire member replay. Exact duplicate identities still compare every intrinsic
 package and relation field; their indexed destination reads reuse cached
 statements and any disagreement fails the private candidate before publication.
+
+### Catalog Proof, Reuse, And Retention
 
 Candidate finalization calculates the deterministic logical digest and then
 performs one complete independent candidate reopen. That full reopen mints an opaque,
@@ -502,6 +516,8 @@ page-derived finalization scratch. A
 one-byte-short refusal leaves no native candidate file. Profile candidates use
 the corresponding ordered-member contract described above.
 
+### Readiness, Deployment, And Refresh Coordination
+
 `apps/remi/src/server/readiness.rs` owns serving-readiness orchestration, while
 `apps/remi/src/server/readiness/source_profiles.rs` owns exact configured-profile
 and active-catalog population inspection. `/health` is an unconditional
@@ -814,479 +830,12 @@ remi native-oracle-input \
 
 ### Native Full-Catalog Parity Artifact
 
-`NativeParityOracleV1` is the sole accepted contract for independent native
-package-fact parity against one exact `ProfileRevisionV2`. Its strict manifest
-binds the profile revision and logical digests, ordered source members and
-precedence, pinned RPM, Debian, or ALPM implementation and version, projection
-schema, normalized counts, and the exact SHA-256 and size of a canonical JSONL
-package artifact. Each row carries the exact package variant, contributing
-member, source snapshot, payload checksum/size/download authority, providers,
-and grouped positive and negative relations. Conflict, break, replacement, and
-obsolescence declarations remain typed group authority.
-
-The writer and independent reopener reject unknown fields, unsupported schema,
-noncanonical bytes, duplicate or reordered keys, count drift, extra bundle
-entries, symlinks, and artifact tamper. Comparison merge-walks the verified
-oracle and immutable catalog by exact package key, retains one candidate/oracle
-package pair at a time, and reports typed candidate-only, oracle-only, identity,
-precedence, payload, provider, grouped-requirement, or negative-relation drift.
-The native evidence producer must be the pinned implementation named by the
-manifest; constructing oracle rows from Conary's own catalog is test support,
-not release evidence.
-
-ALPM and RPM have implemented native package-fact producers. The explicit
-`native-alpm-oracle` feature links the exact pinned Rust bindings to libalpm;
-ordinary Conary and Remi builds remain free of that host-library requirement.
-For each ordered profile member, the producer separately verifies the bound
-`SourceSnapshotV1` manifest and its exact authenticated `ArchDatabase` object,
-then reads package and relation facts through libalpm. It uses a bounded private
-spool for profile precedence and exact-identity conflict handling, writes the
-canonical bundle, and reopens the complete result before success. It consumes
-neither the Conary catalog nor Conary's Arch repository parser.
-Versioned ALPM soname-v1 provides such as `libacl.so=1-64` remain one atomic
-soname capability with no package-version authority. libalpm exposes that text
-through generic dependency fields split at `=`, so the producer requires those
-fields to reconstruct the exact native text while the pinned ALPM grammar owns
-its soname classification. Ordinary package relations still require exact
-field-for-field normalized name and version agreement.
-
-The explicit `native-rpm-oracle` feature links a narrow private C shim to exact
-libsolv 0.7.36. It separately rehashes each ordered member's compressed primary
-and filelists objects before libsolv reopens them, then projects every package
-variant, payload fact, declared and file provider, required/prerequisite group,
-weak RPM relation, conflict, and obsolete. Typed libsolv rich-relation trees
-must agree with the canonical RPM grammar. The producer renders canonical RPM
-text from the typed tree instead of treating libsolv display text as lossless;
-it flattens only the right-associated `with` spine and retains parentheses for
-left-nested same-operator trees before reparsing and requiring exact agreement.
-At that source-decoding boundary, RPM's empty serialized epoch and explicit
-epoch zero both become omitted epoch zero; positive epochs remain exact, and
-canonical or persisted requirements remain strict.
-Profile precedence applies only to fact-identical duplicate identities;
-contradictory duplicates fail. The producer uses the shared bounded spool,
-canonical writer, and independent complete bundle reopener and reads neither
-the Conary catalog nor the Fedora parser's projected packages.
-libsolv derives `namespace:splitprovides(prefix with /path)` supplements from
-source-declared `prefix:/path` capabilities as legacy installed-package update
-machinery. These are not authenticated RPM `Supplements:` records. The producer
-requires the exact `REL_NAMESPACE`/`REL_WITH` tree to bind an existing atomic
-declared capability and same-package authenticated file coverage. Coverage is
-either that exact path or a strict descendant separated by `/`; lexical prefixes
-and files owned only by another package do not establish it. The producer then
-excludes only that derived relation from source package facts. Unknown
-namespaces, malformed trees or paths, and missing declared facts fail closed;
-declared rich supplements retain full typed tree and canonical RPM grammar
-agreement.
-
-The explicit `native-debian-oracle` feature links a narrow private C++ shim to
-exact apt-pkg 3.2.0 in the pinned Ubuntu 26.04 image. For each ordered member it
-requires exactly one authenticated `DebianPackages` object, rehashes the exact
-compressed bytes, and reopens every deb822 stanza and dependency expression
-through apt-pkg. It projects package variants and `Multi-Arch`, payload
-authority, declared providers, grouped alternatives and architecture
-qualifiers, required and weak relations, conflicts, breaks, and replacements.
-Repeated authority fields, malformed or unsupported relations, missing
-payload facts, and contradictory exact identities fail the complete input.
-apt-pkg's process-global state is serialized for the native handle lifetime.
-The producer invokes no apt/dpkg executable or database and reads neither the
-Conary catalog nor the Conary Debian parser. It uses the shared bounded spool,
-canonical writer, and independent complete bundle reopener.
-
-The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
-lifecycle and CLI release tests. They do not satisfy this complete-candidate
-contract.
-
-Protected production uses `produce-remi-native-oracles` with one exact
-successful native-input export run and one explicit full producer commit,
-which operators set to the deployed commit unless intentionally selecting a
-newer producer. Authorization independently reopens that transport and its
-deployment evidence, requires deployed-to-producer-to-`origin/main` ancestry,
-and each native lane builds from the exact clean producer tree. The checked-in lane adapter
-derives source order and object paths only from canonical profile members,
-source-snapshot digests, authenticated object roles, and the digest-addressed
-inventory. Fedora runs with pinned libsolv 0.7.36, Ubuntu with apt-pkg 3.2.0,
-and Arch with the pinned archive/libalpm image. Each lane retains the complete
-package and resolution bundles plus sanitized manifest, artifact, count,
-implementation, candidate, export, deployed/producer commit, and both producer
-binary SHA-256 bindings for seven days. It has
-no repository refresh, conversion, proof, activation, or pointer authority.
-Every selected lane uploads a separately typed diagnostics-only resolution
-survey before strict resolution decides lane success. The optional closed
-`lanes` subset defaults to all three profiles; assembly fills unselected lanes
-from the newest successful strict artifact for the same export, verifies its
-GitHub archive and internal digests, and accepts mixed producer commits only
-when each is a merged descendant of the common deployed commit under the same
-schema and implementation pins. Exactly one strict Fedora, Ubuntu, and Arch
-lane is mandatory, and survey artifacts are never assembly authority.
-
-`NativeResolutionOracleV1` is the separate resolver-owned contract for native
-solver closure and unresolved-dependency evidence. It binds the exact profile
-and package-oracle manifest, pinned solver implementation/version, target
-architecture, and one fixed typed policy: empty installed state, every exact
-package as a root, required/pre-required groups only, and native
-provider/repository precedence. The policy architecture must equal the profile
-revision's typed target architecture during bundle binding, comparison, and
-promotion proof validation. Native and Conary producers derive the solver
-architecture from that field; `--architecture` is retained only as a checked
-operator assertion, and a mismatch fails with typed
-`ProfileArchitectureMismatch` before any root walk or output bundle. Package
-projection and oracle reopen reject any architecture absent from its typed
-authority with `UnknownArchitectureToken { scheme, token }`
-before resolution evidence exists. The vendored tables are RPM 6.0.1 tag
-`rpm-6.0.1-release` `rpmrc.in` architecture lines; dpkg 1.23.7 tag `1.23.7`
-`data/cputable` and `data/tupletable`. Pacman
-`7.1.0.r9.g54d9411-2` commit
-`54d94116164b0b2202c6061c4a59c6f3e70820d8` `makepkg.conf.in` plus the
-2026-08-02 Arch core, extra, and multilib database `arch` values prove the
-supported x86_64 profile snapshot. Pacman defines no format-wide closed token
-table: the registry declares each ALPM profile's target token plus `any`, and
-libalpm compares those configured strings literally. Exact files, versions,
-commits, and upstream URLs are recorded in the fixture headers.
-
-`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
-32-bit ARM float ABI. It is derived from compile-time machine facts without
-the executable's libc, target environment, or OS, so GNU and musl builds for
-one machine are identical hosts. Package libc/ABI is separate: dpkg contributes
-its `gnu`, `musl`, or `uclibc` tuple dimension, while RPM and ALPM carry their
-profile-declared implied glibc ABI. Native-only admission requires package
-machine equality with the host and package ABI equality with the exact source
-profile. RPM `arch_compat` and `buildarch_compat` enumerate known tokens but
-cannot grant native-only compatibility.
-
-`native_only` admission returns `Admitted`,
-`Excluded { identity: NativeMachineIdentityV1 }`, or
-`UnknownArchitectureToken { scheme, token }`. Only a known non-native identity
-becomes `architecture_excluded`; unknown tokens are producer failures and have
-their own survey error kind. Native package managers retain provider-selection
-authority under their pinned architecture configuration, and Conary root and
-provider matching consumes the same checked full identities. Every
-package root has exactly one canonical resolved closure, typed unresolved set,
-or known-identity `architecture_excluded` outcome. Independent reopen uses a
-private disk-backed membership index for referenced package and required-group
-authority plus a bounded merge walk for complete root coverage. Comparison
-retains one native/candidate root pair and reports typed root, outcome, closure,
-unresolved-set, or not-installable-reason drift.
-
-ALPM, RPM, and Debian have implemented native solver producers. Each independently
-reopens and freshly reproduces the bound package oracle from the exact
-authenticated native metadata before solving every package as an exact root
-against empty installed state. The ALPM producer records prepared libalpm
-transaction packages and typed missing-dependency records. The RPM producer
-uses exact libsolv transaction and problem-rule IDs, applies profile precedence
-as native repository priority, excludes weak relations, and reopens complete
-filelists for typed file-provider resolution. Its resolution projection schema
-4 calls libsolv 0.7.36 `pool_setarchpolicy` with the single native architecture
-after `pool_setarch`; pinned libsolv still admits `noarch`, while cross-machine
-solvables are not installable and are absent from its provider index. An exact
-excluded root must report `SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the
-typed excluded outcome. The same rule for an admitted root is fatal.
-Native-only admission removes the former strict-priority multilib
-strict-plus-conflict shape, so the residual solve, ancillary `PKG_CONFLICTS`
-tolerance, and `INFARCH` tolerance are gone. Either policy rule is fatal if it
-ever appears. Ordinary same-architecture strict-priority blocked requirements
-still project their terminal unresolved edge.
-
-The Debian producer uses private
-volatile apt-pkg source indexes and empty installed state, projects profile
-order into candidate and provider priority, records exact native transactions,
-and forces each exact root through apt 3.0's complete-version solver with
-non-strict pinning. Native policy still prefers the highest-precedence
-dependency version that permits a complete transaction, while a shadowed lower
-version remains eligible when required by the protected exact root. After a
-failed solve, a broken required or pre-required group retained directly on that
-exact root becomes typed unresolved evidence when apt-pkg exposes no
-authenticated candidate satisfying any alternative. This covers absent names
-and names available only at incompatible versions. Every broken hard group on
-the retained root must meet that rule; a separate broken group with a
-satisfying candidate keeps the complete failure fatal. The exact-root identity,
-relation kind, and parser-owned native group text bind directly back to package
-oracle authority without textual normalization. Pinned apt-pkg 3.2.0 does not
-publicly expose solver3's typed reason graph, and rendered diagnostics are not
-authority. Transitive no-candidate failures and other failures without a
-directly attributable root group therefore remain fatal native solver failures
-and become `NativeSolverFailed` records in survey mode.
-All three bind closures and missing groups back to exact package-oracle
-authority. Policy-excluded Debian and ALPM roots are typed before native
-solving; the configured Ubuntu profile contains sixteen `binary-amd64` indexes
-and the Arch profile contains three `/os/x86_64` databases, with `all` and `any`
-admitted respectively. Conflicts, identity or input drift, and unexpected
-native errors remain fatal. The
-producers write the canonical resolution bundle and fully reopen it before
-success.
-
-The resolution contract is schema 2; Conary candidate, Debian, and ALPM
-projections are schema 2; RPM is schema 4; comparison and survey are schema 2.
-There are no compatibility readers. Every retained native-resolution and
-Conary candidate bundle from the superseded schemas is invalid and must be
-regenerated before promotion proof.
-
-The same three binaries expose a mutually exclusive `--survey <FILE>`
-diagnostic destination. Survey mode uses the identical per-root native solve
-and projection path but inventories every projection failure instead of
-stopping the walk. The versioned `NativeResolutionSurveyV1` binds the exact
-profile, package oracle, implementation, policy, and architecture; records
-complete outcome counts and a typed error histogram; and retains at most 5,000
-root failures with explicit truncation and uncapped totals. Retained native
-explanations have a separate 64 MiB budget measured by canonical serialized
-size at collection time. Once exhausted, later retained failure records carry
-a typed evidence-budget-exhausted marker; byte and explanation counts plus an
-independent evidence-truncation flag remain validated in the single JSON
-document. RPM failures carry
-the complete per-problem libsolv rule dump; rule slots that are not dependency
-IDs, including job indices, remain null with a typed unavailability reason.
-apt-pkg and libalpm carry the
-typed native results those APIs safely expose or an explicit unavailability
-reason. The create-only JSON file is private to its creating user on Unix,
-never writes strict bundle filenames, and is
-diagnostics only: Remi comparison, proof, activation, and publication do not
-accept it as authority. The command exits non-zero after writing any non-empty
-failure inventory.
-
-Strict and survey producers dispatch exact roots to a bounded worker set and
-reassemble results by package-oracle sequence before touching the writer or
-collector. That single ordered sink keeps bundle bytes, manifest digests,
-survey counts and histograms, the 5,000-record cap, and the 64 MiB explanation
-budget identical to a one-worker run. Each next root goes to the first worker
-that becomes available, preserving capacity when solve times are uneven. A
-strict failure stops further dispatch, then returns the first failure in
-canonical order after draining workers.
-
-RPM threads each own a libsolv pool loaded from the staged authenticated
-metadata; ALPM threads each own a private staged libalpm root and handle;
-Conary threads each own a read-only projected-catalog SQLite connection and
-fresh per-root resolvo state. Debian uses processes because apt-pkg's
-configuration and system objects are process-global. Each Debian worker builds
-its own apt cache from the same staged authenticated inputs and opens the
-projection index read-only.
-
-All three oracle binaries and `remi resolution-survey` accept typed
-`--workers <n>`. The automatic value is bounded by Rust available parallelism,
-the cgroup-v2 CPU quota, root count, and memory capacity. Worker memory uses a
-1.5 GiB Fedora pool allowance, rounded above a retained 1,271,280 KiB
-one-worker root-walk RSS observation; the effective budget subtracts
-`memory.current` from every bounded cgroup-v2 ancestor (or uses host
-`MemAvailable`), reserves 25% of the remaining memory, and never exceeds 8 GiB.
-Native binaries write selected worker count, effective budget, retained pool
-allowance, and per-worker pool/cache load milliseconds to the required separate
-`--implementation-evidence` JSON file. Remi writes equivalent per-profile
-candidate and comparison implementation files. Scheduling evidence therefore
-remains comparable without contaminating canonical survey or oracle bytes.
-
-The fresh Fedora export from successful
-`export-remi-native-oracle-inputs` run `33699383309` supplied 101,187 roots for
-the retained full-scale measurement. The profile-manifest SHA-256 was
-`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`;
-both passes used release binary SHA-256
-`407485a67107802a670561db60b4fbcb3cc2f05a11c6b0baef58bbdd4e387198`
-from commit `23f702c3` in `conary-oracle-fedora-slice6`. The observed 12 CPUs
-and 8 GiB worker budget made five workers the automatic capacity.
-
-| Workers | Wall seconds | User seconds | System seconds | Peak RSS KiB | Per-worker pool load ms |
-| ---: | ---: | ---: | ---: | ---: | :--- |
-| 1 | 10,832.801 | 3,231.511 | 184.536 | 1,656,556 | 26,540 |
-| 5 | 6,774.840 | 3,458.632 | 192.119 | 3,801,984 | 31,460; 31,540; 31,676; 31,479; 31,519 |
-
-That is a 1.60x end-to-end wall-time speedup. Each run recorded the same 45
-typed failures, and their 167,998-byte canonical survey files were identical:
-SHA-256
-`0fd754eed04d6cd9bfa5e7a58d392b1eec4c9b3bf4b31b91805e833c3826874c`.
-The mandatory package-oracle reprojection was storage-bound and varied between
-the sequential runs, which is why CPU, RSS, and per-worker load evidence remains
-beside wall time. On the largest checked-in RPM fixture, one worker took 930 ms
-and two workers took 986 ms; strict bundle bytes and survey JSON were identical,
-and the tiny load-bound input correctly showed no speedup.
-
-`ConaryResolutionSurveyV1` schema 1 applies that collector discipline to the
-Conary SAT candidate. It binds the exact schema-3 profile revision,
-package-oracle manifest, `conary-sat` implementation, native-only policy, and
-profile-owned typed target architecture. The producer and strict candidate
-writer share one per-root sink walk. Each successful root retains its exact
-package identity and key with a complete `resolved`, `unresolved`, or
-`not_installable` outcome; each hard failure contributes to uncapped totals
-and the typed error-variant/reason histogram. At most 5,000 failures retain
-their exact root, full error message, and lazily built native explanation.
-
-The explanation is a direct typed projection of resolvo's conflict graph. It
-contains unresolved-node incoming edges with requiring solvable and rendered
-requirement/version sets, conflict edges with both solvables and the typed
-conflict kind, and excluded solvables with their typed provider reason. It
-never parses resolvo's user-friendly diagnostic text. The 64 MiB canonical
-byte budget, first-exhaustion withholding behavior, create-only mode `0600`
-writer, counts, histogram, and truncation validation are shared with the
-native survey.
-
-`NativeResolutionComparisonSurveyV1` schema 1 consumes independently reopened
-complete native and candidate bundles. It walks every root pair in canonical
-key order and retains up to 5,000 mismatches. Each record contains the exact
-root identity, typed mismatch kind, both complete outcomes, and the manifest
-SHA-256 identifying each side. Uncapped mismatch totals, exact histograms by
-mismatch kind and by outcome-kind pair, and explicit truncation remain in the
-validated document. The strict comparison still aborts on the first mismatch.
-
-`remi resolution-survey` is the stopped-runtime owner. It takes the normal
-exclusive runtime lock and exactly mirrors `promotion-prove`'s canonical
-ordered `--candidate`, `--package-oracle`, `--native-resolution`, and
-`--architecture` bindings. Reordered profiles, foreign revisions, or an
-operator architecture that differs from the profile's typed target fail
-before a survey file is created. The destination must be a new directory; it
-is mode `0700` on Unix and every contained JSON file is create-only mode
-`0600`.
-
-```text
-remi resolution-survey \
-  --config /etc/conary/remi.toml \
-  --candidate fedora-44=<revision> \
-  --candidate ubuntu-26.04=<revision> \
-  --candidate arch=<revision> \
-  --package-oracle fedora-44=<directory> \
-  --package-oracle ubuntu-26.04=<directory> \
-  --package-oracle arch=<directory> \
-  --native-resolution fedora-44=<directory> \
-  --native-resolution ubuntu-26.04=<directory> \
-  --native-resolution arch=<directory> \
-  --architecture fedora-44=x86_64 \
-  --architecture ubuntu-26.04=amd64 \
-  --architecture arch=x86_64 \
-  --workers 4 \
-  --output-dir <new-private-survey-directory>
-```
-
-The command writes `<profile>.candidate-resolution-survey.json` and
-`<profile>.candidate-resolution-implementation.json`. When that
-profile has no hard candidate failures it builds a strict candidate only in an
-automatically removed temporary directory and writes
-`<profile>.native-resolution-comparison-survey.json` plus
-`<profile>.comparison-resolution-implementation.json`; otherwise comparison for
-that profile is skipped because no complete candidate exists. All profiles are
-still visited, and the command returns Remi's top-level failure status `101`
-after reporting any findings.
-
-These files are diagnosis, never authority. They cannot satisfy a strict
-resolution-bundle or `NativeResolutionComparisonV1` reader, and promotion
-proof, activation, publication, and public binding paths reject them. They
-contain no input paths, credentials, process environment, or host identity.
-
-Production operators dispatch `.github/workflows/survey-remi-resolution.yml`
-from protected `main` with `oracle_run_id` naming one successful
-`produce-remi-native-oracles` run. The workflow derives the common export run
-and deployment run from its canonical assembled three-lane evidence, and
-requires the oracle run head to equal its own exact current protected-main
-operator commit. For each
-Fedora, Ubuntu, and Arch lane, including a retained same-export lane from an
-earlier successful producer run, it reopens the recorded workflow and successful
-producer job, verifies the API-bound artifact archive digest before safe
-extraction, and requires the lane evidence, producer provenance, export
-manifest, deployment inspection, installed binary digest, exact candidates,
-oracle manifests, and typed architectures to agree. The export must also carry the
-typed operator attestation binding its exact workflow commit to the protected
-pinned-host-key SSH contract; pre-attestation exports are non-authority. It
-transfers one authenticated
-oracle archive, requires the helper from its exact protected
-`github.workflow_sha` to be byte-identical to the freshly fetched protected-main
-helper and the complete workflow revision to be that exact current main commit.
-It stages the helper, then refetches protected main and repeats both the commit
-and digest checks immediately before the existing `install-helper` action. The
-root helper independently resolves current protected main over pinned HTTPS,
-downloads that exact commit's helper itself, requires its digest to match, and
-installs those root-fetched bytes rather than the caller's staged file. It
-then invokes
-the production survey entry point:
-
-```text
-sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution \
-  <survey-id> <export-id> \
-  /tmp/remi-resolution-survey-oracles-<survey-id>.tar
-```
-
-Rerunning an older workflow revision fails before root mutation even when its
-helper bytes remain unchanged, so stale verifier code cannot certify evidence.
-Any protected-main advance during input authentication also fences the run.
-
-The helper obtains candidate revisions from the stopped deployment's current
-private-candidate pointers; they are deliberately absent from its argument
-contract. It runs `remi resolution-survey` as the service user with
-`--config /etc/conary/remi.toml`, the three authenticated oracle directory
-pairs, and the profiles' typed `x86_64`, `amd64`, and `x86_64` architectures.
-It writes durable private output below
-`/conary/evidence/resolution-surveys/<survey-id>`, copies the completed JSON into
-root-owned staging before restoring the service, restores and probes Remi even
-when the survey returns status `101` for recorded findings, accepts that status
-only when the typed outcome reports at least one finding, and requires a bounded successful
-`/health/ready` response before it considers restoration complete. It then emits
-`/tmp/remi-resolution-survey-<survey-id>.tar`. The workflow independently
-reopens that archive, requires every deployment, candidate, architecture, and
-oracle binding to equal the authenticated input verification, and uploads its
-canonical JSON, exact digest/size/binding manifest, and count/histogram
-verification plus the authenticated three-lane assembly for seven days. The
-independent reader enforces every typed Rust survey field, outcome, histogram,
-the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
-mismatch-evidence relationship.
-Transport manifest and verification evidence schema 2 additionally bind each
-candidate and comparison survey to its separate implementation-evidence file.
-The independent reader reopens those files and verifies the selected worker
-count, exact per-worker load-time vector, effective memory budget, and retained
-per-worker RSS allowance before accepting the survey artifact.
-Comparison counts must cover the exact zero-failure candidate root population;
-every retained mismatch root, identity, and candidate outcome must match that
-candidate survey.
-It also requires the candidate producer to be profile-ecosystem `conary-sat`
-projection schema 2; a merely well-formed implementation identity is rejected.
-Neither helper input admission nor runner output verification imposes an
-aggregate transport ceiling absent from the producer contract. Each still
-admits only a plain archive. Runner construction uses uncompressed GNU
-base-256 tar headers, so an authenticated member larger than USTAR's 8-GiB
-ceiling does not become an invented unsupported class; no PAX metadata is
-admitted. The independent reader chunk-copies and hashes each declared member
-into private mode-`0700` staging, then maps the authenticated JSON read-only
-and decodes large outcome, failure, and mismatch arrays one canonical record
-at a time. Its candidate/comparison join retains
-only the at-most-5,000 mismatch bindings, so neither the archive nor a complete
-survey document or candidate-root index is held in memory.
-Remi returns a bounded per-profile summary with the exact comparison candidate
-manifest digest; the helper uses that summary rather than reparsing survey
-documents with `jq`. The independent reader reconstructs the strict candidate
-`roots.jsonl` bytes and manifest from streamed successful outcomes plus the
-authenticated package-oracle manifest, and requires the comparison digest to
-match even when there are no retained mismatches. It maps the authenticated
-package artifact directly from the oracle archive and requires every
-zero-failure candidate root key and identity to cover those package rows in
-order. Nested closure and unresolved-dependency arrays are decoded one element
-at a time, while copied survey documents are retained for only one profile and
-deleted before the next profile is admitted.
-Every profile's total root count and each retained success or failure identity
-is checked against the package rows before the findings branch. For complete
-profiles, the reader also maps the authenticated native `roots.jsonl`, walks it
-in lockstep with candidate outcomes, and recomputes matching and mismatch
-counts, histograms, and retained evidence rather than trusting the survey's
-comparison summary.
-The sanitized manifest's aggregate and per-profile summaries retain exact JSON
-integer types. After Remi is restored, the helper archives the root-owned
-frozen survey snapshot directly, without another survey-sized staging copy.
-The authenticated oracle members are materialized in a private root-owned
-staging directory on the `/conary/evidence` capacity domain, rather than
-duplicating the unbounded transport beneath `/tmp`.
-The protected runner deletes each authenticated GitHub artifact ZIP after
-extraction and consumes each extracted lane member immediately after adding it
-to the oracle transport, keeping no three-copy full-catalog working set.
-The helper arms cleanup immediately after creating root staging.
-Raw deployment-inspection and survey stderr remain only in its mode-`0600`
-diagnostic file, are destroyed during helper cleanup, and are never copied to
-SSH or workflow logs;
-public failures are typed helper messages. The Markdown summary escapes all
-shell-interpolated code spans. This path cannot promote, activate, or publish
-anything.
-
-Conary separately replays the exact verified profile catalog into a
-private temporary resolver projection, resolves every exact package key
-against empty installed state for the oracle's target architecture, maps
-successful closures and typed missing groups back to package-oracle authority,
-writes and independently reopens its complete candidate bundle, and requires
-exact native comparison. Exact root constraints cannot substitute a different
-version, release, architecture, repository, or variant; optional and build
-groups remain excluded from the positive solve. Initial conversion crawling,
-exact proof reuse, independent CCS reopen, and target preflight retain their
-own evidence contracts. The promotion-evidence producer below binds all of
-these independently reopened records to the same exact candidates.
+The full-catalog package-fact and resolution contract is owned by
+[the native parity oracle specification](../specs/remi-native-parity-oracle.md).
+That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
+schema hard cuts, bounded surveys, comparison rules, and production transport.
+Remi consumes only independently reopened artifacts bound to the selected
+private profile candidates; survey output never authorizes promotion.
 
 ### Initial Full-Universe Conversion Crawl
 
@@ -1920,209 +1469,8 @@ cargo run -p remi --release -- conversion-benchmark \
   --iterations 2
 ```
 
-`--work-root` must name a new directory outside the live Remi storage root.
-The Remi service and every other one-shot runtime owner must be stopped. The
-command acquires the existing runtime root's exclusive kernel lock before it
-snapshots the operational SQLite database and retains that lock through strict
-reopen of the durable report. This keeps activation and catalog garbage
-collection from changing the registered catalog set during the run. It clears runtime
-conversion/cache state in that copy, stages the admitted source artifact, and
-places every mutation below the work root. Deployed catalogs, signing keys, and
-the source database remain read-only authorities; the benchmark cannot warm or
-otherwise mutate live conversion state. Use a distinct new work root for every
-subject and revision being compared.
-
-The strict `conversion-benchmark-v8.json` report records the exact binary path
-and digest, source commit and dirty state, Remi and host identity, CPU and
-memory, and the device, filesystem, and block size for every authority and
-scratch root. It pins each profile and source resource, catalog artifact,
-logical digest, portable-manifest digest and size, and exact chunk geometry as
-well as the benchmark subject.
-
-Before conversion repetitions, `setup.prepare`, `setup.profile`,
-`setup.source`, and `setup.finalize` are separately bounded, non-overlapping
-setup phases. Evidence assembly between probes is excluded rather than charged
-to the next phase.
-The profile and source records separately expose `reopen` and required
-authority-`query` work; query VFS counters are checked deltas from the owning
-reader at the end of its reopen. VFS snapshot extraction is included in the
-phase it describes. Each phase records process wall/user/system
-time, RSS endpoints and process-lifetime peak, faults, logical bytes and
-syscalls from `/proc/self/io`, storage bytes, context switches, and endpoint
-thread occupancy. Cancelled-write bytes are a signed phase delta, so a counter
-regression is retained rather than rejected. Each catalog record also names
-exact verification-pass
-evidence and authenticated-VFS read/chunk/cache work. Schema-v6 validation requires exactly one
-compact portable-manifest validation, one stored-binding check, demanded VFS
-authentication with no integrity failure, and zero complete userspace catalog
-hash, SQLite integrity scan, or logical replay. The chosen chunk size, count,
-and proof size must agree exactly with catalog geometry.
-
-Each repetition separates `conversion_core` from `end_to_end`, records the same
-process resource counters, and retains phase timings and deterministic work
-counters. Successful cold evidence independently reopens the signed transport
-and hashes the complete CCS archive; the report records the CCS, transport,
-and canonical signed-object-set identities and byte counts.
-
-Schema v6 retains exact native payload amplification evidence. The
-`native_payload_spool_file_reopens` counter records each successful physical
-reopen after spooling, including an open of a zero-length file, while
-`native_payload_spool_bytes_reread` records bytes actually read through those
-reopens. For a cold RPM conversion, validation requires declared bytes to
-equal spooled bytes and both reopen counters to be zero. The RPM decoder pairs
-the exact `FILEDIGESTALGO` with every `FILEDIGESTS` value and produces typed,
-algorithm-tagged evidence during its bounded decode/spool copy. Code 8 shares
-the content SHA-256 state, so `native_payload_bytes_hashed` is exactly one
-times spooled bytes; every other supported file-digest algorithm runs one
-concurrent declared-digest state, so it is exactly two times spooled bytes.
-Additive CPIO CRC work is excluded from that cryptographic counter.
-
-Schema v6 hard-cuts the former split payload-reference derivation and payload-
-object emission paths. One `payload_derivation_and_object_staging` phase opens
-each regular content owner once, validates its whole-content identity, derives
-canonical chunk identities where required, and writes each unique staged
-object once. Its counters separately record source opens/bytes, zero source
-reopens/rereads, chunk-identity and whole-content SHA-256 input, their checked
-aggregate, unique writes, deduplicated occurrences/bytes, and zero canonical
-staging rereads or durability calls. The retired phases, nested temporary-
-staging timing, and second-pass/temp-incoming-hash fields are absent rather than
-reported as zero. Prepared layouts and the exact unique object census must
-match final v3 authority before signing.
-
-The two current reopen timers have different owners and boundaries. The
-`timing.phases` entry named `independent_transport_reopen` consumes the
-converter's typed pending artifact, verifies it under the exact profile targets
-key, and streams its signed objects into permanent CAS. It remains inside the
-`end_to_end` view and is the sole internal verification/finalization boundary.
-`output.independent_transport_reopen_ms` is instead a benchmark-only proof
-performed after the end-to-end conversion call. It is inside the outer
-repetition process envelope but outside both views, and it is never credited as
-a conversion optimization. The adjacent
-`output.independent_complete_archive_hash_ms` is also post-conversion proof.
-
-The internal independent transport reopen streams signed object bytes directly
-into the permanent verified-CAS batch. The current schema-v8 contract
-attributes that fused wall time once to `independent_transport_reopen` and
-records `durable_cas_ingestion` as skipped with the exact reason
-`fused into independent transport reopen; no post-verification object pass`.
-The `independent_transport_reopen_object_bytes_hashed` and
-`cas_incoming_bytes_hashed` counters therefore describe the same physical hash
-pass and must agree with the signed object byte count; they are not additive.
-An isolated cold benchmark starts with an empty application CAS, so its
-missing-object bytes are written once behind one staged-data and one
-canonical-name barrier. A hot repetition has zero conversion `timing.work`,
-but the benchmark still performs its separate output proof; outer process wall
-time is therefore not hot service latency.
-
-CCS archive emission uses one portable Rust canonical MGZIP representation with
-fixed ordered 1 MiB DEFLATE blocks. Authenticated reopen validates every exact
-header, encoded-size bound, DEFLATE completion, decoded-size footer, and CRC,
-returns decoded bytes in carrier order, and rejects ordinary gzip, malformed or
-short blocks, and trailing bytes. Reordered or substituted valid blocks cannot
-survive the canonical tar layout plus signed object authority. Remi derives one
-shared bounded archive-CPU capacity from logical parallelism; emission and
-reopen lease that capacity without oversubscription. The raw and public records
-carry exact encode and decode workers, blocks, bytes, and checked buffer
-ceilings. Existing pre-alpha single-member CCS artifacts require rebuild; no
-compatibility reader remains.
-
-Schema v8 retains the schema-v4 hard cut that removed the former
-converter-owned immediate reopen and its inferred work fields entirely; it is
-not represented by a zero-duration or skipped compatibility phase. Foreign
-conversion now returns a typed pending artifact. Remi storage consumes that
-value and is the only code that can hand a verified conversion to transport
-construction and persistence. A signature, archive, object, or
-reconstructed-layout failure therefore still terminates before transport,
-chunk bookkeeping, or conversion rows become authoritative.
-The writer hashes every compressed output byte beneath its MGZIP write and
-binds that identity into the pending value. Remi first copies those bytes into
-a same-directory private file below `cache/packages`, synchronizes and seals it
-`0400` as defense-in-depth read-only mode, and makes that exact path the sole
-verifier input while signed objects stream directly into permanent CAS. It
-then hard-links that staged inode under the verifier-produced digest name
-without replacement and independently hashes the opened canonical final inode.
-A preexisting digest name is reused only when it is itself one sealed regular
-file with the exact verified size and digest. The staging name and an
-inode-bound publication guard remain owned through the
-conversion-row commit together with the exact read-only final file descriptor
-used for that one canonical hash. Every later binding compares the pathname to
-that held descriptor's regular-file device, inode, size, and sealed mode before
-bookkeeping and inside the conversion transaction. Digest names are append-only
-during the running service: request failure retires only its private staging
-name, and any future reclamation of unreferenced digest artifacts must run as
-exclusive stopped-runtime garbage collection. This avoids a conditional-unlink
-race with concurrent reuse or replacement. Portable regular-file permissions
-do not defend against an arbitrary writer already holding the same service
-principal's authority; that principal also controls Remi's database, keys, and
-CAS and is outside this boundary. Consequently the cold phase order is
-`complete_archive_copy`, `independent_transport_reopen`, then
-`complete_archive_hash`; each byte counter covers its exact full-archive pass,
-while `ccs_output_bytes_hashed` records the fused authoring hash.
-
-The exact pre-fusion production-XFS comparison anchor is protected workflow
-run `33282246922`: cold end-to-end was 246.678 seconds. Its correct #755 target
-boundary is the internal `independent_transport_reopen` at 38.282 seconds plus
-the old `durable_cas_ingestion` pass at 17.974 seconds, or 56.256 seconds. The
-39.100-second `immediate_converter_reopen` and the 40.099-second post-conversion
-output reopen are outside that target. Exact bindings, counters, formulas, and
-measurement caveats live in [performance evidence](../performance/README.md).
-
-The first successful repetition must be `cold`. Every later successful
-repetition must be an exact `hot` hit with no conversion-core work. Failures
-remain typed evidence rather than being relabeled or silently retried. The
-first failure terminates the repetition sequence, including a failure in the
-independent persisted-output reopen after conversion succeeds. A conversion
-failure carries zero unexecuted views; the distinct independent-output-reopen
-failure retains the completed conversion's cache state, timing, and executed
-views while omitting the output proof that could not be authenticated. Missing
-timing or contradictory cache/view evidence is a fatal harness-contract defect,
-not a valid repetition failure. The terminal failure is validated, atomically
-published, and independently reopened before the command reports its nonzero
-outcome.
-Schema-v6 validation rejects inconsistent authority, reopen evidence,
-iteration, cache-state, timing, or output proof before atomically publishing
-the report, then deserializes and compares the durable report before success.
-The validator binds `end_to_end` to the timing total, recomputes
-`conversion_core` from its owned phases, requires each independent complete
-reopen/hash byte count to equal the CCS size, and requires every hot output
-identity and byte geometry to equal the cold result. A commit-worthy
-baseline uses a clean exact source commit, preserves the complete JSON report,
-and compares identical authority, subject, parsed source, host/filesystem
-geometry, and signed-object-set identities while retaining each run's exact
-source commit and binary digest. Whole CCS and transport wrapper identities are
-exact within each cold/hot pair; their timestamped signatures make them
-time-varying across separately executed conversions. The recorded counters are
-regression evidence; they do not weaken conversion verification or storage
-authority. Performance baselines and measured optimizations live in
-[performance evidence](../performance/README.md).
-
-A successful command also atomically publishes
-`conversion-benchmark-public-v6.json`. This strict sidecar binds the exact raw
-schema-v8 bytes by size and SHA-256 and carries the complete safe authority,
-setup, process, VFS, phase, work, view, and output-proof evidence without
-rounding. It omits the executable path, every storage-root path and device ID,
-and the free-form explanation attached to skipped phases. Failed or dirty-source
-reports never receive a public sidecar. Both files are create-only, mode 0600,
-atomically and durably published, strictly reopened, and value-compared before
-success; the raw report remains the local diagnostic authority.
-
-`.github/workflows/remi-conversion-benchmark.yml` is the sole production
-adapter. It binds an exact successful protected deployment and accepts one
-explicit registered profile-revision digest so before-and-after binaries can
-be compared against identical retained authority even after the current
-candidate advances. It authenticates source bytes before and after transport,
-serializes against deployment, and invokes the fixed root-owned helper. The
-helper runs exactly one cold and one hot iteration on XFS while Remi is
-trap-backed stopped, then restores liveness. Only the public sidecar and its
-deployment/source bindings leave the host; workflow validation requires two
-successful repetitions, exact requested subject identity, clean deployed
-source and binary identity, and XFS for every retained root role.
-
-The isolated harness exercises local verified-CAS durability separately from
-cloud publication. `r2_write_through` is therefore recorded as skipped with a
-typed reason; the command has no R2 credentials or destination arguments.
-Cloud durability performance requires a separate benchmark against an
-explicitly isolated R2 prefix.
+Benchmark setup, isolation, report schemas, counters, comparison rules, and
+production-adapter requirements live in [performance evidence](../performance/README.md).
 
 ## Chunk Garbage Collection
 

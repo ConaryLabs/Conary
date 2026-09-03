@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 91
+revision: 92
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -80,7 +80,7 @@ workflow.
 ### Remi
 
 - Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
-- Use the normal admin account (`peter@ssh.conary.io`) plus passwordless,
+- Use the normal admin account (`<admin>@ssh.conary.io`) plus passwordless,
   least-privilege `sudo`; root SSH login is not part of the supported deploy
   path.
 - Exclude `target/`, `.git/`, and `.worktrees/`
@@ -507,7 +507,7 @@ workflow.
   `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
   installs `deploy/sudoers/remi` to `/etc/sudoers.d/remi`, and validates the
   sudoers file with `visudo -cf`.
-- After bootstrap, `ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
+- After bootstrap, `ssh <admin>@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
   should succeed without prompting for a password. This operation verifies
   root execution and the installed Remi configuration only; it deliberately
   works before the first Remi binary or service start so a clean host does not
@@ -520,7 +520,7 @@ workflow.
   are the source of truth.
 - The public frontends currently share the Remi host but deploy as two separate
   static sites. `deploy/deploy-sites.sh` builds locally, stages the build output
-  under `/tmp` on `peter@ssh.conary.io`, then asks
+  under `/tmp` on `<admin>@ssh.conary.io`, then asks
   `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
   `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
 - Post-release public-frontend updates deploy from the exact `main` commit
@@ -548,171 +548,6 @@ workflow.
   `sudo certbot renew --dry-run --cert-name remi.conary.io --non-interactive --no-random-sleep-on-renew`;
   the 2026-07-16 production repair passed that simulation and restored public
   health for all three certificate names.
-
-#### Remi Remote Development Workbench
-
-The Remi host may also carry an isolated multi-project development workbench,
-but that workbench is not part of the production service contract. Use the
-unprivileged `dev` account for all interactive development. Keep production
-service paths such as `/conary/web`, `/conary/site`, `/conary/releases`, and
-systemd-owned Remi state out of development workflows. `conary` remains the
-dedicated non-login service identity; do not recreate the retired
-`conary-dev` or `signed-dev` interactive accounts.
-
-When rebuilding the workbench from a privileged Remi shell, the non-secret
-baseline is:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential git clang mold nodejs npm fd-find ripgrep gh bubblewrap tmux mosh
-sudo useradd -m -d /data/dev/home -s /bin/bash dev
-sudo install -d -o dev -g dev /data/dev/src
-sudo install -d -o dev -g dev /data/dev/cache/cargo /data/dev/cache/rustup /data/dev/cache/npm /data/dev/cache/target
-sudo loginctl enable-linger dev
-```
-
-After the account exists, clone repositories as `dev` under `/data/dev/src`,
-set `CARGO_HOME`, `RUSTUP_HOME`, npm cache, and target cache paths under
-`/data/dev/cache`, install Rust through rustup, and install
-the assistant CLIs without version pinning:
-
-```bash
-rustup toolchain install 1.98.0 --profile default
-rustup default 1.98.0
-npm install -g @openai/codex @anthropic-ai/claude-code
-```
-
-Google agent work uses the supported Antigravity CLI through `agy`. Install it
-from Google's current
-[Antigravity distribution](https://antigravity.google/download), authenticate
-interactively, and verify it with `agy --version`; do not add a second Google
-CLI compatibility path to the repository. Workspace guidance for Antigravity
-lives in `.agents/rules/conary.md` and routes back to the shared `AGENTS.md`
-contract.
-
-After Codex authentication, bootstrap its managed app-server for durable remote
-control and automatic CLI updates:
-
-```bash
-codex app-server daemon bootstrap --remote-control
-codex remote-control start --json
-codex app-server daemon version
-```
-
-The upstream pid-backed daemon and updater survive logout but not a host reboot.
-Install `deploy/systemd/codex-app-server-bootstrap.service` into `dev`'s user
-manager so the idempotent upstream bootstrap runs at every boot:
-
-```bash
-runtime_dir="/run/user/$(id -u dev)"
-sudo install -d -o dev -g dev -m 0755 \
-  /data/dev/home/.config/systemd/user/default.target.wants \
-  /data/dev/home/.local/libexec
-sudo install -o dev -g dev -m 0755 \
-  deploy/hetzner/codex-app-server-reconcile.sh \
-  /data/dev/home/.local/libexec/codex-app-server-reconcile
-sudo install -o dev -g dev -m 0644 \
-  deploy/systemd/codex-app-server-bootstrap.service \
-  /data/dev/home/.config/systemd/user/codex-app-server-bootstrap.service
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" \
-  systemctl --user enable --now codex-app-server-bootstrap.service
-```
-
-The preflight reconciles PID records left across a host reboot against both the
-live PID and its recorded process start time. It removes only stale records,
-preserves matching live processes, and rejects malformed state rather than
-guessing. This is required because Codex 0.149.1 otherwise fails bootstrap on a
-previous-boot PID record instead of repairing it. The unit retries after a
-failed reconciliation/start so a process-exit race cannot strand Remote
-Control until the next reboot.
-
-The upstream defect and deterministic reboot evidence are tracked in
-[`openai/codex#35295`](https://github.com/openai/codex/issues/35295). Remove the
-preflight only after the installed Codex release reconciles both absent and
-start-time-mismatched PID records itself and that behavior passes the reboot
-gate.
-
-`loginctl enable-linger dev` is part of the baseline above and is required for
-the user manager to start without an interactive login. After a host reboot,
-verify the unit is active, both managed Codex processes are owned by `dev`'s
-user manager, and `codex remote-control start --json` reports `connected`
-before treating Remote as recovered.
-
-Register the clean Conary, Nomos, and The Mortal Estate checkout roots as Codex
-projects through the running app-server's experimental project API. Project
-registration is explicit; do not create dummy model turns merely to seed recent
-working directories. Pair trusted clients with a short-lived
-`codex remote-control pair` code and verify the project list from the paired
-client. The rpm-rs fork remains a pinned Conary dependency while its upstream
-work is pending, but it is not a Remi development project or persistent
-checkout.
-
-Claude Code Remote Control is directory-scoped rather than backed by a global
-project registry. Authenticate `dev` with a full-scope `claude.ai` subscription
-login, then run `claude` interactively once in each project root to accept the
-workspace trust gate. Before enabling the unattended services, run
-`claude remote-control` interactively in one trusted project and accept the
-one-time `Enable Remote Control?` account consent. A headless process can remain
-alive without registering a remote session while that consent is pending, so a
-healthy systemd process is not sufficient proof. Install the tracked template
-and enable one named server instance per supported project:
-
-```bash
-runtime_dir="/run/user/$(id -u dev)"
-sudo install -d -o dev -g dev -m 0755 \
-  /data/dev/home/.config/systemd/user/default.target.wants
-sudo install -o dev -g dev -m 0644 \
-  deploy/systemd/claude-remote-control@.service \
-  /data/dev/home/.config/systemd/user/claude-remote-control@.service
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user enable --now \
-  claude-remote-control@Conary.service \
-  claude-remote-control@nomos.service \
-  claude-remote-control@the-mortal-estate.service
-```
-
-Each instance uses Claude's worktree spawn mode so concurrent on-demand
-sessions do not edit the same checkout, with a four-session capacity per
-project. The pre-created session remains in the clean project root. Verify all
-three services are active, each project owns a fresh
-`~/.claude/projects/<project>/bridge-pointer.json`, and `Remi Conary`,
-`Remi nomos`, and `Remi the-mortal-estate` appear in `claude.ai/code` from a
-separate client before treating the remote workbench as recovered.
-
-Native Claude Code installations download updates in the background, but a new
-version takes effect only when the process next starts. A host reboot starts the
-template instances from the current binary. To apply an update sooner, finish
-or detach active Remote Control work and explicitly restart the three service
-instances; do not interrupt active sessions from an automatic update hook.
-
-The durable interactive entry point is a `dev` wrapper in
-`/data/dev/home/.local/bin/dev`. It should attach to a selected project tmux
-session under `/data/dev/src`, creating the session when absent.
-Install `/usr/local/bin/dev` as a root-owned symlink or wrapper only after the
-user-owned script exists. Enable tmux history and mouse support in the
-`dev` home directory rather than relying on workstation defaults.
-
-Use `ssh.conary.io` for SSH transport. Workstation-specific aliases such as
-`remi-dev`, `remi-work`, or mosh wrappers belong in the ignored
-`docs/operations/LOCAL_ACCESS.md`; do not commit private key paths, access
-tokens, recent-session history, or assistant cache directories. It is fine to
-copy minimal assistant auth/config after reviewing it, but do not copy local
-conversation history or package build artifacts wholesale. The remote Codex
-GitHub MCP token, when present, belongs in a private env file such as
-`/data/dev/home/.config/codex/env`; Cloudflare MCP login remains an
-interactive `codex mcp login cloudflare-api` step unless a future tracked helper
-defines a safer bootstrap.
-
-After a laptop rebuild, restore the SSH private key locally, recreate the
-ignored SSH aliases from `docs/operations/LOCAL_ACCESS.md`, install `mosh` if
-the workstation should use it, and connect with the tmux-attaching alias. If the
-remote workbench itself is lost, rebuild the host packages, account, cache
-directories, rustup toolchain, assistant CLIs, and `dev` wrapper before copying
-any private auth material.
-
-Do not overwrite the live Remi binary while `remi.service` is still running the
-old process. That can fail with `Text file busy`.
 
 ## Release Flow
 
