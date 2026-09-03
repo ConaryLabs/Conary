@@ -1,6 +1,11 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/resolution.rs
 
 //! Independent libalpm-backed native resolution evidence production.
+//!
+//! Each worker stages the same authenticated database inputs into a private
+//! libalpm root, owns that handle and a read-only package-index connection, and
+//! returns results to the bounded canonical-order sink. libalpm state never
+//! crosses threads.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -16,6 +21,11 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
+use crate::repository::catalog::parity::resolution_parallel::{
+    OrderedResolutionMetrics, RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    walk_ordered_parallel,
+};
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
     NativeRootResolutionResult, RootOutcomeSink,
@@ -48,12 +58,36 @@ pub fn produce_alpm_resolution_oracle(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionOracleV1> {
+    produce_alpm_resolution_oracle_with_workers(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(manifest, _)| manifest)
+}
+
+/// Produce a strict ALPM bundle with an explicit or capacity-derived worker request.
+pub fn produce_alpm_resolution_oracle_with_workers(
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionOracleV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let ResolutionProduct::Oracle(manifest) = produce_alpm_resolution(
         profile,
         inputs,
         package_oracle_directory,
         architecture,
         ResolutionDestination::Oracle(output),
+        worker_request,
     )?
     else {
         unreachable!("ALPM oracle destination returned survey")
@@ -69,12 +103,36 @@ pub fn produce_alpm_resolution_survey(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionSurveyV1> {
+    produce_alpm_resolution_survey_with_workers(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(survey, _)| survey)
+}
+
+/// Produce an ALPM survey with an explicit or capacity-derived worker request.
+pub fn produce_alpm_resolution_survey_with_workers(
+    profile: &ProfileRevisionV2,
+    inputs: &[AlpmParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionSurveyV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let ResolutionProduct::Survey(survey) = produce_alpm_resolution(
         profile,
         inputs,
         package_oracle_directory,
         architecture,
         ResolutionDestination::Survey(output),
+        worker_request,
     )?
     else {
         unreachable!("ALPM survey destination returned oracle")
@@ -88,8 +146,18 @@ enum ResolutionDestination<'a> {
 }
 
 enum ResolutionProduct {
-    Oracle(NativeResolutionOracleV1),
-    Survey(NativeResolutionSurveyV1),
+    Oracle(
+        (
+            NativeResolutionOracleV1,
+            ResolutionWalkImplementationEvidenceV1,
+        ),
+    ),
+    Survey(
+        (
+            NativeResolutionSurveyV1,
+            ResolutionWalkImplementationEvidenceV1,
+        ),
+    ),
 }
 
 fn produce_alpm_resolution(
@@ -98,6 +166,7 @@ fn produce_alpm_resolution(
     package_oracle_directory: &Path,
     architecture: &str,
     destination: ResolutionDestination<'_>,
+    worker_request: ResolutionWorkerRequest,
 ) -> Result<ResolutionProduct> {
     let architecture = profile.require_target_architecture(architecture)?;
     let policy = NativeResolutionPolicyV1 {
@@ -114,8 +183,12 @@ fn produce_alpm_resolution(
     require_alpm_package_oracle(package_oracle.manifest())?;
     verify_package_oracle_reprojection(profile, inputs, package_oracle.manifest())?;
     let package_index = PackageResolutionIndex::create(&package_oracle)?;
+    let workers = worker_request.resolve(
+        package_oracle.manifest().artifact.counts.packages,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
 
-    let (_staging, mut alpm) = open_alpm(profile, inputs, &[architecture])?;
     let implementation = crate::repository::catalog::parity::NativeParityImplementationV1 {
         ecosystem: NativeParityEcosystemV1::Alpm,
         name: "libalpm".to_string(),
@@ -133,14 +206,14 @@ fn produce_alpm_resolution(
                 implementation,
                 policy.clone(),
             )?;
-            walk_resolution_roots(
+            let metrics = walk_resolution_roots(
                 &package_oracle,
-                &mut alpm,
                 profile,
                 inputs,
                 &package_index,
                 &policy,
                 RootOutcomeSink::Strict(&mut writer),
+                workers,
             )?;
             let manifest = writer.finish()?;
             write_native_resolution_oracle_manifest(output, &manifest)?;
@@ -151,7 +224,10 @@ fn produce_alpm_resolution(
                     "reopened ALPM resolution manifest differs from produced manifest".to_string(),
                 ));
             }
-            Ok(ResolutionProduct::Oracle(manifest))
+            Ok(ResolutionProduct::Oracle((
+                manifest,
+                implementation_evidence(workers, metrics)?,
+            )))
         }
         ResolutionDestination::Survey(output) => {
             let mut collector = NativeResolutionSurveyCollector::new(
@@ -160,47 +236,86 @@ fn produce_alpm_resolution(
                 implementation,
                 policy.clone(),
             )?;
-            walk_resolution_roots(
+            let metrics = walk_resolution_roots(
                 &package_oracle,
-                &mut alpm,
                 profile,
                 inputs,
                 &package_index,
                 &policy,
                 RootOutcomeSink::Survey(&mut collector),
+                workers,
             )?;
             let survey = collector.finish()?;
             write_native_resolution_survey(output, &survey)?;
-            Ok(ResolutionProduct::Survey(survey))
+            Ok(ResolutionProduct::Survey((
+                survey,
+                implementation_evidence(workers, metrics)?,
+            )))
         }
     }
 }
 
 fn walk_resolution_roots(
     package_oracle: &NativeParityOracleReader,
-    alpm: &mut Alpm,
     profile: &ProfileRevisionV2,
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndex,
     policy: &NativeResolutionPolicyV1,
     mut sink: RootOutcomeSink<'_>,
-) -> Result<()> {
-    package_oracle.for_each_package(|root| {
-        let result = resolve_exact_root(
-            alpm,
-            profile,
-            inputs,
-            package_index,
-            &root,
-            policy,
-            sink.explanation_byte_limit(),
-        );
-        sink.root(&root, result)
-    })
+    workers: ResolutionWorkerCount,
+) -> Result<OrderedResolutionMetrics> {
+    let explanation_byte_limit = sink.explanation_byte_limit();
+    walk_ordered_parallel(
+        package_oracle,
+        workers,
+        explanation_byte_limit,
+        |_| {
+            let (staging, alpm) = open_alpm(profile, inputs, &[&policy.architecture])?;
+            Ok(AlpmResolutionWorker {
+                _staging: staging,
+                alpm,
+                package_index: package_index.worker()?,
+            })
+        },
+        |worker, root, byte_limit| {
+            resolve_exact_root(
+                &mut worker.alpm,
+                profile,
+                inputs,
+                &worker.package_index,
+                root,
+                policy,
+                byte_limit,
+            )
+        },
+        |root, result| sink.root(root, result),
+    )
+}
+
+struct AlpmResolutionWorker {
+    _staging: tempfile::TempDir,
+    alpm: Alpm,
+    package_index: PackageResolutionIndexReader,
+}
+
+fn implementation_evidence(
+    workers: ResolutionWorkerCount,
+    metrics: OrderedResolutionMetrics,
+) -> Result<ResolutionWalkImplementationEvidenceV1> {
+    ResolutionWalkImplementationEvidenceV1::new(
+        workers,
+        metrics.worker_load_milliseconds,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )
 }
 
 struct PackageResolutionIndex {
     _scratch: tempfile::TempDir,
+    database: std::path::PathBuf,
+}
+
+struct PackageResolutionIndexReader {
     connection: Connection,
 }
 
@@ -209,7 +324,8 @@ impl PackageResolutionIndex {
         let scratch = tempfile::Builder::new()
             .prefix("conary-alpm-resolution-index-")
             .tempdir()?;
-        let mut connection = Connection::open(scratch.path().join("packages.sqlite3"))?;
+        let database = scratch.path().join("packages.sqlite3");
+        let mut connection = Connection::open(&database)?;
         connection.execute_batch(
             "PRAGMA journal_mode = OFF;
              PRAGMA synchronous = OFF;
@@ -251,12 +367,25 @@ impl PackageResolutionIndex {
             Ok(())
         })?;
         transaction.commit()?;
+        drop(connection);
         Ok(Self {
             _scratch: scratch,
-            connection,
+            database,
         })
     }
 
+    fn worker(&self) -> Result<PackageResolutionIndexReader> {
+        Ok(PackageResolutionIndexReader {
+            connection: Connection::open_with_flags(
+                &self.database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?,
+        })
+    }
+}
+
+impl PackageResolutionIndexReader {
     fn bind_required_group(
         &self,
         requiring_name: &str,
@@ -336,7 +465,7 @@ fn resolve_exact_root(
     alpm: &mut Alpm,
     profile: &ProfileRevisionV2,
     inputs: &[AlpmParityMemberInput<'_>],
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     root: &NativeParityPackageV1,
     policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
@@ -451,7 +580,7 @@ fn resolve_initialized_transaction(
     alpm: &mut Alpm,
     profile: &ProfileRevisionV2,
     inputs: &[AlpmParityMemberInput<'_>],
-    package_index: &PackageResolutionIndex,
+    package_index: &PackageResolutionIndexReader,
     root: &NativeParityPackageV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {

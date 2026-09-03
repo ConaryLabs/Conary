@@ -8,8 +8,9 @@ use flate2::{Compression, GzBuilder};
 
 use super::*;
 use crate::repository::catalog::{
-    CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME, NativeParityOracleWriter,
-    NativeResolutionOutcomeV1, NativeResolutionSurveyAlpmResultV1,
+    CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME,
+    NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
+    NativeParityOracleWriter, NativeResolutionOutcomeV1, NativeResolutionSurveyAlpmResultV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
     PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
@@ -35,6 +36,80 @@ struct PackageFixture<'a> {
     conflicts: &'a [&'a str],
     replaces: &'a [&'a str],
     include_checksum: bool,
+}
+
+#[test]
+fn serial_and_parallel_resolution_outputs_are_byte_identical() {
+    let directory = tempfile::tempdir().unwrap();
+    let (databases, snapshots) = resolution_fixture_databases(directory.path(), false);
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 11;
+    let package_output = directory.path().join("package-oracle");
+    let member_inputs = inputs(&snapshots, &databases);
+    produce_alpm_parity_oracle(&profile, &member_inputs, &package_output).unwrap();
+    let one = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(1).unwrap(),
+    );
+    let two = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap(),
+    );
+    let serial_output = directory.path().join("serial-resolution");
+    let parallel_output = directory.path().join("parallel-resolution");
+
+    produce_alpm_resolution_oracle_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &serial_output,
+        one,
+    )
+    .unwrap();
+    produce_alpm_resolution_oracle_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &parallel_output,
+        two,
+    )
+    .unwrap();
+    for name in [
+        NATIVE_RESOLUTION_ROOT_FILE_NAME,
+        NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    ] {
+        assert_eq!(
+            fs::read(serial_output.join(name)).unwrap(),
+            fs::read(parallel_output.join(name)).unwrap(),
+            "strict resolution byte drift in {name}"
+        );
+    }
+
+    let serial_survey = directory.path().join("serial-survey.json");
+    let parallel_survey = directory.path().join("parallel-survey.json");
+    produce_alpm_resolution_survey_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &serial_survey,
+        one,
+    )
+    .unwrap();
+    produce_alpm_resolution_survey_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &parallel_survey,
+        two,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(serial_survey).unwrap(),
+        fs::read(parallel_survey).unwrap(),
+        "survey JSON changed with worker scheduling"
+    );
 }
 
 impl<'a> PackageFixture<'a> {

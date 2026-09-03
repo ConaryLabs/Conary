@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::{ArgGroup, Parser};
 use conary_core::repository::catalog::{
-    AlpmParityMemberInput, ProfileRevisionV2, SourceSnapshotV1, produce_alpm_resolution_oracle,
-    produce_alpm_resolution_survey,
+    AlpmParityMemberInput, ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest,
+    SourceSnapshotV1, produce_alpm_resolution_oracle_with_workers,
+    produce_alpm_resolution_survey_with_workers, write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -48,6 +49,14 @@ struct Arguments {
     /// New diagnostics-only NativeResolutionSurveyV1 JSON file.
     #[arg(long)]
     survey: Option<PathBuf>,
+
+    /// Worker threads; defaults to detected CPU and measured memory capacity.
+    #[arg(long)]
+    workers: Option<ResolutionWorkerCount>,
+
+    /// New JSON file recording worker count and per-worker pool-load time.
+    #[arg(long)]
+    implementation_evidence: PathBuf,
 }
 
 fn main() {
@@ -79,24 +88,31 @@ fn run(arguments: Arguments) -> Result<()> {
             database,
         })
         .collect::<Vec<_>>();
-    match (arguments.output, arguments.survey) {
+    let worker_request = arguments.workers.map_or(
+        ResolutionWorkerRequest::Automatic,
+        ResolutionWorkerRequest::explicit,
+    );
+    let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
-            produce_alpm_resolution_oracle(
+            let (_, evidence) = produce_alpm_resolution_oracle_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce ALPM resolution oracle")?;
+            evidence
         }
         (None, Some(output)) => {
-            let survey = produce_alpm_resolution_survey(
+            let (survey, evidence) = produce_alpm_resolution_survey_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
                 &arguments.architecture,
                 &output,
+                worker_request,
             )
             .context("produce ALPM resolution survey")?;
             if survey.total_failures != 0 {
@@ -106,9 +122,12 @@ fn run(arguments: Arguments) -> Result<()> {
                     output.display()
                 );
             }
+            evidence
         }
         _ => unreachable!("clap requires exactly one resolution destination"),
-    }
+    };
+    write_resolution_walk_implementation_evidence(&arguments.implementation_evidence, &evidence)
+        .context("write ALPM resolution implementation evidence")?;
     Ok(())
 }
 

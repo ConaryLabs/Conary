@@ -1,12 +1,21 @@
 // crates/conary-core/src/repository/catalog/parity/debian/resolution.rs
 
 //! Independent apt-pkg-backed Debian native resolution evidence production.
+//!
+//! apt-pkg exposes process-global configuration and system pointers, so safe
+//! parallelism uses worker processes rather than shared or merely thread-local
+//! handles. Each process builds its own cache from the same staged authenticated
+//! inputs and opens the package index read-only. A bounded ordered sink in the
+//! parent remains the sole canonical artifact writer.
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use rusqlite::{Connection, params};
+use serde::{Deserialize, Serialize};
 
 use super::ffi::{AptNativeIdentity, AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::{
@@ -16,6 +25,11 @@ use super::{
 use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
+use crate::repository::catalog::parity::resolution_parallel::{
+    OrderedResolutionMetrics, RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    walk_ordered_parallel,
+};
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
     NativeRootResolutionResult, RootOutcomeSink,
@@ -29,12 +43,14 @@ use crate::repository::catalog::parity::{
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyErrorVariantV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
+    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
+    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
+use crate::repository::versioning::VersionScheme;
 
 /// Projection contract for apt-pkg transaction selections and broken strong groups.
 pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
@@ -64,12 +80,36 @@ pub fn produce_debian_resolution_oracle(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionOracleV1> {
+    produce_debian_resolution_oracle_with_workers(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(manifest, _)| manifest)
+}
+
+/// Produce a strict Debian bundle with isolated apt-pkg worker processes.
+pub fn produce_debian_resolution_oracle_with_workers(
+    profile: &ProfileRevisionV2,
+    inputs: &[DebianParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionOracleV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let ResolutionProduct::Oracle(manifest) = produce_debian_resolution(
         profile,
         inputs,
         package_oracle_directory,
         architecture,
         ResolutionDestination::Oracle(output),
+        worker_request,
     )?
     else {
         unreachable!("Debian oracle destination returned survey")
@@ -85,12 +125,36 @@ pub fn produce_debian_resolution_survey(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionSurveyV1> {
+    produce_debian_resolution_survey_with_workers(
+        profile,
+        inputs,
+        package_oracle_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(survey, _)| survey)
+}
+
+/// Produce a Debian survey with isolated apt-pkg worker processes.
+pub fn produce_debian_resolution_survey_with_workers(
+    profile: &ProfileRevisionV2,
+    inputs: &[DebianParityMemberInput<'_>],
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionSurveyV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let ResolutionProduct::Survey(survey) = produce_debian_resolution(
         profile,
         inputs,
         package_oracle_directory,
         architecture,
         ResolutionDestination::Survey(output),
+        worker_request,
     )?
     else {
         unreachable!("Debian survey destination returned oracle")
@@ -104,8 +168,18 @@ enum ResolutionDestination<'a> {
 }
 
 enum ResolutionProduct {
-    Oracle(NativeResolutionOracleV1),
-    Survey(NativeResolutionSurveyV1),
+    Oracle(
+        (
+            NativeResolutionOracleV1,
+            ResolutionWalkImplementationEvidenceV1,
+        ),
+    ),
+    Survey(
+        (
+            NativeResolutionSurveyV1,
+            ResolutionWalkImplementationEvidenceV1,
+        ),
+    ),
 }
 
 fn produce_debian_resolution(
@@ -114,6 +188,7 @@ fn produce_debian_resolution(
     package_oracle_directory: &Path,
     architecture: &str,
     destination: ResolutionDestination<'_>,
+    worker_request: ResolutionWorkerRequest,
 ) -> Result<ResolutionProduct> {
     let architecture = profile.require_target_architecture(architecture)?;
     let policy = NativeResolutionPolicyV1 {
@@ -137,7 +212,11 @@ fn produce_debian_resolution(
     let staged = stage_verified_packages(inputs, staging.path())?;
     let solver_inputs = stage_solver_inputs(&staged, staging.path())?;
     let package_index = PackageResolutionIndex::create(&package_oracle)?;
-    let mut apt = AptResolution::open(&solver_inputs, architecture)?;
+    let workers = worker_request.resolve(
+        package_oracle.manifest().artifact.counts.packages,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
 
     let implementation = NativeParityImplementationV1 {
         ecosystem: NativeParityEcosystemV1::Debian,
@@ -155,12 +234,13 @@ fn produce_debian_resolution(
                 implementation,
                 policy.clone(),
             )?;
-            walk_resolution_roots(
+            let metrics = walk_resolution_roots(
                 &package_oracle,
-                &mut apt,
                 &package_index,
                 &policy,
                 RootOutcomeSink::Strict(&mut writer),
+                &solver_inputs,
+                workers,
             )?;
             let manifest = writer.finish()?;
             write_native_resolution_oracle_manifest(output, &manifest)?;
@@ -172,7 +252,10 @@ fn produce_debian_resolution(
                         .to_string(),
                 ));
             }
-            Ok(ResolutionProduct::Oracle(manifest))
+            Ok(ResolutionProduct::Oracle((
+                manifest,
+                implementation_evidence(workers, metrics)?,
+            )))
         }
         ResolutionDestination::Survey(output) => {
             let mut collector = NativeResolutionSurveyCollector::new(
@@ -181,43 +264,299 @@ fn produce_debian_resolution(
                 implementation,
                 policy.clone(),
             )?;
-            walk_resolution_roots(
+            let metrics = walk_resolution_roots(
                 &package_oracle,
-                &mut apt,
                 &package_index,
                 &policy,
                 RootOutcomeSink::Survey(&mut collector),
+                &solver_inputs,
+                workers,
             )?;
             let survey = collector.finish()?;
             write_native_resolution_survey(output, &survey)?;
-            Ok(ResolutionProduct::Survey(survey))
+            Ok(ResolutionProduct::Survey((
+                survey,
+                implementation_evidence(workers, metrics)?,
+            )))
         }
     }
 }
 
 fn walk_resolution_roots(
     package_oracle: &NativeParityOracleReader,
-    apt: &mut AptResolution,
     package_index: &PackageResolutionIndex,
     policy: &NativeResolutionPolicyV1,
     mut sink: RootOutcomeSink<'_>,
-) -> Result<()> {
-    package_oracle.for_each_package(|root| {
-        let result = resolve_exact_root(
-            apt,
-            package_index,
-            &root,
-            policy,
-            sink.explanation_byte_limit(),
-        );
-        sink.root(&root, result)
+    solver_inputs: &[PathBuf],
+    workers: ResolutionWorkerCount,
+) -> Result<OrderedResolutionMetrics> {
+    let explanation_byte_limit = sink.explanation_byte_limit();
+    let executable = debian_worker_executable()?;
+    walk_ordered_parallel(
+        package_oracle,
+        workers,
+        explanation_byte_limit,
+        |_| {
+            DebianResolutionProcess::spawn(
+                &executable,
+                solver_inputs,
+                package_index.database(),
+                &policy.architecture,
+            )
+        },
+        |worker, root, byte_limit| worker.resolve(root, byte_limit),
+        |root, result| sink.root(root, result),
+    )
+}
+
+fn implementation_evidence(
+    workers: ResolutionWorkerCount,
+    metrics: OrderedResolutionMetrics,
+) -> Result<ResolutionWalkImplementationEvidenceV1> {
+    ResolutionWalkImplementationEvidenceV1::new(
+        workers,
+        metrics.worker_load_milliseconds,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DebianResolutionWorkerRequest {
+    root: DebianResolutionRoot,
+    explanation_byte_limit: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DebianResolutionRoot {
+    package_key_sha256: String,
+    source_profile: String,
+    name: String,
+    version: String,
+    architecture: Option<String>,
+    version_scheme: VersionScheme,
+}
+
+impl From<&crate::repository::catalog::parity::NativeParityPackageV1> for DebianResolutionRoot {
+    fn from(root: &crate::repository::catalog::parity::NativeParityPackageV1) -> Self {
+        Self {
+            package_key_sha256: root.package_key_sha256.clone(),
+            source_profile: root.source_profile.clone(),
+            name: root.name.clone(),
+            version: root.version.clone(),
+            architecture: root.architecture.clone(),
+            version_scheme: root.version_scheme,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum DebianResolutionWorkerResponse {
+    Ready,
+    Outcome {
+        outcome: NativeResolutionOutcomeV1,
+    },
+    Failure {
+        error_variant: NativeResolutionSurveyErrorVariantV1,
+        error_message: String,
+        reason: NativeResolutionSurveyErrorReasonV1,
+        explanation: NativeResolutionSurveyNativeExplanationV1,
+    },
+}
+
+struct DebianResolutionProcess {
+    child: Child,
+    input: BufWriter<ChildStdin>,
+    output: BufReader<ChildStdout>,
+}
+
+impl DebianResolutionProcess {
+    fn spawn(
+        executable: &Path,
+        solver_inputs: &[PathBuf],
+        package_index: &Path,
+        architecture: &str,
+    ) -> Result<Self> {
+        let mut command = Command::new(executable);
+        command
+            .arg("--internal-resolution-worker")
+            .arg("--architecture")
+            .arg(architecture)
+            .arg("--package-index")
+            .arg(package_index)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped());
+        for input in solver_inputs {
+            command.arg("--solver-input").arg(input);
+        }
+        let mut child = command.spawn()?;
+        let input = BufWriter::new(child.stdin.take().ok_or_else(|| {
+            Error::InternalError("Debian worker stdin was not piped".to_string())
+        })?);
+        let mut output = BufReader::new(child.stdout.take().ok_or_else(|| {
+            Error::InternalError("Debian worker stdout was not piped".to_string())
+        })?);
+        let response = read_worker_response(&mut output)?;
+        if !matches!(response, DebianResolutionWorkerResponse::Ready) {
+            return Err(Error::InternalError(
+                "Debian worker emitted a root before readiness".to_string(),
+            ));
+        }
+        Ok(Self {
+            child,
+            input,
+            output,
+        })
+    }
+
+    fn resolve(
+        &mut self,
+        root: &crate::repository::catalog::parity::NativeParityPackageV1,
+        explanation_byte_limit: u64,
+    ) -> NativeRootResolutionResult {
+        let request = DebianResolutionWorkerRequest {
+            root: root.into(),
+            explanation_byte_limit,
+        };
+        if let Err(error) = write_worker_message(&mut self.input, &request) {
+            return Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
+                debian_unavailable(),
+            ));
+        }
+        match read_worker_response(&mut self.output) {
+            Ok(DebianResolutionWorkerResponse::Outcome { outcome }) => Ok(outcome),
+            Ok(DebianResolutionWorkerResponse::Failure {
+                error_variant,
+                error_message,
+                reason,
+                explanation,
+            }) => Err(NativeRootResolutionError::from_wire(
+                error_variant,
+                error_message,
+                reason,
+                explanation,
+            )),
+            Ok(DebianResolutionWorkerResponse::Ready) => Err(NativeRootResolutionError::new(
+                Error::InternalError("Debian worker repeated readiness".to_string()),
+                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
+                debian_unavailable(),
+            )),
+            Err(error) => Err(NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::NativeSolverUnexpectedFailure,
+                debian_unavailable(),
+            )),
+        }
+    }
+}
+
+impl Drop for DebianResolutionProcess {
+    fn drop(&mut self) {
+        let _ = self.input.flush();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+fn write_worker_message<T: Serialize>(writer: &mut impl Write, value: &T) -> Result<()> {
+    serde_json::to_writer(&mut *writer, value)?;
+    writer.write_all(b"\n")?;
+    writer.flush()?;
+    Ok(())
+}
+
+fn read_worker_response(
+    reader: &mut BufReader<impl std::io::Read>,
+) -> Result<DebianResolutionWorkerResponse> {
+    let mut line = String::new();
+    if reader.read_line(&mut line)? == 0 {
+        return Err(Error::InternalError(
+            "Debian resolution worker closed its output".to_string(),
+        ));
+    }
+    serde_json::from_str(&line).map_err(Into::into)
+}
+
+fn debian_worker_executable() -> Result<PathBuf> {
+    let current = std::env::current_exe()?;
+    if current.file_stem().is_some_and(|name| {
+        name.to_string_lossy()
+            .starts_with("conary-debian-resolution-oracle")
+    }) {
+        return Ok(current);
+    }
+    let debug = current
+        .parent()
+        .and_then(Path::parent)
+        .map(|parent| parent.join("conary-debian-resolution-oracle"))
+        .filter(|candidate| candidate.is_file());
+    debug.ok_or_else(|| {
+        Error::ConfigError(
+            "cannot locate conary-debian-resolution-oracle worker executable".to_string(),
+        )
     })
+}
+
+/// Run the private line-delimited apt-pkg worker protocol.
+pub fn run_debian_resolution_worker(
+    solver_inputs: &[PathBuf],
+    package_index: &Path,
+    architecture: &str,
+) -> Result<()> {
+    let mut apt = AptResolution::open(solver_inputs, architecture)?;
+    let package_index = PackageResolutionIndexReader::open(package_index)?;
+    let policy = NativeResolutionPolicyV1 {
+        architecture: architecture.to_string(),
+        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
+        installed_state: NativeResolutionInstalledStateV1::Empty,
+        roots: NativeResolutionRootPolicyV1::EveryExactPackage,
+        positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
+        provider_selection: NativeResolutionProviderPolicyV1::NativePrecedence,
+    };
+    policy.validate()?;
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    let mut input = stdin.lock();
+    let mut output = BufWriter::new(stdout.lock());
+    write_worker_message(&mut output, &DebianResolutionWorkerResponse::Ready)?;
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if input.read_line(&mut line)? == 0 {
+            return Ok(());
+        }
+        let request: DebianResolutionWorkerRequest = serde_json::from_str(&line)?;
+        let response = match resolve_exact_root(
+            &mut apt,
+            &package_index,
+            &request.root,
+            &policy,
+            request.explanation_byte_limit,
+        ) {
+            Ok(outcome) => DebianResolutionWorkerResponse::Outcome { outcome },
+            Err(failure) => {
+                let (error_variant, error_message, reason, explanation) = (*failure).into_wire();
+                DebianResolutionWorkerResponse::Failure {
+                    error_variant,
+                    error_message,
+                    reason,
+                    explanation,
+                }
+            }
+        };
+        write_worker_message(&mut output, &response)?;
+    }
 }
 
 fn resolve_exact_root(
     apt: &mut AptResolution,
-    package_index: &PackageResolutionIndex,
-    root: &crate::repository::catalog::parity::NativeParityPackageV1,
+    package_index: &PackageResolutionIndexReader,
+    root: &DebianResolutionRoot,
     policy: &NativeResolutionPolicyV1,
     explanation_byte_limit: u64,
 ) -> NativeRootResolutionResult {
@@ -493,6 +832,10 @@ fn verify_package_oracle_reprojection(
 
 struct PackageResolutionIndex {
     _scratch: tempfile::TempDir,
+    database: PathBuf,
+}
+
+struct PackageResolutionIndexReader {
     connection: Connection,
 }
 
@@ -501,7 +844,8 @@ impl PackageResolutionIndex {
         let scratch = tempfile::Builder::new()
             .prefix("conary-debian-resolution-index-")
             .tempdir()?;
-        let mut connection = Connection::open(scratch.path().join("packages.sqlite3"))?;
+        let database = scratch.path().join("packages.sqlite3");
+        let mut connection = Connection::open(&database)?;
         connection.execute_batch(CREATE_INDEX)?;
         let transaction = connection.transaction()?;
         package_oracle.for_each_package(|package| {
@@ -548,9 +892,26 @@ impl PackageResolutionIndex {
             Ok(())
         })?;
         transaction.commit()?;
+        drop(connection);
         Ok(Self {
             _scratch: scratch,
-            connection,
+            database,
+        })
+    }
+
+    fn database(&self) -> &Path {
+        &self.database
+    }
+}
+
+impl PackageResolutionIndexReader {
+    fn open(database: &Path) -> Result<Self> {
+        Ok(Self {
+            connection: Connection::open_with_flags(
+                database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?,
         })
     }
 

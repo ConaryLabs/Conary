@@ -1,6 +1,10 @@
 // crates/conary-core/src/repository/catalog/parity/candidate_resolution.rs
 
-//! Complete Conary candidate dependency-resolution evidence production.
+//! Complete ordered-parallel Conary candidate resolution evidence production.
+//!
+//! Workers share only the immutable projected database path. Each owns a
+//! separate read-only SQLite connection and constructs fresh per-root resolvo
+//! state; the bounded caller-thread sink preserves package-oracle order.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -31,6 +35,10 @@ use super::resolution_contract::{
 use super::resolution_io::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionOracleWriter,
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+};
+use super::resolution_parallel::{
+    RESOLUTION_WALK_MEMORY_BUDGET_BYTES, RESOLUTION_WORKER_RSS_BYTES,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest, walk_ordered_parallel,
 };
 use crate::db::models::{
     Repository, RepositoryPackage, RepositoryProvide, RepositoryRequirement,
@@ -63,6 +71,31 @@ pub fn produce_conary_resolution_candidate(
     architecture: &str,
     output: &Path,
 ) -> Result<ConaryResolutionCandidateV1> {
+    produce_conary_resolution_candidate_with_workers(
+        profile,
+        catalog,
+        package_oracle_directory,
+        native_resolution_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(candidate, _)| candidate)
+}
+
+/// Produce one complete candidate with an explicit or capacity-derived worker request.
+pub fn produce_conary_resolution_candidate_with_workers(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle_directory: &Path,
+    native_resolution_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    ConaryResolutionCandidateV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let architecture = profile.require_target_architecture(architecture)?;
     let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
     compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
@@ -82,8 +115,14 @@ pub fn produce_conary_resolution_candidate(
         ));
     }
 
-    let manifest =
-        produce_conary_resolution_bundle(profile, catalog, &package_oracle, &policy, output)?;
+    let (manifest, implementation_evidence) = produce_conary_resolution_bundle(
+        profile,
+        catalog,
+        &package_oracle,
+        &policy,
+        output,
+        worker_request,
+    )?;
     let reopened = verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
     if reopened.manifest() != &manifest {
         return Err(Error::InternalError(
@@ -97,10 +136,13 @@ pub fn produce_conary_resolution_candidate(
                 "Conary candidate resolution diverges from the pinned native oracle: {error}"
             ))
         })?;
-    Ok(ConaryResolutionCandidateV1 {
-        manifest,
-        comparison,
-    })
+    Ok((
+        ConaryResolutionCandidateV1 {
+            manifest,
+            comparison,
+        },
+        implementation_evidence,
+    ))
 }
 
 /// Produce a collect-all comparison survey through an ephemeral strict
@@ -113,6 +155,31 @@ pub fn produce_conary_resolution_comparison_survey(
     architecture: &str,
     output: &Path,
 ) -> Result<NativeResolutionComparisonSurveyV1> {
+    produce_conary_resolution_comparison_survey_with_workers(
+        profile,
+        catalog,
+        package_oracle_directory,
+        native_resolution_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(survey, _)| survey)
+}
+
+/// Produce a comparison survey with an explicit or capacity-derived worker request.
+pub fn produce_conary_resolution_comparison_survey_with_workers(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle_directory: &Path,
+    native_resolution_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionComparisonSurveyV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let architecture = profile.require_target_architecture(architecture)?;
     let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
     compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
@@ -135,12 +202,13 @@ pub fn produce_conary_resolution_comparison_survey(
         .prefix("conary-resolution-comparison-survey-")
         .tempdir()?;
     let candidate_directory = scratch.path().join("candidate");
-    produce_conary_resolution_bundle(
+    let (_, implementation_evidence) = produce_conary_resolution_bundle(
         profile,
         catalog,
         &package_oracle,
         &policy,
         &candidate_directory,
+        worker_request,
     )?;
     let candidate =
         verify_native_resolution_oracle_bundle(&candidate_directory, profile, &package_oracle)?;
@@ -151,7 +219,7 @@ pub fn produce_conary_resolution_comparison_survey(
         &candidate,
     )?;
     write_native_resolution_comparison_survey(output, &survey)?;
-    Ok(survey)
+    Ok((survey, implementation_evidence))
 }
 
 fn produce_conary_resolution_bundle(
@@ -160,8 +228,17 @@ fn produce_conary_resolution_bundle(
     package_oracle: &super::io::NativeParityOracleReader,
     policy: &NativeResolutionPolicyV1,
     output: &Path,
-) -> Result<NativeResolutionOracleV1> {
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    NativeResolutionOracleV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    let workers = worker_request.resolve(
+        package_oracle.manifest().artifact.counts.packages,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
     fs::create_dir(output)?;
     let mut writer = NativeResolutionOracleWriter::create(
         output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
@@ -170,15 +247,22 @@ fn produce_conary_resolution_bundle(
         conary_implementation(package_oracle.manifest()),
         policy.clone(),
     )?;
-    walk_resolution_roots(
+    let metrics = walk_resolution_roots(
         package_oracle,
         &projection,
         policy,
         ConaryRootOutcomeSink::Strict(&mut writer),
+        workers,
     )?;
     let manifest = writer.finish()?;
     write_native_resolution_oracle_manifest(output, &manifest)?;
-    Ok(manifest)
+    let evidence = ResolutionWalkImplementationEvidenceV1::new(
+        workers,
+        metrics.worker_load_milliseconds,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
+    Ok((manifest, evidence))
 }
 
 /// Walk every exact package root and write a diagnostics-only Conary survey.
@@ -189,6 +273,29 @@ pub fn produce_conary_resolution_survey(
     architecture: &str,
     output: &Path,
 ) -> Result<ConaryResolutionSurveyV1> {
+    produce_conary_resolution_survey_with_workers(
+        profile,
+        catalog,
+        package_oracle_directory,
+        architecture,
+        output,
+        ResolutionWorkerRequest::Automatic,
+    )
+    .map(|(survey, _)| survey)
+}
+
+/// Produce a candidate survey with an explicit or capacity-derived worker request.
+pub fn produce_conary_resolution_survey_with_workers(
+    profile: &ProfileRevisionV2,
+    catalog: &CatalogReader,
+    package_oracle_directory: &Path,
+    architecture: &str,
+    output: &Path,
+    worker_request: ResolutionWorkerRequest,
+) -> Result<(
+    ConaryResolutionSurveyV1,
+    ResolutionWalkImplementationEvidenceV1,
+)> {
     let architecture = profile.require_target_architecture(architecture)?;
     let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
     compare_native_parity_oracle(profile, catalog, &package_oracle).map_err(|error| {
@@ -198,6 +305,11 @@ pub fn produce_conary_resolution_survey(
     })?;
     let policy = resolution_policy(architecture);
     let projection = CandidateResolutionProjection::create(profile, catalog)?;
+    let workers = worker_request.resolve(
+        package_oracle.manifest().artifact.counts.packages,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
     let implementation = conary_implementation(package_oracle.manifest());
     let mut collector = ConaryResolutionSurveyCollector::new(
         profile,
@@ -205,15 +317,22 @@ pub fn produce_conary_resolution_survey(
         implementation,
         policy.clone(),
     )?;
-    walk_resolution_roots(
+    let metrics = walk_resolution_roots(
         &package_oracle,
         &projection,
         &policy,
         ConaryRootOutcomeSink::Survey(&mut collector),
+        workers,
     )?;
     let survey = collector.finish()?;
     write_conary_resolution_survey(output, &survey)?;
-    Ok(survey)
+    let evidence = ResolutionWalkImplementationEvidenceV1::new(
+        workers,
+        metrics.worker_load_milliseconds,
+        RESOLUTION_WALK_MEMORY_BUDGET_BYTES,
+        RESOLUTION_WORKER_RSS_BYTES,
+    )?;
+    Ok((survey, evidence))
 }
 
 fn conary_implementation(
@@ -261,15 +380,17 @@ fn walk_resolution_roots(
     projection: &CandidateResolutionProjection,
     policy: &NativeResolutionPolicyV1,
     mut sink: ConaryRootOutcomeSink<'_>,
-) -> Result<()> {
-    package_oracle.for_each_package(|root| {
-        let result = projection.resolve(
-            &root.package_key_sha256,
-            policy,
-            sink.explanation_byte_limit(),
-        );
-        sink.root(&root, result)
-    })
+    workers: super::resolution_parallel::ResolutionWorkerCount,
+) -> Result<super::resolution_parallel::OrderedResolutionMetrics> {
+    let explanation_byte_limit = sink.explanation_byte_limit();
+    walk_ordered_parallel(
+        package_oracle,
+        workers,
+        explanation_byte_limit,
+        |_| projection.worker(),
+        |worker, root, byte_limit| worker.resolve(&root.package_key_sha256, policy, byte_limit),
+        |root, result| sink.root(root, result),
+    )
 }
 
 fn resolution_policy(architecture: &str) -> NativeResolutionPolicyV1 {
@@ -285,6 +406,11 @@ fn resolution_policy(architecture: &str) -> NativeResolutionPolicyV1 {
 
 struct CandidateResolutionProjection {
     _scratch: tempfile::TempDir,
+    database: std::path::PathBuf,
+    source_identity: String,
+}
+
+struct CandidateResolutionWorker {
     connection: Connection,
     source_identity: String,
 }
@@ -327,11 +453,24 @@ impl CandidateResolutionProjection {
         transaction.commit()?;
         Ok(Self {
             _scratch: scratch,
-            connection,
+            database,
             source_identity: profile.profile.clone(),
         })
     }
 
+    fn worker(&self) -> Result<CandidateResolutionWorker> {
+        Ok(CandidateResolutionWorker {
+            connection: Connection::open_with_flags(
+                &self.database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )?,
+            source_identity: self.source_identity.clone(),
+        })
+    }
+}
+
+impl CandidateResolutionWorker {
     fn resolve(
         &self,
         root_package_key_sha256: &str,

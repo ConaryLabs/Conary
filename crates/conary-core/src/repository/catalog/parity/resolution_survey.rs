@@ -507,6 +507,7 @@ pub(super) struct NativeRootResolutionError {
     error: Error,
     reason: NativeResolutionSurveyErrorReasonV1,
     explanation: NativeResolutionSurveyNativeExplanationV1,
+    wire_identity: Option<(NativeResolutionSurveyErrorVariantV1, String)>,
 }
 
 #[allow(dead_code)]
@@ -520,6 +521,38 @@ impl NativeRootResolutionError {
             error,
             reason,
             explanation,
+            wire_identity: None,
+        })
+    }
+
+    pub(super) fn into_wire(
+        self,
+    ) -> (
+        NativeResolutionSurveyErrorVariantV1,
+        String,
+        NativeResolutionSurveyErrorReasonV1,
+        NativeResolutionSurveyNativeExplanationV1,
+    ) {
+        let variant = NativeResolutionSurveyErrorVariantV1::from_error(&self.error);
+        (
+            variant,
+            self.error.to_string(),
+            self.reason,
+            self.explanation,
+        )
+    }
+
+    pub(super) fn from_wire(
+        variant: NativeResolutionSurveyErrorVariantV1,
+        message: String,
+        reason: NativeResolutionSurveyErrorReasonV1,
+        explanation: NativeResolutionSurveyNativeExplanationV1,
+    ) -> Box<Self> {
+        Box::new(Self {
+            error: Error::ResolutionError(message.clone()),
+            reason,
+            explanation,
+            wire_identity: Some((variant, message)),
         })
     }
 
@@ -531,6 +564,7 @@ impl NativeRootResolutionError {
     ) {
         self.error = error;
         self.reason = reason;
+        self.wire_identity = None;
     }
 
     #[cfg(feature = "native-alpm-oracle")]
@@ -660,11 +694,18 @@ impl NativeResolutionSurveyCollector {
             error,
             reason,
             explanation,
+            wire_identity,
         } = failure;
         self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
         self.counts.failed_roots = checked_increment(self.counts.failed_roots)?;
+        let (error_variant, error_message) = wire_identity.unwrap_or_else(|| {
+            (
+                NativeResolutionSurveyErrorVariantV1::from_error(&error),
+                error.to_string(),
+            )
+        });
         let kind = NativeResolutionSurveyErrorKindV1 {
-            error_variant: NativeResolutionSurveyErrorVariantV1::from_error(&error),
+            error_variant,
             reason,
         };
         let count = self.histogram.entry(kind.clone()).or_default();
@@ -678,7 +719,7 @@ impl NativeResolutionSurveyCollector {
                 release: root.package_release.clone(),
                 architecture: root.architecture.clone(),
                 error_kind: kind,
-                error_message: error.to_string(),
+                error_message,
                 native_explanation,
             });
         }

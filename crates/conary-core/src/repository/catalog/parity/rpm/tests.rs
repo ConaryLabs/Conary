@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 use flate2::{Compression, GzBuilder};
 
 use super::*;
+use crate::repository::catalog::parity::{
+    NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
+};
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
@@ -678,6 +681,81 @@ fn resolution_producer_emits_complete_closures_and_typed_unresolved_groups() {
         resolution::explanation_builds(),
         0,
         "resolved and typed-unresolved RPM roots must not build survey evidence"
+    );
+}
+
+#[test]
+fn serial_and_parallel_resolution_outputs_are_byte_identical() {
+    let directory = tempfile::tempdir().unwrap();
+    let (metadata, snapshots) = fixture(directory.path(), false, SplitProvideFileCoverage::Exact);
+    let profile = profile(&snapshots);
+    let package_output = directory.path().join("package-oracle");
+    let member_inputs = inputs(&snapshots, &metadata);
+    produce_rpm_parity_oracle(&profile, &member_inputs, &package_output).unwrap();
+    let one = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(1).unwrap(),
+    );
+    let two = crate::repository::catalog::parity::ResolutionWorkerRequest::explicit(
+        crate::repository::catalog::parity::ResolutionWorkerCount::new(2).unwrap(),
+    );
+    let serial_output = directory.path().join("serial-resolution");
+    let parallel_output = directory.path().join("parallel-resolution");
+
+    let (_, serial_evidence) = produce_rpm_resolution_oracle_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &serial_output,
+        one,
+    )
+    .unwrap();
+    let (_, parallel_evidence) = produce_rpm_resolution_oracle_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &parallel_output,
+        two,
+    )
+    .unwrap();
+    assert_eq!(serial_evidence.workers, 1);
+    assert_eq!(parallel_evidence.workers, 2);
+    for name in [
+        NATIVE_RESOLUTION_ROOT_FILE_NAME,
+        NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
+    ] {
+        assert_eq!(
+            fs::read(serial_output.join(name)).unwrap(),
+            fs::read(parallel_output.join(name)).unwrap(),
+            "strict resolution byte drift in {name}"
+        );
+    }
+
+    let serial_survey = directory.path().join("serial-survey.json");
+    let parallel_survey = directory.path().join("parallel-survey.json");
+    produce_rpm_resolution_survey_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &serial_survey,
+        one,
+    )
+    .unwrap();
+    produce_rpm_resolution_survey_with_workers(
+        &profile,
+        &member_inputs,
+        &package_output,
+        "x86_64",
+        &parallel_survey,
+        two,
+    )
+    .unwrap();
+    assert_eq!(
+        fs::read(serial_survey).unwrap(),
+        fs::read(parallel_survey).unwrap(),
+        "survey JSON changed with worker scheduling"
     );
 }
 

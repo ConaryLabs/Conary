@@ -48,7 +48,9 @@ pub use contract::{
 #[cfg(feature = "native-alpm-oracle")]
 pub use parity::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V2, AlpmParityMemberInput,
-    produce_alpm_parity_oracle, produce_alpm_resolution_oracle, produce_alpm_resolution_survey,
+    produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
+    produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
+    produce_alpm_resolution_survey_with_workers,
 };
 pub use parity::{
     CONARY_RESOLUTION_PROJECTION_SCHEMA_V2, CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT,
@@ -96,24 +98,31 @@ pub use parity::{
     NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyFailureV1,
     NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyRpmPackageV1,
     NativeResolutionSurveyRpmProblemV1, NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1,
-    NativeUnresolvedDependencyV1, compare_native_parity_oracle, compare_native_resolution_oracle,
+    NativeUnresolvedDependencyV1, ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount,
+    ResolutionWorkerRequest, compare_native_parity_oracle, compare_native_resolution_oracle,
     compare_native_resolution_oracle_survey, native_requirement_group_sha256,
-    produce_conary_resolution_candidate, produce_conary_resolution_comparison_survey,
-    produce_conary_resolution_survey, verify_native_parity_oracle_bundle,
+    produce_conary_resolution_candidate, produce_conary_resolution_candidate_with_workers,
+    produce_conary_resolution_comparison_survey,
+    produce_conary_resolution_comparison_survey_with_workers, produce_conary_resolution_survey,
+    produce_conary_resolution_survey_with_workers, verify_native_parity_oracle_bundle,
     verify_native_resolution_oracle_bundle, write_conary_resolution_survey,
     write_native_parity_oracle_manifest, write_native_resolution_comparison_survey,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
+    write_resolution_walk_implementation_evidence,
 };
 #[cfg(feature = "native-debian-oracle")]
 pub use parity::{
     DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
-    produce_debian_resolution_survey,
+    produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey,
+    produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
 };
 #[cfg(feature = "native-rpm-oracle")]
 pub use parity::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V4, RpmParityMemberInput,
-    produce_rpm_parity_oracle, produce_rpm_resolution_oracle, produce_rpm_resolution_survey,
+    produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
+    produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey,
+    produce_rpm_resolution_survey_with_workers,
 };
 pub use portable_integrity::{
     PORTABLE_CHUNK_MANIFEST_SCHEMA_V1, PORTABLE_CHUNK_SIZE_V1, PortableChunkManifestV1,

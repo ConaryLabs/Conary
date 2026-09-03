@@ -37,7 +37,8 @@ use ffi::{AptArchitectureQualifier, AptAtom, AptPackage, AptPackages, AptRelatio
 
 pub use resolution::{
     DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2, produce_debian_resolution_oracle,
-    produce_debian_resolution_survey,
+    produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey,
+    produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
 };
 
 pub const DEBIAN_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
