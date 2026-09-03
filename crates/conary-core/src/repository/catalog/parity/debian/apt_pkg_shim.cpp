@@ -666,21 +666,26 @@ bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dep
             continue;
         }
         bool has_satisfying_candidate = false;
+        bool has_direct_satisfying_candidate = false;
         for (pkgCache::DepIterator atom = start;; ++atom) {
             std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
             for (std::size_t index = 0; targets[index] != nullptr; ++index) {
                 pkgCache::VerIterator target(*handle.cache, targets[index]);
-                if (atom.IsSatisfied(target) && handle.policy->GetPriority(target) > 0) {
+                if (handle.policy->GetPriority(target) > 0) {
                     has_satisfying_candidate = true;
-                    break;
+                    if (target.ParentPkg() == atom.TargetPkg()) {
+                        has_direct_satisfying_candidate = true;
+                    }
                 }
             }
-            if (has_satisfying_candidate || atom == end) {
+            if (atom == end) {
                 break;
             }
         }
         if (has_satisfying_candidate) {
-            has_unattributed_failure = true;
+            if (has_direct_satisfying_candidate) {
+                has_unattributed_failure = true;
+            }
             continue;
         }
         RelationGroup const *group = strong_group_at(*source, kind, ordinal);

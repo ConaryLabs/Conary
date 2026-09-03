@@ -111,6 +111,46 @@ fn resolution_stanza(
     )
 }
 
+fn versioned_virtual_provider_fixture() -> (tempfile::TempDir, AptResolution) {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "virtual-missing-sibling-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: virt (= 2), absent-virtual-sibling (= 9)\n",
+        ),
+        resolution_stanza(
+            "virtual-resolved-root",
+            "1",
+            "amd64",
+            'b',
+            "Depends: virt (= 2)\n",
+        ),
+        resolution_stanza(
+            "virtual-wrong-version-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: virt (= 3)\n",
+        ),
+        resolution_stanza(
+            "virtual-provider",
+            "1",
+            "amd64",
+            'd',
+            "Provides: virt (= 2)\n",
+        ),
+    ]
+    .concat();
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let apt = AptResolution::open(&[staged], "amd64").unwrap();
+    (directory, apt)
+}
+
 fn source_snapshot(repository: &str, packages: &Path) -> SourceSnapshotV1 {
     let packages_bytes = fs::read(packages).unwrap();
     let parser_config = RepositoryParserConfig::Deb {
@@ -857,6 +897,45 @@ fn resolution_producer_projects_direct_no_satisfying_candidates() {
     assert_eq!(survey.counts.roots_walked, 3);
     assert_eq!(survey.counts.unresolved_roots, 2);
     assert_eq!(survey.counts.failed_roots, 0);
+}
+
+#[test]
+fn apt_pkg_keeps_only_missing_sibling_with_matching_versioned_provider() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) = apt
+        .resolve("virtual-missing-sibling-root", "1", "amd64")
+        .unwrap()
+    else {
+        panic!("a valid versioned virtual provider must leave only the missing sibling");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "virtual-missing-sibling-root");
+    assert_eq!(missing[0].native_text, "absent-virtual-sibling (= 9)");
+}
+
+#[test]
+fn apt_pkg_resolves_matching_versioned_virtual_provider() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Resolved(closure) =
+        apt.resolve("virtual-resolved-root", "1", "amd64").unwrap()
+    else {
+        panic!("a matching versioned virtual provider must resolve");
+    };
+    assert!(closure.iter().any(|item| item.name == "virtual-provider"));
+}
+
+#[test]
+fn apt_pkg_projects_mismatched_versioned_virtual_provider_as_missing() {
+    let (_directory, mut apt) = versioned_virtual_provider_fixture();
+    let AptResolutionOutcome::Unresolved(missing) = apt
+        .resolve("virtual-wrong-version-root", "1", "amd64")
+        .unwrap()
+    else {
+        panic!("a mismatched versioned virtual provider must be unresolved");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "virtual-wrong-version-root");
+    assert_eq!(missing[0].native_text, "virt (= 3)");
 }
 
 #[test]
