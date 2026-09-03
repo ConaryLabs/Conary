@@ -3,8 +3,10 @@
 use super::*;
 
 #[path = "rollback/directories.rs"]
+#[cfg(feature = "test-hooks")]
 mod directories;
 #[path = "rollback/generation.rs"]
+#[cfg(feature = "test-hooks")]
 mod generation;
 #[path = "rollback/lineage.rs"]
 mod lineage;
@@ -72,6 +74,7 @@ fn record_test_rollback_authority(
     .unwrap();
 }
 
+#[cfg(feature = "test-hooks")]
 fn with_usr_bin_file(
     mut captured: CapturedSelectedRoot,
     path: &str,
@@ -642,6 +645,7 @@ async fn rollback_snapshot_restores_exact_prior_typed_rpm_authority() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn rollback_publishes_exact_pre_upgrade_parent_directory_authority() {
     let (_temp_dir, db_path_str) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();

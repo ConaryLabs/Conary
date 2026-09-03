@@ -38,7 +38,7 @@ fn conary_test_environment_names_have_one_source_owner() {
 #[test]
 fn ordinary_binary_rejects_test_hook_environment_before_clap_exit() {
     let output = Command::new(env!("CARGO_BIN_EXE_conary"))
-        .env("CONARY_TEST_UNRECOGNIZED_PROBE", "1")
+        .env("CONARY_TEST_BOOT_ID", "probe")
         .arg("--version")
         .output()
         .expect("conary should execute");
@@ -46,7 +46,7 @@ fn ordinary_binary_rejects_test_hook_environment_before_clap_exit() {
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("error: test-hook environment variables are disabled"));
-    assert!(stderr.contains("CONARY_TEST_UNRECOGNIZED_PROBE"));
+    assert!(stderr.contains("CONARY_TEST_BOOT_ID"));
 }
 
 #[cfg(feature = "test-hooks")]

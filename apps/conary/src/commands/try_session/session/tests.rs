@@ -1,17 +1,24 @@
 // apps/conary/src/commands/try_session/session/tests.rs
 //! Try-session lifecycle, refresh, keep, rollback, and liveness tests.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "test-hooks")]
+use std::path::PathBuf;
 
+#[cfg(feature = "test-hooks")]
 use conary_core::ccs::manifest::CcsManifest;
 use conary_core::db::models::{TrySession, TrySessionMode};
+#[cfg(feature = "test-hooks")]
 use conary_core::transaction::TransactionEngine;
 
+use super::super::TryRefreshRequest;
+#[cfg(feature = "test-hooks")]
+use super::super::TryWatchMarkerRequest;
 use super::super::test_support::*;
-use super::super::{TryRefreshRequest, TryWatchMarkerRequest};
 use super::*;
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn activated_no_command_session_records_boot_without_launcher_pid() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -58,6 +65,7 @@ fn namespace_try_start_rejects_unsupported_declarative_hook_classes_before_sessi
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_try_start_creates_active_session_and_copied_artifact() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -99,6 +107,7 @@ fn namespace_try_start_creates_active_session_and_copied_artifact() -> anyhow::R
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_try_start_with_active_session_errors_with_active_id() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -122,6 +131,7 @@ fn namespace_try_start_with_active_session_errors_with_active_id() -> anyhow::Re
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn try_generation_build_leaves_current_link_and_writes_live_runtime_artifacts() -> anyhow::Result<()>
 {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -162,6 +172,7 @@ fn try_generation_build_leaves_current_link_and_writes_live_runtime_artifacts() 
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn activated_try_publishes_generation_records_previous_and_marks_mode() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -185,6 +196,7 @@ fn activated_try_publishes_generation_records_previous_and_marks_mode() -> anyho
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn activated_rollback_uses_copied_package_after_original_is_deleted() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -215,6 +227,7 @@ fn activated_rollback_uses_copied_package_after_original_is_deleted() -> anyhow:
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_rollback_marks_rolled_back_and_removes_work_dir() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -251,6 +264,7 @@ fn namespace_rollback_marks_rolled_back_and_removes_work_dir() -> anyhow::Result
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_rollback_leaves_session_retryable_when_work_dir_removal_fails() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK
         .lock()
@@ -291,6 +305,7 @@ fn namespace_rollback_leaves_session_retryable_when_work_dir_removal_fails() -> 
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_watch_start_writes_marker_before_session_is_keepable() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -326,6 +341,7 @@ fn namespace_watch_start_writes_marker_before_session_is_keepable() -> anyhow::R
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn watch_marker_write_failure_does_not_leave_active_session() {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -361,6 +377,7 @@ fn watch_marker_write_failure_does_not_leave_active_session() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn refresh_try_session_updates_generation_after_staging_succeeds() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -420,6 +437,7 @@ fn refresh_missing_session_is_typed_divergence_before_package_access() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -468,6 +486,7 @@ fn refresh_try_session_cas_miss_preserves_previous_generation() -> anyhow::Resul
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -522,6 +541,7 @@ fn refresh_try_session_cleans_staging_after_generation_build_failure() -> anyhow
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn refresh_try_session_namespace_switch_failure_preserves_stable_files() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -581,6 +601,7 @@ fn refresh_try_session_namespace_switch_failure_preserves_stable_files() -> anyh
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn refresh_try_session_reports_committed_cleanup_failure_with_new_generation_active()
 -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
@@ -632,6 +653,7 @@ fn refresh_try_session_reports_committed_cleanup_failure_with_new_generation_act
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_publishes_try_generation_and_marks_kept() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -659,6 +681,7 @@ fn namespace_keep_publishes_try_generation_and_marks_kept() -> anyhow::Result<()
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_removes_stale_sidecars_before_promoted_db_reopen() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -683,6 +706,7 @@ fn namespace_keep_removes_stale_sidecars_before_promoted_db_reopen() -> anyhow::
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn db_promotion_syncs_parent_after_quarantine_and_final_rename() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK
         .lock()
@@ -722,6 +746,7 @@ fn db_promotion_syncs_parent_after_quarantine_and_final_rename() -> anyhow::Resu
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_holds_runtime_lock_until_session_is_marked() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -750,6 +775,7 @@ fn namespace_keep_holds_runtime_lock_until_session_is_marked() -> anyhow::Result
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn activated_keep_holds_runtime_lock_while_marking_kept() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -779,6 +805,7 @@ fn activated_keep_holds_runtime_lock_while_marking_kept() -> anyhow::Result<()> 
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_restores_live_db_after_post_backup_failure() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -821,6 +848,7 @@ fn namespace_keep_restores_live_db_after_post_backup_failure() -> anyhow::Result
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -889,6 +917,7 @@ fn namespace_keep_restores_current_link_after_post_link_failure() -> anyhow::Res
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_restores_current_link_even_when_db_restore_fails() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -926,6 +955,7 @@ fn namespace_keep_restores_current_link_even_when_db_restore_fails() -> anyhow::
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_keep_fails_when_declarative_hook_effect_is_not_promotable() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();

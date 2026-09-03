@@ -134,6 +134,7 @@ for needle in \
     'CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS"' \
     '--with-test-harness' \
     'cargo build "${cargo_packages[@]}" --target "$TARGET" --locked' \
+    '--features conary/test-hooks' \
     'cargo test -p conary-test --lib --target "$TARGET" --locked' \
     'conary-test-library-tests' \
     'CONARY_STATIC_BUILD_METRICS_PATH' \

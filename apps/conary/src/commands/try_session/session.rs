@@ -494,7 +494,7 @@ pub(super) fn keep_active_try_session(db_path: &str) -> Result<()> {
     keep_active_try_session_inner(db_path, || {})
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 fn keep_active_try_session_with_probe<F>(db_path: &str, probe: F) -> Result<()>
 where
     F: FnOnce(),

@@ -12,6 +12,9 @@ use thiserror::Error;
 const PREFIX: &str = "CONARY_TEST_";
 
 #[cfg(any(feature = "test-hooks", test))]
+// The disabled-feature unit-test build retains the complete name inventory so
+// test helpers can share constants, even though only a subset has writers.
+#[cfg_attr(all(test, not(feature = "test-hooks")), allow(dead_code))]
 pub(crate) mod names {
     pub(crate) const BOOT_ID: &str = "CONARY_TEST_BOOT_ID";
     pub(crate) const DB: &str = "CONARY_TEST_DB";

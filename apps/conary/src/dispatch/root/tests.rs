@@ -136,6 +136,7 @@ fn mutating_cli(fixture: &TryPreflightFixture) -> Cli {
     fixture.parse_with_db(&["conary", "pin", "demo"])
 }
 
+#[cfg(feature = "test-hooks")]
 fn dry_run_cli(fixture: &TryPreflightFixture) -> Cli {
     fixture.parse_with_db(&["conary", "install", "demo", "--dry-run"])
 }
@@ -339,6 +340,7 @@ fn try_dispatch_watch_rejects_package_policy() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_read_only_preflight_allows_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -355,6 +357,7 @@ fn live_namespace_read_only_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_mutating_preflight_blocks_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -378,6 +381,7 @@ fn live_namespace_mutating_preflight_blocks_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_dry_run_preflight_allows_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -436,6 +440,7 @@ fn orphaned_namespace_preflight_marks_orphaned_and_blocks_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_read_only_preflight_allows_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -454,6 +459,7 @@ fn live_activated_read_only_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_dry_run_preflight_allows_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
@@ -472,6 +478,7 @@ fn live_activated_dry_run_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_mutating_preflight_blocks_command() {
     let _env_lock = lock_env();
     let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");

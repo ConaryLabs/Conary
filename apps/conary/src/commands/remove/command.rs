@@ -132,6 +132,7 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
+    #[cfg(feature = "test-hooks")]
     async fn no_current_generation_remove_publishes_without_mutating_ambient_root() {
         let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();

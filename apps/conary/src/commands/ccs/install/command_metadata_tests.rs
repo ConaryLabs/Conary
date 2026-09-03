@@ -8,6 +8,7 @@ use super::test_support::{
 };
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn ccs_install_records_payload_without_direct_live_root_write() {
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;

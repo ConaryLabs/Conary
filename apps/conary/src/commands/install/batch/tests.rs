@@ -1,9 +1,10 @@
 // apps/conary/src/commands/install/batch/tests.rs
 use super::*;
 use crate::commands::PackageFormatType;
+#[cfg(feature = "test-hooks")]
+use conary_core::db::models::InstalledRequirementGroup;
 use conary_core::db::models::{
-    ChangesetStatus, ConfigFile, ConfigSource, FileEntry, InstalledRequirementGroup, Trove,
-    TroveType,
+    ChangesetStatus, ConfigFile, ConfigSource, FileEntry, Trove, TroveType,
 };
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,
@@ -815,6 +816,7 @@ fn irreducible_strong_requirement_cycle_uses_stable_fallback() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root() {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp = tempfile::tempdir().unwrap();
@@ -888,6 +890,7 @@ fn no_current_generation_batch_materializes_db_state_and_publishes_selected_root
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn generation_batch_executes_graph_in_selected_root_and_publishes_final_state() {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let temp = tempfile::tempdir().unwrap();
@@ -925,6 +928,7 @@ fn generation_batch_executes_graph_in_selected_root_and_publishes_final_state() 
     assert!(!sessions.exists() || std::fs::read_dir(sessions).unwrap().next().is_none());
 }
 
+#[cfg(feature = "test-hooks")]
 fn package_requirement_fixture()
 -> conary_core::repository::dependency_model::RepositoryRequirementGroup {
     conary_core::repository::dependency_model::RepositoryRequirementGroup::simple(

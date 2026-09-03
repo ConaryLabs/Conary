@@ -157,12 +157,16 @@ fn find_command(command: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "test-hooks")]
     use std::path::PathBuf;
 
+    #[cfg(feature = "test-hooks")]
     use conary_core::ccs::manifest::CcsManifest;
+    #[cfg(feature = "test-hooks")]
     use conary_core::db::models::TrySession;
 
     use super::super::test_support::*;
+    #[cfg(feature = "test-hooks")]
     use super::super::{TryStartRequest, begin_try_session};
     use super::*;
 
@@ -212,6 +216,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn try_command_records_child_liveness_before_wait_and_clears_after_exit() -> anyhow::Result<()>
     {
         let _env_lock = ENV_LOCK.lock().unwrap();
@@ -311,6 +316,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "test-hooks")]
     fn poll_until<T>(
         timeout: std::time::Duration,
         mut probe: impl FnMut() -> Option<T>,

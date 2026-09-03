@@ -177,7 +177,8 @@ runtime_started_ns="$(date -u +%s%N)"
     LIBSECCOMP_LINK_TYPE=static \
     CC_x86_64_unknown_linux_musl=musl-gcc \
     CFLAGS_x86_64_unknown_linux_musl="$KERNEL_HEADER_FLAGS" \
-        cargo build "${cargo_packages[@]}" --target "$TARGET" --locked
+        cargo build "${cargo_packages[@]}" --target "$TARGET" --locked \
+            --features conary/test-hooks
 )
 runtime_finished_ns="$(date -u +%s%N)"
 runtime_build_ms=$(( (runtime_finished_ns - runtime_started_ns) / 1000000 ))

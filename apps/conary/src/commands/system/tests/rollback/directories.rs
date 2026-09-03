@@ -313,6 +313,7 @@ async fn assert_additive_shared_directory_rollback(
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn additive_install_shared_directory_rollback_is_exact() {
     assert_additive_shared_directory_rollback(
         "single-shared-directory",
@@ -324,6 +325,7 @@ async fn additive_install_shared_directory_rollback_is_exact() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn additive_batch_shared_directory_capture_is_unioned_once_and_rollback_is_exact() {
     assert_additive_shared_directory_rollback(
         "batch-shared-directory",
@@ -338,6 +340,7 @@ async fn additive_batch_shared_directory_capture_is_unioned_once_and_rollback_is
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn additive_deb_payload_claim_rollback_preserves_verified_symlink_materialization() {
     assert_additive_shared_directory_rollback(
         "deb-symlink-directory",
@@ -349,6 +352,7 @@ async fn additive_deb_payload_claim_rollback_preserves_verified_symlink_material
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn additive_rpm_apply_through_symlink_rollback_restores_exact_target_metadata() {
     assert_additive_shared_directory_rollback(
         "rpm-symlink-directory",

@@ -359,15 +359,15 @@ impl Drop for TestMountSkipGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(crate) struct TestGenerationRebuildFailureGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 static TEST_GENERATION_REBUILD_FAILURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(crate) fn test_forced_generation_rebuild_failure_guard(
     message: &str,
 ) -> TestGenerationRebuildFailureGuard {
@@ -378,7 +378,7 @@ pub(crate) fn test_forced_generation_rebuild_failure_guard(
     TestGenerationRebuildFailureGuard { _guard: guard }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 impl Drop for TestGenerationRebuildFailureGuard {
     fn drop(&mut self) {
         unsafe {
@@ -409,6 +409,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn forced_generation_rebuild_failure_reads_test_env_message() {
         let _guard = test_forced_generation_rebuild_failure_guard("slice-d forced failure");
 
@@ -459,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn boot_root_for_generation_build_prefers_self_contained_test_boot_when_requested() {
         let _guard = test_mount_skip_guard();
         let temp = tempfile::TempDir::new().unwrap();

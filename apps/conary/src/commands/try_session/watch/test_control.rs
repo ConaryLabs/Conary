@@ -3,7 +3,6 @@
 //! Private deterministic controls for watch-mode integration tests.
 
 use std::fs;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -13,7 +12,6 @@ pub(super) fn pause_refresh_cook(is_refresh: bool) -> Result<()> {
         return Ok(());
     }
     if let Some(path) = crate::test_hooks::get().try_watch_cook_started_file() {
-        let path = PathBuf::from(path);
         fs::write(&path, b"started\n").with_context(|| {
             format!(
                 "failed to write try watch cook-started test marker {}",
