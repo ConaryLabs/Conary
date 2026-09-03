@@ -4,7 +4,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use super::ffi::{AptResolution, AptResolutionOutcome};
+use super::ffi::{AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionOutcomeV1,
@@ -163,6 +163,69 @@ fn missing_frontier_conflict_stanzas() -> String {
             "Depends: absent-frontier-target (= 2)\n",
         ),
         resolution_stanza("healthy-frontier", "1", "amd64", '8', ""),
+    ]
+    .concat()
+}
+
+fn sibling_frontier_stanzas() -> String {
+    [
+        resolution_stanza(
+            "sibling-conflict-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: sibling-conflict-helper-a, sibling-conflict-helper-b\n",
+        ),
+        resolution_stanza(
+            "sibling-conflict-helper-a",
+            "1",
+            "amd64",
+            'b',
+            "Conflicts: sibling-conflict-helper-b\n",
+        ),
+        resolution_stanza(
+            "sibling-conflict-helper-b",
+            "1",
+            "amd64",
+            'c',
+            "Depends: absent-sibling-target (= 2)\n",
+        ),
+        resolution_stanza(
+            "sibling-breaks-root",
+            "1",
+            "amd64",
+            'd',
+            "Depends: sibling-breaks-helper-a, sibling-breaks-helper-b\n",
+        ),
+        resolution_stanza(
+            "sibling-breaks-helper-a",
+            "1",
+            "amd64",
+            'e',
+            "Breaks: sibling-breaks-helper-b\n",
+        ),
+        resolution_stanza(
+            "sibling-breaks-helper-b",
+            "1",
+            "amd64",
+            'f',
+            "Depends: absent-sibling-target (= 2)\n",
+        ),
+        resolution_stanza(
+            "sibling-missing-root",
+            "1",
+            "amd64",
+            '1',
+            "Depends: sibling-missing-helper-a, sibling-missing-helper-b\n",
+        ),
+        resolution_stanza("sibling-missing-helper-a", "1", "amd64", '2', ""),
+        resolution_stanza(
+            "sibling-missing-helper-b",
+            "1",
+            "amd64",
+            '3',
+            "Depends: absent-sibling-target (= 2)\n",
+        ),
     ]
     .concat()
 }
@@ -1012,6 +1075,75 @@ fn resolution_survey_records_missing_frontier_conflicts_as_failures() {
     )
     .unwrap_err();
     assert!(matches!(error, Error::ConflictError(_)));
+}
+
+#[test]
+fn apt_pkg_missing_frontier_accumulates_sibling_selections() {
+    let directory = tempfile::tempdir().unwrap();
+    let source =
+        write_resolution_packages(directory.path(), "ubuntu-main", &sibling_frontier_stanzas());
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    for root in ["sibling-conflict-root", "sibling-breaks-root"] {
+        let error = apt.resolve(root, "1", "amd64").unwrap_err();
+        assert!(matches!(error, Error::ConflictError(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("conflict on the missing-requirement frontier"),
+            "{root} must retain its native sibling-conflict classification: {error}"
+        );
+    }
+
+    let AptResolutionOutcome::Unresolved(missing) =
+        apt.resolve("sibling-missing-root", "1", "amd64").unwrap()
+    else {
+        panic!("non-conflicting siblings must retain the terminal missing edge");
+    };
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].requiring.name, "sibling-missing-helper-b");
+    assert_eq!(missing[0].kind, AptRelationKind::Depends);
+    assert_eq!(missing[0].native_text, "absent-sibling-target (= 2)");
+}
+
+#[test]
+fn resolution_survey_records_sibling_frontier_conflicts_as_failures() {
+    let directory = tempfile::tempdir().unwrap();
+    let packages = vec![write_resolution_packages(
+        directory.path(),
+        "ubuntu-main",
+        &sibling_frontier_stanzas(),
+    )];
+    let snapshots = vec![source_snapshot("ubuntu-main", &packages[0])];
+    let mut profile = profile(&snapshots);
+    profile.counts.packages = 9;
+    let package_output = directory.path().join("package-oracle");
+    produce_debian_parity_oracle(&profile, &inputs(&snapshots, &packages), &package_output)
+        .unwrap();
+
+    let survey = produce_debian_resolution_survey(
+        &profile,
+        &inputs(&snapshots, &packages),
+        &package_output,
+        "amd64",
+        &directory.path().join("survey.json"),
+    )
+    .unwrap();
+    let failures = survey
+        .failures
+        .iter()
+        .map(|failure| (failure.name.as_str(), failure.error_kind.reason))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for root in ["sibling-conflict-root", "sibling-breaks-root"] {
+        assert_eq!(
+            failures.get(root),
+            Some(&NativeResolutionSurveyErrorReasonV1::NativeSolverFailed),
+            "{root} must be a typed survey failure"
+        );
+    }
+    assert!(!failures.contains_key("sibling-missing-root"));
 }
 
 #[test]

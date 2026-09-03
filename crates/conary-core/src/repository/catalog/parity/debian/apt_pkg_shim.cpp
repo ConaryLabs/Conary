@@ -599,9 +599,10 @@ struct FrontierResult {
     std::vector<MissingRequirement> missing;
 };
 
+using FrontierSelection = std::map<std::string, pkgCache::VerIterator>;
+
 bool selected_frontier_has_conflict(
-    ResolutionHandle &handle,
-    std::map<std::string, pkgCache::VerIterator> const &selected) {
+    ResolutionHandle &handle, FrontierSelection const &selected) {
     std::set<map_id_t> selected_ids;
     for (auto const &[name, version] : selected) {
         (void)name;
@@ -643,7 +644,7 @@ bool selected_frontier_has_conflict(
 
 FrontierResult collect_candidate_frontier(
     ResolutionHandle &handle, pkgCache::VerIterator const &version,
-    std::map<std::string, pkgCache::VerIterator> selected) {
+    FrontierSelection &selected) {
     Package const *source = find_source_package(handle, version);
     if (source == nullptr) {
         handle.error = "apt-pkg candidate package is absent from authenticated Packages inputs: " +
@@ -714,19 +715,28 @@ FrontierResult collect_candidate_frontier(
 
         bool viable = false;
         bool untyped = false;
+        bool has_missing_selection = false;
+        FrontierSelection missing_selection;
         std::vector<MissingRequirement> branch_missing;
         for (pkgCache::VerIterator const &target : targets) {
-            FrontierResult branch = collect_candidate_frontier(handle, target, selected);
+            FrontierSelection branch_selection = selected;
+            FrontierResult branch =
+                collect_candidate_frontier(handle, target, branch_selection);
             if (branch.status == FrontierStatus::Error) {
                 return branch;
             }
             if (branch.status == FrontierStatus::Viable) {
+                selected = std::move(branch_selection);
                 viable = true;
                 break;
             }
             if (branch.status == FrontierStatus::Untyped) {
                 untyped = true;
             } else {
+                if (!has_missing_selection) {
+                    missing_selection = branch_selection;
+                    has_missing_selection = true;
+                }
                 branch_missing.insert(branch_missing.end(),
                                       std::make_move_iterator(branch.missing.begin()),
                                       std::make_move_iterator(branch.missing.end()));
@@ -739,6 +749,7 @@ FrontierResult collect_candidate_frontier(
             found_untyped = true;
             continue;
         }
+        selected = std::move(missing_selection);
         result.status = FrontierStatus::Missing;
         result.missing.insert(result.missing.end(),
                               std::make_move_iterator(branch_missing.begin()),
@@ -847,7 +858,8 @@ bool collect_resolution(ResolutionHandle &handle, EvidenceDepCache &dependency_c
         return true;
     }
     if (!marked || !resolved || dependency_cache.BrokenCount() != 0) {
-        FrontierResult frontier = collect_candidate_frontier(handle, root, {});
+        FrontierSelection selected;
+        FrontierResult frontier = collect_candidate_frontier(handle, root, selected);
         if (frontier.status == FrontierStatus::Error) {
             return false;
         }
