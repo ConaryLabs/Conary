@@ -1153,6 +1153,10 @@ survey_resolution() {
 
     local outcome="${SURVEY_STAGING}/outcome.json"
     local diagnostic="${SURVEY_STAGING}/diagnostic.log"
+    : >"$diagnostic"
+    chmod 0600 "$diagnostic"
+    [[ "$(stat -c '%u' "$diagnostic")" == "$control_uid" ]] ||
+        die "resolution survey diagnostic staging has the wrong owner"
     local survey_status=0
     if [[ -z "$ROOT" ]]; then
         if runuser -u conary -- "${command[@]}" >"$outcome" 2>"$diagnostic"; then
@@ -1214,7 +1218,6 @@ survey_resolution() {
         and (.comparison_mismatches | type == "number" and . >= 0)
         and (.comparison_profiles | type == "number" and . >= 0 and . <= 3)
     ' "$outcome" >/dev/null || {
-        cat "$diagnostic" >&2
         die "resolution survey did not return its exact typed outcome"
     }
     local candidate_failures comparison_mismatches
@@ -1227,11 +1230,9 @@ survey_resolution() {
     # typed "findings recorded" result, to exit status 101.
     elif (( survey_status == 101 )); then
         (( candidate_failures > 0 || comparison_mismatches > 0 )) || {
-            cat "$diagnostic" >&2
             die "resolution survey failed without recording findings"
         }
     else
-        cat "$diagnostic" >&2
         die "resolution survey failed with status ${survey_status}"
     fi
 

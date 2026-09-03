@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 73
+revision: 74
 summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, protected pinned full-candidate native-oracle production and stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
 ---
 
@@ -304,7 +304,10 @@ workflow.
   operator result only when the typed outcome records findings. The returned
   seven-day artifact contains only
   canonical survey JSON, a digest/size/binding manifest, and public verification
-  records. Per-file admission is derived from the already bounded transport size
+  records. Raw Remi stderr remains confined to mode-`0600` root-controlled
+  staging, is destroyed during helper cleanup, and is never written to SSH or
+  workflow logs; public failures use typed helper messages. Per-file admission
+  is derived from the already bounded transport size
   rather than an invented limit below the producer contract. The runner
   independently requires those deployment, candidate,
   architecture, and oracle bindings to equal its authenticated input record. The

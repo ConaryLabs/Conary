@@ -412,7 +412,10 @@ jq -n \
       comparison_profiles:$comparison_profiles
     }
 '
-if (( candidate_failures > 0 || comparison_mismatches > 0 )); then
+if [[ -n "${CONARY_FAKE_SURVEY_STATUS:-}" ]]; then
+    printf '%s\n' "${CONARY_FAKE_SURVEY_DIAGNOSTIC:-unexpected survey failure}" >&2
+    exit "$CONARY_FAKE_SURVEY_STATUS"
+elif (( candidate_failures > 0 || comparison_mismatches > 0 )); then
     echo "resolution surveys recorded findings" >&2
     exit 101
 fi
@@ -640,6 +643,8 @@ run_survey_helper() {
     CONARY_FAKE_FAIL_START="${fake_root}/fail-start" \
     CONARY_FAKE_SURVEY_ARGS="${fake_root}/survey-args" \
     CONARY_FAKE_SURVEY_FINDINGS="${CONARY_FAKE_SURVEY_FINDINGS:-0}" \
+    CONARY_FAKE_SURVEY_STATUS="${CONARY_FAKE_SURVEY_STATUS:-}" \
+    CONARY_FAKE_SURVEY_DIAGNOSTIC="${CONARY_FAKE_SURVEY_DIAGNOSTIC:-}" \
     CONARY_FAKE_MUTATE_SURVEY_ON_START="${CONARY_FAKE_MUTATE_SURVEY_ON_START:-}" \
         bash "$helper" survey-resolution "$@"
 }
@@ -1238,6 +1243,37 @@ test_resolution_survey_findings_restart_and_succeed() {
     ' "$verification" >/dev/null
 }
 
+test_resolution_survey_failure_sanitizes_diagnostic() {
+    local survey_id="survey-failure-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local stdout_file="${tmpdir}/${survey_id}.stdout"
+    local stderr_file="${tmpdir}/${survey_id}.stderr"
+    local private_diagnostic='/conary/private/candidates/secret-token'
+    local status
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+
+    set +e
+    CONARY_FAKE_SURVEY_STATUS=42 \
+    CONARY_FAKE_SURVEY_DIAGNOSTIC="$private_diagnostic" \
+        run_survey_helper "$fake_root" \
+        "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+        >"$stdout_file" 2>"$stderr_file"
+    status=$?
+    set -e
+
+    [[ "$status" -ne 0 ]] || fail "unexpected survey failure succeeded"
+    grep -F 'resolution survey failed with status 42' "$stderr_file" >/dev/null ||
+        fail "unexpected survey failure lost its typed public diagnostic"
+    if grep -F "$private_diagnostic" "$stdout_file" "$stderr_file" >/dev/null; then
+        fail "unexpected survey failure leaked raw Remi diagnostics"
+    fi
+    [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+        fail "unexpected survey failure did not restore Remi in order"
+    [[ "$(cat "$fake_root/service-state")" == "active" ]]
+    [[ ! -e "/tmp/remi-resolution-survey-${survey_id}.tar" ]]
+}
+
 test_resolution_survey_rejects_invalid_requests_before_downtime() {
     local survey_id="survey-invalid-$$"
     local export_id="slice6-export-$$"
@@ -1817,6 +1853,7 @@ main() {
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
     test_resolution_survey_findings_restart_and_succeed
+    test_resolution_survey_failure_sanitizes_diagnostic
     test_resolution_survey_rejects_invalid_requests_before_downtime
     test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence
     test_conversion_benchmark_failure_restarts_without_publication

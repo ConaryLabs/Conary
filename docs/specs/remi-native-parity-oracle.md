@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define strict native parity artifacts and private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 35
+revision: 36
 status: active
 ---
 
@@ -500,7 +500,10 @@ plus a digest, size, deployment, candidate, and oracle binding manifest. The
 workflow independently reopens that transport and compares every authority
 binding with its authenticated input verification. Its per-file admission limit
 is the bounded transport size, not a smaller threshold unrelated to producer
-output. Neither side has promotion, activation, or publication authority.
+output. Raw Remi stderr remains confined to mode-`0600` root-controlled helper
+staging, is destroyed during helper cleanup, and is never emitted through SSH or
+workflow logs; public failures contain only a typed helper message. Neither side
+has promotion, activation, or publication authority.
 
 ALPM resolution evidence is produced by the same explicit
 `native-alpm-oracle` feature and pinned libalpm runtime as the package-fact
