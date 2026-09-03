@@ -334,6 +334,8 @@ jobs:
               "- package_rows: `\(.package_oracle.artifact.counts.packages)`\n" +
               "- resolution_manifest: `\(.resolution_oracle.manifest_sha256)`\n" +
               "- resolution_roots: `\(.resolution_oracle.artifact.counts.roots)`\n" +
+              "- resolution_workers: `\(.resolution_implementation.workers)`\n" +
+              "- worker_load_ms: `\(.resolution_implementation.worker_load_milliseconds | join(\",\"))`\n" +
               "- implementation: `\(.package_oracle.implementation.name) \(.package_oracle.implementation.version)`"
             ' "$evidence"
             echo "- artifact_digest: \`$ARTIFACT_DIGEST\`"

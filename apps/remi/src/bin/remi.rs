@@ -277,6 +277,10 @@ struct ResolutionSurveyArgs {
     /// New private directory receiving diagnostics-only survey JSON files.
     #[arg(long)]
     output_dir: PathBuf,
+
+    /// Worker threads; defaults to detected CPU and measured memory capacity.
+    #[arg(long)]
+    workers: Option<conary_core::repository::catalog::ResolutionWorkerCount>,
 }
 
 #[derive(Debug, Clone)]
@@ -631,7 +635,11 @@ fn run_resolution_survey_command(args: ResolutionSurveyArgs) -> Result<()> {
         args.native_resolutions,
         args.architectures,
     )?;
-    let outcome = run_resolution_surveys_from_config(&config, args.output_dir, profiles)?;
+    let workers = args.workers.map_or(
+        conary_core::repository::catalog::ResolutionWorkerRequest::Automatic,
+        conary_core::repository::catalog::ResolutionWorkerRequest::explicit,
+    );
+    let outcome = run_resolution_surveys_from_config(&config, args.output_dir, profiles, workers)?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
     anyhow::ensure!(
         outcome.candidate_failures == 0 && outcome.comparison_mismatches == 0,

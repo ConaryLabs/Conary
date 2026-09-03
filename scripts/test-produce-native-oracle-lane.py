@@ -84,6 +84,13 @@ else:
         "profile_revision_sha256": revision_sha,
         "schema_version": 2,
     }
+    Path(one("--implementation-evidence")).write_bytes(canonical({
+        "memory_budget_bytes": 8589934592,
+        "measured_worker_rss_bytes": 536870912,
+        "schema_version": 1,
+        "worker_load_milliseconds": [12, 13],
+        "workers": 2,
+    }))
 (output / "manifest.json").write_bytes(canonical(manifest))
 '''
 
@@ -193,12 +200,14 @@ class NativeOracleLaneTests(unittest.TestCase):
         result = self.run_lane()
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
+        self.assertEqual(evidence["schema_version"], 2)
         self.assertEqual(evidence["profile"], "fedora-44")
         self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
         self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 4)
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["name"], "libsolv")
+        self.assertEqual(evidence["resolution_implementation"]["workers"], 2)
         self.assertEqual(
             (self.root / "output-fedora-44" / "evidence.json").read_bytes(),
             canonical(evidence),

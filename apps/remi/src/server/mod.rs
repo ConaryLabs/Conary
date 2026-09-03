@@ -587,6 +587,7 @@ pub fn run_resolution_surveys_from_config(
     remi_config: &RemiConfig,
     output_dir: PathBuf,
     profiles: Vec<RemiPromotionProofProfileInput>,
+    workers: conary_core::repository::catalog::ResolutionWorkerRequest,
 ) -> Result<RemiResolutionSurveyOutcome> {
     remi_config.validate()?;
     let server_config = remi_config.to_server_config()?;
@@ -600,6 +601,7 @@ pub fn run_resolution_surveys_from_config(
         &RemiResolutionSurveyConfig {
             output_dir,
             profiles,
+            workers,
         },
         &authority,
     )

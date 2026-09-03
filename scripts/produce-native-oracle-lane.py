@@ -279,6 +279,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     output_root.mkdir(mode=0o700)
     package_output = output_root / "package-oracle"
     resolution_output = output_root / "resolution-oracle"
+    resolution_implementation_path = output_root / "resolution-implementation.json"
 
     with tempfile.TemporaryDirectory(prefix="native-oracle-lane-", dir=output_root.parent) as temporary:
         staging = Path(temporary)
@@ -307,6 +308,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
             "--output", str(resolution_output),
+            "--implementation-evidence", str(resolution_implementation_path),
         ))
         invoke(resolution_command, "native resolution producer")
 
@@ -327,8 +329,31 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         NATIVE_RESOLUTION_ORACLE_SCHEMA,
         package["manifest_sha256"],
     )
+    resolution_implementation, _ = load_canonical(
+        resolution_implementation_path, "resolution implementation evidence"
+    )
+    resolution_implementation = require_keys(
+        resolution_implementation,
+        {
+            "schema_version",
+            "workers",
+            "worker_load_milliseconds",
+            "memory_budget_bytes",
+            "measured_worker_rss_bytes",
+        },
+        "resolution implementation evidence",
+    )
+    if (
+        resolution_implementation["schema_version"] != 1
+        or not isinstance(resolution_implementation["workers"], int)
+        or resolution_implementation["workers"] < 1
+        or not isinstance(resolution_implementation["worker_load_milliseconds"], list)
+        or len(resolution_implementation["worker_load_milliseconds"])
+        != resolution_implementation["workers"]
+    ):
+        raise ValueError("resolution implementation evidence is malformed")
     evidence = {
-        "schema_version": 1,
+        "schema_version": 2,
         "export_id": arguments.export_id,
         "deployed_commit": arguments.deployed_commit,
         "input_manifest_sha256": input_manifest_sha256,
@@ -337,6 +362,7 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
         "target_architecture": target_architecture,
         "package_oracle": package,
         "resolution_oracle": resolution,
+        "resolution_implementation": resolution_implementation,
     }
     evidence_bytes = canonical_json(evidence)
     (output_root / "evidence.json").write_bytes(evidence_bytes)

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use conary_core::repository::catalog::{
-    produce_conary_resolution_comparison_survey, produce_conary_resolution_survey,
+    ResolutionWorkerRequest, produce_conary_resolution_comparison_survey_with_workers,
+    produce_conary_resolution_survey_with_workers, write_resolution_walk_implementation_evidence,
 };
 
 use super::catalog_authority::CatalogAuthority;
@@ -17,6 +18,7 @@ use super::promotion_proof::{RemiPromotionProofProfileInput, validate_inputs};
 pub struct RemiResolutionSurveyConfig {
     pub output_dir: PathBuf,
     pub profiles: Vec<RemiPromotionProofProfileInput>,
+    pub workers: ResolutionWorkerRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -60,19 +62,26 @@ pub(crate) fn produce_remi_resolution_surveys(
         ));
         let candidate = {
             let reader = pin.reader();
-            produce_conary_resolution_survey(
+            let (survey, evidence) = produce_conary_resolution_survey_with_workers(
                 pin.manifest(),
                 &reader,
                 &input.package_oracle_dir,
                 &input.architecture,
                 &candidate_path,
+                config.workers,
             )
             .with_context(|| {
                 format!(
                     "produce Conary resolution survey for '{}'",
                     input.selection.source_profile
                 )
-            })?
+            })?;
+            let evidence_path = config.output_dir.join(format!(
+                "{}.candidate-resolution-implementation.json",
+                input.selection.source_profile
+            ));
+            write_resolution_walk_implementation_evidence(&evidence_path, &evidence)?;
+            survey
         };
         roots_walked = checked_add(roots_walked, candidate.counts.roots_walked)?;
         candidate_failures = checked_add(candidate_failures, candidate.total_failures)?;
@@ -86,20 +95,27 @@ pub(crate) fn produce_remi_resolution_surveys(
         ));
         let comparison = {
             let reader = pin.reader();
-            produce_conary_resolution_comparison_survey(
+            let (survey, evidence) = produce_conary_resolution_comparison_survey_with_workers(
                 pin.manifest(),
                 &reader,
                 &input.package_oracle_dir,
                 &input.native_resolution_dir,
                 &input.architecture,
                 &comparison_path,
+                config.workers,
             )
             .with_context(|| {
                 format!(
                     "produce native resolution comparison survey for '{}'",
                     input.selection.source_profile
                 )
-            })?
+            })?;
+            let evidence_path = config.output_dir.join(format!(
+                "{}.comparison-resolution-implementation.json",
+                input.selection.source_profile
+            ));
+            write_resolution_walk_implementation_evidence(&evidence_path, &evidence)?;
+            survey
         };
         comparison_mismatches = checked_add(comparison_mismatches, comparison.total_mismatches)?;
         comparison_profiles = comparison_profiles
@@ -188,6 +204,7 @@ mod tests {
             &RemiResolutionSurveyConfig {
                 output_dir: output.clone(),
                 profiles,
+                workers: ResolutionWorkerRequest::Automatic,
             },
             fixture.authority(),
         )
@@ -205,6 +222,7 @@ mod tests {
             &RemiResolutionSurveyConfig {
                 output_dir: output.clone(),
                 profiles: inputs(),
+                workers: ResolutionWorkerRequest::Automatic,
             },
             fixture.authority(),
         )
@@ -227,6 +245,7 @@ mod tests {
             &RemiResolutionSurveyConfig {
                 output_dir: output.clone(),
                 profiles: inputs(),
+                workers: ResolutionWorkerRequest::Automatic,
             },
             fixture.authority(),
         )
