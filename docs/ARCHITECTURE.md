@@ -505,6 +505,12 @@ Generation-aware package mutation
   validated manifests + carrier capabilities + CAS -> exact state/security projection -> staged ESP/rootfs
 ```
 
+The initramfs mounts the composefs generation with `verity_check=1` by
+default. An unverified mount is permitted only when the kernel command line
+contains the exact opt-out `conary.verity=off`; boot prints a console warning
+before mounting without fs-verity. `conary.verity=on` is the explicit verified
+form, and any other value fails generation activation before the mount.
+
 ### Generation Lifecycle
 
 `root_manifest/delta.rs` owns the normalized changed-path contract and

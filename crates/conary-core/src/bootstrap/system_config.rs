@@ -203,7 +203,8 @@ pub fn bootstrap_initramfs_input_paths() -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
-const INITRAMFS_INIT: &str = r#"#!/bin/sh
+const INITRAMFS_INIT: &str = concat!(
+    r#"#!/bin/sh
 PATH=/usr/bin:/usr/sbin:/bin:/sbin
 export PATH
 
@@ -211,6 +212,10 @@ fail() {
     echo "conary-initramfs: $*" >&2
     exec /bin/sh
 }
+
+"#,
+    include_str!("../../../../packaging/dracut/90conary/conary-verity.sh"),
+    r#"
 
 expose_generation_usr() {
     usr_source="/sysroot/conary/mnt/usr"
@@ -253,6 +258,7 @@ ROOT_FSTYPE="ext4"
 ROOT_FLAGS=""
 CONARY_GEN=""
 CONARY_CARRIER=""
+CONARY_VERITY=on
 for opt in $(cat /proc/cmdline); do
     case "$opt" in
         root=*) ROOT_SPEC="${opt#root=}" ;;
@@ -260,6 +266,7 @@ for opt in $(cat /proc/cmdline); do
         rootflags=*) ROOT_FLAGS="${opt#rootflags=}" ;;
         conary.generation=*) CONARY_GEN="${opt#conary.generation=}" ;;
         conary.carrier=*) CONARY_CARRIER="${opt#conary.carrier=}" ;;
+        conary.verity=*) CONARY_VERITY="${opt#conary.verity=}" ;;
     esac
 done
 
@@ -293,8 +300,9 @@ if [ -n "$CONARY_GEN" ]; then
 
     [ -f "$EROFS_IMG" ] || fail "generation $CONARY_GEN is missing root.erofs"
     mkdir -p /sysroot/conary/mnt
-    mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR,verity_check=1" 2>/dev/null ||
-        mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR" ||
+    COMPOSEFS_OPTIONS="$(conary_composefs_options "$CONARY_VERITY" "$CAS_DIR")" ||
+        fail "invalid composefs verification policy"
+    mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "$COMPOSEFS_OPTIONS" ||
         fail "composefs mount failed for generation $CONARY_GEN"
 
     if [ -d /sysroot/conary/mnt/usr ]; then
@@ -326,7 +334,8 @@ mount --move /proc /sysroot/proc 2>/dev/null || true
 mount --move /sys /sysroot/sys 2>/dev/null || true
 exec switch_root /sysroot /usr/lib/systemd/systemd
 fail "switch_root failed"
-"#;
+"#,
+);
 
 /// Write the Conary bootstrap initramfs used by generation-aware boot entries.
 ///

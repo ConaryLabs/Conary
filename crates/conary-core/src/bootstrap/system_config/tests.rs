@@ -185,6 +185,26 @@ fn bootstrap_initramfs_supports_readonly_iso_carrier() {
     assert!(INITRAMFS_INIT.contains("ETC_BASE=\"/sysroot/run/conary/etc-state\""));
 }
 
+#[test]
+fn bootstrap_initramfs_applies_shared_fail_closed_verity_policy() {
+    let shared_policy = include_str!("../../../../../packaging/dracut/90conary/conary-verity.sh");
+
+    assert!(INITRAMFS_INIT.contains(shared_policy));
+    assert!(INITRAMFS_INIT.contains("CONARY_VERITY=on"));
+    assert!(
+        INITRAMFS_INIT.contains("conary.verity=*) CONARY_VERITY=\"${opt#conary.verity=}\" ;;"),
+        "the bootstrap initramfs must parse conary.verity as an exact kernel argument"
+    );
+    assert!(INITRAMFS_INIT.contains(
+        "COMPOSEFS_OPTIONS=\"$(conary_composefs_options \"$CONARY_VERITY\" \"$CAS_DIR\")\""
+    ));
+    assert_eq!(
+        INITRAMFS_INIT.matches("mount -t composefs").count(),
+        1,
+        "the bootstrap initramfs must never retry a failed verified mount without verity"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_configure_system_bridges_lib64_to_usr_lib_for_exported_generations() {

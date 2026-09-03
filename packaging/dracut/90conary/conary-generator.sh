@@ -1,6 +1,6 @@
 #!/bin/bash
 # packaging/dracut/90conary/conary-generator.sh
-# Pre-pivot hook: mount Conary generation via composefs
+# Initramfs generation activator: mount Conary generation via composefs
 
 SYSROOT="${CONARY_SYSROOT:-/sysroot}"
 CMDLINE_FILE="${CONARY_CMDLINE_FILE:-/proc/cmdline}"
@@ -44,9 +44,11 @@ read_kernel_value() {
     local key="$1"
 
     if [ ! -r "$CMDLINE_FILE" ]; then
-        return 0
+        return 1
     fi
 
+    # Kernel command-line arguments are whitespace-delimited, not line-delimited.
+    # shellcheck disable=SC2013
     for opt in $(cat "$CMDLINE_FILE"); do
         case "$opt" in
             "$key"=*)
@@ -55,6 +57,8 @@ read_kernel_value() {
                 ;;
         esac
     done
+
+    return 1
 }
 
 read_kernel_generation() {
@@ -134,6 +138,10 @@ prepare_readonly_var_state() {
 
 CONARY_CARRIER="$(read_kernel_value conary.carrier)"
 CONARY_GEN="$(read_kernel_generation)"
+CONARY_VERITY=on
+if verity_value="$(read_kernel_value conary.verity)"; then
+    CONARY_VERITY="$verity_value"
+fi
 if [ -z "$CONARY_GEN" ]; then
     CONARY_GEN="$(read_current_generation)"
 fi
@@ -156,10 +164,16 @@ CAS_DIR="${SYSROOT}/conary/objects"
 
 # Mount composefs at staging point
 mkdir -p "${SYSROOT}/conary/mnt"
+verity_policy_path="${CONARY_VERITY_POLICY_PATH:-/usr/lib/conary/conary-verity.sh}"
+[ -r "$verity_policy_path" ] || {
+    echo "conary: composefs verity policy missing at $verity_policy_path" >&2
+    exit 1
+}
+# shellcheck source=packaging/dracut/90conary/conary-verity.sh
+. "$verity_policy_path"
+COMPOSEFS_OPTIONS="$(conary_composefs_options "$CONARY_VERITY" "$CAS_DIR")" || exit 1
 mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
-    -o "basedir=${CAS_DIR},verity_check=1" 2>/dev/null || \
-mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
-    -o "basedir=${CAS_DIR}" || {
+    -o "$COMPOSEFS_OPTIONS" || {
     echo "conary: composefs mount failed for $EROFS_IMG" >&2
     exit 1
 }
