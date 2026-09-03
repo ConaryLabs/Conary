@@ -481,6 +481,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 malformed, profile, "comparison.json"
             )
 
+        malformed = json.loads(canonical(comparison))
+        malformed["schema_version"] = True
+        with self.assertRaisesRegex(ValueError, "unsigned 64-bit integer"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json"
+            )
+
     def test_build_input_binds_all_runs_and_oracle_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))

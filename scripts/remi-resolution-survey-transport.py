@@ -69,7 +69,9 @@ def fail(message: str) -> NoReturn:
 
 
 def canonical_json(value: Any) -> bytes:
-    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
 
 
 def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -83,7 +85,13 @@ def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def decode_json(data: bytes, label: str) -> Any:
     try:
-        return json.loads(data, object_pairs_hook=reject_duplicate_key)
+        return json.loads(
+            data,
+            object_pairs_hook=reject_duplicate_key,
+            parse_constant=lambda value: fail(
+                f"{label} contains non-finite JSON number {value!r}"
+            ),
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         fail(f"{label} is not valid JSON: {error}")
 
@@ -998,7 +1006,7 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
     )
     architecture = profile["target_architecture"]
     if (
-        survey["schema_version"] != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"]
@@ -1151,7 +1159,7 @@ def validate_comparison_survey(value: Any, profile: dict[str, Any], name: str) -
         name,
     )
     if (
-        survey["schema_version"] != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"] != profile["package_oracle_manifest_sha256"]
