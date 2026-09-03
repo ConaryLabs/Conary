@@ -308,6 +308,7 @@ create_release_policy_fixture() {
         "$repo/scripts/verify-native-oracle-producer.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
+    cp "$REPO_ROOT/scripts/build-static-conary.sh" "$repo/scripts/build-static-conary.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
@@ -3490,6 +3491,17 @@ test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
 }
 
+test_check_release_matrix_rejects_test_hooks_in_release_workflow() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo fmt --check' \
+        '        run: cargo fmt --check --features test-hooks'
+
+    assert_check_release_matrix_fails "$repo" "release-build test-hooks feature"
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3931,6 +3943,7 @@ main() {
         test_check_release_matrix_requires_hosted_debian_parity_producer
         test_check_release_matrix_requires_hosted_debian_resolution_binary
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
+        test_check_release_matrix_rejects_test_hooks_in_release_workflow
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary
