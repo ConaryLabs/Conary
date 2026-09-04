@@ -42,10 +42,6 @@ pub const TAKEOVER_MANIFEST_SCHEMA: u32 = 1;
 pub const TAKEOVER_PREVIEW_SCHEMA: u32 = 1;
 pub const TAKEOVER_PREVIEW_ENVELOPE_SCHEMA: u32 = 1;
 
-pub type TakeoverPolicyScope = RepositoryPolicyScopeInput;
-pub type TakeoverSourceStream = RepositorySourceStreamInput;
-pub type TakeoverUpdatePolicy = RepositoryUpdatePolicyInput;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TakeoverRepositoryInput {
@@ -53,9 +49,9 @@ pub struct TakeoverRepositoryInput {
     pub name: String,
     pub source_identity: String,
     pub repository_identity: String,
-    pub scope: TakeoverPolicyScope,
-    pub stream: TakeoverSourceStream,
-    pub update: TakeoverUpdatePolicy,
+    pub scope: RepositoryPolicyScopeInput,
+    pub stream: RepositorySourceStreamInput,
+    pub update: RepositoryUpdatePolicyInput,
     pub metadata_url: String,
     pub content_url: Option<String>,
     pub parser: RepositoryParserConfig,

@@ -2,10 +2,10 @@
 
 //! Typed validation for durable profile-refresh run identities and members.
 
-use super::RemiSyncRunMember;
+use super::ProfileSyncRunMember;
 use crate::error::{Error, Result};
 
-pub(super) fn validate_member(member: &RemiSyncRunMember) -> Result<()> {
+pub(super) fn validate_member(member: &ProfileSyncRunMember) -> Result<()> {
     if member.ordinal < 0 {
         return Err(Error::ConfigError(
             "sync run member ordinal must not be negative".to_string(),

@@ -61,13 +61,13 @@ fn fixture() -> (
             name: "vendor".to_string(),
             source_identity: "vendor-rpm".to_string(),
             repository_identity: "vendor".to_string(),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: "vendor".to_string(),
             },
-            stream: TakeoverSourceStream::Release {
+            stream: RepositorySourceStreamInput::Release {
                 identity: "stable".to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: "https://packages.example/repo".to_string(),
             content_url: Some("https://packages.example/content".to_string()),
             parser: RepositoryParserConfig::Rpm {
@@ -205,7 +205,7 @@ fn complete_enrollment_includes_disabled_repositories_and_exact_products() {
     second.name = "vendor-copy".to_string();
     second.source_identity = "vendor-rpm-copy".to_string();
     second.repository_identity = "vendor-copy".to_string();
-    second.scope = TakeoverPolicyScope::Repository {
+    second.scope = RepositoryPolicyScopeInput::Repository {
         identity: "vendor-copy".to_string(),
     };
     duplicate.repositories.push(second);
@@ -378,13 +378,13 @@ fn apt_enrollment_covers_every_uri_suite_component_product_exactly_once() {
         name: name.to_string(),
         source_identity: "apt-vendor".to_string(),
         repository_identity: name.to_string(),
-        scope: TakeoverPolicyScope::Group {
+        scope: RepositoryPolicyScopeInput::Group {
             identity: "apt-vendor".to_string(),
         },
-        stream: TakeoverSourceStream::Release {
+        stream: RepositorySourceStreamInput::Release {
             identity: "stable".to_string(),
         },
-        update: TakeoverUpdatePolicy::Follow,
+        update: RepositoryUpdatePolicyInput::Follow,
         metadata_url: "https://apt.example/".to_string(),
         content_url: None,
         parser: RepositoryParserConfig::Deb {
