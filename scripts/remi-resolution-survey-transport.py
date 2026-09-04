@@ -13,12 +13,17 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import sys
 import tarfile
 import tempfile
 from typing import Any, Iterator, NoReturn
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
+INPUT_MANIFEST_SCHEMA = 2
+INPUT_EVIDENCE_SCHEMA = 2
+OUTPUT_MANIFEST_SCHEMA = 3
+OUTPUT_EVIDENCE_SCHEMA = 3
 PROFILE_ARCHITECTURES = {
     "fedora-44": "x86_64",
     "ubuntu-26.04": "amd64",
@@ -72,6 +77,31 @@ MISMATCH_KINDS = (
 
 class ValidationError(ValueError):
     """An input or output differs from the reviewed transport contract."""
+
+
+class SchemaRebuildRequired(ValidationError):
+    """A recognized retired envelope is non-authority and must be rebuilt."""
+
+    def __init__(self, envelope: str, found: int, current: int):
+        self.evidence = {
+            "status": "obsolete",
+            "reason": "schema_rebuild_required",
+            "envelope": envelope,
+            "found_schema": found,
+            "current_schema": current,
+            "message": f"obsolete {envelope} schema {found}; rebuild as schema {current}",
+        }
+        super().__init__(self.evidence["message"])
+
+
+def require_envelope_schema(value: Any, current: int, label: str) -> None:
+    if not isinstance(value, dict):
+        fail(f"{label} must be an object")
+    version = exact_u32(value.get("schema_version"), f"{label} schema_version")
+    if 0 < version < current:
+        raise SchemaRebuildRequired(label, version, current)
+    if version != current:
+        fail(f"{label} schema {version} is unsupported; expected {current}")
 
 
 def fail(message: str) -> NoReturn:
@@ -790,7 +820,7 @@ def build_input(args: argparse.Namespace) -> None:
             {"path": name, "sha256": hash_file(path), "size": metadata.st_size}
         )
     manifest = {
-        "schema_version": 1,
+        "schema_version": INPUT_MANIFEST_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": {
@@ -829,7 +859,7 @@ def build_input(args: argparse.Namespace) -> None:
         manifest_path.unlink(missing_ok=True)
 
     evidence = {
-        "schema_version": 1,
+        "schema_version": INPUT_EVIDENCE_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": manifest["workflow_runs"],
@@ -1921,6 +1951,7 @@ def validate_input_evidence(
     path: Path, survey_id: str, export_id: str
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict[str, Any]]:
     value, _ = load_json(path, "resolution-survey input verification", canonical=True)
+    require_envelope_schema(value, INPUT_EVIDENCE_SCHEMA, "survey input verification")
     evidence = exact_object(
         value,
         {
@@ -1939,8 +1970,7 @@ def validate_input_evidence(
         "resolution-survey input verification",
     )
     if (
-        exact_u32(evidence["schema_version"], "input evidence schema_version") != 1
-        or evidence["survey_id"] != survey_id
+        evidence["survey_id"] != survey_id
         or evidence["export_id"] != export_id
     ):
         fail("resolution-survey input verification request binding drifted")
@@ -2074,10 +2104,11 @@ def load_input_package_manifests(
         if manifest_member is None:
             fail("oracle transport has no manifest.json")
         manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
+        input_manifest = decode_json(manifest_bytes, "oracle transport manifest")
+        require_envelope_schema(input_manifest, INPUT_MANIFEST_SCHEMA, "survey input manifest")
         if (
             sha256_bytes(manifest_bytes) != expected_manifest_sha256
-            or canonical_json(decode_json(manifest_bytes, "oracle transport manifest"))
-            != manifest_bytes
+            or canonical_json(input_manifest) != manifest_bytes
         ):
             fail("oracle transport manifest differs from authenticated input evidence")
         expected_names = {"manifest.json"}
@@ -2596,6 +2627,7 @@ def verify_staged_output(
             fail("survey transport has no manifest.json")
         manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
         manifest = decode_json(manifest_bytes, "survey manifest")
+        require_envelope_schema(manifest, OUTPUT_MANIFEST_SCHEMA, "survey output manifest")
         if canonical_json(manifest) != manifest_bytes:
             fail("survey manifest is not canonical JSON")
         manifest = exact_object(
@@ -2612,8 +2644,7 @@ def verify_staged_output(
             "survey manifest",
         )
         if (
-            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 2
-            or manifest["survey_id"] != survey_id
+            manifest["survey_id"] != survey_id
             or manifest["export_id"] != export_id
         ):
             fail("survey manifest request binding drifted")
@@ -2937,7 +2968,7 @@ def verify_staged_output(
     forbid_private_paths(manifest, "survey manifest")
 
     evidence = {
-        "schema_version": 2,
+        "schema_version": OUTPUT_EVIDENCE_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "deployment": deployment,
@@ -3029,5 +3060,8 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except SchemaRebuildRequired as error:
+        print(canonical_json(error.evidence).decode(), file=sys.stderr)
+        raise SystemExit(3) from error
     except (OSError, tarfile.TarError, ValidationError) as error:
         raise SystemExit(f"Remi resolution-survey transport validation failed: {error}") from error

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-04
-revision: 167
+last_updated: 2026-09-05
+revision: 168
 summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
@@ -839,6 +839,11 @@ That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
 schema hard cuts, bounded surveys, comparison rules, and production transport.
 Remi consumes only independently reopened artifacts bound to the selected
 private profile candidates; survey output never authorizes promotion.
+The survey input manifest and verification evidence use schema 2; the output
+manifest and verification evidence use schema 3. Retained older survey inputs
+and outputs are typed `obsolete` / `schema_rebuild_required` non-authority before
+nested validation and must be regenerated. Current envelopes with mismatched
+nested schemas remain invalid. This envelope cut leaves oracle bundles unchanged.
 Resolution schema 3 admits `not_installable { reason: conflicting_closure }`
 when conflict, break, same-name, obsoletion, or exact-root displacement makes a
 root-reachable closure inconsistent. Conflict-class attribution dominates

@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 71
+revision: 72
 status: active
 ---
 
@@ -707,10 +707,18 @@ at least one finding, polls `/health/ready` to a bounded successful result
 regardless of those findings, and returns only survey JSON
 and separate resolution-walk implementation JSON plus a digest, size,
 deployment, candidate, and oracle binding manifest. Survey transport manifest
-and verification evidence schema 2 bind every candidate/comparison survey to
+and verification evidence schema 3 bind every candidate/comparison survey to
 its implementation file; the independent reader validates the worker count,
 per-worker load-time vector, effective memory budget, and retained worker RSS
-allowance. The
+allowance. The input transport manifest and input verification evidence both
+use schema 2. These are #814 hard cuts: input envelopes move from 1 to 2 and
+output envelopes from 2 to 3. Readers classify retired envelopes before nested
+validation as typed `obsolete` / `schema_rebuild_required` non-authority with
+the found/current schemas and a rebuild message (the Python CLI exits 3).
+A current envelope containing mismatched nested schemas remains invalid input.
+All retained survey inputs and outputs must be regenerated; this envelope cut
+does not change or invalidate the current package or resolution oracle bundles.
+The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
 relationships, including the fixed 5,000-record, 32-MiB retained-evidence, and

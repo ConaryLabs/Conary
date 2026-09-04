@@ -294,6 +294,9 @@ jobs:
           install -m 0600 \
             "$RUNNER_TEMP/oracle-set/evidence.json" \
             resolution-survey-oracle-set.json
+          jq -e 'if .schema_version == 1 then
+            error("schema_rebuild_required: obsolete survey input verification; rebuild as schema 2")
+            else .schema_version == 2 end' resolution-survey-input-verification.json >/dev/null
           deployed_commit="$(jq -r .deployment.commit_sha resolution-survey-input-verification.json)"
           git merge-base --is-ancestor "$deployed_commit" origin/main || {
             echo "surveyed Remi deployment must remain merged into origin/main" >&2
@@ -496,7 +499,10 @@ jobs:
             --argjson bytes "$TRANSPORT_BYTES" \
             --argjson candidate_failures "$CANDIDATE_FAILURES" \
             --argjson comparison_mismatches "$COMPARISON_MISMATCHES" '
-            .transport == {sha256:$sha256,size:$bytes}
+            (if .schema_version == 1 or .schema_version == 2 then
+              error("schema_rebuild_required: obsolete survey output verification; rebuild as schema 3")
+              else .schema_version == 3 end)
+            and .transport == {sha256:$sha256,size:$bytes}
             and .counts.candidate_failures == $candidate_failures
             and .counts.comparison_mismatches == $comparison_mismatches
           ' resolution-survey-verification.json >/dev/null
