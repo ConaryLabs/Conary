@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::ccs::manifest::FileCapability;
-use crate::db::models::{FileEntry, InstallSource, InstalledFileCapability, PayloadClaim, Trove};
+use crate::db::models::{
+    FileEntry, InstallSource, InstalledFileCapability, PayloadClaim, PayloadClaimIndex, Trove,
+};
 use crate::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest, RootPathDomain, capture_existing_payload_node, capture_root_node,
@@ -64,7 +66,9 @@ pub(super) fn collect_runtime_generation_inputs(
         .iter()
         .filter(|trove| trove.install_source == InstallSource::AdoptedTrack)
         .count();
-    let mut capability_xattrs = collect_runtime_capability_xattrs(conn, &trove_map, &files)?;
+    let claim_index = PayloadClaim::index_all(conn)?;
+    let mut capability_xattrs =
+        collect_runtime_capability_xattrs(conn, &trove_map, &files, &claim_index)?;
     let mut runtime_entries = Vec::new();
     let mut immutable_entries = Vec::new();
     let mut state_entries = Vec::new();
@@ -79,7 +83,7 @@ pub(super) fn collect_runtime_generation_inputs(
         let mut generation_owner = anchor_source
             .is_generation_input()
             .then_some((*anchor_package_name, file.trove_id));
-        let claims = PayloadClaim::find_retaining_path(conn, &file.path)?;
+        let claims = claim_index.retaining(&file.path);
         for claim in &claims {
             let Some((claim_package_name, claim_source)) = trove_map.get(&claim.trove_id) else {
                 return Err(crate::Error::InternalError(format!(
@@ -250,6 +254,7 @@ fn collect_runtime_capability_xattrs(
     conn: &rusqlite::Connection,
     trove_map: &HashMap<i64, (&str, &InstallSource)>,
     files: &[FileEntry],
+    claim_index: &PayloadClaimIndex,
 ) -> crate::Result<RuntimeCapabilityXattrs> {
     let capability_rows = InstalledFileCapability::find_all_ordered(conn).map_err(|error| {
         crate::Error::InternalError(format!(
@@ -262,7 +267,7 @@ fn collect_runtime_capability_xattrs(
 
     let mut files_by_trove_path = HashMap::new();
     for file in files {
-        for claim in PayloadClaim::find_by_path(conn, &file.path)? {
+        for claim in claim_index.by_path(&file.path) {
             files_by_trove_path.insert((claim.trove_id, file.path.as_str()), file);
         }
     }
