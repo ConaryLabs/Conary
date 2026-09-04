@@ -39,13 +39,14 @@ fn recover_expired_profile_sync_runs_in_transaction(
     now: i64,
 ) -> Result<Vec<ProfileSyncRunRecovery>> {
     let expired = {
-        let mut statement = tx.prepare(
+        let mut statement = tx.prepare(&format!(
             "SELECT run_id, source_profile, fencing_epoch
              FROM repository_sync_runs
-             WHERE state NOT IN ('candidate', 'published', 'failed', 'abandoned')
+             WHERE state NOT IN ({})
                AND lease_expires_at <= ?1
              ORDER BY source_profile, fencing_epoch",
-        )?;
+            ProfileSyncRunState::terminal_sql()
+        ))?;
         statement
             .query_map([now], |row| {
                 Ok((
@@ -78,12 +79,15 @@ pub fn acknowledge_profile_sync_candidate_cleanup(conn: &Connection, run_id: &st
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
     let updated = tx.execute(
-        "UPDATE repository_sync_runs
+        &format!(
+            "UPDATE repository_sync_runs
          SET candidate_cleaned_at = ?1
          WHERE run_id = ?2
-           AND state IN ('candidate', 'published', 'failed', 'abandoned')
+           AND state IN ({})
            AND finished_at IS NOT NULL
            AND candidate_cleaned_at IS NULL",
+            ProfileSyncRunState::terminal_sql()
+        ),
         params![now, run_id],
     )?;
     tx.commit()?;
@@ -102,15 +106,26 @@ pub(super) fn abandon_expired_run(
         "durable lease for profile {source_profile} fencing epoch {fencing_epoch} expired before {recovery_context}"
     );
     let updated = tx.execute(
-        "UPDATE repository_sync_runs
-         SET state = 'abandoned', heartbeat_at = ?1, lease_expires_at = ?1,
-             finished_at = ?1, failure_stage = 'publishing',
-             failure_category = 'fenced', failure_evidence = ?2
+        &format!(
+            "UPDATE repository_sync_runs
+         SET state = ?5, heartbeat_at = ?1, lease_expires_at = ?1,
+             finished_at = ?1, failure_stage = ?6,
+             failure_category = ?7, failure_evidence = ?2
          WHERE run_id = ?3
            AND source_profile = ?4
-           AND state NOT IN ('candidate', 'published', 'failed', 'abandoned')
+           AND state NOT IN ({})
            AND lease_expires_at <= ?1",
-        params![now, evidence, run_id, source_profile],
+            ProfileSyncRunState::terminal_sql()
+        ),
+        params![
+            now,
+            evidence,
+            run_id,
+            source_profile,
+            ProfileSyncRunState::Abandoned.as_str(),
+            ProfileSyncFailureStage::Publishing.as_str(),
+            ProfileSyncFailureCategory::Fenced.as_str()
+        ],
     )?;
     if updated != 1 {
         return Err(Error::ConflictError(format!(
@@ -124,14 +139,15 @@ pub(super) fn pending_candidate_recovery(
     tx: &Transaction<'_>,
     source_profile: Option<&str>,
 ) -> Result<Vec<ProfileSyncRunRecovery>> {
-    let mut statement = tx.prepare(
+    let mut statement = tx.prepare(&format!(
         "SELECT run_id, source_profile
          FROM repository_sync_runs
-         WHERE state IN ('candidate', 'published', 'failed', 'abandoned')
+         WHERE state IN ({})
            AND candidate_cleaned_at IS NULL
            AND (?1 IS NULL OR source_profile = ?1)
          ORDER BY finished_at, source_profile, fencing_epoch",
-    )?;
+        ProfileSyncRunState::terminal_sql()
+    ))?;
     Ok(statement
         .query_map([source_profile], |row| {
             Ok(ProfileSyncRunRecovery {

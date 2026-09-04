@@ -87,8 +87,8 @@ pub use substituter::{SubstituterChain, SubstituterResult, SubstituterSource};
 pub use sync::{
     DurableSourceCatalogReuseV1, PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncCandidate,
     ProfileSyncFailureCategory, ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember,
-    ProfileSyncRunRecovery, RepositoryWriteAuthority, SourceCatalogMaterializationV1,
-    VerifiedSourceCatalogCandidateV1, abort_profile_sync_run,
+    ProfileSyncRunRecovery, ProfileSyncRunState, RepositoryWriteAuthority,
+    SourceCatalogMaterializationV1, VerifiedSourceCatalogCandidateV1, abort_profile_sync_run,
     acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
     begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
     complete_profile_sync_candidate, current_profile_sync_candidate, current_timestamp,

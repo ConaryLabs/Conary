@@ -440,3 +440,67 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
         .is_err()
     );
 }
+
+#[test]
+fn terminal_sql_and_typed_states_agree() {
+    let conn = Connection::open_in_memory().unwrap();
+    for state in [
+        ProfileSyncRunState::Created,
+        ProfileSyncRunState::FetchingObjects,
+        ProfileSyncRunState::ReadyToPublish,
+        ProfileSyncRunState::Candidate,
+        ProfileSyncRunState::Published,
+        ProfileSyncRunState::Failed,
+        ProfileSyncRunState::Abandoned,
+    ] {
+        assert_eq!(
+            ProfileSyncRunState::try_from(state.as_str()).unwrap(),
+            state
+        );
+        let terminal: bool = conn
+            .query_row(
+                &format!("SELECT ?1 IN ({})", ProfileSyncRunState::terminal_sql()),
+                [state.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(terminal, state.is_terminal());
+    }
+    for value in ["", "CREATED", "obsolete"] {
+        assert!(ProfileSyncRunState::try_from(value).is_err());
+    }
+}
+
+#[test]
+fn unknown_run_state_fences_mutation_and_successor() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let owner = uuid::Uuid::new_v4().to_string();
+    let run = begin_profile_sync_run(&conn, "fedora", &owner).unwrap();
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+        .unwrap();
+    conn.execute("UPDATE repository_sync_runs SET state = ?1", ["obsolete"])
+        .unwrap();
+    for error in [
+        heartbeat_profile_sync_run(&conn, &run).unwrap_err(),
+        begin_profile_sync_run(&conn, "fedora", &owner).unwrap_err(),
+        abort_profile_sync_run(
+            &conn,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            ProfileSyncFailureCategory::Fenced,
+            "test",
+        )
+        .unwrap_err(),
+    ] {
+        let Error::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = error else {
+            panic!("expected typed persisted-value error: {error:?}");
+        };
+        assert!(
+            source
+                .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+                .is_some()
+        );
+    }
+    assert_eq!(run_state(&conn, &run), "obsolete");
+}

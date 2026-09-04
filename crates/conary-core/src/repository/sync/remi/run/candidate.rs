@@ -27,17 +27,17 @@ pub fn complete_profile_sync_candidate(
 ) -> Result<ProfileSyncCandidate> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "ready_to_publish", "", "", now)?;
+    require_owned_run(&tx, run, &[ProfileSyncRunState::ReadyToPublish], now)?;
     verify_registered_candidate(&tx, run)?;
     let updated = tx.execute(
         "UPDATE repository_sync_runs
-         SET state = 'candidate', heartbeat_at = ?1, lease_expires_at = ?1,
+         SET state = ?6, heartbeat_at = ?1, lease_expires_at = ?1,
              finished_at = ?1
          WHERE run_id = ?2
            AND source_profile = ?3
            AND owner_instance_uuid = ?4
            AND fencing_epoch = ?5
-           AND state = 'ready_to_publish'
+           AND state = ?7
            AND candidate_profile_digest IS NOT NULL
            AND lease_expires_at > ?1",
         params![
@@ -46,6 +46,8 @@ pub fn complete_profile_sync_candidate(
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
+            ProfileSyncRunState::Candidate.as_str(),
+            ProfileSyncRunState::ReadyToPublish.as_str()
         ],
     )?;
     if updated != 1 {
@@ -68,12 +70,13 @@ fn verify_registered_candidate(tx: &Transaction<'_>, run: &ProfileSyncRun) -> Re
          FROM repository_sync_runs
          WHERE run_id = ?1 AND source_profile = ?2
            AND owner_instance_uuid = ?3 AND fencing_epoch = ?4
-           AND state = 'ready_to_publish'",
+           AND state = ?5",
         params![
             &run.run_id,
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
+            ProfileSyncRunState::ReadyToPublish.as_str()
         ],
         |row| row.get::<_, String>(0),
     )?;
@@ -148,18 +151,22 @@ fn current_profile_sync_candidate_in_transaction(
            ON run.source_profile = scope.source_profile
           AND run.fencing_epoch <= scope.fencing_epoch
          WHERE scope.source_profile = ?1
-           AND run.state = 'candidate'
+           AND run.state = ?2
            AND NOT EXISTS (
                SELECT 1
                FROM repository_sync_runs newer
                WHERE newer.source_profile = run.source_profile
                  AND newer.fencing_epoch > run.fencing_epoch
                  AND newer.fencing_epoch <= scope.fencing_epoch
-                 AND newer.state IN ('candidate', 'published')
+                 AND newer.state IN (?2, ?3)
            )
          ORDER BY run.fencing_epoch DESC
          LIMIT 1",
-        [source_profile],
+        params![
+            source_profile,
+            ProfileSyncRunState::Candidate.as_str(),
+            ProfileSyncRunState::Published.as_str()
+        ],
         |row| {
             Ok(ProfileSyncCandidate {
                 source_profile: row.get(0)?,

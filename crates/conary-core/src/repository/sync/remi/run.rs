@@ -20,9 +20,8 @@ mod recovery;
 pub use candidate::{
     ProfileSyncCandidate, complete_profile_sync_candidate, current_profile_sync_candidate,
 };
-use contract::{
-    is_terminal_state, validate_digest, validate_member, validate_profile, validate_uuid,
-};
+pub use contract::ProfileSyncRunState;
+use contract::{validate_digest, validate_member, validate_profile, validate_uuid};
 pub use failure::{ProfileSyncFailureCategory, ProfileSyncFailureStage};
 
 #[cfg(test)]
@@ -179,7 +178,7 @@ fn begin_profile_sync_run_in_transaction(
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    read_run_state(row, 2)?,
                     row.get::<_, i64>(3)?,
                 ))
             },
@@ -188,7 +187,7 @@ fn begin_profile_sync_run_in_transaction(
 
     let prior_epoch = match current {
         Some((epoch, run_id, state, lease_expires_at)) => {
-            if !is_terminal_state(&state) {
+            if !state.is_terminal() {
                 if lease_expires_at > now {
                     return Err(Error::ConflictError(format!(
                         "profile {source_profile} sync run {run_id} owns fencing epoch \
@@ -218,7 +217,7 @@ fn begin_profile_sync_run_in_transaction(
         "INSERT INTO repository_sync_runs (
              run_id, source_profile, owner_instance_uuid, fencing_epoch,
              input_profile_digest, state, started_at, heartbeat_at, lease_expires_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, 'created', ?6, ?6, ?7)",
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?8, ?6, ?6, ?7)",
         params![
             run_id,
             source_profile,
@@ -227,6 +226,7 @@ fn begin_profile_sync_run_in_transaction(
             input_profile_digest,
             now,
             lease_expires_at,
+            ProfileSyncRunState::Created.as_str()
         ],
     )?;
     tx.execute(
@@ -291,9 +291,11 @@ pub fn heartbeat_profile_sync_run(conn: &Connection, run: &ProfileSyncRun) -> Re
     require_owned_run(
         &tx,
         run,
-        "created",
-        "fetching_objects",
-        "ready_to_publish",
+        &[
+            ProfileSyncRunState::Created,
+            ProfileSyncRunState::FetchingObjects,
+            ProfileSyncRunState::ReadyToPublish,
+        ],
         now,
     )?;
     touch_owned_run(&tx, run, now)?;
@@ -310,7 +312,15 @@ pub fn record_profile_sync_run_member(
     validate_member(member)?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "created", "fetching_objects", "", now)?;
+    require_owned_run(
+        &tx,
+        run,
+        &[
+            ProfileSyncRunState::Created,
+            ProfileSyncRunState::FetchingObjects,
+        ],
+        now,
+    )?;
     let existing = tx
         .query_row(
             "SELECT ordinal, repository_id, source_identity, repository_identity,
@@ -409,7 +419,15 @@ pub fn ready_profile_sync_run(
     )?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
-    require_owned_run(&tx, run, "created", "fetching_objects", "", now)?;
+    require_owned_run(
+        &tx,
+        run,
+        &[
+            ProfileSyncRunState::Created,
+            ProfileSyncRunState::FetchingObjects,
+        ],
+        now,
+    )?;
     let (member_count, missing_required): (i64, i64) = tx.query_row(
         "SELECT COUNT(*),
                 COALESCE(SUM(CASE WHEN required = 1
@@ -434,13 +452,13 @@ pub fn ready_profile_sync_run(
     }
     let updated = tx.execute(
         "UPDATE repository_sync_runs
-         SET state = 'ready_to_publish', candidate_profile_digest = ?1,
+         SET state = ?8, candidate_profile_digest = ?1,
              heartbeat_at = ?2, lease_expires_at = ?3
          WHERE run_id = ?4
            AND source_profile = ?5
            AND owner_instance_uuid = ?6
            AND fencing_epoch = ?7
-           AND state IN ('created', 'fetching_objects')
+           AND state IN (?9, ?10)
            AND lease_expires_at > ?2",
         params![
             candidate_profile_digest,
@@ -450,6 +468,9 @@ pub fn ready_profile_sync_run(
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
+            ProfileSyncRunState::ReadyToPublish.as_str(),
+            ProfileSyncRunState::Created.as_str(),
+            ProfileSyncRunState::FetchingObjects.as_str()
         ],
     )?;
     if updated != 1 {
@@ -481,28 +502,31 @@ pub fn abort_profile_sync_run(
                 &run.owner_instance_uuid,
                 run.fencing_epoch
             ],
-            |row| row.get::<_, String>(0),
+            |row| read_run_state(row, 0),
         )
         .optional()?;
     let Some(state) = state else {
         return Err(fenced_error(run, "run does not exist"));
     };
-    if is_terminal_state(&state) {
+    if state.is_terminal() {
         tx.commit()?;
         return Ok(());
     }
-    require_owned_run(&tx, run, &state, "", "", now)?;
+    require_owned_run(&tx, run, &[state], now)?;
     let updated = tx.execute(
-        "UPDATE repository_sync_runs
-         SET state = 'abandoned', heartbeat_at = ?1, lease_expires_at = ?1,
+        &format!(
+            "UPDATE repository_sync_runs
+         SET state = ?9, heartbeat_at = ?1, lease_expires_at = ?1,
              finished_at = ?1, failure_stage = ?2, failure_category = ?3,
              failure_evidence = ?4
          WHERE run_id = ?5
            AND source_profile = ?6
            AND owner_instance_uuid = ?7
            AND fencing_epoch = ?8
-           AND state NOT IN ('candidate', 'published', 'failed', 'abandoned')
+           AND state NOT IN ({})
            AND lease_expires_at > ?1",
+            ProfileSyncRunState::terminal_sql()
+        ),
         params![
             now,
             stage.as_str(),
@@ -512,6 +536,7 @@ pub fn abort_profile_sync_run(
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
+            ProfileSyncRunState::Abandoned.as_str()
         ],
     )?;
     if updated != 1 {
@@ -524,52 +549,53 @@ pub fn abort_profile_sync_run(
 fn require_owned_run(
     tx: &Transaction<'_>,
     run: &ProfileSyncRun,
-    first_state: &str,
-    second_state: &str,
-    third_state: &str,
+    allowed: &[ProfileSyncRunState],
     now: i64,
 ) -> Result<()> {
-    let owned = tx.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM repository_sync_scopes scope
-             JOIN repository_sync_runs current ON current.run_id = scope.current_run_id
-             WHERE scope.source_profile = ?1
-               AND scope.current_run_id = ?2
-               AND scope.fencing_epoch = ?3
-               AND current.source_profile = ?1
-               AND current.owner_instance_uuid = ?4
-               AND (?5 = '' OR current.state = ?5 OR current.state = ?6 OR current.state = ?7)
-               AND current.lease_expires_at > ?8
-         )",
-        params![
-            &run.source_profile,
-            &run.run_id,
-            run.fencing_epoch,
-            &run.owner_instance_uuid,
-            first_state,
-            second_state,
-            third_state,
-            now,
-        ],
-        |row| row.get::<_, bool>(0),
-    )?;
-    if !owned {
+    let state = tx
+        .query_row(
+            "SELECT current.state
+         FROM repository_sync_scopes scope
+         JOIN repository_sync_runs current ON current.run_id = scope.current_run_id
+         WHERE scope.source_profile = ?1 AND scope.current_run_id = ?2
+           AND scope.fencing_epoch = ?3 AND current.source_profile = ?1
+           AND current.owner_instance_uuid = ?4 AND current.lease_expires_at > ?5",
+            params![
+                &run.source_profile,
+                &run.run_id,
+                run.fencing_epoch,
+                &run.owner_instance_uuid,
+                now
+            ],
+            |row| read_run_state(row, 0),
+        )
+        .optional()?;
+    if !state.is_some_and(|state| allowed.contains(&state)) {
         return Err(fenced_error(run, "ownership proof failed"));
     }
     Ok(())
 }
 
+fn read_run_state(row: &Row<'_>, index: usize) -> rusqlite::Result<ProfileSyncRunState> {
+    ProfileSyncRunState::try_from(row.get::<_, String>(index)?.as_str()).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
+}
+
 fn touch_owned_run(tx: &Transaction<'_>, run: &ProfileSyncRun, now: i64) -> Result<()> {
     let updated = tx.execute(
         "UPDATE repository_sync_runs
-         SET state = CASE WHEN state = 'created' THEN 'fetching_objects' ELSE state END,
+         SET state = CASE WHEN state = ?7 THEN ?8 ELSE state END,
              heartbeat_at = ?1, lease_expires_at = ?2
          WHERE run_id = ?3
            AND source_profile = ?4
            AND owner_instance_uuid = ?5
            AND fencing_epoch = ?6
-           AND state IN ('created', 'fetching_objects', 'ready_to_publish')
+           AND state IN (?7, ?8, ?9)
            AND lease_expires_at > ?1",
         params![
             now,
@@ -578,6 +604,9 @@ fn touch_owned_run(tx: &Transaction<'_>, run: &ProfileSyncRun, now: i64) -> Resu
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
+            ProfileSyncRunState::Created.as_str(),
+            ProfileSyncRunState::FetchingObjects.as_str(),
+            ProfileSyncRunState::ReadyToPublish.as_str()
         ],
     )?;
     if updated != 1 {
@@ -605,31 +634,32 @@ impl ProfileSyncRunMember {
         })
     }
 
-    fn immutable_part(
-        &self,
-    ) -> (
-        &i64,
-        &i64,
-        &str,
-        &str,
-        &str,
-        &str,
-        ProfileSourceRole,
-        &i64,
-        bool,
-    ) {
-        (
-            &self.ordinal,
-            &self.repository_id,
-            &self.source_identity,
-            &self.repository_identity,
-            &self.stream_kind,
-            &self.stream_identity,
-            self.role,
-            &self.precedence,
-            self.required,
-        )
+    fn immutable_part(&self) -> ProfileSyncRunMemberKey<'_> {
+        ProfileSyncRunMemberKey {
+            ordinal: self.ordinal,
+            repository_id: self.repository_id,
+            source_identity: &self.source_identity,
+            repository_identity: &self.repository_identity,
+            stream_kind: &self.stream_kind,
+            stream_identity: &self.stream_identity,
+            role: self.role,
+            precedence: self.precedence,
+            required: self.required,
+        }
     }
+}
+
+#[derive(PartialEq, Eq)]
+struct ProfileSyncRunMemberKey<'a> {
+    ordinal: i64,
+    repository_id: i64,
+    source_identity: &'a str,
+    repository_identity: &'a str,
+    stream_kind: &'a str,
+    stream_identity: &'a str,
+    role: ProfileSourceRole,
+    precedence: i64,
+    required: bool,
 }
 
 fn row_conversion_error(index: usize, error: String) -> rusqlite::Error {

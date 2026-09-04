@@ -203,20 +203,22 @@ fn activate_profile_revision_in_transaction(
                AND run.source_profile = ?2
                AND run.owner_instance_uuid = ?3
                AND run.fencing_epoch = ?4
-               AND run.state IN ('candidate', 'published')
+               AND run.state IN (?5, ?6)
                AND NOT EXISTS (
                    SELECT 1
                    FROM repository_sync_runs newer
                    WHERE newer.source_profile = run.source_profile
                      AND newer.fencing_epoch > run.fencing_epoch
                      AND newer.fencing_epoch <= scope.fencing_epoch
-                     AND newer.state IN ('candidate', 'published')
+                     AND newer.state IN (?5, ?6)
                )",
             params![
                 &request.run_id,
                 &request.source_profile,
                 &request.owner_instance_uuid,
                 request.fencing_epoch,
+                crate::repository::ProfileSyncRunState::Candidate.as_str(),
+                crate::repository::ProfileSyncRunState::Published.as_str()
             ],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
         )
@@ -278,12 +280,12 @@ fn activate_profile_revision_in_transaction(
     let published_at = now;
     let published = tx.execute(
         "UPDATE repository_sync_runs
-         SET state = 'published', heartbeat_at = ?1, lease_expires_at = ?1
+         SET state = ?7, heartbeat_at = ?1, lease_expires_at = ?1
          WHERE run_id = ?2
            AND source_profile = ?3
            AND owner_instance_uuid = ?4
            AND fencing_epoch = ?5
-           AND state = 'candidate'
+           AND state = ?8
            AND candidate_profile_digest = ?6
            AND finished_at IS NOT NULL",
         params![
@@ -293,6 +295,8 @@ fn activate_profile_revision_in_transaction(
             &request.owner_instance_uuid,
             request.fencing_epoch,
             &request.profile_revision_sha256,
+            crate::repository::ProfileSyncRunState::Published.as_str(),
+            crate::repository::ProfileSyncRunState::Candidate.as_str()
         ],
     )?;
     if published != 1 {

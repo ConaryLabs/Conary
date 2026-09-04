@@ -258,7 +258,7 @@ pub fn delete_catalog_collection(
                    JOIN repository_sync_scopes scope
                      ON scope.source_profile = run.source_profile
                     AND run.fencing_epoch <= scope.fencing_epoch
-                   WHERE run.state = 'candidate'
+                   WHERE run.state = ?9
                      AND run.candidate_profile_digest = ?1
                      AND NOT EXISTS (
                          SELECT 1
@@ -266,7 +266,7 @@ pub fn delete_catalog_collection(
                          WHERE newer.source_profile = run.source_profile
                            AND newer.fencing_epoch > run.fencing_epoch
                            AND newer.fencing_epoch <= scope.fencing_epoch
-                           AND newer.state IN ('candidate', 'published')
+                           AND newer.state IN (?9, ?10)
                      )
                )",
             params![
@@ -278,6 +278,8 @@ pub fn delete_catalog_collection(
                 &resource.manifest_json,
                 resource.durable as i64,
                 resource.created_at,
+                crate::repository::ProfileSyncRunState::Candidate.as_str(),
+                crate::repository::ProfileSyncRunState::Published.as_str()
             ],
         )?;
         if deleted == 1 {
@@ -330,7 +332,7 @@ pub fn delete_catalog_collection(
                     AND run.fencing_epoch <= scope.fencing_epoch
                    JOIN repository_sync_run_members member
                      ON member.run_id = run.run_id
-                   WHERE run.state = 'candidate'
+                   WHERE run.state = ?9
                      AND member.candidate_source_snapshot_sha256 = ?1
                      AND NOT EXISTS (
                          SELECT 1
@@ -338,7 +340,7 @@ pub fn delete_catalog_collection(
                          WHERE newer.source_profile = run.source_profile
                            AND newer.fencing_epoch > run.fencing_epoch
                            AND newer.fencing_epoch <= scope.fencing_epoch
-                           AND newer.state IN ('candidate', 'published')
+                           AND newer.state IN (?9, ?10)
                      )
                )",
             params![
@@ -350,6 +352,8 @@ pub fn delete_catalog_collection(
                 &resource.manifest_json,
                 resource.durable as i64,
                 resource.created_at,
+                crate::repository::ProfileSyncRunState::Candidate.as_str(),
+                crate::repository::ProfileSyncRunState::Published.as_str()
             ],
         )?;
         if deleted == 1 {
@@ -592,18 +596,24 @@ fn load_profile_roots(
          JOIN repository_sync_runs run
            ON run.source_profile = scope.source_profile
           AND run.fencing_epoch <= scope.fencing_epoch
-         WHERE run.state = 'candidate'
+         WHERE run.state = ?1
            AND NOT EXISTS (
                SELECT 1
                FROM repository_sync_runs newer
                WHERE newer.source_profile = run.source_profile
                  AND newer.fencing_epoch > run.fencing_epoch
                  AND newer.fencing_epoch <= scope.fencing_epoch
-                 AND newer.state IN ('candidate', 'published')
+                 AND newer.state IN (?1, ?2)
            )
          ORDER BY run.source_profile",
     )?;
-    let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;
+    let candidate_rows = candidates.query_map(
+        params![
+            crate::repository::ProfileSyncRunState::Candidate.as_str(),
+            crate::repository::ProfileSyncRunState::Published.as_str()
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
     for row in candidate_rows {
         insert_profile_digest(
             reachability,
@@ -653,7 +663,7 @@ fn load_source_run_roots(
            ON run.source_profile = scope.source_profile
           AND run.fencing_epoch <= scope.fencing_epoch
          JOIN repository_sync_run_members member ON member.run_id = run.run_id
-         WHERE run.state = 'candidate'
+         WHERE run.state = ?1
            AND member.candidate_source_snapshot_sha256 IS NOT NULL
            AND NOT EXISTS (
                SELECT 1
@@ -661,11 +671,17 @@ fn load_source_run_roots(
                WHERE newer.source_profile = run.source_profile
                  AND newer.fencing_epoch > run.fencing_epoch
                  AND newer.fencing_epoch <= scope.fencing_epoch
-                 AND newer.state IN ('candidate', 'published')
+                 AND newer.state IN (?1, ?2)
            )
          ORDER BY run.source_profile, member.ordinal",
     )?;
-    let candidate_rows = candidates.query_map([], |row| row.get::<_, String>(0))?;
+    let candidate_rows = candidates.query_map(
+        params![
+            crate::repository::ProfileSyncRunState::Candidate.as_str(),
+            crate::repository::ProfileSyncRunState::Published.as_str()
+        ],
+        |row| row.get::<_, String>(0),
+    )?;
     for row in candidate_rows {
         insert_source_digest(
             reachability,
