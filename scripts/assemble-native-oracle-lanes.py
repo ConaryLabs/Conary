@@ -72,7 +72,8 @@ LANES = {
     },
 }
 MAX_JSON_BYTES = 16 * 1024 * 1024
-NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 5
+NATIVE_ORACLE_THREE_LANE_SET_SCHEMA = 2
 
 
 def canonical_json(value: Any) -> bytes:
@@ -451,7 +452,7 @@ def assemble(arguments: argparse.Namespace) -> dict[str, Any]:
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": NATIVE_ORACLE_THREE_LANE_SET_SCHEMA,
         "artifact_type": "native-oracle-three-lane-set",
         "deployment_run_id": arguments.deployment_run_id,
         "export_run_id": arguments.export_run_id,

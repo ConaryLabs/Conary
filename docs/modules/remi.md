@@ -811,12 +811,14 @@ result only when the export run used its own current-main operator
 revision. Callers cannot supply paths, profile order, conversion commands, or
 publication operations.
 
-The diagnostics survey binding is schema 2 and the strict per-ecosystem lane
-evidence is schema 4. Both require the resolution worker count, measured
-per-worker load times and RSS admission inputs. Schema-1 survey bindings and
-schema-3 lanes predate that scheduling evidence and are fenced as obsolete;
-operators must regenerate all three strict lanes once before retained-lane
-subset production can resume.
+The diagnostics survey binding is schema 2, the strict per-ecosystem lane
+evidence is schema 5, and the assembled three-lane set is schema 2. The lane
+schema embeds resolution schema 3; the assembled set binds those current lane
+summaries. Survey and lane evidence require the resolution worker count,
+measured per-worker load times and RSS admission inputs. Schema-1 survey
+bindings, strict lanes through schema 4, and schema-1 assembled sets are fenced
+as obsolete; operators must regenerate all three strict lanes once before
+retained-lane subset production can resume.
 
 ```text
 remi native-oracle-input \

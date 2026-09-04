@@ -282,7 +282,7 @@ class TransportFixture:
                 "resolution": {"name": resolution_binary, "sha256": str(index + 3) * 64},
             }
             evidence = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "artifact_type": "native-oracle-lane",
                 "deployment_run_id": int(DEPLOYMENT_RUN_ID),
                 "export_run_id": int(EXPORT_RUN_ID),
@@ -351,7 +351,7 @@ class TransportFixture:
         write_json(
             self.assembly_evidence,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "artifact_type": "native-oracle-three-lane-set",
                 "deployment_run_id": int(DEPLOYMENT_RUN_ID),
                 "export_run_id": int(EXPORT_RUN_ID),
@@ -720,6 +720,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("pinned SSH operator attestation", result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            assembly = json.loads(fixture.assembly_evidence.read_bytes())
+            assembly["schema_version"] = 1
+            write_json(fixture.assembly_evidence, assembly)
+            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("one canonical assembled three-lane set", result.stderr)
 
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))

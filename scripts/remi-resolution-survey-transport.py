@@ -404,7 +404,7 @@ def validate_lane(
         evidence["resolution_implementation"], f"{profile} resolution implementation"
     )
     if (
-        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 4
+        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 5
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != deployment_run_id
         or evidence["export_run_id"] != export_run_id
@@ -642,7 +642,7 @@ def build_input(args: argparse.Namespace) -> None:
     )
     assembled_lanes = assembly.get("lanes")
     if (
-        exact_u32(assembly["schema_version"], "oracle assembly schema_version") != 1
+        exact_u32(assembly["schema_version"], "oracle assembly schema_version") != 2
         or assembly["artifact_type"] != "native-oracle-three-lane-set"
         or not isinstance(assembled_lanes, list)
         or len(assembled_lanes) != len(PUBLIC_PROFILES)

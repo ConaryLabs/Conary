@@ -2066,8 +2066,8 @@ test_check_release_matrix_rejects_native_oracle_lane_schema_drift() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .schema_version == 4 and' \
-        '            .schema_version == 3 and'
+        '            .schema_version == 5 and' \
+        '            .schema_version == 4 and'
 
     assert_check_release_matrix_fails \
         "$repo" \

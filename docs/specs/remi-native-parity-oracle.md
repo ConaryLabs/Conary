@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 60
+revision: 61
 status: active
 ---
 
@@ -103,11 +103,14 @@ carry the export/deployment/producer/image/schema/implementation/binary-digest
 bindings, and remain diagnostics-only. Their type can never satisfy assembly,
 comparison, promotion, activation, or publication.
 
-Native-resolution survey binding evidence is schema 2, and strict native-oracle
-lane evidence is schema 4. Those versions add the required worker count,
+Native-resolution survey binding evidence is schema 2, strict native-oracle
+lane evidence is schema 5, and the assembled three-lane set is schema 2. The
+lane schema embeds resolution schema 3; the assembled-set schema binds those
+current lane summaries. The survey and lane versions also require the worker count,
 per-worker pool-load timings, measured worker RSS, and admitted memory budget.
-This is a hard cut: schema-1 survey bindings and schema-3 strict lanes are
-obsolete non-authority and must be regenerated. In particular, the first
+This is a hard cut: schema-1 survey bindings, strict lanes through schema 4,
+and schema-1 assembled sets are obsolete non-authority and must be regenerated.
+In particular, the first
 subset production after this cut must rebuild all three strict lanes before
 later subset runs may retain an unselected lane.
 

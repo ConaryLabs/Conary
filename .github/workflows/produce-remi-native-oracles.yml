@@ -518,7 +518,7 @@ jobs:
             --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
             --arg resolution_sha256 "$resolution_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 4 and
+            .schema_version == 5 and
             .artifact_type == "native-oracle-lane" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
@@ -788,7 +788,7 @@ jobs:
             --arg deployed_commit "$DEPLOYED_COMMIT" \
             --arg export_id "$EXPORT_ID" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-              .schema_version == 1 and
+              .schema_version == 2 and
               .artifact_type == "native-oracle-three-lane-set" and
               .deployed_commit == $deployed_commit and
               .export_id == $export_id and

@@ -171,7 +171,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
                 "worker_load_milliseconds": [12, 13],
                 "workers": 2,
             },
-            "schema_version": 4,
+            "schema_version": 5,
             "target_architecture": architecture,
             "transport_sha256": TRANSPORT_SHA256,
         }
@@ -220,6 +220,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         assembled = json.loads(result.stdout)
+        self.assertEqual(assembled["schema_version"], 2)
         self.assertEqual(assembled["artifact_type"], "native-oracle-three-lane-set")
         self.assertEqual([lane["profile"] for lane in assembled["lanes"]], list(PROFILES))
         self.assertEqual(
@@ -238,15 +239,15 @@ class NativeOracleAssemblyTests(unittest.TestCase):
 
     def test_rejects_obsolete_lane_evidence_schema(self) -> None:
         evidence = self.evidence("fedora-44")
-        evidence["schema_version"] = 3
+        evidence["schema_version"] = 4
         self.rewrite_evidence("fedora-44", evidence)
         result = self.run_assembler()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("fedora-44 lane binding drifted", result.stderr)
 
-    def test_rejects_schema_three_lane_without_worker_evidence(self) -> None:
+    def test_rejects_schema_four_lane_without_worker_evidence(self) -> None:
         evidence = self.evidence("fedora-44")
-        evidence["schema_version"] = 3
+        evidence["schema_version"] = 4
         del evidence["resolution_implementation"]
         self.rewrite_evidence("fedora-44", evidence)
         result = self.run_assembler()

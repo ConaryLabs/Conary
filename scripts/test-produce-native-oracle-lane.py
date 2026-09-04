@@ -262,7 +262,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
-        self.assertEqual(evidence["schema_version"], 4)
+        self.assertEqual(evidence["schema_version"], 5)
         self.assertEqual(evidence["artifact_type"], "native-oracle-lane")
         self.assertEqual(evidence["deployment_run_id"], 123)
         self.assertEqual(evidence["export_run_id"], 456)
