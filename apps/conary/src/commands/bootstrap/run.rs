@@ -171,8 +171,8 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
 
         // 8. Execute pipeline
         println!("\nStarting derivation pipeline...\n");
-        let profile = pipeline
-            .execute(&seed, &recipes, &build_steps, &conn, |event| match event {
+        let profile =
+            pipeline.execute(&seed, &recipes, &build_steps, &conn, |event| match event {
                 PipelineEvent::StageStarted {
                     name,
                     package_count,
@@ -238,8 +238,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                         ),
                     );
                 }
-            })
-            .await?;
+            })?;
 
         // 9. Write generation output
         let gen_dir = output_dir.join("generations").join("1");
