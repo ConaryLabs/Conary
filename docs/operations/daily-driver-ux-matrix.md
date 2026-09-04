@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-25
-revision: 2
-summary: Daily-driver CLI UX matrix for Goal 7 diagnostics, unsupported-case routes, shell completion checks, and focused tests
+last_updated: 2026-09-03
+revision: 3
+summary: Daily-driver CLI routes, presentation slices, shell completion checks, and focused tests
 ---
 
 # Daily-Driver UX Matrix
@@ -51,6 +51,42 @@ cargo run -p conary -- system completions zsh >/tmp/conary-completion.zsh
   generation activation, rollback, or export.
 - conaryd guidance is operator routing text for durable package jobs. It is not
   a new UI client and does not loosen the live-host mutation acknowledgement.
+
+## Ranked UI Slices
+
+These slices change rendering and presentation, not package, publication,
+query, download, or boot behavior. Each lands separately under #132 unless a
+focused issue is created first. Proof for every slice includes before/after
+evidence plus `cargo test -p conary --test output_vocabulary_guard` and
+`cargo test -p conary --test cli_daily_ux`; snapshot changes also run
+`cargo test -p conary --test cli_output_snapshots`.
+
+1. **Fix TTY progress rendering** — For `install`, `update`, and `remove`, stop
+   rendering zero-length bars. Single-package operations get one spinner line
+   that clears to the final summary; bars appear only with known non-zero
+   totals. Keep the primitive capable of a bounded aggregate-plus-worker layout
+   for #535. Add a pty capture with `script -qec`.
+2. **One warning/error voice** — Route deferred or stuck publication warnings
+   once through `ui::warn`, retain tracing for logs rather than duplicate
+   default output, render application failures through `ui::error_line`, align
+   clap's visible vocabulary, and state each fact and remedy once. #534 owns
+   publication behavior; this slice owns rendering.
+3. **Transaction summary block** — Give `install --dry-run`, `install --yes`,
+   `update`, and `remove` one shared summary renderer for install, upgrade, and
+   remove groups; version, architecture, source format, file count, size, and
+   disk delta; and a closing line that distinguishes planning from apply.
+4. **Typed preflight rendering** — Render signature, authority, and preflight
+   refusals from their fields: one `error:` line naming the cause, indented
+   facts without debug wrappers or repeated paths, and one `note:` remedy.
+5. **Field/heading unification and empty-state phrasing** — Route `list --info`,
+   `ccs build`, `system history`, and list/search/update empty states through
+   `ui::field` and `ui::heading`; preserve guarded ASCII tags and one phrasing
+   pattern per empty state. Core returns typed CCS summary data for rendering at
+   the application boundary. History drops hand-rolled tags and repeated retry
+   prose. Update snapshots in the same slice.
+6. **Structured refusal layout** — Keep the live-host refusal routes from this
+   matrix, presented as a short cause plus `note:` next steps. Update
+   `live_host_mutation_safety` expectations in the same slice.
 
 ## Release Honesty
 

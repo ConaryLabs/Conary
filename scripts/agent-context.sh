@@ -471,7 +471,7 @@ span_exists_in_worktree() {
 }
 
 mode_validate() {
-    local heading field slug span i t matched
+    local heading field slug span i t matched start_here_count
     local -a worktree_files=()
     declare -A seen_slugs=()
 
@@ -505,6 +505,11 @@ mode_validate() {
         if [[ -n "${card_fields["$heading|Paths"]:-}" ]] \
             && [[ -z "$(extract_spans "${card_fields["$heading|Paths"]}")" ]]; then
             validate_err "card '$heading' Paths has no backticked glob"
+        fi
+
+        start_here_count="$(print_entries "${card_fields["$heading|Start here"]:-}" | wc -l)"
+        if (( start_here_count > 8 )); then
+            validate_err "card '$heading' Start here has $start_here_count entries (maximum 8)"
         fi
 
         for field in "Start here" "Docs to update"; do

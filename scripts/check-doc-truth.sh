@@ -151,6 +151,83 @@ check_live_doc_location_claims() {
     )
 }
 
+is_repo_path_span() {
+    local span="$1"
+    [[ "$span" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 1
+    if [[ "$span" == */* ]]; then
+        return 0
+    fi
+    [[ "$span" == *.md ]]
+}
+
+list_worktree_files() {
+    local path
+    while IFS= read -r path; do
+        if [[ -f "$path" || -L "$path" ]]; then
+            printf '%s\n' "$path"
+        fi
+    done < <(git ls-files --cached --others --exclude-standard)
+}
+
+check_backticked_repo_paths() {
+    local file line_no span hypothetical root parent candidate
+    declare -A repository_roots=()
+    declare -A worktree_paths=()
+
+    while IFS= read -r file; do
+        worktree_paths["$file"]=1
+        root="${file%%/*}"
+        if [[ "$file" == */* ]]; then
+            repository_roots["$root"]=1
+        fi
+        parent="$file"
+        while [[ "$parent" == */* ]]; do
+            parent="${parent%/*}"
+            worktree_paths["$parent"]=1
+        done
+    done < <(list_worktree_files)
+
+    while IFS=$'\t' read -r file line_no span hypothetical; do
+        [[ -n "$span" ]] || continue
+        if [[ "$hypothetical" == "1" ]]; then
+            continue
+        fi
+        if ! is_repo_path_span "$span"; then
+            continue
+        fi
+        if [[ "$span" == */* ]]; then
+            root="${span%%/*}"
+            [[ -n "${repository_roots["$root"]:-}" ]] || continue
+        fi
+        candidate="${span%/}"
+        if [[ -z "${worktree_paths["$candidate"]:-}" ]]; then
+            report_error "$file:$line_no names missing repository path: $span (annotate an intentional exception, for example <!-- repo-path: hypothetical -->)"
+        fi
+    done < <(
+        while IFS= read -r file; do
+            [[ -f "$file" ]] || continue
+            awk -v file="$file" '
+                /^[[:space:]]*(```|~~~)/ { in_fence = !in_fence; next }
+                !in_fence {
+                    hypothetical = match($0, /<!-- repo-path: (hypothetical|generated|local|external) -->/) ? 1 : 0
+                    rest = $0
+                    while (match(rest, /`[^`]+`/)) {
+                        span = substr(rest, RSTART + 1, RLENGTH - 2)
+                        printf "%s\t%d\t%s\t%d\n", file, NR, span, hypothetical
+                        rest = substr(rest, RSTART + RLENGTH)
+                    }
+                }
+            ' "$file"
+        done < <(
+            {
+                printf '%s\n' AGENTS.md CONTRIBUTING.md README.md
+                git ls-files --cached --others --exclude-standard -- \
+                    'docs/**/*.md' 'docs/*.md'
+            } | sort -u
+        )
+    )
+}
+
 check_assistant_context_budget() {
     local budget path max_lines max_bytes actual_lines actual_bytes
 
@@ -183,7 +260,7 @@ check_assistant_context_budget() {
 }
 
 check_canonical_doc_frontmatter() {
-    local file closing_line frontmatter
+    local file closing_line frontmatter summary summary_words
     local retired_provider_root
     retired_provider_root="docs/$(printf '%s%s' 'super' 'powers')"
 
@@ -208,8 +285,14 @@ check_canonical_doc_frontmatter() {
         if ! rg -q -- '^revision: [1-9][0-9]*$' <<< "$frontmatter"; then
             report_error "$file: frontmatter requires a positive integer revision"
         fi
-        if ! rg -q -- '^summary: .+' <<< "$frontmatter"; then
+        summary="$(sed -n 's/^summary: //p' <<< "$frontmatter")"
+        if [[ -z "$summary" ]]; then
             report_error "$file: frontmatter requires a non-empty summary"
+        else
+            summary_words="$(wc -w <<< "$summary")"
+            if (( summary_words > 40 )); then
+                report_error "$file: frontmatter summary exceeds 40 words: $summary_words"
+            fi
         fi
     done < <(
         git ls-files --cached --others --exclude-standard -- \
@@ -417,13 +500,6 @@ check_preview_status() {
     require_match "ROADMAP.md" 'docs/roadmaps/development-roadmap\.md' 'detailed development roadmap link'
     require_match "docs/roadmaps/development-roadmap.md" '[Ff]irst external tester milestone' 'first external tester milestone wording'
 
-    require_match "docs/roadmaps/development-roadmap.md" 'Remote Forge validation and conary-test deployment are decommissioned' 'Forge deployment retirement wording'
-    require_match "docs/INTEGRATION-TESTING.md" 'no replacement Forge rollout path|Remote Forge control-plane validation and conary-test deployment are' 'Forge deployment retirement wording'
-
-    require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group O' 'dated Group O evidence'
-    require_match "docs/roadmaps/development-roadmap.md" '2026-07-31.*Group P' 'dated Group P evidence'
-    require_match "docs/INTEGRATION-TESTING.md" 'Group O.*2026-07-31' 'dated Group O evidence'
-    require_match "docs/INTEGRATION-TESTING.md" 'Group P.*2026-07-31' 'dated Group P evidence'
 }
 
 check_release_doc_versions() {
@@ -519,24 +595,13 @@ check_release_doc_versions() {
     local truth_doc
     local -a release_truth_docs=(
         "docs/operations/release-artifact-matrix.md"
-        "docs/roadmaps/external-tester-milestone.md"
     )
     for truth_doc in "${release_truth_docs[@]}"; do
         [[ -f "$truth_doc" ]] || continue
-        case "$truth_doc" in
-            docs/operations/release-artifact-matrix.md)
-                require_match \
-                    "$truth_doc" \
-                    "Version \`${published_version}\` is the current immutable release authority" \
-                    "published release authority ${current_tag}"
-                ;;
-            docs/roadmaps/external-tester-milestone.md)
-                require_match \
-                    "$truth_doc" \
-                    "publication gate for synchronized suite \`${current_tag}\` is complete" \
-                    "completed publication gate ${current_tag}"
-                ;;
-        esac
+        require_match \
+            "$truth_doc" \
+            "Version \`${published_version}\` is the current immutable release authority" \
+            "published release authority ${current_tag}"
         if [[ "$prepared_tag" != "$current_tag" ]]; then
             if ! rg -q -- "$prepared_tag" "$truth_doc"; then
                 report_error "$truth_doc has stale conary release reference; expected prepared target ${prepared_tag}"
@@ -1082,9 +1147,9 @@ check_profile_architecture_authority() {
         'supported-profile registry is the sole target-architecture authority' \
         'native parity architecture authority claim'
     require_match \
-        "docs/modules/remi.md" \
+        "docs/specs/remi-native-parity-oracle.md" \
         'ProfileArchitectureMismatch' \
-        'Remi architecture mismatch claim'
+        'native parity architecture mismatch claim'
 }
 
 check_neutral_planning_layout
@@ -1093,6 +1158,7 @@ check_profile_architecture_authority
 check_live_doc_location_claims
 check_assistant_context_budget
 check_canonical_doc_frontmatter
+check_backticked_repo_paths
 check_required_scan_paths
 check_schema_versions
 check_retired_commands

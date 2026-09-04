@@ -74,15 +74,16 @@ coding buddy can discover ownership and proof without private prompt lore.
 Agent assistance does not weaken branch, review, security, or verification
 requirements, and no proprietary assistant is required.
 
-If you work with an LLM coding tool, start with:
+If you work with an LLM coding tool, read `AGENTS.md` and this contribution
+workflow, then ask the repository router for the smallest relevant context:
 
-1. `AGENTS.md`
-2. [This contribution workflow](#development-workflow)
-3. `docs/llms/README.md`
-4. `docs/modules/feature-ownership.md` when choosing a feature area or
-   deciding which cross-system gates apply
-5. `docs/INTEGRATION-TESTING.md` when validation spans `conary-test`
-6. `docs/operations/infrastructure.md` for MCP, deploy, and host workflow notes
+```bash
+bash scripts/agent-context.sh --list
+bash scripts/agent-context.sh --feature <slug>
+```
+
+The selected packet points to its start-here files, owned paths, and focused
+proof. Use `--brief` when only the route is needed.
 
 Tool-specific files such as `CLAUDE.md`, `.agents/rules/conary.md`, and
 `.github/copilot-instructions.md` are compatibility shims. Prefer the linked
@@ -194,7 +195,10 @@ cargo test -p conaryd
   use the guarded lowercase vocabulary such as `[ok]`, `[fail]`, and `[warn]`.
   Do not hand-roll status prefixes.
 - **Clippy-clean**: All code must pass `cargo clippy --workspace --all-targets -- -D warnings`. Pedantic lints are encouraged.
-- **Tests in same file**: Unit tests go in a `#[cfg(test)] mod tests` block at the bottom of each source file, not in separate test files.
+- **Unit-test placement**: Keep small tests in an inline `#[cfg(test)] mod tests`.
+  Larger modules may use a sibling `tests.rs` or a `tests/` submodule beside the
+  owner; package-level integration tests remain under the package's top-level
+  `tests/` directory.
 
 ### Rust Specifics
 
@@ -416,7 +420,7 @@ creating the branch. Include the issue number in a short descriptive name:
 
 - `fix/42-rpm-parser-overflow`
 - `feat/57-sparse-index`
-- `docs/63-update-architecture`
+- `docs/63-update-architecture` <!-- repo-path: hypothetical -->
 - `chore/71-refresh-dependencies`
 
 Do not commit or push repository changes directly to `main`.

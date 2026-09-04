@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-07-25
-revision: 3
+last_updated: 2026-09-03
+revision: 4
 summary: Template for local machine-specific access and remote-workbench notes that must not be committed
 ---
 
@@ -9,7 +9,7 @@ summary: Template for local machine-specific access and remote-workbench notes t
 ## Purpose
 
 This file is a local-only place for machine-specific or sensitive operational
-notes. Copy it to `docs/operations/LOCAL_ACCESS.md` and keep the real file
+notes. Copy it to `docs/operations/LOCAL_ACCESS.md` <!-- repo-path: local --> and keep the real file
 untracked.
 
 ## Suggested Sections
@@ -29,7 +29,7 @@ untracked.
 ## Credential Storage Locations
 
 - Where credentials live locally
-- Prefer an ignored env file such as `docs/operations/LOCAL_SECRETS.env` for
+- Prefer an ignored env file such as `docs/operations/LOCAL_SECRETS.env` <!-- repo-path: local --> for
   literal values
 - How they are loaded
 - Rotation reminders

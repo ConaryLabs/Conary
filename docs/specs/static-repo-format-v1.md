@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-08
-revision: 7
+last_updated: 2026-09-03
+revision: 8
 summary: Standalone normative contract for the static Conary repository format, publisher behavior, client behavior, and operator key lifecycle
 ---
 
@@ -11,8 +11,8 @@ summary: Standalone normative contract for the static Conary repository format, 
 A static Conary repository is a directory of files servable by any dumb HTTP
 server (nginx, GitHub Pages, S3 bucket, `file://` path) with no server-side
 logic. It carries CCS packages, a package index (`index.json`), and TUF
-1.0.31 metadata that protects everything a client consumes. Producers:
-`conary publish` (M1a) and, later, Remi (M2). Consumer: the conary client
+1.0.31 metadata that protects everything a client consumes. Producers are
+`conary publish`, Remi, and compatible third-party tooling. The consumer is the conary client
 (`repo add` / sync / install).
 
 This specification is the stable contract for static repository producers and
@@ -29,7 +29,7 @@ Out of scope (deferred): chunk-level delta fetch semantics (`chunks/` layout
 is reserved here, semantics defined with delta publishing); TUF delegations
 (not implemented; `delegations` is absent from targets metadata in v1);
 consistent-snapshot versioned filenames (v2 path, §11); Remi's push/upload
-protocol (M2); repo federation.
+protocol; repo federation.
 
 ## Terminology
 
@@ -73,7 +73,7 @@ Rules:
   is replaced only on initial publish or root metadata update.
 - Clients MUST support `http://`, `https://`; and MUST support `file://`
   URLs and bare local paths for every fetch in this spec (repo identity,
-  TUF metadata, index, packages). Implementation note (M1a): this requires
+  TUF metadata, index, packages). This requires
   lifting HTTP-only checks in `repository/client.rs::validate_url_scheme`,
   `recipe/kitchen/archive.rs::download_file`, and adding a filesystem
   fallback to `trust/client.rs` metadata fetching.
@@ -252,7 +252,7 @@ Consistency invariants (publisher MUST enforce, client MUST check on use):
    entries.
 3. `index_version == targets.version`.
 
-Mapping note (M1a client work, non-normative): index entries map onto the
+Client mapping note (non-normative): index entries map onto the
 existing client model `repository/metadata.rs::PackageMetadata` as
 name→name, version→version, arch→architecture, sha256→checksum,
 size→size, `<repo-url>/<path>`→download_url; typed provides and requirement
@@ -291,7 +291,7 @@ Two operator keypairs (Ed25519 only):
 | Keypair  | TUF roles                      | Also signs                      |
 |----------|--------------------------------|---------------------------------|
 | root     | root                           | — (root.json only; keep offline)|
-| publish  | targets, snapshot, timestamp   | packages (CCS), attestations (M2)|
+| publish  | targets, snapshot, timestamp   | packages (CCS), build attestations |
 
 All thresholds are 1 in v1. Multi-key roles and higher thresholds are valid
 TUF and MAY be produced by other tooling; the conary client already
@@ -346,7 +346,7 @@ Field rules:
   entirely, and every artifact it signed MUST be removed or republished
   (re-signed, new release number) — §7.3. A `retired` key MAY be dropped from
   the file once no entry in the current index references an artifact signed by
-  it (fully superseded). M1a does not maintain a compatibility trust window for
+  it (fully superseded). The client does not maintain a compatibility trust window for
   retired keys; operators rotate by republishing current-index artifacts under
   the active key.
 - `comment`: optional human-readable text; clients ignore it.
@@ -379,7 +379,7 @@ client error whose message MUST name the remedy (operator runs
 
 ## 5. Publish Algorithm (Producer Requirements)
 
-Any producer (`conary publish` M1a, Remi M2, third-party tooling) MUST
+Any producer (`conary publish`, Remi, or third-party tooling) MUST
 behave as follows. The publisher is destination-derived with a local rollback
 watermark: current versions are read from the destination, while the local
 watermark only gates regressions and never derives the next version.
@@ -572,12 +572,12 @@ for a future v2 consistent-snapshot upgrade.
 1. Run the existing TUF update flow (`trust/client.rs::update`) against
    `<url>/metadata`: root-rotation probe → timestamp → snapshot →
    targets, with signature, expiry, monotonicity, and snapshot-consistency
-   checks. M1a strengthening: for static repos the client MUST hard-fail
+   checks. For static repos the client MUST hard-fail
    when the snapshot lacks `meta` entries for `root.json` or
    `targets.json` (the current `verify_snapshot_consistency` checks the
-   root pin only **if the entry exists** — presence itself must become a
-   static-repo requirement, or the §4.1 invariant is unenforced). M1a
-   strengthening: the timestamp role MUST also support no-change syncs:
+   root pin only **if the entry exists** — presence itself is a
+   static-repo requirement, or the §4.1 invariant is unenforced). The timestamp
+   role MUST also support no-change syncs:
    after signature and expiry verification, an offered timestamp version
    equal to the stored timestamp version is successful only when the offered
    signed metadata bytes (or their persisted `tuf_metadata.metadata_hash`)
@@ -593,7 +593,7 @@ for a future v2 consistent-snapshot upgrade.
    `"retired"`; update the repo's package trust policy with
    `TrustPolicy::strict(<active package-keys public_key values>)`. Retired
    keys are persisted for audit/history only and MUST NOT authorize package
-   installs in M1a.
+   installs.
 5. Map package entries into the client package model (§3 mapping note).
 
 ### 6.3 Install
@@ -653,11 +653,11 @@ Files use the existing CCS key format (`ccs/signing.rs::KeyFile` TOML):
 The key directory MUST be created mode 0700 **before** any key is written,
 and private key files MUST be created 0600 at open time — not written then
 chmod'd (the current `save_to_files` writes first and tightens permissions
-after, a transient exposure window M1a fixes). The existing
+after, creating a transient exposure window). The existing
 `conary trust key gen` (single TUF role → `{role}.private`/`{role}.public`
 in an output dir) remains low-level plumbing; `conary publish` wraps the
 same `KeyFile` format and is the documented path — there is no
-two-key ceremony command today, and M1a builds it into publish rather than
+two-key ceremony command today, and publish owns that ceremony rather than
 extending `trust key gen`. Generation MUST print both generated key IDs: the
 repo fingerprint (the root-role key ID accepted by
 `repo add --fingerprint`) and the publish key ID (operator bookkeeping; not
@@ -671,7 +671,7 @@ manually re-trust (§7.4).
 - Rotate publish key: generate new keypair; produce root vN+1 that replaces
   the old publish key in every TUF role it backs (targets, snapshot,
   timestamp) in one root version. The existing
-  `trust/ceremony.rs::rotate_key` helper is role-singular plumbing; M1a MUST
+  `trust/ceremony.rs::rotate_key` helper is role-singular plumbing; publish MUST
   batch-update all three publish-backed roles or add a `rotate_publish_key`
   helper rather than calling `rotate_key` once and leaving two roles on the
   old key. Publish per §5.3 including the new `{N+1}.root.json` and updated
@@ -679,7 +679,7 @@ manually re-trust (§7.4).
   `status: "retired"` for audit/history; new key is `"active"`), and a
   `conary-repo.toml` left unchanged (root keys did not change). Current-index
   artifacts MUST be republished under the active key because retired keys do
-  not authorize installs in M1a. Clients pick up the rotation via root-version
+  not authorize installs. Clients pick up the rotation via root-version
   probing; no user action.
 - Rotate root key: same mechanism; root vN+1 MUST be signed by **both**
   old and new root keys (TUF rotation rule, enforced by the existing
@@ -772,6 +772,6 @@ this is load-bearing, not hygiene).
   owned by `static_repo::format::SCHEMA_VERSION`, which the publisher stamps
   and the parser gates on, so a published document and the client that admits
   it cannot drift apart.
-- Remi (M2) MUST produce byte-format-identical repos (it is "one producer of
+- Remi MUST produce byte-format-identical repos (it is "one producer of
   the same format" per the parent spec); its DB-backed TUF serving and this
   file-based layout share `trust/` types and generation functions.

@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-16
-revision: 8
+last_updated: 2026-09-03
+revision: 9
 summary: Explicit recipe scaffolding, parsing, hermetic cook, Kitchen execution, and source provenance
 ---
 
@@ -76,7 +76,7 @@ from their locked input.
 | `StageConfig` | kitchen/config.rs | Per-stage sysroot, tools_dir, tool_prefix, target_triple |
 | `HermeticBuildEvidence` | hermetic/evidence.rs | Closed schema-2 build evidence embedded in signed CCS provenance |
 | `HermeticBuildPlan` | hermetic/plan.rs | Assembles exact source and dependency identities, diagnostic command-risk, reproducibility, and Kitchen hermetic config |
-| `HostBuildRecord` | hermetic/divergence.rs | Local host-build comparison input for diagnostic-only M2a divergence reports |
+| `HostBuildRecord` | hermetic/divergence.rs | Local host-build comparison input for diagnostic-only divergence reports |
 | `RecipeGraph` | graph.rs | Directed dependency graph with topological sort |
 | `BuildCache` | cache.rs | Artifact cache keyed by recipe + toolchain + dependency hashes |
 | `CacheEntry` | cache.rs | Cached package path, cache key, created timestamp, size |
@@ -105,9 +105,9 @@ Cache keys are deterministic hashes of:
 Default location: `/var/cache/conary/builds`, sharded by first 2 chars
 of cache key. Configurable max_size (10GB) and max_age (30 days).
 
-## M2a Hermetic Cook
+## Hermetic Cook
 
-After M2a, `conary cook --isolated` is the hermetic build path. The CLI loads
+`conary cook --isolated` is the hermetic build path. The CLI loads
 `apps/conary/src/commands/hermetic_config.rs`, requires exact content-identity
 locks for build dependencies, and asks `HermeticBuildPlan` to produce the
 unsigned evidence stored under
@@ -151,7 +151,7 @@ diagnostic text are not publication authority.
 Recipes produce CCS packages, feeding into the same CAS and transaction
 pipeline as any other installation. The Kitchen uses Linux namespace isolation
 through the container module for sandboxed builds and pristine sysroot-only
-mounts for M2a hermetic builds. Provenance data captured during cooking is
+mounts for hermetic builds. Provenance data captured during cooking is
 embedded in the output CCS manifest.
 
 See also: [docs/ARCHITECTURE.md](/docs/ARCHITECTURE.md).

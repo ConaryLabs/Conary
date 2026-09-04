@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-31
-revision: 73
+last_updated: 2026-09-03
+revision: 74
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -65,7 +65,7 @@ CAS paths do not use this ephemeral API and retain their durability barriers.
 |------|------|---------|
 | `CcsManifest` | manifest.rs | Root ccs.toml structure (package, provides, requires, hooks, policy, etc.) |
 | `ManifestProvenance` | manifest_provenance.rs | Provenance DTOs embedded by the root manifest, including hermetic evidence, build attestations, and foreign conversion boundaries |
-| `BuildAttestationEnvelope` | attestation.rs | Signed M2 release-publish attestation payload and verification helpers |
+| `BuildAttestationEnvelope` | attestation.rs | Signed release-publish attestation payload and verification helpers |
 | `CcsBuilder` | builder.rs + builder/source.rs | Describes a CCS package from filesystem metadata and reopenable payload sources |
 | `CcsInstallPrefix` | builder.rs | Validated absolute mapping for source-root children; the prefix and its ancestors are not package entries |
 | `BuildResult` | builder.rs | Output: manifest, components, files, reopenable payload sources, total_size |
@@ -105,8 +105,8 @@ becomes independent trust authority.
 manifest schema and validation owner. Declarative hook schemas, capability
 validation, and hook reversibility live in `ccs::manifest::hooks` and are
 re-exported through that root entrypoint. The provenance DTOs live in
-`ccs::manifest_provenance` and are exported through the same root schema. M2
-release publish stores hermetic evidence, signed
+`ccs::manifest_provenance` and are exported through the same root schema.
+Release publish stores hermetic evidence, signed
 build-attestation envelopes, and foreign conversion boundaries in manifest
 provenance. Artifact-form `conary publish <pkg.ccs> <target>` is allowed only
 after `repository::static_repo::publish_gate` verifies package signatures,

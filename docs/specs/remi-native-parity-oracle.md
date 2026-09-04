@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-03
-revision: 54
+revision: 55
 status: active
 ---
 
@@ -11,7 +11,7 @@ status: active
 ## Boundary
 
 The native full-catalog parity oracle is independent release evidence for one
-exact `ProfileRevisionV2`. It is distinct from the hosted
+`ProfileRevisionV2`. It is distinct from the hosted
 `phase4-native-pm-parity` suite: that suite proves deterministic one-package
 lifecycle and CLI behavior, while this contract covers every package admitted
 to one immutable profile candidate.
@@ -24,7 +24,7 @@ typed value into every `ProfileRevisionV2`. Profile catalog projection version
 projection-version-2 profile catalogs lack this binding, are invalid, and must
 be rebuilt from authenticated sources. There is no compatibility reader.
 
-## Exact input handoff
+## Input handoff
 
 The production native producers consume `NativeOracleInputSetV1`, not mutable
 mirror state or Conary's normalized catalog bytes. The strict schema-1 bundle
@@ -33,38 +33,38 @@ revisions, every ordered `SourceSnapshotV1`, and the digest-sorted union of
 their authenticated native metadata objects. Candidate construction retains
 each authenticated object as a digest-named file inside the immutable source
 bundle. Export independently reopens that bundle, resolves only those retained
-paths, and copies an object only after its exact SHA-256 and size match. It
+paths, and copies an object only after its SHA-256 and size match. It
 performs no upstream network request or URL reconstruction. Debian Release
 member names remain distribution-relative for signed SHA-256 lookup, while
 the recorded `source_path` preserves the exact `dists/<distribution>/` prefix
 that identified the authenticated object during candidate construction.
 
 The writer publishes canonical `manifest.json` plus digest-named files beneath
-one exact `objects/` directory, synchronizes and atomically renames the complete
+one `objects/` directory, synchronizes and atomically renames the complete
 bundle, then independently reopens every byte. Extra or missing entries,
 symlinks, noncanonical JSON, object tamper, and candidate supersession fail the
 operation. The bundle is an input carrier only; the pinned ALPM, libsolv, or
 apt-pkg implementation remains the sole native fact and resolution authority.
 
-The protected production producer accepts only one successful exact export
+The protected production producer accepts only one successful export
 run. It independently reopens the transport and deployment evidence and
 requires the artifact-owned deployed commit to be merged. The export's
-canonical operator attestation must bind its exact run ID, attempt, workflow
+canonical operator attestation must bind its run ID, attempt, workflow
 commit, export identity, and `protected-pinned-known-hosts-v1` contract. An
 older export without that attestation cannot become strict oracle authority.
 The export operator must equal freshly fetched protected `main` at initial
 authorization and immediately before SSH. Production accepts the export only
-when its run head equals the producer workflow's own exact current-main commit,
+when its run head equals the producer workflow's own current-main commit,
 so rerunning a historical workflow cannot mint new input authority.
 Dispatch also names
 one explicit full `producer_commit`; operators use the deployed commit by
 default and name a newer commit only for an intended producer advance. The
 workflow fetches `origin/main`, requires the producer commit to descend from
 the deployed commit and already be an ancestor of `origin/main`, then checks
-out that exact clean tree separately from the protected workflow/operator
+out that clean tree separately from the protected workflow/operator
 checkout. Floating branches, workflow heads, malformed SHAs, unmerged commits,
 non-descendants, and dirty producer trees are inadmissible.
-`scripts/verify-native-oracle-producer.py` owns this exact reusable full-SHA,
+`scripts/verify-native-oracle-producer.py` owns this reusable full-SHA,
 fetch, and two-direction ancestry predicate for protected native-oracle and
 resolution-survey producers; workflows may not fork a weaker local version.
 Three pinned container lanes derive every member and object argument from the
@@ -82,7 +82,7 @@ activation, or public-pointer authority.
 The accepted producer-binding decision deliberately separates immutable input
 authority from producer implementation provenance. A merged descendant may fix
 producer-only behavior without forcing a semantically identical Remi deploy
-and export, while the exact export continues to own every candidate, source,
+and export, while the export continues to own every candidate, source,
 and metadata byte. Merged provenance alone grants no schema latitude: package
 schema 1, resolution schema 2, and every ecosystem implementation/projection
 pin remain mandatory. A three-lane set may contain different producer
@@ -91,7 +91,7 @@ commit and every lane passes those identical pins; each lane records its own
 commit and binary digests.
 
 Every selected production lane produces diagnostics before deciding strict
-authority. It reopens one exact staged export, creates and reopens the package
+authority. It reopens one staged export, creates and reopens the package
 oracle once, runs the resolution producer with `--survey`, validates and
 uploads the canonical survey plus a separate binding manifest, and only then
 runs strict resolution against that same package oracle. Survey findings cause
@@ -168,13 +168,13 @@ parsing or test-time fetches:
 - RPM 6.0.1 `rpmrc.in` at tag `rpm-6.0.1-release`, commit
   `58a917a6c5e24e9e8a01976c17d2eee06249b9b6`, contributes every
   `arch_canon`, `arch_compat`, and `buildarch_compat` line from
-  [the exact upstream file](https://github.com/rpm-software-management/rpm/blob/rpm-6.0.1-release/rpmrc.in).
+  [the pinned upstream file](https://github.com/rpm-software-management/rpm/blob/rpm-6.0.1-release/rpmrc.in).
   The pinned Fedora 44 image ships `rpm-6.0.1-2.fc44.x86_64`.
 - dpkg 1.23.7 tag `1.23.7`, commit
   `ef4d59f5925661818484ac666014ee3e665aadcf`, contributes
-  [`data/cputable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
+  [upstream data/cputable](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/cputable?h=1.23.7)
   and
-  [`data/tupletable`](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
+  [upstream data/tupletable](https://git.dpkg.org/cgit/dpkg/dpkg.git/tree/data/tupletable?h=1.23.7).
   The pinned Ubuntu 26.04 image ships `dpkg 1.23.7ubuntu1`.
 - The Arch producer pins `pacman 7.1.0.r9.g54d9411-2`; its installed
   `CARCH=x86_64` derives from
@@ -185,7 +185,7 @@ parsing or test-time fetches:
   [pinned libalpm comparison](https://gitlab.archlinux.org/pacman/pacman/-/blob/54d94116164b0b2202c6061c4a59c6f3e70820d8/lib/libalpm/trans.c#L69-106)
   compares `%ARCH%` literally while admitting `any`. The supported `arch`
   profile therefore owns `x86_64` plus `any`; the 2026-08-02 databases in the
-  fixture header prove that exact profile snapshot rather than a format-wide
+  fixture header prove that profile snapshot rather than a format-wide
   vocabulary.
 
 Conformance tests parse those vendored files and require every RPM table token,
@@ -194,7 +194,7 @@ to project to a typed class. Tokens outside the supported x86_64/amd64 machine
 profiles, including Debian `x32` and RPM micro-architecture levels, remain
 known typed non-native classes rather than literal fallback values.
 
-Rows are canonical JSON ordered by the exact profile package key. The writer
+Rows are canonical JSON ordered by the profile package key. The writer
 and verifier retain one complete package projection at a time; neither may
 construct a profile-sized package or relation collection.
 
@@ -207,7 +207,7 @@ catalog logical digest proves deterministic Conary output, not independent
 native agreement.
 
 The ALPM producer is built only with the explicit
-`native-alpm-oracle` feature, reads exact profile-member database artifacts
+`native-alpm-oracle` feature, reads profile-member database artifacts
 through pinned upstream Rust bindings to libalpm, and records the linked
 libalpm runtime version. Ordinary Conary and Remi builds do not acquire a
 libalpm dependency. The helper may share the strict oracle serializer and
@@ -215,8 +215,8 @@ typed fact vocabulary; it may not read Conary catalogs, Conary Arch parser
 output, or operational repository SQLite as native evidence.
 
 The producer takes one `SourceSnapshotV1` and one local database file for each
-profile member in exact ordinal order. The source-snapshot manifest digest must
-match the member binding. Separately, the database bytes must match the exact
+profile member in ordinal order. The source-snapshot manifest digest must
+match the member binding. Separately, the database bytes must match the
 `ArchDatabase` authenticated-object digest and size inside that snapshot; the
 two digests describe different objects and are never substituted for one
 another. The snapshot's content URL, or metadata URL when no content URL is
@@ -235,7 +235,7 @@ cargo run -p conary-core --features native-alpm-oracle \
 ```
 
 The helper registers the verified databases with libalpm in profile precedence
-order. Every package returned by libalpm is projected or participates in exact
+order. Every package returned by libalpm is projected or participates in
 conflict-checked deduplication; there is no skip input. A private bounded spool
 orders selected rows by package key without retaining the complete profile in
 Rust memory. Success means the two-file bundle has been durably written and
@@ -251,12 +251,12 @@ virtual relations continue to require exact normalized libalpm name and version
 agreement, so this distinction adds no permissive fallback.
 
 RPM package-fact evidence is produced only with the explicit
-`native-rpm-oracle` feature and exact libsolv 0.7.36 runtime. Ordinary Conary
+`native-rpm-oracle` feature and pinned libsolv 0.7.36 runtime. Ordinary Conary
 and Remi builds do not acquire a libsolv dependency. For every profile member
-in exact ordinal order, the producer requires one `SourceSnapshotV1` that
+in ordinal order, the producer requires one `SourceSnapshotV1` that
 binds exactly the compressed `RpmPrimary` and `RpmFilelists` objects in that
 order. It copies both objects to private staging, independently verifies their
-exact authenticated sizes and SHA-256 digests, and only then lets libsolv
+authenticated sizes and SHA-256 digests, and only then lets libsolv
 reopen the staged bytes with filelists extending the primary solvables.
 
 The producer projects every libsolv package and variant, payload location,
@@ -268,7 +268,7 @@ native display text alone cannot establish parity. The producer derives its
 canonical RPM text from that typed tree, flattening only RPM's right-associated
 `with` spine and retaining parentheses wherever omission would change
 association. It reparses that lossless text through the canonical RPM grammar
-and requires exact typed agreement. The typed source projection canonicalizes
+and requires typed agreement. The typed source projection canonicalizes
 RPM's empty serialized epoch and explicit epoch zero to omitted epoch zero,
 while retaining positive epochs and the strict persisted grammar.
 Exact-identity duplicates obey profile
@@ -303,18 +303,18 @@ cargo run -p conary-core --features native-rpm-oracle \
 ```
 
 Debian package-fact evidence is produced only with the explicit
-`native-debian-oracle` feature and exact apt-pkg 3.2.0 from the pinned Ubuntu
+`native-debian-oracle` feature and pinned apt-pkg 3.2.0 from the Ubuntu
 26.04 image. Ordinary Conary and Remi builds do not acquire an apt-pkg
 dependency. Each ordered profile member supplies one `SourceSnapshotV1` and
 exactly one local object bound as `DebianPackages`. The producer copies the
-compressed object to private staging, verifies its exact authenticated size
+compressed object to private staging, verifies its authenticated size
 and SHA-256, and then independently reopens the staged bytes through apt-pkg's
 compression, strict deb822, and dependency-expression APIs. It does not invoke
 `apt`, `apt-get`, `dpkg`, their databases, the Conary Debian parser, a Conary
 catalog, or operational repository SQLite.
 
 Every deb822 stanza becomes one native row before profile deduplication. The
-producer projects exact package/version/architecture and `Multi-Arch`
+producer projects package/version/architecture and `Multi-Arch`
 identity, payload location/SHA-256/size, package and declared providers,
 comma-separated groups and alternatives, architecture qualifiers, required
 and pre-required relations, recommends, suggests, enhances, conflicts,
@@ -340,9 +340,9 @@ cargo run -p conary-core --features native-debian-oracle \
 
 ## Dependency resolution evidence
 
-`NativeResolutionOracleV1` is the separate resolver-owned authority for exact
-dependency closure and unresolved dependencies. Its manifest binds the exact
-`ProfileRevisionV2`, the exact `NativeParityOracleV1` manifest digest, the
+`NativeResolutionOracleV1` is the separate resolver-owned authority for complete
+dependency closure and unresolved dependencies. Its manifest binds the
+`ProfileRevisionV2`, the `NativeParityOracleV1` manifest digest, the
 solver implementation and version, its projection schema, the target
 architecture, normalized counts, and the SHA-256 and size of `roots.jsonl`.
 The resolution policy architecture must equal the bound profile revision's
@@ -350,8 +350,8 @@ typed target architecture during manifest binding, comparison, and promotion
 proof validation.
 
 Schema 2 fixes the resolution policy rather than accepting solver flags or
-free-form policy: the installed state is empty, every exact package variant is
-requested as its exact root, only required and pre-required groups enter the
+free-form policy: the installed state is empty, every package variant is
+requested as a root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
 uses native repository precedence. `architecture_admission: native_only`
 admits only equality of the complete source-derived machine identity and the
@@ -406,7 +406,7 @@ mixed or empty outcomes, reordered or duplicate roots/references, count drift,
 noncanonical bytes, tamper, extra bundle entries, symlinks, and package-oracle
 drift fail closed.
 
-Comparison applies the same exact profile, package oracle, architecture, and
+Comparison applies the same profile, package oracle, architecture, and
 typed policy to native and Conary evidence. It merge-walks one root pair at a
 time and reports typed oracle-only root, candidate-only root, outcome,
 dependency-closure, unresolved-dependency, or not-installable-reason drift.
@@ -422,7 +422,7 @@ regenerated before comparison or promotion proof.
 
 The three native resolution binaries also accept `--survey <FILE>`. Exactly
 one of `--output <DIRECTORY>` and `--survey <FILE>` is required. Survey mode
-walks every exact package-oracle root even when a native result cannot be
+walks every package-oracle root even when a native result cannot be
 projected into the strict resolution contract. It writes one create-only
 canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing
 path, and exits non-zero after writing when any root failed so unattended
@@ -433,7 +433,7 @@ digest, package-oracle manifest digest, native implementation and projection
 schema, fixed resolution policy, and target architecture. Its counts record
 roots walked, resolved, unresolved, not-installable, and failed plus a canonical histogram
 keyed by the originating typed Conary `Error` variant and a stable short
-reason. Each retained failure records the exact root package key,
+reason. Each retained failure records the root package key,
 name/version/release/architecture, full sanitized error message, and typed
 native explanation. The inventory retains at most 5,000 failure records while
 reporting the uncapped `total_failures`, retained count, limit, and explicit
@@ -493,10 +493,10 @@ records the selected worker count, every worker's pool/cache load milliseconds,
 the effective memory budget, and the measured allowance; those run-dependent
 facts never enter canonical oracle or survey bytes.
 
-The retained Fedora measurement used the fresh export from successful
-`export-remi-native-oracle-inputs` run `33699383309`, profile-manifest SHA-256
-`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`,
-and all 101,187 roots. Both passes used release binary SHA-256
+The retained Fedora measurement covered all 101,187 roots and used
+profile-manifest SHA-256
+`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`.
+Both passes used release binary SHA-256
 `407485a67107802a670561db60b4fbcb3cc2f05a11c6b0baef58bbdd4e387198`
 from commit `23f702c3` inside `conary-oracle-fedora-slice6`. The observed 12 CPUs
 and 8 GiB worker budget made five workers the automatic capacity.
@@ -543,16 +543,16 @@ their existing `--packages` and `--database` member inputs respectively.
 ### Candidate-resolution and comparison surveys
 
 `ConaryResolutionSurveyV1` schema 1 is the diagnostics-only Conary counterpart
-to the native survey. It binds the exact profile revision, package-oracle
+to the native survey. It binds the profile revision, package-oracle
 manifest, `conary-sat` implementation and projection schema, native-only
 policy, and the profile's typed target architecture. The policy architecture,
 operator assertion, and profile target must agree before output creation. The
-producer walks every exact package-oracle key through the same per-root code as
-strict candidate production. Every successful root retains its exact
+producer walks every package-oracle key through the same per-root code as
+strict candidate production. Every successful root retains its
 name/version/release/architecture/key and one complete `resolved`,
 `unresolved`, or `not_installable` outcome. A failed root contributes to
 uncapped counts and a canonical histogram keyed by typed Conary error variant
-and stable producer reason; up to 5,000 failures retain the same exact root
+and stable producer reason; up to 5,000 failures retain the same root
 identity, full error message, and native explanation.
 
 Candidate native explanations are projected directly from resolvo's typed
@@ -561,14 +561,14 @@ They retain unresolved-node incoming edges with the requiring solvable and
 rendered requirement/version sets, conflict edges with both solvable
 identities and typed conflict kind, and excluded solvables with their typed
 provider reason. No `display_user_friendly` text is parsed. Explanations share
-the native survey's exact canonical-JSON accounting, 64 MiB budget,
+the native survey's canonical-JSON accounting, 64 MiB budget,
 failure-record cap, first-exhaustion withholding rule, and independently
 validated count/truncation invariants. They are built only on a hard per-root
 failure.
 
 `NativeResolutionComparisonSurveyV1` schema 1 first reopens two complete,
 package-oracle-bound resolution bundles, then walks every root pair in
-canonical key order. Every retained mismatch records the exact root identity,
+canonical key order. Every retained mismatch records the root identity,
 typed mismatch kind, both complete outcomes, and the manifest SHA-256 that
 identifies each side's evidence. It retains at most 5,000 mismatch records
 while preserving uncapped totals, a canonical histogram by mismatch kind, a

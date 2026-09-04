@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-07
-revision: 3
+last_updated: 2026-09-03
+revision: 4
 summary: Document current federation trust controls, peer identity, discovery rules, and CLI peer management
 ---
 
@@ -8,6 +8,12 @@ summary: Document current federation trust controls, peer identity, discovery ru
 
 Peer-to-peer CAS chunk distribution. Enables LAN caching, multi-tier
 routing, and resilient chunk fetching across Conary nodes.
+
+Federation is outside the limited public preview. Only the directory endpoint
+is routed today, and Remi chunk serving does not construct or call the
+federated fetcher on a local miss. The coordinator and trust code below remain
+experimental library surface until serving wiring and two-node failure proof
+land.
 
 ## Data Flow: Federated Chunk Fetch
 
