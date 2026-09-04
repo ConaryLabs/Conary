@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/mod.rs
+// crates/conary-core/src/ccs/hooks/mod.rs
 
 //! CCS declarative hook execution
 //!

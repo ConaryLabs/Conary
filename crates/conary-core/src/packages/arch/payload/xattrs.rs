@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/payload/xattrs.rs
+// crates/conary-core/src/packages/arch/payload/xattrs.rs
 
 //! PAX extended-attribute projection from libarchive's exact writer grammar.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/file_capabilities.rs
+// crates/conary-core/src/generation/builder/file_capabilities.rs
 
 use std::collections::BTreeSet;
 

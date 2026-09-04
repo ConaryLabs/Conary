@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/arch.rs
+// crates/conary-core/src/ccs/native_transaction/arch.rs
 
 //! Exact libalpm install-script and transaction-hook planning.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/ini.rs
+// crates/conary-core/src/repository/declarations/ini.rs
 
 //! Private lossless INI lexer shared by the distinct DNF and libzypp models.
 

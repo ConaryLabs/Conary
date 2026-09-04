@@ -1,4 +1,4 @@
-// src/commands/verify.rs
+// apps/conary/src/commands/verify.rs
 
 //! Verification command handlers.
 

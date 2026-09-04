@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation/content_layout.rs
+// crates/conary-core/src/ccs/v3/validation/content_layout.rs
 
 //! Signed regular-file storage and reconstruction authority.
 

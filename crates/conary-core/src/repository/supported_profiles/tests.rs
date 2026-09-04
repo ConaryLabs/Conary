@@ -1,4 +1,4 @@
-// conary-core/src/repository/supported_profiles/tests.rs
+// crates/conary-core/src/repository/supported_profiles/tests.rs
 
 use super::*;
 use crate::repository::versioning::VersionScheme;

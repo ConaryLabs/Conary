@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/cross_tools.rs
+// crates/conary-core/src/bootstrap/cross_tools.rs
 
 //! Phase 1: Cross-compilation tools (LFS Chapter 5)
 //!

@@ -1,4 +1,4 @@
-// conary/tests/features/collections.rs
+// apps/conary/tests/features/collections.rs
 
 use super::*;
 

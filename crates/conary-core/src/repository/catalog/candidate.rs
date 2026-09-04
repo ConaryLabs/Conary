@@ -1,4 +1,4 @@
-// conary-core/src/repository/catalog/candidate.rs
+// crates/conary-core/src/repository/catalog/candidate.rs
 
 //! Bounded construction of one deterministic standalone catalog candidate.
 

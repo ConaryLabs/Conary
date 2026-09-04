@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/failure_policy.rs
+// crates/conary-core/src/scriptlet/failure_policy.rs
 
 //! Typed per-scriptlet-class lifecycle failure posture.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/resolver/requirements.rs
+// crates/conary-core/src/resolver/requirements.rs
 
 //! Exact evaluation of typed native requirements against a bounded package set.
 

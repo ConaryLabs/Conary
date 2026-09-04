@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/component_view.rs
+// crates/conary-core/src/ccs/v3/component_view.rs
 
 //! Component and file views derived from signed CCS v3 authority.
 //!

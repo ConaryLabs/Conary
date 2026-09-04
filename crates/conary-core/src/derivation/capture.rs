@@ -1,4 +1,4 @@
-// conary-core/src/derivation/capture.rs
+// crates/conary-core/src/derivation/capture.rs
 
 //! Output capture: preserve a complete DESTDIR payload tree in CAS.
 //!

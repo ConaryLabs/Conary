@@ -1,4 +1,4 @@
-// src/commands/install/batch/execution.rs
+// apps/conary/src/commands/install/batch/execution.rs
 
 //! Graph-driven batch payload execution.
 

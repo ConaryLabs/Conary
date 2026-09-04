@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/standard_api/helpers.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/standard_api/helpers.rs
 //! Mode, identity, and POSIX configuration helpers.
 
 use super::super::context::LuaRuntimeContext;

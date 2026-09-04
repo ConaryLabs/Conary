@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/rpm.rs
+// crates/conary-core/src/ccs/native_transaction/rpm.rs
 
 //! Exact RPM package, file, and transaction-file trigger planning.
 //!

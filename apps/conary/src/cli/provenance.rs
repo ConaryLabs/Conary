@@ -1,4 +1,4 @@
-// src/cli/provenance.rs
+// apps/conary/src/cli/provenance.rs
 
 //! CLI commands for Package DNA / Provenance queries
 //!

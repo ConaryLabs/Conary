@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/enrollment.rs
+// crates/conary-core/src/repository/declarations/takeover/enrollment.rs
 
 //! Complete native-product enrollment validation.
 

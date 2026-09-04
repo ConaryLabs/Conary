@@ -1,4 +1,4 @@
-// src/cli/trust.rs
+// apps/conary/src/cli/trust.rs
 
 //! CLI definitions for TUF trust management commands
 

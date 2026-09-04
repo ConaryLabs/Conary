@@ -1,4 +1,4 @@
-// conary-test/src/container/mod.rs
+// apps/conary-test/src/container/mod.rs
 
 pub mod backend;
 mod build_output;

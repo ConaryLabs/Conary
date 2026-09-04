@@ -1,4 +1,4 @@
-// conary-core/src/flavor/mod.rs
+// crates/conary-core/src/flavor/mod.rs
 //! Flavor specification parsing and matching
 //!
 //! Flavors represent build-time variations like architecture, features, and toolchain.

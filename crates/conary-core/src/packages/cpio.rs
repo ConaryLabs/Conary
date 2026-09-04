@@ -1,4 +1,4 @@
-// conary-core/src/packages/cpio.rs
+// crates/conary-core/src/packages/cpio.rs
 
 use crate::ccs::{ArchiveDecodeBounds, CCS_BUDGET};
 use crate::error::{Error, Result};

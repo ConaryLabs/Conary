@@ -1,4 +1,4 @@
-// src/commands/self_update.rs
+// apps/conary/src/commands/self_update.rs
 
 //! Self-update command: update the conary binary itself
 

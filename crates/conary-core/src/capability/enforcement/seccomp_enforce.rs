@@ -1,4 +1,4 @@
-// conary-core/src/capability/enforcement/seccomp_enforce.rs
+// crates/conary-core/src/capability/enforcement/seccomp_enforce.rs
 //! Seccomp-BPF syscall enforcement
 //!
 //! Converts syscall capability declarations into seccomp BPF filters that

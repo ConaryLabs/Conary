@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/trust_policy.rs
+// crates/conary-core/src/repository/declarations/takeover/trust_policy.rs
 
 //! Exact projection from discovered trust evidence into persisted policy.
 

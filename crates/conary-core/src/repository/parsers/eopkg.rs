@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/eopkg.rs
+// crates/conary-core/src/repository/parsers/eopkg.rs
 
 //! Authenticated Solus eopkg repository-index parser.
 

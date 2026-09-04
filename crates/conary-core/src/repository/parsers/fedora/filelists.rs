@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/filelists.rs
+// crates/conary-core/src/repository/parsers/fedora/filelists.rs
 
 //! Complete RPM package file ownership from the signed `filelists.xml`.
 //!

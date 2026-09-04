@@ -1,4 +1,4 @@
-// conary/tests/features/install_reasons.rs
+// apps/conary/tests/features/install_reasons.rs
 
 use super::*;
 

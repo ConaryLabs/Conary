@@ -1,4 +1,4 @@
-// conary-test/src/bootstrap/tests.rs
+// apps/conary-test/src/bootstrap/tests.rs
 
 use super::*;
 use tempfile::tempdir;

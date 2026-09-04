@@ -1,4 +1,4 @@
-// conary-core/src/derivation/pipeline/tests.rs
+// crates/conary-core/src/derivation/pipeline/tests.rs
 
 use super::*;
 use crate::derivation::compose::{ComposeError, erofs_image_hash};

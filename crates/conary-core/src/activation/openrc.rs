@@ -1,4 +1,4 @@
-// conary-core/src/activation/openrc.rs
+// crates/conary-core/src/activation/openrc.rs
 
 //! Closed parser and invocation contract for OpenRC runtime service work.
 

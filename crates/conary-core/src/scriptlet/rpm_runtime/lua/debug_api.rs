@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/debug_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/debug_api.rs
 //! Safe debug-library projection that preserves Conary's VM deadline hook.
 
 use mlua::{Function, Lua, MultiValue, Table, Value};

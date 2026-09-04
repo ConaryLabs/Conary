@@ -1,4 +1,4 @@
-// src/commands/model/snapshot.rs
+// apps/conary/src/commands/model/snapshot.rs
 
 use super::super::open_db;
 use anyhow::Result;

@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/rpm_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/rpm_api.rs
 //! Remaining RPM-specific Lua APIs from the pinned RPM runtime.
 
 use super::context::LuaRuntimeContext;

@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/mod.rs
+// crates/conary-core/src/repository/parsers/mod.rs
 
 //! Repository metadata parsers for different package formats
 //!

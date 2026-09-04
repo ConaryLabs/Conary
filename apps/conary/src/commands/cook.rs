@@ -1,4 +1,4 @@
-// src/commands/cook.rs
+// apps/conary/src/commands/cook.rs
 
 //! Cook command - build packages from recipes
 

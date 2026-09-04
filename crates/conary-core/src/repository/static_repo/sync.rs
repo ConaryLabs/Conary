@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/sync.rs
+// crates/conary-core/src/repository/static_repo/sync.rs
 
 use crate::db::models::{
     Repository, RepositoryPackage, RepositoryPackageKey, RepositoryPackageKeyStatus,

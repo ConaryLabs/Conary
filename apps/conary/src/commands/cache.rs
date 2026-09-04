@@ -1,4 +1,4 @@
-// src/commands/cache.rs
+// apps/conary/src/commands/cache.rs
 
 //! Implementation of `conary cache` commands.
 

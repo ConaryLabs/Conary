@@ -1,4 +1,4 @@
-// conary-core/src/recipe/recording/draft.rs
+// crates/conary-core/src/recipe/recording/draft.rs
 
 use anyhow::{Result, bail};
 

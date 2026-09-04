@@ -1,4 +1,4 @@
-// conary-core/benches/selected_root_delta.rs
+// crates/conary-core/benches/selected_root_delta.rs
 
 //! Installed-path scaling for the selected-root transaction commit boundary.
 

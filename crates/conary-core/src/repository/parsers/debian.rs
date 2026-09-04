@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/debian.rs
+// crates/conary-core/src/repository/parsers/debian.rs
 
 //! Debian/Ubuntu repository metadata parser
 //!

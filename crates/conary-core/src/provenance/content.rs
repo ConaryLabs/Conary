@@ -1,4 +1,4 @@
-// conary-core/src/provenance/content.rs
+// crates/conary-core/src/provenance/content.rs
 
 //! Content layer provenance - what's in the package
 

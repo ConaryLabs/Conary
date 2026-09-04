@@ -1,4 +1,4 @@
-// conary-core/src/trust/generate.rs
+// crates/conary-core/src/trust/generate.rs
 
 //! TUF metadata generation
 //!

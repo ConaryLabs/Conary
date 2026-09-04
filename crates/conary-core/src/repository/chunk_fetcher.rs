@@ -1,4 +1,4 @@
-// conary-core/src/repository/chunk_fetcher.rs
+// crates/conary-core/src/repository/chunk_fetcher.rs
 //! Chunk fetcher trait and implementations
 //!
 //! Provides a transport abstraction for fetching chunks from various backends:

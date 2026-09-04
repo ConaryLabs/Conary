@@ -1,4 +1,4 @@
-// conary-core/src/model/parser/automation.rs
+// crates/conary-core/src/model/parser/automation.rs
 
 //! Automation policy types owned by the system-model parser.
 

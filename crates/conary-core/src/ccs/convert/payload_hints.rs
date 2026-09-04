@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/payload_hints.rs
+// crates/conary-core/src/ccs/convert/payload_hints.rs
 
 use super::ForeignConversionInput;
 use crate::packages::traits::ExtractedFile;

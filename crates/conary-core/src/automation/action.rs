@@ -1,4 +1,4 @@
-// conary-core/src/automation/action.rs
+// crates/conary-core/src/automation/action.rs
 
 //! Action definitions and planning for the automation system.
 

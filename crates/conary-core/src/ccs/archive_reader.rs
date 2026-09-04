@@ -1,4 +1,4 @@
-// conary-core/src/ccs/archive_reader.rs
+// crates/conary-core/src/ccs/archive_reader.rs
 
 //! Explicitly untrusted CCS v3 archive inspection.
 //!

@@ -1,4 +1,4 @@
-// src/commands/model/lock.rs
+// apps/conary/src/commands/model/lock.rs
 
 use std::path::{Path, PathBuf};
 

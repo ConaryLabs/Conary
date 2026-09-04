@@ -1,4 +1,4 @@
-// conary-core/src/db/models/provide_entry.rs
+// crates/conary-core/src/db/models/provide_entry.rs
 
 //! ProvideEntry model - capabilities that packages offer
 //!

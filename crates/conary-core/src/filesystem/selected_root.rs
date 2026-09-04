@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/selected_root.rs
+// crates/conary-core/src/filesystem/selected_root.rs
 //! Bounded root-relative inspection of selected-root paths.
 
 use crate::error::{Error, Result};

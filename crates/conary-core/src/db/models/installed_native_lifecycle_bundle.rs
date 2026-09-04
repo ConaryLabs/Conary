@@ -1,4 +1,4 @@
-// conary-core/src/db/models/installed_native_lifecycle_bundle.rs
+// crates/conary-core/src/db/models/installed_native_lifecycle_bundle.rs
 
 //! Installed native lifecycle bundle persistence.
 

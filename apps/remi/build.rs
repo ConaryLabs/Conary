@@ -1,4 +1,4 @@
-// remi/build.rs
+// apps/remi/build.rs
 
 use std::env;
 use std::path::{Path, PathBuf};

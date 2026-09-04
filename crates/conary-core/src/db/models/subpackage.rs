@@ -1,4 +1,4 @@
-// conary-core/src/db/models/subpackage.rs
+// crates/conary-core/src/db/models/subpackage.rs
 
 //! Subpackage relationship model
 //!

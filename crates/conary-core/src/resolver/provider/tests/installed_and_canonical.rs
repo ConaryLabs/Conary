@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/tests/installed_and_canonical.rs
+// crates/conary-core/src/resolver/provider/tests/installed_and_canonical.rs
 
 use super::*;
 

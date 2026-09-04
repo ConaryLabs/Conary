@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/native.rs
+// crates/conary-core/src/repository/sync/native.rs
 
 use crate::db::models::{
     AuthenticatedSnapshotIdentity, Repository, RepositoryPackage, RepositoryProvide,

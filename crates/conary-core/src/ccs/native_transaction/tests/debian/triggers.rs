@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/debian/triggers.rs
+// crates/conary-core/src/ccs/native_transaction/tests/debian/triggers.rs
 
 use super::*;
 

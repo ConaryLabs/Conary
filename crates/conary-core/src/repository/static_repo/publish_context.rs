@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish_context.rs
+// crates/conary-core/src/repository/static_repo/publish_context.rs
 
 use std::fs;
 use std::io::ErrorKind;

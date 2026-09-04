@@ -1,4 +1,4 @@
-// conary-core/src/repository/download.rs
+// crates/conary-core/src/repository/download.rs
 
 //! Package and delta download functionality
 //!

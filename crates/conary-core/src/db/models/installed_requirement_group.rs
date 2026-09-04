@@ -1,4 +1,4 @@
-// conary-core/src/db/models/installed_requirement_group.rs
+// crates/conary-core/src/db/models/installed_requirement_group.rs
 
 //! The single typed requirement authority for installed packages.
 

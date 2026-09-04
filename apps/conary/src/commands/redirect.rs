@@ -1,4 +1,4 @@
-// src/commands/redirect.rs
+// apps/conary/src/commands/redirect.rs
 
 //! Redirect command implementations for package aliasing and supersession
 

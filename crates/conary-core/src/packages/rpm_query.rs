@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm_query.rs
+// crates/conary-core/src/packages/rpm_query.rs
 
 //! Query installed RPM packages from the system database
 //!

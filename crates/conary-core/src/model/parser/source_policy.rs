@@ -1,4 +1,4 @@
-// conary-core/src/model/parser/source_policy.rs
+// crates/conary-core/src/model/parser/source_policy.rs
 
 //! Source selection policy for system models.
 

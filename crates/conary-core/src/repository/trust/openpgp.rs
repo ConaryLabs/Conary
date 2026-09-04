@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp.rs
+// crates/conary-core/src/repository/trust/openpgp.rs
 
 //! Pinned OpenPGP trust preparation and verification.
 //!

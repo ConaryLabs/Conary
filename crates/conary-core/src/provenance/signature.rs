@@ -1,4 +1,4 @@
-// conary-core/src/provenance/signature.rs
+// crates/conary-core/src/provenance/signature.rs
 
 //! Signature layer provenance - who vouches for this package
 

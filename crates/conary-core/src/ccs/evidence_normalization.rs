@@ -1,4 +1,4 @@
-// conary-core/src/ccs/evidence_normalization.rs
+// crates/conary-core/src/ccs/evidence_normalization.rs
 //! Canonical privacy-safe normalization for persisted scriptlet evidence.
 
 use regex::Regex;

@@ -1,4 +1,4 @@
-// conary-core/src/canonical/appstream.rs
+// crates/conary-core/src/canonical/appstream.rs
 
 //! AppStream discovery-metadata parser.
 //!

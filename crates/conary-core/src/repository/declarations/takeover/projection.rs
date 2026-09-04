@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/projection.rs
+// crates/conary-core/src/repository/declarations/takeover/projection.rs
 
 //! Projection discovery, drift inspection, staging, and byte restoration.
 

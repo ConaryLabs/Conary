@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/metalink.rs
+// crates/conary-core/src/repository/parsers/fedora/metalink.rs
 
 //! Fedora metalink authority for the rpm-md root object.
 

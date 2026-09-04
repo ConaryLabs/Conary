@@ -1,4 +1,4 @@
-// src/commands/update/selection.rs
+// apps/conary/src/commands/update/selection.rs
 
 //! Exact-source update candidate selection and security metadata checks.
 

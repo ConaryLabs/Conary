@@ -1,4 +1,4 @@
-// src/commands/model/publish.rs
+// apps/conary/src/commands/model/publish.rs
 
 use std::path::{Path, PathBuf};
 

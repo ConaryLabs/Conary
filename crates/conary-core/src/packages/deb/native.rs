@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/native.rs
+// crates/conary-core/src/packages/deb/native.rs
 
 use super::*;
 

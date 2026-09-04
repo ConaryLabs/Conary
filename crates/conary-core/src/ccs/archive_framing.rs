@@ -1,4 +1,4 @@
-// conary-core/src/ccs/archive_framing.rs
+// crates/conary-core/src/ccs/archive_framing.rs
 
 //! Canonical fixed-block MGZIP framing and ordered parallel decode.
 

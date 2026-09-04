@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/entries.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/entries.rs
 
 use super::format_metadata::{FormatMetadataProjection, project_format_metadata};
 use super::native_contracts::{

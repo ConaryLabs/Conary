@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle.rs
 
 //! Source-pinned, byte-preserving argv contracts for dpkg lifecycle tools.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers/service.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers/service.rs
 
 use super::HelperGrammarError;
 use super::common::{InitScriptAction, validate_argument};

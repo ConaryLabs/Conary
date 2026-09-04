@@ -1,4 +1,4 @@
-// conary-core/src/ccs/archive_layout.rs
+// crates/conary-core/src/ccs/archive_layout.rs
 
 //! The directory layout a CCS v3 archive is allowed to contain.
 //!

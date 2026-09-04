@@ -1,4 +1,4 @@
-// src/cli/config.rs
+// apps/conary/src/cli/config.rs
 //! Configuration file management commands
 
 use super::{CommonArgs, DbArgs};

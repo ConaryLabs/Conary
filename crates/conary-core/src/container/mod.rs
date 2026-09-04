@@ -1,4 +1,4 @@
-// conary-core/src/container/mod.rs
+// crates/conary-core/src/container/mod.rs
 
 //! Container isolation for scriptlet execution
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/xml.rs
+// crates/conary-core/src/packages/eopkg/xml.rs
 
 //! Bounded XML admission for eopkg `metadata.xml` and `files.xml`.
 

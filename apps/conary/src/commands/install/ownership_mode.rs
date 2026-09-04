@@ -1,4 +1,4 @@
-// src/commands/install/ownership_mode.rs
+// apps/conary/src/commands/install/ownership_mode.rs
 //! Recorded ownership handling for package installation and update.
 
 use std::fmt;

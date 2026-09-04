@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_backup_chain.rs
+// crates/conary-core/src/db/generation_backup_chain.rs
 
 //! Self-contained, bounded SQLite base-plus-changeset recovery authority.
 

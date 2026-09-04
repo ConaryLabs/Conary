@@ -1,4 +1,4 @@
-// conary-core/benches/erofs_build.rs
+// crates/conary-core/benches/erofs_build.rs
 
 use std::collections::BTreeMap;
 

@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/tier2.rs
+// crates/conary-core/src/bootstrap/tier2.rs
 
 //! Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
 //!

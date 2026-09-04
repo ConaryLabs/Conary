@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/rpm.rs
+// crates/conary-core/src/ccs/native_export/rpm.rs
 //! RPM package generator
 //!
 //! Generates RPM packages from CCS build results using the `rpm` crate's

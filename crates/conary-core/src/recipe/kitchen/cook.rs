@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/cook.rs
+// crates/conary-core/src/recipe/kitchen/cook.rs
 
 //! Cook: the actual build execution for a single recipe
 

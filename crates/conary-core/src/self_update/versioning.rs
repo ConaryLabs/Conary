@@ -1,4 +1,4 @@
-// conary-core/src/self_update/versioning.rs
+// crates/conary-core/src/self_update/versioning.rs
 
 use crate::error::{Error, Result};
 use semver::Version;

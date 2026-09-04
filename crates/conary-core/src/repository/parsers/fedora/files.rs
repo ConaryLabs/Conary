@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/files.rs
+// crates/conary-core/src/repository/parsers/fedora/files.rs
 
 //! The one `<file>` record grammar shared by RPM repository metadata.
 //!

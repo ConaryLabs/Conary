@@ -1,4 +1,4 @@
-// src/commands/update/collection.rs
+// apps/conary/src/commands/update/collection.rs
 
 //! Collection update orchestration for `conary update @collection`.
 

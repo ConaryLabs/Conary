@@ -1,4 +1,4 @@
-// conary-core/tests/canonical.rs
+// crates/conary-core/tests/canonical.rs
 
 //! Integration tests for canonical package identity system
 //!

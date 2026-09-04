@@ -1,4 +1,4 @@
-// conary-core/src/packages/native_abi.rs
+// crates/conary-core/src/packages/native_abi.rs
 //! Native package-manager scriptlet ABI metadata captured by package parsers.
 
 use crate::hash;

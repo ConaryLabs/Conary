@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/schema.rs
+// crates/conary-core/src/ccs/v3/schema.rs
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

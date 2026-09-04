@@ -1,4 +1,4 @@
-// src/commands/registry.rs
+// apps/conary/src/commands/registry.rs
 //! Registry management command implementations
 
 use super::open_db;

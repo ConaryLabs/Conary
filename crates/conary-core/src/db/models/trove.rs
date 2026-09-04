@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trove.rs
+// crates/conary-core/src/db/models/trove.rs
 
 //! Trove model - the core package/component/collection type
 

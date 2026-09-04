@@ -1,4 +1,4 @@
-// src/commands/collection.rs
+// apps/conary/src/commands/collection.rs
 //! Collection management commands
 
 use super::open_db;

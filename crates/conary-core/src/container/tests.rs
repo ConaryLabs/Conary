@@ -1,4 +1,4 @@
-// conary-core/src/container/tests.rs
+// crates/conary-core/src/container/tests.rs
 use super::namespaces::namespace_map_contents;
 use super::*;
 use crate::capability::enforcement::{EnforcementMode, EnforcementPolicy};

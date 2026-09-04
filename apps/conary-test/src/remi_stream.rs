@@ -1,4 +1,4 @@
-// conary-test/src/remi_stream.rs
+// apps/conary-test/src/remi_stream.rs
 
 //! Local CLI orchestration for Remi test-result streaming.
 

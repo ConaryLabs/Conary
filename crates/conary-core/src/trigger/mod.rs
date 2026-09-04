@@ -1,4 +1,4 @@
-// conary-core/src/trigger/mod.rs
+// crates/conary-core/src/trigger/mod.rs
 
 //! Trigger execution for post-installation actions
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/overlay/probe.rs
+// crates/conary-core/src/generation/root_manifest/overlay/probe.rs
 
 //! Functional host/filesystem preflight for the selected-root OverlayFS profile.
 

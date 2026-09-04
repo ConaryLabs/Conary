@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm_query/provides.rs
+// crates/conary-core/src/packages/rpm_query/provides.rs
 
 //! Typed provider acquisition from one exact installed RPM header.
 

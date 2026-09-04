@@ -1,4 +1,4 @@
-// conary-test/src/container/image.rs
+// apps/conary-test/src/container/image.rs
 
 use anyhow::{Context, Result, bail};
 use conary_core::repository::supported_profiles::ProfilePackageFormat;

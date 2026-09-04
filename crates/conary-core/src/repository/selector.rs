@@ -1,4 +1,4 @@
-// conary-core/src/repository/selector.rs
+// crates/conary-core/src/repository/selector.rs
 
 //! Package selection logic for repository-based installation
 //!

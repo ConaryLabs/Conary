@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/config.rs
+// crates/conary-core/src/bootstrap/config.rs
 
 //! Bootstrap configuration types
 

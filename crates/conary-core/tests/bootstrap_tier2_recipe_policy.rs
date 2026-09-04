@@ -1,4 +1,4 @@
-// conary-core/tests/bootstrap_tier2_recipe_policy.rs
+// crates/conary-core/tests/bootstrap_tier2_recipe_policy.rs
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;

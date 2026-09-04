@@ -1,4 +1,4 @@
-// conary-core/src/repository/client/public_network.rs
+// crates/conary-core/src/repository/client/public_network.rs
 
 //! Public-address enforcement and one-resolution HTTP client pinning.
 

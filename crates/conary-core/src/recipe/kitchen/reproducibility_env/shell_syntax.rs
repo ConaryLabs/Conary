@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/reproducibility_env/shell_syntax.rs
+// crates/conary-core/src/recipe/kitchen/reproducibility_env/shell_syntax.rs
 
 use super::*;
 

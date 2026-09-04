@@ -1,4 +1,4 @@
-// src/cli/mod.rs
+// apps/conary/src/cli/mod.rs
 //! CLI definitions for the Conary package manager
 //!
 //! This module contains all command-line interface definitions using clap.

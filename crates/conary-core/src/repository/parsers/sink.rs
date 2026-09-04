@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/sink.rs
+// crates/conary-core/src/repository/parsers/sink.rs
 
 //! Versioned streaming output contract for authenticated repository parsers.
 

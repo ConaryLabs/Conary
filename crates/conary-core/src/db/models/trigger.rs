@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trigger.rs
+// crates/conary-core/src/db/models/trigger.rs
 
 //! Trigger model for path-based post-installation actions
 //!

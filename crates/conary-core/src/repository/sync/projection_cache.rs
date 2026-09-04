@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/projection_cache.rs
+// crates/conary-core/src/repository/sync/projection_cache.rs
 
 //! Strict durable cache for normalized authenticated native projections.
 

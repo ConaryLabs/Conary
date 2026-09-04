@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/payload_preparation.rs
+// crates/conary-core/src/ccs/builder/payload_preparation.rs
 
 //! One-pass payload layout derivation and operation-private object staging.
 

@@ -1,4 +1,4 @@
-// src/commands/federation.rs
+// apps/conary/src/commands/federation.rs
 //! Command implementations for federation management
 
 use super::format_bytes;

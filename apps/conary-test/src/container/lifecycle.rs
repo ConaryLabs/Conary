@@ -1,4 +1,4 @@
-// conary-test/src/container/lifecycle.rs
+// apps/conary-test/src/container/lifecycle.rs
 
 use anyhow::{Context, Result, bail};
 use async_trait::async_trait;

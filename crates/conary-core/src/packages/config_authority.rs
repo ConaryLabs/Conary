@@ -1,4 +1,4 @@
-// conary-core/src/packages/config_authority.rs
+// crates/conary-core/src/packages/config_authority.rs
 
 //! Closed source configuration declarations and transaction projection.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/mirror_health.rs
+// crates/conary-core/src/repository/mirror_health.rs
 
 //! Mirror health tracking and ranking
 //!

@@ -1,4 +1,4 @@
-// conary-core/benches/package_transaction_staging.rs
+// crates/conary-core/benches/package_transaction_staging.rs
 
 //! Package transaction persistence scaling for many-tiny-file workloads.
 

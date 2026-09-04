@@ -1,4 +1,4 @@
-// conary-core/src/generation/delta.rs
+// crates/conary-core/src/generation/delta.rs
 
 //! Binary delta support between EROFS generation images.
 //!

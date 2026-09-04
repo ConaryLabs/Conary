@@ -1,4 +1,4 @@
-// conary-core/src/db/models/native_lifecycle_residual_state.rs
+// crates/conary-core/src/db/models/native_lifecycle_residual_state.rs
 
 //! Native lifecycle state retained after the installed trove disappears.
 

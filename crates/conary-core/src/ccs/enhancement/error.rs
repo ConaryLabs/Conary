@@ -1,4 +1,4 @@
-// conary-core/src/ccs/enhancement/error.rs
+// crates/conary-core/src/ccs/enhancement/error.rs
 //! Error types for the enhancement framework
 
 use thiserror::Error;

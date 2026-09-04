@@ -1,4 +1,4 @@
-// conary-core/src/repository/rpm_dependency.rs
+// crates/conary-core/src/repository/rpm_dependency.rs
 
 //! Source-derived parser for RPM boolean dependency expressions.
 //!

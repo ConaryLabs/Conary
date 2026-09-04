@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync.rs
+// crates/conary-core/src/repository/sync.rs
 
 //! Repository synchronization
 //!

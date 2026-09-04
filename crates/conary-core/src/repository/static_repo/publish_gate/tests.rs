@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish_gate/tests.rs
+// crates/conary-core/src/repository/static_repo/publish_gate/tests.rs
 
 use super::*;
 use crate::ccs::attestation::{

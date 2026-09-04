@@ -1,4 +1,4 @@
-// conary-core/src/dependencies/mod.rs
+// crates/conary-core/src/dependencies/mod.rs
 
 //! Language-specific dependency support
 //!

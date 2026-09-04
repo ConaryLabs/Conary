@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish_context/key_management.rs
+// crates/conary-core/src/repository/static_repo/publish_context/key_management.rs
 
 use std::collections::BTreeSet;
 use std::fs;

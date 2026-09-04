@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/native_provenance.rs
+// crates/conary-core/src/ccs/convert/native_provenance.rs
 
 //! Native package provenance extraction
 //!

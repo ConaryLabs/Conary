@@ -1,4 +1,4 @@
-// src/commands/model/check.rs
+// apps/conary/src/commands/model/check.rs
 
 use std::path::Path;
 use std::process;

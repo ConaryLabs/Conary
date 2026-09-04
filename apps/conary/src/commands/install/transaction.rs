@@ -1,4 +1,4 @@
-// src/commands/install/transaction.rs
+// apps/conary/src/commands/install/transaction.rs
 
 use super::{ExtractionResult, InstallSemantics, RepositoryInstallProvenance};
 use anyhow::{Context, Result};

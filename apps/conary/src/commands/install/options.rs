@@ -1,4 +1,4 @@
-// src/commands/install/options.rs
+// apps/conary/src/commands/install/options.rs
 
 use super::OwnershipMode;
 use anyhow::{Context, Result};

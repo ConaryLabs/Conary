@@ -1,4 +1,4 @@
-// conary-core/src/recipe/scaffold.rs
+// crates/conary-core/src/recipe/scaffold.rs
 
 //! Exact named recipe scaffolding and deterministic recipe materialization.
 

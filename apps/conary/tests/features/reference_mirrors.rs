@@ -1,4 +1,4 @@
-// conary/tests/features/reference_mirrors.rs
+// apps/conary/tests/features/reference_mirrors.rs
 
 use super::*;
 

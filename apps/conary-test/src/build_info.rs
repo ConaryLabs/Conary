@@ -1,4 +1,4 @@
-// conary-test/src/build_info.rs
+// apps/conary-test/src/build_info.rs
 
 use serde::Serialize;
 use std::borrow::ToOwned;

@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers/deb_systemd_invoke.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers/deb_systemd_invoke.rs
 
 use super::HelperGrammarError;
 use super::common::{UnitInstance, required, validate_argument};

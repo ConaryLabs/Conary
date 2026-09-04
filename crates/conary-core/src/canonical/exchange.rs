@@ -1,4 +1,4 @@
-// conary-core/src/canonical/exchange.rs
+// crates/conary-core/src/canonical/exchange.rs
 
 //! Exact canonical-map wire contract for signed Remi universes.
 

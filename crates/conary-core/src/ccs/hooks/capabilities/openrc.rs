@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/capabilities/openrc.rs
+// crates/conary-core/src/ccs/hooks/capabilities/openrc.rs
 
 //! Typed OpenRC service-manager interface.
 

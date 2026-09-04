@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/mod.rs
+// crates/conary-core/src/filesystem/mod.rs
 
 //! Filesystem operations for Conary
 //!

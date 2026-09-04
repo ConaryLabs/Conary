@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/archive.rs
+// crates/conary-core/src/recipe/kitchen/archive.rs
 
 //! Archive and source file utilities for the Kitchen
 

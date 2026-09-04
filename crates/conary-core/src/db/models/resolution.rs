@@ -1,4 +1,4 @@
-// conary-core/src/db/models/resolution.rs
+// crates/conary-core/src/db/models/resolution.rs
 
 //! Package resolution routing model
 //!

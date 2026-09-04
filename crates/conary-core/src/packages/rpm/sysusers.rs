@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/sysusers.rs
+// crates/conary-core/src/packages/rpm/sysusers.rs
 //! RPM 4.19+ `%sysusers` dependency decoding.
 
 use super::*;

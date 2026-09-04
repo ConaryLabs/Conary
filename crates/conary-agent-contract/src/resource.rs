@@ -1,4 +1,4 @@
-// conary-agent-contract/src/resource.rs
+// crates/conary-agent-contract/src/resource.rs
 //! Canonical Conary agent resource URI helpers.
 
 use schemars::JsonSchema;

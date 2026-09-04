@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/dpkg.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/dpkg.rs
 
 #[path = "dpkg/options.rs"]
 mod options;

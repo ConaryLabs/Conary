@@ -1,4 +1,4 @@
-// conary-core/src/repository/dependency_source.rs
+// crates/conary-core/src/repository/dependency_source.rs
 
 //! Source ecosystem identity for repository dependencies and capabilities.
 //!

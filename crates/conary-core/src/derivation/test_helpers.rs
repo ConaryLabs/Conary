@@ -1,4 +1,4 @@
-// conary-core/src/derivation/test_helpers.rs
+// crates/conary-core/src/derivation/test_helpers.rs
 
 //! Shared test utilities for the derivation module.
 

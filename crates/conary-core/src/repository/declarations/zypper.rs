@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/zypper.rs
+// crates/conary-core/src/repository/declarations/zypper.rs
 
 //! libzypp `.repo` and `.service` declaration authority.
 

@@ -1,4 +1,4 @@
-// conary-core/src/container/analysis.rs
+// crates/conary-core/src/container/analysis.rs
 //! Runtime scriptlet risk derived from formal shell command evidence.
 
 use crate::security::command_risk::{

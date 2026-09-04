@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/package_writer.rs
+// crates/conary-core/src/ccs/builder/package_writer.rs
 
 //! Package emission helpers for the CCS builder.
 //!

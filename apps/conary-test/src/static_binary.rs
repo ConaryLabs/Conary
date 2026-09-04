@@ -1,4 +1,4 @@
-// conary-test/src/static_binary.rs
+// apps/conary-test/src/static_binary.rs
 
 //! The statically linked `conary` artifact staged into foreign userlands.
 //!

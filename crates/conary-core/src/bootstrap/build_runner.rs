@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/build_runner.rs
+// crates/conary-core/src/bootstrap/build_runner.rs
 
 //! Shared package build runner for bootstrap stages
 //!

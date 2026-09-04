@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/user_group.rs
+// crates/conary-core/src/ccs/hooks/user_group.rs
 
 //! User and group management for CCS hooks
 //!

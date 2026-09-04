@@ -1,4 +1,4 @@
-// conary-test/src/config/release_root.rs
+// apps/conary-test/src/config/release_root.rs
 
 use std::collections::{BTreeSet, HashMap};
 

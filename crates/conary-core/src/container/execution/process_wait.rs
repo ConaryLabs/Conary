@@ -1,4 +1,4 @@
-// conary-core/src/container/execution/process_wait.rs
+// crates/conary-core/src/container/execution/process_wait.rs
 
 //! Deadline-aware child waiting and cleanup shared by sandbox monitors.
 //!

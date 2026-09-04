@@ -1,4 +1,4 @@
-// conary-core/src/repository/distro.rs
+// crates/conary-core/src/repository/distro.rs
 
 //! Shared source-feed catalog and persisted version-scheme parsing.
 

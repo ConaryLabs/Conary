@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover.rs
+// crates/conary-core/src/repository/declarations/takeover.rs
 
 //! Transactional native repository takeover and owned declaration projections.
 

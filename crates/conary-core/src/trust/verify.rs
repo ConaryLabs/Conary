@@ -1,4 +1,4 @@
-// conary-core/src/trust/verify.rs
+// crates/conary-core/src/trust/verify.rs
 
 //! TUF signature and metadata verification
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/model/state.rs
+// crates/conary-core/src/model/state.rs
 
 //! System state capture and representation.
 //!

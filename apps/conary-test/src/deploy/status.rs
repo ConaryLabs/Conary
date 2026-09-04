@@ -1,4 +1,4 @@
-// conary-test/src/deploy/status.rs
+// apps/conary-test/src/deploy/status.rs
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

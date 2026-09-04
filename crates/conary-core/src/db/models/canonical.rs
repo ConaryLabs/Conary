@@ -1,4 +1,4 @@
-// conary-core/src/db/models/canonical.rs
+// crates/conary-core/src/db/models/canonical.rs
 
 //! Canonical package identity models
 //!

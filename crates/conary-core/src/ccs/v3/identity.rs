@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/identity.rs
+// crates/conary-core/src/ccs/v3/identity.rs
 
 use super::schema::*;
 use crate::repository::dependency_model::RepositoryRequirementGroup;

@@ -1,4 +1,4 @@
-// conary-core/src/trust/client.rs
+// crates/conary-core/src/trust/client.rs
 
 //! TUF client for repository sync
 //!

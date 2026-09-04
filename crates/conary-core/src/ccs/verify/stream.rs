@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify/stream.rs
+// crates/conary-core/src/ccs/verify/stream.rs
 
 //! Signature-first streaming verification of trusted CCS archives.
 

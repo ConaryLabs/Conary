@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/image/tests.rs
+// crates/conary-core/src/bootstrap/image/tests.rs
 
 use super::*;
 use crate::generation::metadata::GENERATION_FORMAT;

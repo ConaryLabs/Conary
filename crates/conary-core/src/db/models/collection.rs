@@ -1,4 +1,4 @@
-// conary-core/src/db/models/collection.rs
+// crates/conary-core/src/db/models/collection.rs
 
 //! CollectionMember model - members of package collections/groups
 //!

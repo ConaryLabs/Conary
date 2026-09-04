@@ -1,4 +1,4 @@
-// conary-test/src/report/corpus.rs
+// apps/conary-test/src/report/corpus.rs
 
 //! Fail-closed JSON envelope for attributable just-works corpus evidence.
 

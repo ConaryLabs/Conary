@@ -1,4 +1,4 @@
-// conary-core/src/generation/artifact/tests.rs
+// crates/conary-core/src/generation/artifact/tests.rs
 
 use super::*;
 use crate::generation::metadata::{

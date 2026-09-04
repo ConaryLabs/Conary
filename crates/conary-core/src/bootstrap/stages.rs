@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/stages.rs
+// crates/conary-core/src/bootstrap/stages.rs
 
 //! Bootstrap stage management and progress tracking
 //!

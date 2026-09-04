@@ -1,4 +1,4 @@
-// conary-core/src/packages/dpkg_query.rs
+// crates/conary-core/src/packages/dpkg_query.rs
 
 //! Query installed dpkg packages from the system database
 //!

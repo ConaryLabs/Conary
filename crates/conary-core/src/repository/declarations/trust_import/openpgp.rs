@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/trust_import/openpgp.rs
+// crates/conary-core/src/repository/declarations/trust_import/openpgp.rs
 
 use super::{
     OpenPgpCertificateEvidence, OpenPgpFingerprintSelector, PlanFindings, TrustEvidenceSource,

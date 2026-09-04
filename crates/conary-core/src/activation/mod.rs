@@ -1,4 +1,4 @@
-// conary-core/src/activation/mod.rs
+// crates/conary-core/src/activation/mod.rs
 
 //! Typed runtime work that is deferred until an immutable generation boots.
 //!

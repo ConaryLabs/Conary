@@ -1,4 +1,4 @@
-// conary-core/src/db/current_schema/definition.rs
+// crates/conary-core/src/db/current_schema/definition.rs
 
 use crate::error::Result;
 use rusqlite::Connection;

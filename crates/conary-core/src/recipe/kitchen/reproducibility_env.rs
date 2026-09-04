@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/reproducibility_env.rs
+// crates/conary-core/src/recipe/kitchen/reproducibility_env.rs
 
 //! Hermetic command-local reproducibility environment validation.
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/archive_emitter.rs
+// crates/conary-core/src/ccs/archive_emitter.rs
 
 //! Atomic emission of one exact CCS v3 control and object set.
 

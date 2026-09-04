@@ -1,4 +1,4 @@
-// conary-core/src/derivation/recipe_hash.rs
+// crates/conary-core/src/derivation/recipe_hash.rs
 
 //! Recipe hashing for content-addressed build identification.
 //!

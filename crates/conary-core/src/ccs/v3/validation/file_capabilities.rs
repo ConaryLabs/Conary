@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation/file_capabilities.rs
+// crates/conary-core/src/ccs/v3/validation/file_capabilities.rs
 
 //! Signed Linux file-capability validation against exact package payload authority.
 

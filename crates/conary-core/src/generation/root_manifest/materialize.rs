@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/materialize.rs
+// crates/conary-core/src/generation/root_manifest/materialize.rs
 
 //! Exact materialization of typed generation-root and mutable-state manifests.
 

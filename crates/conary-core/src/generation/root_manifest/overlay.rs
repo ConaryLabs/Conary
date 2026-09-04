@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/overlay.rs
+// crates/conary-core/src/generation/root_manifest/overlay.rs
 
 //! OverlayFS upper-tree decoding for delta-sized selected-root transactions.
 

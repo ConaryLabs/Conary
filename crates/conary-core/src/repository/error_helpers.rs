@@ -1,4 +1,4 @@
-// conary-core/src/repository/error_helpers.rs
+// crates/conary-core/src/repository/error_helpers.rs
 
 //! Extension trait for adding contextual information to errors in repository
 //! operations.

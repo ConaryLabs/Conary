@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/capabilities.rs
+// crates/conary-core/src/ccs/hooks/capabilities.rs
 
 //! Typed host integration capabilities used by declarative CCS hooks.
 //!

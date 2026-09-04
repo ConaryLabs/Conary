@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/native_command.rs
+// crates/conary-core/src/scriptlet/native_command.rs
 
 //! Exact argv execution for formally parsed native transaction hooks.
 

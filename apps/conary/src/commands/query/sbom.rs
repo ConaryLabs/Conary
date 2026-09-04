@@ -1,4 +1,4 @@
-// src/commands/query/sbom.rs
+// apps/conary/src/commands/query/sbom.rs
 
 //! Software Bill of Materials (SBOM) export
 //!

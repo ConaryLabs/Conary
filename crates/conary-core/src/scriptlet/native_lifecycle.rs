@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/native_lifecycle.rs
+// crates/conary-core/src/scriptlet/native_lifecycle.rs
 
 mod arch_install;
 mod contracts;

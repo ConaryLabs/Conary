@@ -1,4 +1,4 @@
-// conary-core/src/packages/archive_utils.rs
+// crates/conary-core/src/packages/archive_utils.rs
 
 use crate::error::Result;
 use crate::filesystem::source_path::SourcePathBytes;

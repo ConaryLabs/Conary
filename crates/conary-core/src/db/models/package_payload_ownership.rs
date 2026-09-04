@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_payload_ownership.rs
+// crates/conary-core/src/db/models/package_payload_ownership.rs
 //! Claim-aware installed package payload projection.
 
 use super::{FileEntry, PayloadClaim, Trove};

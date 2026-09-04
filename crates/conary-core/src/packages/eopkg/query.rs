@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/query.rs
+// crates/conary-core/src/packages/eopkg/query.rs
 
 //! Exact installed eopkg authority from retained package XML.
 

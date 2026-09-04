@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/engine.rs
+// crates/conary-core/src/packages/deb/debconf/engine.rs
 
 //! Deterministic noninteractive execution of typed debconf commands.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/paths.rs
+// crates/conary-core/src/repository/static_repo/paths.rs
 
 use anyhow::{Result, anyhow, bail};
 

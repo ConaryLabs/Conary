@@ -1,4 +1,4 @@
-// conary-core/src/generation/gc.rs
+// crates/conary-core/src/generation/gc.rs
 
 //! Typed CAS reachability and object collection.
 //!

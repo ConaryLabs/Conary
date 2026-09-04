@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/alpm_hook.rs
+// crates/conary-core/src/packages/arch/alpm_hook.rs
 
 //! Strict parser for the current `alpm-hooks(5)` control-file grammar.
 

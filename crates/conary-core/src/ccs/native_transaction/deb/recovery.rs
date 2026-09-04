@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/deb/recovery.rs
+// crates/conary-core/src/ccs/native_transaction/deb/recovery.rs
 
 //! Debian failure-event materialization and reverse lifecycle unwind.
 

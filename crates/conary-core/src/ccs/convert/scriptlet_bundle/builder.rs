@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/builder.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/builder.rs
 
 use super::digest::evidence_digest;
 use super::entries::build_entries;

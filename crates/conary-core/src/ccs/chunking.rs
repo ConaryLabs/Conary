@@ -1,4 +1,4 @@
-// conary-core/src/ccs/chunking.rs
+// crates/conary-core/src/ccs/chunking.rs
 
 //! Content-Defined Chunking (CDC) for efficient deduplication and delta updates.
 //!

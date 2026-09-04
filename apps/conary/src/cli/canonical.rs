@@ -1,4 +1,4 @@
-// src/cli/canonical.rs
+// apps/conary/src/cli/canonical.rs
 //! Canonical package identity commands
 
 use super::DbArgs;

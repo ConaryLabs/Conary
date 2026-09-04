@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/tests.rs
+// crates/conary-core/src/filesystem/cas/tests.rs
 
 use super::*;
 use tempfile::TempDir;

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/try_session.rs
+// crates/conary-core/src/db/models/try_session.rs
 
 //! Durable state for `conary try` sessions.
 

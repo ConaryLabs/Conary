@@ -1,4 +1,4 @@
-// conary-core/src/derivation/mod.rs
+// crates/conary-core/src/derivation/mod.rs
 
 //! Derivation data model for the CAS-layered bootstrap build system.
 //!

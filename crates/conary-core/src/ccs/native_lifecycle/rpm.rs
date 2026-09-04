@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle/rpm.rs
+// crates/conary-core/src/ccs/native_lifecycle/rpm.rs
 //! Persisted RPM lifecycle runtime contracts.
 
 use super::required_string;

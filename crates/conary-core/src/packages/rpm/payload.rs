@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload.rs
+// crates/conary-core/src/packages/rpm/payload.rs
 
 //! Exact RPM header and payload projection.
 //!

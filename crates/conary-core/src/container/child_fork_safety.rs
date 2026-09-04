@@ -1,4 +1,4 @@
-// conary-core/src/container/child_fork_safety.rs
+// crates/conary-core/src/container/child_fork_safety.rs
 
 //! The post-fork child path may not log or spawn.
 //!

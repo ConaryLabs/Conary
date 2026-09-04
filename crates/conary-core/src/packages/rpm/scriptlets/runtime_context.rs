@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/scriptlets/runtime_context.rs
+// crates/conary-core/src/packages/rpm/scriptlets/runtime_context.rs
 //! Typed RPM query-format and macro context captured from package headers.
 //! Signature translation mirrors RPM `lib/package.cc` at
 //! `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.

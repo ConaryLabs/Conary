@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation.rs
+// crates/conary-core/src/ccs/v3/validation.rs
 
 mod config;
 mod content_layout;

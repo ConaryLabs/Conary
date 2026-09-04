@@ -1,4 +1,4 @@
-// src/commands/repo/options.rs
+// apps/conary/src/commands/repo/options.rs
 
 //! Typed input for repository enrollment.
 

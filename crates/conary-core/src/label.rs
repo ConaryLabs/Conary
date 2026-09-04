@@ -1,4 +1,4 @@
-// conary-core/src/label.rs
+// crates/conary-core/src/label.rs
 
 //! Conary-style label system for tracking package provenance
 //!

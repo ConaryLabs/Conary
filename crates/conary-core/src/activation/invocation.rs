@@ -1,4 +1,4 @@
-// conary-core/src/activation/invocation.rs
+// crates/conary-core/src/activation/invocation.rs
 
 //! Persisted closed union of runtime work consumed by an exact generation.
 

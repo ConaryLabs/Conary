@@ -1,4 +1,4 @@
-// src/commands/generation/takeover_state.rs
+// apps/conary/src/commands/generation/takeover_state.rs
 
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};

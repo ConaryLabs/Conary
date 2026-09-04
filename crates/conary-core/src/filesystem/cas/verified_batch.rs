@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/verified_batch.rs
+// crates/conary-core/src/filesystem/cas/verified_batch.rs
 
 //! Transaction-owned ingestion of signed objects into permanent CAS.
 

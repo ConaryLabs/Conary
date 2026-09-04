@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/mod.rs
+// crates/conary-core/src/ccs/v3/mod.rs
 //! CCS v3 native package authority.
 
 pub mod authoring;

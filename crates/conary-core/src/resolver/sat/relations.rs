@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/relations.rs
+// crates/conary-core/src/resolver/sat/relations.rs
 
 //! Exact post-solve conflict and replacement planning.
 

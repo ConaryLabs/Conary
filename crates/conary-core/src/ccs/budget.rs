@@ -1,4 +1,4 @@
-// conary-core/src/ccs/budget.rs
+// crates/conary-core/src/ccs/budget.rs
 
 //! The single canonical structural and operator-resource budget for CCS v3.
 //!

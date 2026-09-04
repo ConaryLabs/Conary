@@ -1,4 +1,4 @@
-// conary-core/src/transaction/mod.rs
+// crates/conary-core/src/transaction/mod.rs
 
 //! Composefs-native transaction engine.
 //!

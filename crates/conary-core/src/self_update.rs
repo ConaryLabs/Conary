@@ -1,4 +1,4 @@
-// conary-core/src/self_update.rs
+// crates/conary-core/src/self_update.rs
 
 //! Self-update logic for the conary binary
 //!

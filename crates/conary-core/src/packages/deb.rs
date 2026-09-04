@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb.rs
+// crates/conary-core/src/packages/deb.rs
 
 //! Debian package format parser
 //!

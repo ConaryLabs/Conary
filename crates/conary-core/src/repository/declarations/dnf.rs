@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/dnf.rs
+// crates/conary-core/src/repository/declarations/dnf.rs
 
 //! DNF5/YUM `.repo` declaration authority.
 

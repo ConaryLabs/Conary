@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify/archive_identity.rs
+// crates/conary-core/src/ccs/verify/archive_identity.rs
 
 //! Exact compressed CCS archive identity and canonical stream completion.
 

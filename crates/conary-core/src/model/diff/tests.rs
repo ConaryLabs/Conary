@@ -1,4 +1,4 @@
-// conary-core/src/model/diff/tests.rs
+// crates/conary-core/src/model/diff/tests.rs
 use super::super::state::InstalledPackage;
 use super::*;
 

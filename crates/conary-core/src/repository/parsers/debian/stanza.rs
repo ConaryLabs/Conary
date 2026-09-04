@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/debian/stanza.rs
+// crates/conary-core/src/repository/parsers/debian/stanza.rs
 
 //! Record-at-a-time Debian Packages stanza grammar.
 

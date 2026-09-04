@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/templates.rs
+// crates/conary-core/src/packages/deb/templates.rs
 
 //! Exact parser and package-level native authority for Debian debconf templates.
 

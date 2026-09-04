@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/boot_assets.rs
+// crates/conary-core/src/generation/builder/boot_assets.rs
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

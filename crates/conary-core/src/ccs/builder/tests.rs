@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/tests.rs
+// crates/conary-core/src/ccs/builder/tests.rs
 
 use super::*;
 use crate::payload::PayloadNodeKind;

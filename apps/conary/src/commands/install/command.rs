@@ -1,4 +1,4 @@
-// src/commands/install/command.rs
+// apps/conary/src/commands/install/command.rs
 
 use super::acquire::{CcsInstallParams, resolve_and_parse_package};
 use super::ccs_removal_hooks::CcsRemovalHookPlan;

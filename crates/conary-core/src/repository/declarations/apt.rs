@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/apt.rs
+// crates/conary-core/src/repository/declarations/apt.rs
 
 //! APT `sources.list` and deb822 `.sources` declaration authority.
 

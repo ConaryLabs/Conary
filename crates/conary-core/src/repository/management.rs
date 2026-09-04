@@ -1,4 +1,4 @@
-// conary-core/src/repository/management.rs
+// crates/conary-core/src/repository/management.rs
 
 //! Repository management operations
 //!

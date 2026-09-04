@@ -1,4 +1,4 @@
-// conary-core/src/generation/composefs_rs_eval.rs
+// crates/conary-core/src/generation/composefs_rs_eval.rs
 
 //! Evaluation of composefs-rs for EROFS image building.
 //!

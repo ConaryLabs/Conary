@@ -1,4 +1,4 @@
-// conary-core/tests/generation_composefs_runtime_contract.rs
+// crates/conary-core/tests/generation_composefs_runtime_contract.rs
 
 use std::fs;
 use std::path::{Path, PathBuf};

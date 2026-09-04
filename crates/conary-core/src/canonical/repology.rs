@@ -1,4 +1,4 @@
-// conary-core/src/canonical/repology.rs
+// crates/conary-core/src/canonical/repology.rs
 
 //! Repology discovery-metadata client.
 //!

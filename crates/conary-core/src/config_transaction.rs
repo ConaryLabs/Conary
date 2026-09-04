@@ -1,4 +1,4 @@
-// conary-core/src/config_transaction.rs
+// crates/conary-core/src/config_transaction.rs
 
 //! Exact package-format configuration-file transaction contracts.
 //!

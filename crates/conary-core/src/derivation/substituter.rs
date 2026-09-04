@@ -1,4 +1,4 @@
-// conary-core/src/derivation/substituter.rs
+// crates/conary-core/src/derivation/substituter.rs
 
 //! Derivation substituter client.
 //!

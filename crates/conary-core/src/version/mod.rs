@@ -1,4 +1,4 @@
-// conary-core/src/version/mod.rs
+// crates/conary-core/src/version/mod.rs
 
 //! Version handling and constraint satisfaction for package dependencies
 //!

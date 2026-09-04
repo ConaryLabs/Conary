@@ -1,4 +1,4 @@
-// conary-core/src/repository/versioning.rs
+// crates/conary-core/src/repository/versioning.rs
 
 //! Parsed, ecosystem-native repository version comparison.
 //!

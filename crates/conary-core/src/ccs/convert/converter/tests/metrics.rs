@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/converter/tests/metrics.rs
+// crates/conary-core/src/ccs/convert/converter/tests/metrics.rs
 
 use super::*;
 

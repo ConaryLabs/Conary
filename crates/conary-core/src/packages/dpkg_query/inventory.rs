@@ -1,4 +1,4 @@
-// conary-core/src/packages/dpkg_query/inventory.rs
+// crates/conary-core/src/packages/dpkg_query/inventory.rs
 
 //! Fixed-work dpkg installed-inventory acquisition.
 

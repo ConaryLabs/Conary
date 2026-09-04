@@ -1,4 +1,4 @@
-// conary-core/src/model/mod.rs
+// crates/conary-core/src/model/mod.rs
 
 //! System Model - Declarative OS State Management
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/mod.rs
+// crates/conary-core/src/packages/eopkg/mod.rs
 
 //! Solus eopkg/PISI 1.2 package support.
 

@@ -1,4 +1,4 @@
-// conary-core/src/corpus/failure.rs
+// crates/conary-core/src/corpus/failure.rs
 
 //! Typed conversion-failure taxonomy for corpus reporting.
 //!

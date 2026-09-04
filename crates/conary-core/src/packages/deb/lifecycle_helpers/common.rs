@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers/common.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers/common.rs
 
 use super::HelperGrammarError;
 

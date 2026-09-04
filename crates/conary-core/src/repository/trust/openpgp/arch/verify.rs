@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch/verify.rs
+// crates/conary-core/src/repository/trust/openpgp/arch/verify.rs
 
 //! Pacman-conformant verification of an Arch detached signature.
 //!

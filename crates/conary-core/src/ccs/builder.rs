@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder.rs
+// crates/conary-core/src/ccs/builder.rs
 //! CCS package builder.
 //!
 //! The builder owns typed package assembly. Native source discovery lives in

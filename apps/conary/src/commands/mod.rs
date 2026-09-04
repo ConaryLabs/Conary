@@ -1,4 +1,4 @@
-// src/commands/mod.rs
+// apps/conary/src/commands/mod.rs
 //! Command handlers for the Conary CLI
 
 mod adopt;

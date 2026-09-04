@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/command_risk.rs
+// crates/conary-core/src/recipe/hermetic/command_risk.rs
 
 use crate::recipe::format::Recipe;
 use crate::recipe::hermetic::evidence::{BuildCommandRiskEntry, BuildCommandRiskReport};

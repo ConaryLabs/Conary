@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua.rs
 
 //! Bundled Lua 5.4 runtime for RPM `<lua>` transaction scriptlets.
 

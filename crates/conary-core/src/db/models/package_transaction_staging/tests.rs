@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_transaction_staging/tests.rs
+// crates/conary-core/src/db/models/package_transaction_staging/tests.rs
 
 use super::*;
 use crate::db::models::{Changeset, Trove, TroveType};

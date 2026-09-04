@@ -1,4 +1,4 @@
-// conary-core/src/derived/mod.rs
+// crates/conary-core/src/derived/mod.rs
 
 //! Derived package builder
 //!

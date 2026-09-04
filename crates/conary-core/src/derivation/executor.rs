@@ -1,4 +1,4 @@
-// conary-core/src/derivation/executor.rs
+// crates/conary-core/src/derivation/executor.rs
 
 //! Single-package derivation executor.
 //!

@@ -1,4 +1,4 @@
-// src/commands/update/adopted_authority.rs
+// apps/conary/src/commands/update/adopted_authority.rs
 
 //! Adopted-package update authority and native package-manager guidance.
 

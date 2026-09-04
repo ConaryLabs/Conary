@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_delta.rs
+// crates/conary-core/src/db/generation_delta.rs
 
 //! Typed SQLite session changesets for generation recovery deltas.
 

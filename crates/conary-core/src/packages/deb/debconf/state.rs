@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/state.rs
+// crates/conary-core/src/packages/deb/debconf/state.rs
 
 //! Serializable debconf templates, questions, and shared ownership state.
 

@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/final_system.rs
+// crates/conary-core/src/bootstrap/final_system.rs
 
 //! Phase 3: Final system (LFS Chapter 8)
 //!

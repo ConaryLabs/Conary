@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/dpkg/options.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/dpkg/options.rs
 
 use super::{DpkgForceMode, DpkgForceThing, DpkgOption};
 use crate::packages::deb::dpkg_lifecycle::common::{

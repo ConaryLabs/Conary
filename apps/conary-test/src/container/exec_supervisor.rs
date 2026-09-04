@@ -1,4 +1,4 @@
-// conary-test/src/container/exec_supervisor.rs
+// apps/conary-test/src/container/exec_supervisor.rs
 
 use anyhow::{Context, Result};
 

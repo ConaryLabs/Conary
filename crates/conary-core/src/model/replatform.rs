@@ -1,4 +1,4 @@
-// conary-core/src/model/replatform.rs
+// crates/conary-core/src/model/replatform.rs
 
 //! Shared helpers for source-policy replatform planning.
 

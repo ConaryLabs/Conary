@@ -1,4 +1,4 @@
-// conary-core/tests/bootstrap_recipe_patch_contract.rs
+// crates/conary-core/tests/bootstrap_recipe_patch_contract.rs
 
 use std::path::{Path, PathBuf};
 

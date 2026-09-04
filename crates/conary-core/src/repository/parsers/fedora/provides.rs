@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/provides.rs
+// crates/conary-core/src/repository/parsers/fedora/provides.rs
 
 //! Exact provider-role projection from authenticated RPM primary metadata.
 

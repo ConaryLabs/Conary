@@ -1,4 +1,4 @@
-// src/commands/config.rs
+// apps/conary/src/commands/config.rs
 
 //! Configuration file management CLI commands
 //!

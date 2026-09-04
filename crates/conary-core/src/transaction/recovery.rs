@@ -1,4 +1,4 @@
-// conary-core/src/transaction/recovery.rs
+// crates/conary-core/src/transaction/recovery.rs
 
 use super::TransactionEngine;
 use crate::Result;

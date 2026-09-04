@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/format.rs
+// crates/conary-core/src/repository/static_repo/format.rs
 
 use std::collections::HashSet;
 

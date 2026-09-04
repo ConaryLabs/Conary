@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/location.rs
+// crates/conary-core/src/repository/static_repo/location.rs
 
 use std::path::PathBuf;
 

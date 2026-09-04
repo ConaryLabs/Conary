@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository_package_key.rs
+// crates/conary-core/src/db/models/repository_package_key.rs
 
 //! Repository package signing key persistence.
 

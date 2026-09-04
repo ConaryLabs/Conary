@@ -1,4 +1,4 @@
-// src/cli/redirect.rs
+// apps/conary/src/cli/redirect.rs
 //! Redirect management commands for package aliasing and supersession
 
 use super::DbArgs;

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository_requirement.rs
+// crates/conary-core/src/db/models/repository_requirement.rs
 
 //! Normalized repository requirement expression groups and clause indexes.
 

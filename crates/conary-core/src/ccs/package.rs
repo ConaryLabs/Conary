@@ -1,4 +1,4 @@
-// conary-core/src/ccs/package.rs
+// crates/conary-core/src/ccs/package.rs
 
 //! CCS package parser implementing PackageFormat trait
 //!

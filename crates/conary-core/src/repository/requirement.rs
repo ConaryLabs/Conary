@@ -1,4 +1,4 @@
-// conary-core/src/repository/requirement.rs
+// crates/conary-core/src/repository/requirement.rs
 
 //! Validation for the single typed package-requirement authority.
 

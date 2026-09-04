@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/reproducibility_env/tests.rs
+// crates/conary-core/src/recipe/kitchen/reproducibility_env/tests.rs
 
 use super::*;
 use std::path::Path;

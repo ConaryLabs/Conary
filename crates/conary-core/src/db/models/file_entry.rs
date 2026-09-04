@@ -1,4 +1,4 @@
-// conary-core/src/db/models/file_entry.rs
+// crates/conary-core/src/db/models/file_entry.rs
 
 //! Exact installed payload-node state.
 

@@ -1,4 +1,4 @@
-// src/commands/generation/switch.rs
+// apps/conary/src/commands/generation/switch.rs
 //! Generation switching via composefs mounts
 //!
 //! CLI wrapper around `conary_core::generation::mount`. Core mount/unmount

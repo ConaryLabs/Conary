@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch/testkeys.rs
+// crates/conary-core/src/repository/trust/openpgp/arch/testkeys.rs
 
 //! Synthetic OpenPGP material for Arch trust tests.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/lifecycle_bridge/staging.rs
+// crates/conary-core/src/scriptlet/lifecycle_bridge/staging.rs
 
 use crate::error::{Error, Result, ScriptletFailureKind};
 use nix::errno::Errno;

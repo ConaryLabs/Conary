@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/boundary.rs
+// crates/conary-core/src/scriptlet/boundary.rs
 
 //! Stable selected-root security boundary for native lifecycle execution.
 //!

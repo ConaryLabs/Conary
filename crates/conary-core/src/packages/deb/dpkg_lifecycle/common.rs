@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/common.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/common.rs
 
 pub(super) const MAINTSCRIPT_HELPER: &str = "dpkg-maintscript-helper";
 pub(super) const DPKG_QUERY: &str = "dpkg-query";

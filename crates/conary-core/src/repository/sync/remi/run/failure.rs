@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/remi/run/failure.rs
+// crates/conary-core/src/repository/sync/remi/run/failure.rs
 
 //! Typed durable failure evidence for one profile refresh run.
 

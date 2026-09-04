@@ -1,4 +1,4 @@
-// conary-test/src/config/manifest.rs
+// apps/conary-test/src/config/manifest.rs
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};

@@ -1,4 +1,4 @@
-// src/commands/ccs/install/component_selection.rs
+// apps/conary/src/commands/ccs/install/component_selection.rs
 
 use anyhow::Result;
 use conary_core::ccs::CcsPackage;

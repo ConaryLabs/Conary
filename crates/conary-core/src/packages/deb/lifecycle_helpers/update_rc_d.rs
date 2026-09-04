@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers/update_rc_d.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers/update_rc_d.rs
 
 use super::HelperGrammarError;
 use super::common::validate_word;

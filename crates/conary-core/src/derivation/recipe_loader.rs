@@ -1,4 +1,4 @@
-// conary-core/src/derivation/recipe_loader.rs
+// crates/conary-core/src/derivation/recipe_loader.rs
 
 //! Shared recipe discovery for derivation-facing commands.
 

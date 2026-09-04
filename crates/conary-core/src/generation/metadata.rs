@@ -1,4 +1,4 @@
-// conary-core/src/generation/metadata.rs
+// crates/conary-core/src/generation/metadata.rs
 
 //! Generation metadata types and path helpers.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/recipe/format.rs
+// crates/conary-core/src/recipe/format.rs
 
 //! Recipe file format definitions
 //!

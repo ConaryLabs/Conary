@@ -1,4 +1,4 @@
-// conary-test/src/engine/assertions.rs
+// apps/conary-test/src/engine/assertions.rs
 
 use crate::config::manifest::Assertion;
 use anyhow::{Result, bail};

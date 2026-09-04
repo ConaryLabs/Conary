@@ -1,4 +1,4 @@
-// conary-core/src/model/parser.rs
+// crates/conary-core/src/model/parser.rs
 
 //! Parser for system model TOML files.
 

@@ -1,4 +1,4 @@
-// src/commands/recipe_audit.rs
+// apps/conary/src/commands/recipe_audit.rs
 
 //! Implementation of `conary recipe-audit` command.
 

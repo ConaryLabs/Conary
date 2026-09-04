@@ -1,4 +1,4 @@
-// conary-core/src/repository/eopkg_version.rs
+// crates/conary-core/src/repository/eopkg_version.rs
 
 //! Exact eopkg/PISI version grammar and ordering.
 //!

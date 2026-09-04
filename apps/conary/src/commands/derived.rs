@@ -1,4 +1,4 @@
-// src/commands/derived.rs
+// apps/conary/src/commands/derived.rs
 
 //! Derived package management CLI commands
 //!

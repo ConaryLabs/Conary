@@ -1,4 +1,4 @@
-// conary-core/src/db/models/generation_publication.rs
+// crates/conary-core/src/db/models/generation_publication.rs
 
 use crate::config_transaction::GenerationConfigTransaction;
 use crate::error::Result;

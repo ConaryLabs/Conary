@@ -1,4 +1,4 @@
-// conary-core/src/db/models/settings.rs
+// crates/conary-core/src/db/models/settings.rs
 
 //! Key-value settings storage
 

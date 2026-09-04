@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/inventory.rs
+// crates/conary-core/src/packages/eopkg/inventory.rs
 
 //! Shared installed-inventory projection for retained eopkg XML authority.
 

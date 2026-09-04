@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/remi/run.rs
+// crates/conary-core/src/repository/sync/remi/run.rs
 
 //! Durable profile-refresh ownership, recovery, and fenced publication.
 //!

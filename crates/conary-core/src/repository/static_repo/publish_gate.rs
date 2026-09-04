@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish_gate.rs
+// crates/conary-core/src/repository/static_repo/publish_gate.rs
 //! Static artifact-form publish eligibility and signer authority checks.
 
 use std::collections::{BTreeMap, BTreeSet};

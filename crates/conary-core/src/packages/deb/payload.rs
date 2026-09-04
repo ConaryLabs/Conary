@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/payload.rs
+// crates/conary-core/src/packages/deb/payload.rs
 
 //! Exact parser for the `data.tar` subset accepted by dpkg.
 //!

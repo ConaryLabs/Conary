@@ -1,4 +1,4 @@
-// conary-core/src/transaction/package_relations/tests.rs
+// crates/conary-core/src/transaction/package_relations/tests.rs
 
 use super::*;
 use crate::db::models::TroveType;

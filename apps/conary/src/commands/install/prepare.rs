@@ -1,4 +1,4 @@
-// src/commands/install/prepare.rs
+// apps/conary/src/commands/install/prepare.rs
 //! Package parsing and pre-installation validation
 
 use super::{InstallIntent, InstallSemantics};

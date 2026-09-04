@@ -1,4 +1,4 @@
-// conary-core/src/automation/check.rs
+// crates/conary-core/src/automation/check.rs
 
 //! Automation checks - scan system for actionable items.
 //!

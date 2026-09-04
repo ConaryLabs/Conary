@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/rebuild.rs
+// crates/conary-core/src/generation/builder/rebuild.rs
 
 use std::path::Path;
 

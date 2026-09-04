@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository_capability.rs
+// crates/conary-core/src/db/models/repository_capability.rs
 
 //! Normalized repository-native capability tables.
 

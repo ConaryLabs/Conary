@@ -1,4 +1,4 @@
-// conary-core/src/packages/native_scriptlet_support.rs
+// crates/conary-core/src/packages/native_scriptlet_support.rs
 
 //! Code-owned native package-manager scriptlet support matrix.
 //!

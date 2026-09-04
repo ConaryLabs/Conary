@@ -1,4 +1,4 @@
-// conary-core/src/progress.rs
+// crates/conary-core/src/progress.rs
 
 //! Shared progress tracking trait and implementations
 //!

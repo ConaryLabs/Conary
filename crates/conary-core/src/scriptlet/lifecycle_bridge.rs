@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/lifecycle_bridge.rs
+// crates/conary-core/src/scriptlet/lifecycle_bridge.rs
 
 //! Private, byte-exact transport between selected-root lifecycle shims and Conary.
 //!

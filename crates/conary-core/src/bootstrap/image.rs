@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/image.rs
+// crates/conary-core/src/bootstrap/image.rs
 
 //! Phase 5: Bootable image generation
 //!

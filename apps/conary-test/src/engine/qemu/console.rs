@@ -1,4 +1,4 @@
-// conary-test/src/engine/qemu/console.rs
+// apps/conary-test/src/engine/qemu/console.rs
 //! Concurrent, bounded capture of a QEMU process's console pipes.
 //!
 //! QEMU writes the guest serial console to its stdout. A piped stdout that

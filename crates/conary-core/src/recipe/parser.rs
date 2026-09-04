@@ -1,4 +1,4 @@
-// conary-core/src/recipe/parser.rs
+// crates/conary-core/src/recipe/parser.rs
 
 //! Recipe file parsing
 

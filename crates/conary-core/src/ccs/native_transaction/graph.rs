@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/graph.rs
+// crates/conary-core/src/ccs/native_transaction/graph.rs
 
 //! Typed payload boundaries for native package-manager transaction execution.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch/corpus.rs
+// crates/conary-core/src/repository/trust/openpgp/arch/corpus.rs
 
 //! Real-package conformance corpus.
 //!

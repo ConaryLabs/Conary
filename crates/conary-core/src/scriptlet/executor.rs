@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/executor.rs
+// crates/conary-core/src/scriptlet/executor.rs
 
 use super::ScriptletFailureKind;
 use super::lifecycle_bridge::LifecycleBridgeConfig;

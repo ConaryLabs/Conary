@@ -1,4 +1,4 @@
-// conary-core/src/db/rebuild.rs
+// crates/conary-core/src/db/rebuild.rs
 
 //! Explicit current-schema replacement for retired pre-alpha databases.
 

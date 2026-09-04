@@ -1,4 +1,4 @@
-// conary-test/src/engine/suite.rs
+// apps/conary-test/src/engine/suite.rs
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

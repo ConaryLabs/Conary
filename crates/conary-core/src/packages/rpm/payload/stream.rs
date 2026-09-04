@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/stream.rs
+// crates/conary-core/src/packages/rpm/payload/stream.rs
 
 //! Streaming RPM payload decompression and exact CPIO grammar.
 

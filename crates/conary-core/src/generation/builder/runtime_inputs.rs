@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/runtime_inputs.rs
+// crates/conary-core/src/generation/builder/runtime_inputs.rs
 
 //! Exact projection of installed payload authority into generation artifacts.
 

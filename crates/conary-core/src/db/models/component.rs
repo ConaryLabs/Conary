@@ -1,4 +1,4 @@
-// conary-core/src/db/models/component.rs
+// crates/conary-core/src/db/models/component.rs
 
 //! Component model - independently installable units within packages
 //!

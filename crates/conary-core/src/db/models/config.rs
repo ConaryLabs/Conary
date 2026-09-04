@@ -1,4 +1,4 @@
-// conary-core/src/db/models/config.rs
+// crates/conary-core/src/db/models/config.rs
 
 //! Configuration file tracking model
 //!

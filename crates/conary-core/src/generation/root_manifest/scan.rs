@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/scan.rs
+// crates/conary-core/src/generation/root_manifest/scan.rs
 
 //! Exact selected-root scanner and CAS capture.
 

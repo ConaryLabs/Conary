@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/lifecycle_bridge/protocol.rs
+// crates/conary-core/src/scriptlet/lifecycle_bridge/protocol.rs
 
 //! Version 1 wire grammar:
 //! `CONARY-LIFECYCLE-BRIDGE 1 <argc>\n`, followed by one command and `argc`

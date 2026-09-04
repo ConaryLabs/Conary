@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/payload.rs
+// crates/conary-core/src/packages/eopkg/payload.rs
 
 //! Exact eopkg 1.2 inner-tar payload admission.
 

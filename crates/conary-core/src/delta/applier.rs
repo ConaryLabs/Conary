@@ -1,4 +1,4 @@
-// conary-core/src/delta/applier.rs
+// crates/conary-core/src/delta/applier.rs
 
 //! Delta applier to reconstruct new version from old version + delta
 //!

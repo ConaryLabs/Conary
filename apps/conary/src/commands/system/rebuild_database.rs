@@ -1,4 +1,4 @@
-// conary/src/commands/system/rebuild_database.rs
+// apps/conary/src/commands/system/rebuild_database.rs
 
 use super::init::{configure_current_database, require_init_privileges};
 use anyhow::Result;

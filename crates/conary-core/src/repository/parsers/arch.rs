@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/arch.rs
+// crates/conary-core/src/repository/parsers/arch.rs
 
 //! Arch Linux repository metadata parser
 //!

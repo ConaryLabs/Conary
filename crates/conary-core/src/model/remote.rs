@@ -1,4 +1,4 @@
-// conary-core/src/model/remote.rs
+// crates/conary-core/src/model/remote.rs
 
 //! Remote collection fetching for model include resolution
 //!

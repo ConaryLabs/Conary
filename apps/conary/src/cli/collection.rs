@@ -1,4 +1,4 @@
-// src/cli/collection.rs
+// apps/conary/src/cli/collection.rs
 //! Package collection/group management commands
 
 use super::DbArgs;

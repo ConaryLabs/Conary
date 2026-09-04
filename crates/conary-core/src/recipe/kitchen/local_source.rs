@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/local_source.rs
+// crates/conary-core/src/recipe/kitchen/local_source.rs
 
 use crate::error::{Error, Result};
 use crate::recipe::hermetic::source_identity::{

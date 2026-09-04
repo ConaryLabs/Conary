@@ -1,4 +1,4 @@
-// conary-core/src/security/command_risk.rs
+// crates/conary-core/src/security/command_risk.rs
 //! Shared diagnostic command-observation taxonomy.
 //!
 //! The classifier parses shell structure and records observations for audit and

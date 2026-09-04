@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/payload/mod.rs
+// crates/conary-core/src/packages/arch/payload/mod.rs
 
 //! Exact ALPM tar payload parsing.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/dependency_model/tests.rs
+// crates/conary-core/src/repository/dependency_model/tests.rs
 
 use super::*;
 use std::collections::BTreeSet;

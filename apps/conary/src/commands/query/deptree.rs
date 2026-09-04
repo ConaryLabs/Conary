@@ -1,4 +1,4 @@
-// src/commands/query/deptree.rs
+// apps/conary/src/commands/query/deptree.rs
 
 //! Dependency tree visualization
 //!

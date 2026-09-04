@@ -1,4 +1,4 @@
-// conary-core/src/recipe/recording/capabilities.rs
+// crates/conary-core/src/recipe/recording/capabilities.rs
 
 use super::{CapabilitySuggestion, InstalledFileEvidence};
 

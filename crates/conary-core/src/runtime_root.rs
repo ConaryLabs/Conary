@@ -1,4 +1,4 @@
-// conary-core/src/runtime_root.rs
+// crates/conary-core/src/runtime_root.rs
 
 use std::path::{Path, PathBuf};
 

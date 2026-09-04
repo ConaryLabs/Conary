@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_snapshot.rs
+// crates/conary-core/src/db/generation_snapshot.rs
 
 //! Typed, crash-retryable SQLite snapshots for generation publication.
 

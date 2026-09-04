@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/mod.rs
+// crates/conary-core/src/ccs/native_export/mod.rs
 //! Native package format exporters.
 
 pub mod arch;

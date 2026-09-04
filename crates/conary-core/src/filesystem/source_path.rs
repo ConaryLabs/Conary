@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/source_path.rs
+// crates/conary-core/src/filesystem/source_path.rs
 
 //! Byte-exact path authority for untrusted source-package archives.
 //!

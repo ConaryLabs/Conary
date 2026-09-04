@@ -1,4 +1,4 @@
-// conary-core/src/ccs/policy/tests.rs
+// crates/conary-core/src/ccs/policy/tests.rs
 
 use super::*;
 use std::fs::File;

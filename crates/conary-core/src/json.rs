@@ -1,4 +1,4 @@
-// conary-core/src/json.rs
+// crates/conary-core/src/json.rs
 
 //! Canonical JSON serialization for deterministic cryptographic operations.
 //!

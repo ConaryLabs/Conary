@@ -1,4 +1,4 @@
-// src/commands/bootstrap/mod.rs
+// apps/conary/src/commands/bootstrap/mod.rs
 
 //! Bootstrap command implementations
 //!
