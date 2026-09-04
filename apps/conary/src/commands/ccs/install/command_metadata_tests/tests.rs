@@ -1,4 +1,4 @@
-// apps/conary/src/commands/ccs/install/command_metadata_tests.rs
+// apps/conary/src/commands/ccs/install/command_metadata_tests/tests.rs
 
 use std::collections::HashMap;
 
