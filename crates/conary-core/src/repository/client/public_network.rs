@@ -4,12 +4,15 @@
 
 use std::net::{IpAddr, SocketAddr};
 
-use reqwest::Client;
+use reqwest::header::{HeaderMap, LOCATION};
+use reqwest::{Client, Response, StatusCode};
 use url::Host;
 
 use super::TimeoutConfig;
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::http_client_builder_error_message;
+
+const MAX_PUBLIC_REDIRECTS: usize = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NonGlobalRepositoryAddress {
@@ -30,6 +33,7 @@ enum NonGlobalRepositoryAddress {
     Translation,
     DiscardOnly,
     SixToFour,
+    SixToFourRelay,
     SegmentRouting,
 }
 
@@ -53,6 +57,7 @@ impl NonGlobalRepositoryAddress {
             Self::Translation => "translation",
             Self::DiscardOnly => "discard-only",
             Self::SixToFour => "6to4",
+            Self::SixToFourRelay => "6to4-relay",
             Self::SegmentRouting => "segment-routing",
         }
     }
@@ -88,6 +93,11 @@ const IPV4_NON_GLOBAL_RANGES: &[Ipv4Range] = &[
         [192, 0, 2, 0],
         24,
         NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv4_range(
+        [192, 88, 99, 0],
+        24,
+        NonGlobalRepositoryAddress::SixToFourRelay,
     ),
     ipv4_range([192, 168, 0, 0], 16, NonGlobalRepositoryAddress::Private),
     ipv4_range(
@@ -205,7 +215,7 @@ fn classify_non_global_repository_ip(ip: IpAddr) -> Option<NonGlobalRepositoryAd
     match ip {
         IpAddr::V4(ip) => {
             let value = u32::from(ip);
-            IPV4_NON_GLOBAL_RANGES
+            let class = IPV4_NON_GLOBAL_RANGES
                 .iter()
                 .find(|range| {
                     if range.class == NonGlobalRepositoryAddress::ProtocolAssignment
@@ -220,7 +230,11 @@ fn classify_non_global_repository_ip(ip: IpAddr) -> Option<NonGlobalRepositoryAd
                         range.prefix,
                     )
                 })
-                .map(|range| range.class)
+                .map(|range| range.class);
+            if class.is_some() {
+                return class;
+            }
+            (!(1..=223).contains(&ip.octets()[0])).then_some(NonGlobalRepositoryAddress::Reserved)
         }
         IpAddr::V6(ip) => {
             if ip.is_unspecified() {
@@ -237,7 +251,7 @@ fn classify_non_global_repository_ip(ip: IpAddr) -> Option<NonGlobalRepositoryAd
                 return Some(NonGlobalRepositoryAddress::Ipv4Compatible);
             }
             let value = u128::from(ip);
-            IPV6_NON_GLOBAL_RANGES
+            let class = IPV6_NON_GLOBAL_RANGES
                 .iter()
                 .find(|range| {
                     if range.class == NonGlobalRepositoryAddress::ProtocolAssignment
@@ -247,7 +261,14 @@ fn classify_non_global_repository_ip(ip: IpAddr) -> Option<NonGlobalRepositoryAd
                     }
                     prefix_matches(value, range.network, 128, range.prefix)
                 })
-                .map(|range| range.class)
+                .map(|range| range.class);
+            if class.is_some() {
+                return class;
+            }
+            let globally_routable =
+                prefix_matches(value, 0x2000_0000_0000_0000_0000_0000_0000_0000, 128, 3)
+                    || prefix_matches(value, 0x0064_ff9b_0000_0000_0000_0000_0000_0000, 128, 96);
+            (!globally_routable).then_some(NonGlobalRepositoryAddress::Reserved)
         }
     }
 }
@@ -338,6 +359,87 @@ pub(super) async fn pinned_client_for_url(url: &str, timeouts: &TimeoutConfig) -
         .map_err(|error| Error::InitError(http_client_builder_error_message(error)))
 }
 
+pub(super) async fn get_following_public_redirects(
+    url: &str,
+    headers: &HeaderMap,
+    timeouts: &TimeoutConfig,
+    request_timeout: Option<std::time::Duration>,
+) -> Result<Response> {
+    let mut current = url::Url::parse(url)
+        .map_err(|error| Error::ConfigError(format!("invalid repository URL: {error}")))?;
+    let original_was_https = current.scheme() == "https";
+
+    for redirects in 0..=MAX_PUBLIC_REDIRECTS {
+        validate_public_request_url(&current, original_was_https)?;
+        let client = pinned_client_for_url(current.as_str(), timeouts).await?;
+        let mut request = client.get(current.clone()).headers(headers.clone());
+        if let Some(timeout) = request_timeout {
+            request = request.timeout(timeout);
+        }
+        let response = request.send().await.map_err(|error| {
+            Error::DownloadError(format!("Failed to download {current}: {error}"))
+        })?;
+        if !is_followed_redirect(response.status()) {
+            return Ok(response);
+        }
+        if redirects == MAX_PUBLIC_REDIRECTS {
+            return Err(Error::DownloadError(format!(
+                "repository URL exceeded {MAX_PUBLIC_REDIRECTS} redirects: {url}"
+            )));
+        }
+        let location = response
+            .headers()
+            .get(LOCATION)
+            .ok_or_else(|| {
+                Error::DownloadError(format!(
+                    "repository redirect from {current} has no Location header"
+                ))
+            })?
+            .to_str()
+            .map_err(|error| {
+                Error::DownloadError(format!(
+                    "repository redirect from {current} has an invalid Location header: {error}"
+                ))
+            })?;
+        current = current.join(location).map_err(|error| {
+            Error::DownloadError(format!(
+                "repository redirect from {current} has an invalid target: {error}"
+            ))
+        })?;
+    }
+    unreachable!("redirect loop is bounded")
+}
+
+fn is_followed_redirect(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::MOVED_PERMANENTLY
+            | StatusCode::FOUND
+            | StatusCode::SEE_OTHER
+            | StatusCode::TEMPORARY_REDIRECT
+            | StatusCode::PERMANENT_REDIRECT
+    )
+}
+
+fn validate_public_request_url(url: &url::Url, original_was_https: bool) -> Result<()> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(Error::ConfigError(format!(
+            "repository redirect target must use http:// or https://: {url}"
+        )));
+    }
+    if original_was_https && url.scheme() != "https" {
+        return Err(Error::ConfigError(format!(
+            "repository redirect may not downgrade HTTPS to HTTP: {url}"
+        )));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(Error::ConfigError(
+            "repository URLs may not contain credentials".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,6 +456,7 @@ mod tests {
             ("198.18.0.1", NonGlobalRepositoryAddress::Benchmarking),
             ("224.0.0.1", NonGlobalRepositoryAddress::Multicast),
             ("240.0.0.1", NonGlobalRepositoryAddress::Reserved),
+            ("192.88.99.1", NonGlobalRepositoryAddress::SixToFourRelay),
             ("::", NonGlobalRepositoryAddress::Unspecified),
             ("::1", NonGlobalRepositoryAddress::Loopback),
             ("fc00::1", NonGlobalRepositoryAddress::UniqueLocal),
@@ -372,6 +475,7 @@ mod tests {
             ("ff02::1", NonGlobalRepositoryAddress::Multicast),
             ("::ffff:8.8.8.8", NonGlobalRepositoryAddress::Ipv4Mapped),
             ("::8.8.8.8", NonGlobalRepositoryAddress::Ipv4Compatible),
+            ("4000::1", NonGlobalRepositoryAddress::Reserved),
         ];
 
         for (address, expected) in cases {
@@ -411,5 +515,23 @@ mod tests {
             );
             require_public_repository_ip(ip).expect("global unicast address");
         }
+    }
+
+    #[test]
+    fn redirect_targets_preserve_public_https_authority() {
+        let base = url::Url::parse("https://archlinux.org/packages/download/").unwrap();
+        let target = base
+            .join("https://geo.mirror.pkgbuild.com/core/keyring.pkg.tar.zst")
+            .unwrap();
+        validate_public_request_url(&target, true).expect("public HTTPS redirect");
+
+        let downgrade = base.join("http://mirror.example/keyring").unwrap();
+        assert!(validate_public_request_url(&downgrade, true).is_err());
+        let local_file = base.join("file:///etc/passwd").unwrap();
+        assert!(validate_public_request_url(&local_file, true).is_err());
+        let credentials = base
+            .join("https://user:secret@example.test/keyring")
+            .unwrap();
+        assert!(validate_public_request_url(&credentials, true).is_err());
     }
 }

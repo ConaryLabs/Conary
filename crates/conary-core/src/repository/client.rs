@@ -372,11 +372,26 @@ impl RepositoryClient {
         Ok(client)
     }
 
-    async fn client_for_url(&self, url: &str) -> Result<Client> {
-        if !self.public_network_only {
-            return Ok(self.client.clone());
+    async fn send_get(
+        &self,
+        url: &str,
+        headers: &header::HeaderMap,
+        request_timeout: Option<Duration>,
+    ) -> Result<reqwest::Response> {
+        if self.public_network_only {
+            return public_network::get_following_public_redirects(
+                url,
+                headers,
+                &self.timeouts,
+                request_timeout,
+            )
+            .await;
         }
-        public_network::pinned_client_for_url(url, &self.timeouts).await
+        let mut request = self.client.get(url).headers(headers.clone());
+        if let Some(timeout) = request_timeout {
+            request = request.timeout(timeout);
+        }
+        request.send().await.download_context(url)
     }
 
     /// Set a custom retry config (builder pattern)
@@ -396,15 +411,15 @@ impl RepositoryClient {
         };
 
         info!("Fetching repository metadata from {}", metadata_url);
-        let client = self.client_for_url(&metadata_url).await?;
-
         let mut attempt = 0;
         loop {
             attempt += 1;
-            match client
-                .get(&metadata_url)
-                .timeout(self.timeouts.metadata)
-                .send()
+            match self
+                .send_get(
+                    &metadata_url,
+                    &header::HeaderMap::new(),
+                    Some(self.timeouts.metadata),
+                )
                 .await
             {
                 Ok(response) => {
@@ -448,10 +463,10 @@ impl RepositoryClient {
                     return Ok(metadata);
                 }
                 Err(e) => {
-                    if attempt >= self.retry_policy.max_attempts {
-                        return Err(Error::DownloadError(format!(
-                            "Failed to fetch metadata after {attempt} attempts: {e}"
-                        )));
+                    if attempt >= self.retry_policy.max_attempts
+                        || !matches!(&e, Error::DownloadError(_))
+                    {
+                        return Err(e);
                     }
                     warn!(
                         "Metadata fetch attempt {} failed: {}, retrying...",
@@ -490,15 +505,15 @@ impl RepositoryClient {
         max_size: u64,
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
-        let client = self.client_for_url(url).await?;
-
         let max_attempts = self.retry_policy.max_attempts.max(1);
         for attempt in 1..=max_attempts {
-            let response = client
-                .get(url)
-                .header(header::ACCEPT_ENCODING, "identity")
-                .timeout(byte_download_timeout(&self.timeouts))
-                .send()
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                header::HeaderValue::from_static("identity"),
+            );
+            let response = self
+                .send_get(url, &headers, Some(byte_download_timeout(&self.timeouts)))
                 .await;
             match response {
                 Ok(response) if is_transient_error(response.status()) => {
@@ -531,8 +546,8 @@ impl RepositoryClient {
                     }
                 }
                 Err(error) => {
-                    if attempt == max_attempts {
-                        return Err(error).download_context(url);
+                    if attempt == max_attempts || !matches!(&error, Error::DownloadError(_)) {
+                        return Err(error);
                     }
                     warn!("Byte download attempt {attempt} failed: {error}, retrying...");
                 }
@@ -702,7 +717,6 @@ impl RepositoryClient {
         let temp_path = dest_path.with_extension("tmp");
 
         let mut attempt = 0;
-        let client = self.client_for_url(url).await?;
         loop {
             attempt += 1;
 
@@ -716,16 +730,27 @@ impl RepositoryClient {
                 )));
             }
 
-            let mut request = client.get(url).header(header::ACCEPT_ENCODING, "identity");
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                header::HeaderValue::from_static("identity"),
+            );
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",
                     existing_len
                 );
-                request = request.header(header::RANGE, format!("bytes={}-", existing_len));
+                headers.insert(
+                    header::RANGE,
+                    header::HeaderValue::from_str(&format!("bytes={existing_len}-")).map_err(
+                        |error| Error::DownloadError(format!("invalid byte range: {error}")),
+                    )?,
+                );
             }
 
-            let response = tokio::time::timeout(self.timeouts.download, request.send()).await;
+            let response =
+                tokio::time::timeout(self.timeouts.download, self.send_get(url, &headers, None))
+                    .await;
             match response {
                 Err(_) => {
                     if attempt >= self.retry_policy.max_attempts {
@@ -951,10 +976,10 @@ impl RepositoryClient {
                     });
                 }
                 Ok(Err(e)) => {
-                    if attempt >= self.retry_policy.max_attempts {
-                        return Err(Error::DownloadError(format!(
-                            "Failed to download after {attempt} attempts: {e}"
-                        )));
+                    if attempt >= self.retry_policy.max_attempts
+                        || !matches!(&e, Error::DownloadError(_))
+                    {
+                        return Err(e);
                     }
                     warn!("Download attempt {} failed: {}, retrying...", attempt, e);
                     tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;
