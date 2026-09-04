@@ -17,12 +17,6 @@ pub fn validate_authority(authority: &AuthorityDocumentV3) -> Result<(), V3Valid
     validate_authority_common(authority).map(|_| ())
 }
 
-pub fn validate_authority_structure(
-    authority: &AuthorityDocumentV3,
-) -> Result<(), V3ValidationError> {
-    validate_authority_common(authority).map(|_| ())
-}
-
 /// Validate and return the structural census the shared budget measured.
 ///
 /// Authoring uses the census to prove the bytes it is about to sign fit the

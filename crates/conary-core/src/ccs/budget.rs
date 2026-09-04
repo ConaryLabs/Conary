@@ -650,14 +650,18 @@ impl CcsStructuralBudget {
     pub fn metadata_bytes_ceiling(&self, census: &AuthorityCensus) -> BudgetResult<u64> {
         let authority = self.authority_bytes_ceiling(census)?;
         let projection = self.debug_projection_bytes_ceiling(census)?;
+        // MANIFEST.attestation.json and the foreign-conversion boundary are two
+        // attestation documents sharing one per-document ceiling.
+        let build_attestation = self.attestation_bytes_ceiling();
+        let conversion_boundary = self.attestation_bytes_ceiling();
         sum(
             "metadata_bytes_ceiling",
             [
                 authority,
                 projection,
                 self.signature_bytes_ceiling(),
-                self.attestation_bytes_ceiling(),
-                self.attestation_bytes_ceiling(),
+                build_attestation,
+                conversion_boundary,
             ],
         )
     }
@@ -885,7 +889,7 @@ impl CcsStructuralBudget {
         for (field, encoded) in [
             ("identity", encoded_len(&authority.identity, "identity")?),
             (
-                "execution_capabilities",
+                "capabilities",
                 encoded_len(&authority.provided_capabilities, "capabilities")?,
             ),
             (
@@ -894,7 +898,7 @@ impl CcsStructuralBudget {
             ),
             ("relations", encoded_len(&authority.relations, "relations")?),
             (
-                "capabilities",
+                "execution_capabilities",
                 encoded_len(&authority.execution_capabilities, "execution_capabilities")?,
             ),
             (

@@ -13,7 +13,8 @@ use super::{
     ensure_rpm_program_available, entry_event, lines_stdin, rpm_runtime,
 };
 use crate::ccs::native_lifecycle::{
-    NativeLifecycleEntry, RpmProgram, RpmTriggerAction, RpmTriggerKind, RpmTriggerTargetConstraint,
+    NativeLifecycleEntry, RpmProgram, RpmTriggerAction, RpmTriggerKind, RpmTriggerMetadata,
+    RpmTriggerTargetConstraint,
 };
 use crate::repository::versioning::{RepoVersionConstraint, VersionScheme, repo_version_satisfies};
 use anyhow::{Result, bail};
@@ -27,6 +28,8 @@ use counts::{
 };
 
 const FILE_TRIGGER_HIGH_PRIORITY_BOUND: i32 = 10_000;
+/// rpm assigns this priority to file triggers that declare none.
+const DEFAULT_FILE_TRIGGER_PRIORITY: i32 = 100_000;
 
 pub(super) fn plan(
     view: &NativeBundleView<'_>,
@@ -86,91 +89,63 @@ pub(super) fn plan(
         };
         ensure_rpm_program_available(entry)?;
         let action = single_trigger_action(&trigger.target_constraints, &entry.id)?;
+        let plan = TriggerPlan {
+            view,
+            entry,
+            trigger,
+            entry_index,
+            action,
+            changes,
+            state,
+        };
 
         match trigger.kind {
             RpmTriggerKind::Package => {
-                plan_installed_package_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
-                plan_transaction_package_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
+                plan_installed_package_owner(&plan, events)?;
+                plan_transaction_package_owner(&plan, events)?;
             }
             RpmTriggerKind::File => {
-                plan_installed_file_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
-                plan_transaction_file_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
+                plan_installed_file_owner(&plan, events)?;
+                plan_transaction_file_owner(&plan, events)?;
             }
             RpmTriggerKind::TransactionFile => {
-                plan_installed_transaction_file_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
-                plan_transaction_transaction_file_owner(
-                    view,
-                    entry,
-                    entry_index,
-                    action,
-                    changes,
-                    state,
-                    events,
-                )?;
+                plan_installed_transaction_file_owner(&plan, events)?;
+                plan_transaction_transaction_file_owner(&plan, events)?;
             }
         }
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn plan_installed_package_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
+/// One trigger entry's planning inputs, shared by every owner planner.
+#[derive(Clone, Copy)]
+struct TriggerPlan<'a> {
+    view: &'a NativeBundleView<'a>,
+    entry: &'a NativeLifecycleEntry,
+    trigger: &'a RpmTriggerMetadata,
     entry_index: usize,
     action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    changes: &'a [NativeTransactionChange],
+    state: &'a NativeTransactionState,
+}
+
+fn plan_installed_package_owner(
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     for change in changes_in_order(changes) {
         let mut target_matches = false;
-        for constraint in &entry
-            .rpm_trigger
-            .as_ref()
-            .expect("trigger entry")
-            .target_constraints
-        {
+        for constraint in &trigger.target_constraints {
             if constraint.action == action
                 && constraint.package == change.package_name
                 && constraint_matches_version(constraint, trigger_change_version(change, action))?
@@ -222,25 +197,25 @@ fn plan_installed_package_owner(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn plan_transaction_package_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
-    entry_index: usize,
-    action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     let Some(owner_change) = transaction_owner_change(view, changes, action) else {
         return Ok(());
     };
     let snapshot = package_snapshot(state, changes, owner_change, action);
-    let constraints = &entry
-        .rpm_trigger
-        .as_ref()
-        .expect("trigger entry")
-        .target_constraints;
+    let constraints = &trigger.target_constraints;
     let Some(first_target) = first_matching_package(constraints, action, &snapshot)? else {
         return Ok(());
     };
@@ -274,17 +249,20 @@ fn plan_transaction_package_owner(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn plan_installed_file_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
-    entry_index: usize,
-    action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
-    let trigger = entry.rpm_trigger.as_ref().expect("trigger entry");
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     for change in changes_in_order(changes) {
         if !rpm_action_matches_change(action, change.operation)
             || !installed_owner_visible(view, change, action, RpmTriggerKind::File, changes)
@@ -332,21 +310,24 @@ fn plan_installed_file_owner(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn plan_transaction_file_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
-    entry_index: usize,
-    action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     let Some(owner_change) = transaction_owner_change(view, changes, action) else {
         return Ok(());
     };
     let snapshot = package_snapshot(state, changes, owner_change, action);
-    let trigger = entry.rpm_trigger.as_ref().expect("trigger entry");
     let matching_packages = snapshot
         .iter()
         .filter_map(|package| {
@@ -392,22 +373,25 @@ fn plan_transaction_file_owner(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn plan_installed_transaction_file_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
-    entry_index: usize,
-    action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     if view.role != NativeBundleRole::Installed
         && !(view.role == NativeBundleRole::Installing && action == RpmTriggerAction::PostUninstall)
     {
         return Ok(());
     }
-    let trigger = entry.rpm_trigger.as_ref().expect("trigger entry");
     let activation_paths = transaction_activation_paths(changes, action);
     let matching_activation = matching_paths(&trigger.path_prefixes, activation_paths.iter());
     if matching_activation.is_empty() {
@@ -450,20 +434,23 @@ fn plan_installed_transaction_file_owner(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 fn plan_transaction_transaction_file_owner(
-    view: &NativeBundleView<'_>,
-    entry: &NativeLifecycleEntry,
-    entry_index: usize,
-    action: RpmTriggerAction,
-    changes: &[NativeTransactionChange],
-    state: &NativeTransactionState,
+    plan: &TriggerPlan<'_>,
     events: &mut Vec<NativeTransactionEvent>,
 ) -> Result<()> {
+    let TriggerPlan {
+        view,
+        entry,
+        trigger,
+        entry_index,
+        action,
+        changes,
+        state,
+        ..
+    } = *plan;
     let Some(owner_change) = transaction_owner_change(view, changes, action) else {
         return Ok(());
     };
-    let trigger = entry.rpm_trigger.as_ref().expect("trigger entry");
     let paths = match action {
         RpmTriggerAction::Install => {
             matching_paths(&trigger.path_prefixes, state.installed_paths_after.iter())
@@ -602,8 +589,9 @@ fn installed_owner_visible(
             }
             match action {
                 RpmTriggerAction::PreInstall => owner.transaction_index < target.transaction_index,
-                RpmTriggerAction::Install => owner.transaction_index <= target.transaction_index,
-                RpmTriggerAction::Uninstall | RpmTriggerAction::PostUninstall => {
+                RpmTriggerAction::Install
+                | RpmTriggerAction::Uninstall
+                | RpmTriggerAction::PostUninstall => {
                     owner.transaction_index <= target.transaction_index
                 }
             }
@@ -622,14 +610,7 @@ fn installed_owner_visible(
             {
                 return false;
             }
-            match action {
-                RpmTriggerAction::PreInstall | RpmTriggerAction::Install => {
-                    owner.transaction_index >= target.transaction_index
-                }
-                RpmTriggerAction::Uninstall | RpmTriggerAction::PostUninstall => {
-                    owner.transaction_index >= target.transaction_index
-                }
-            }
+            owner.transaction_index >= target.transaction_index
         }
     }
 }
@@ -793,7 +774,9 @@ fn constraint_matches_version(
         Some(">=") => RepoVersionConstraint::GreaterOrEqual(expected.to_string()),
         Some("<") => RepoVersionConstraint::LessThan(expected.to_string()),
         Some("<=") => RepoVersionConstraint::LessOrEqual(expected.to_string()),
-        Some(_) => return Ok(false),
+        Some(operator) => {
+            bail!("RPM trigger constraint operator '{operator}' is not a supported comparison")
+        }
     };
     Ok(repo_version_satisfies(
         VersionScheme::Rpm,
@@ -876,7 +859,8 @@ pub(super) fn rpm_stage(
     action: RpmTriggerAction,
     priority: Option<i32>,
 ) -> Result<NativeEventStage> {
-    let high_priority = priority.unwrap_or(100_000) >= FILE_TRIGGER_HIGH_PRIORITY_BOUND;
+    let high_priority =
+        priority.unwrap_or(DEFAULT_FILE_TRIGGER_PRIORITY) >= FILE_TRIGGER_HIGH_PRIORITY_BOUND;
     let stage = match (kind, action) {
         (RpmTriggerKind::Package, RpmTriggerAction::PreInstall) => {
             NativeEventStage::RpmTriggerPreInstall
@@ -948,7 +932,7 @@ fn trigger_order_key(
             RpmTriggerOwner::InstalledDatabase,
         ) => 1,
     };
-    let priority = priority.unwrap_or(100_000);
+    let priority = priority.unwrap_or(DEFAULT_FILE_TRIGGER_PRIORITY);
     let descending_priority = i64::from(i32::MAX) - i64::from(priority);
     format!(
         "rpm:{transaction_index:020}:{direction}:{descending_priority:010}:{entry_index:08}:{entry_id}"
