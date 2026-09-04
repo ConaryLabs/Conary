@@ -1,18 +1,7 @@
 // crates/conary-core/src/repository/error_helpers.rs
 
-//! Extension trait for adding contextual information to errors in repository
-//! operations.
-//!
-//! The repository module has many `.map_err(|e| Error::DownloadError(format!(...)))`
-//! chains that follow the same patterns. This trait provides concise helpers:
-//!
-//! ```ignore
-//! // Before:
-//! response.bytes().map_err(|e| Error::DownloadError(format!("Failed to fetch {}: {}", url, e)))?;
-//!
-//! // After:
-//! response.bytes().download_context(url)?;
-//! ```
+//! Error-context helpers shared by the repository client, its streaming
+//! reader, and the Remi client.
 
 use crate::error::{Error, Result};
 
@@ -28,11 +17,10 @@ pub(crate) fn http_client_builder_error_message(error: impl std::fmt::Display) -
     )
 }
 
-/// Extension trait for adding download/parse/sync context to errors.
+/// Extension trait for adding download/parse/io context to errors.
 ///
 /// Implemented on `Result<T, E>` where `E: Display`, so it works with
 /// `reqwest::Error`, `std::io::Error`, `serde_json::Error`, etc.
-#[allow(dead_code)]
 pub(crate) trait ResultExt<T> {
     /// Wrap the error with download context, including the URL.
     ///
@@ -43,11 +31,6 @@ pub(crate) trait ResultExt<T> {
     ///
     /// Produces `Error::ParseError("Failed to parse {format}: {original}")`.
     fn parse_context(self, format: &str) -> Result<T>;
-
-    /// Wrap the error with sync context, including the repository name.
-    ///
-    /// Produces `Error::DownloadError("Failed to sync {repo}: {original}")`.
-    fn sync_context(self, repo: &str) -> Result<T>;
 
     /// Wrap the error with I/O context, including a description of the operation.
     ///
@@ -62,10 +45,6 @@ impl<T, E: std::fmt::Display> ResultExt<T> for std::result::Result<T, E> {
 
     fn parse_context(self, format: &str) -> Result<T> {
         self.map_err(|e| Error::ParseError(format!("Failed to parse {format}: {e}")))
-    }
-
-    fn sync_context(self, repo: &str) -> Result<T> {
-        self.map_err(|e| Error::DownloadError(format!("Failed to sync {repo}: {e}")))
     }
 
     fn io_context(self, operation: &str) -> Result<T> {
@@ -94,15 +73,6 @@ mod tests {
         let e = result.unwrap_err();
         assert!(e.to_string().contains("Failed to parse"));
         assert!(e.to_string().contains("primary.xml"));
-    }
-
-    #[test]
-    fn test_sync_context() {
-        let err: std::result::Result<(), &str> = Err("timeout");
-        let result: Result<()> = err.sync_context("fedora-updates");
-        let e = result.unwrap_err();
-        assert!(e.to_string().contains("Failed to sync"));
-        assert!(e.to_string().contains("fedora-updates"));
     }
 
     #[test]

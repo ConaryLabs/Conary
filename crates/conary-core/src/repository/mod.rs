@@ -74,7 +74,7 @@ pub use resolution::{
     PackageResolver, PackageSource, RepositorySourceKind, RepositorySourceMetadata,
     ResolutionOptions, resolve_package,
 };
-pub use retry::{RetryConfig, with_retry};
+pub use retry::RetryConfig;
 pub use selector::{
     HostArchitectureAssertion, PackageArchitectureVariant, PackageSelector, PackageWithRepo,
     SelectionOptions,
