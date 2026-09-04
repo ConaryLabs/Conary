@@ -63,7 +63,10 @@ fn string_literals(line: &str) -> Vec<String> {
 fn forbidden_literal(literal: &str) -> bool {
     let upper = literal.to_uppercase();
     let interpolated_tag = literal.find("[{").is_some_and(|tag_start| {
+        let tag = &literal[tag_start..];
+        let has_trailing_content = tag.find(']').is_none_or(|end| end + 1 < tag.len());
         literal[..tag_start].trim().is_empty()
+            && (tag_start == 0 || has_trailing_content)
             && !ALLOWED_INTERPOLATED_DATA.contains(&literal.trim())
     });
     FORBIDDEN.iter().any(|token| upper.contains(token))
