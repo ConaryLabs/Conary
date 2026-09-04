@@ -835,11 +835,14 @@ bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
                                               pkgCache::VerIterator const &initial) {
     struct ReachableConflictNode {
         unsigned long id;
+        pkgCache::VerIterator version;
         bool directly_conflicting;
         std::vector<std::vector<unsigned long>> required_groups;
     };
 
-    std::vector<pkgCache::VerIterator> pending{initial};
+    // Include all exact-root dependencies, not only the currently probed target:
+    // another required sibling can have disappeared from the failed marker.
+    std::vector<pkgCache::VerIterator> pending{root, initial};
     std::set<unsigned long> visited;
     std::vector<ReachableConflictNode> nodes;
     while (!pending.empty()) {
@@ -850,6 +853,7 @@ bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
         }
         ReachableConflictNode node{
             version->ID,
+            version,
             (version.ParentPkg() == root.ParentPkg() && version != root) ||
                 version_has_negative_relation_to_version(handle, version, root) ||
                 version_has_negative_relation_to_version(handle, root, version),
@@ -888,8 +892,24 @@ bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
         nodes.push_back(std::move(node));
     }
 
+    // A failed apt marker can retain only one side of a transitive sibling conflict.
+    // Read apt's negative relations across every reachable version, in both directions;
+    // the marker's retained selection is not the complete required closure. AllTargets
+    // remains the native version/provide matcher; this adds no alternate package solver.
+    for (std::size_t left = 0; left < nodes.size(); ++left) {
+        for (std::size_t right = left + 1; right < nodes.size(); ++right) {
+            if (version_has_negative_relation_to_version(
+                    handle, nodes[left].version, nodes[right].version) ||
+                version_has_negative_relation_to_version(
+                    handle, nodes[right].version, nodes[left].version)) {
+                nodes[left].directly_conflicting = true;
+                nodes[right].directly_conflicting = true;
+            }
+        }
+    }
+
     // Conflict authority is the least fixed point over hard dependency groups: a version is
-    // blocked when it conflicts directly with the root, or when one of its required groups has
+    // blocked by a reachable negative pair, or when one of its required groups has
     // candidates but every candidate is itself blocked. This keeps a usable OR alternative from
     // being poisoned by a rejected sibling and treats dependency cycles without a conflict as
     // viable rather than inventing evidence.

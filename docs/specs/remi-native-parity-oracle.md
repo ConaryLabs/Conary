@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 73
+revision: 74
 status: active
 ---
 
@@ -954,6 +954,13 @@ Each `AptMissingRequirement` carries the exact requiring-package identity,
 relation kind, and parser-owned native dependency text; the Rust boundary binds
 that text to the exact package-oracle group recorded by the same Debian parser,
 without textual normalization.
+
+A failed apt marker may retain only one party of a transitive sibling conflict.
+The reachable-version fallback therefore reads apt's `Conflicts`/`Breaks`
+relations between every reachable pair in both directions, using native
+`AllTargets` matching, and seeds the required-group fixed point with those
+pairs rather than only relations against the exact root. The existing
+all-candidates-blocked propagation retains usable OR alternatives.
 
 Pinned apt-pkg 3.2.0 does not expose solver3's typed failure reason graph as a
 public API: solver state, work, trail, and clause registration are protected or

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::ffi::{AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::*;
+mod sibling_conflict;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionNotInstallableReasonV1,
