@@ -103,3 +103,44 @@ pub(super) fn verify_transaction_high_water_mark_connection(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_publication_values_cannot_validate_a_backup() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE generation_publications (
+            id INTEGER, phase TEXT, status TEXT, recoverable INTEGER, state_number INTEGER,
+            generation_number INTEGER)",
+        )
+        .unwrap();
+        for (phase, status) in [
+            ("obsolete", GenerationPublicationStatus::Complete.as_str()),
+            (
+                GenerationPublicationPhase::DatabaseBackedUp.as_str(),
+                "obsolete",
+            ),
+        ] {
+            conn.execute("DELETE FROM generation_publications", [])
+                .unwrap();
+            conn.execute(
+                "INSERT INTO generation_publications VALUES (1, ?1, ?2, 0, 1, 1)",
+                [phase, status],
+            )
+            .unwrap();
+            let error = verify_generation_publication_state_connection(&conn, 1, 1).unwrap_err();
+            let Error::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = error
+            else {
+                panic!("expected typed non-authority: {error:?}");
+            };
+            assert!(
+                source
+                    .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+                    .is_some()
+            );
+        }
+    }
+}

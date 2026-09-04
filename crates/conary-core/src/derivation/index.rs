@@ -222,28 +222,40 @@ impl<'a> DerivationIndex<'a> {
     /// The trust level can only increase: if the current level is higher than
     /// the requested level, the row is unchanged.
     pub fn set_trust_level(&self, derivation_id: &str, level: DerivationTrustLevel) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        let stored = tx
-            .query_row(
-                "SELECT trust_level FROM derivation_index WHERE derivation_id = ?1",
-                [derivation_id],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?;
-        if let Some(stored) = stored {
-            DerivationTrustLevel::try_from(stored).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    0,
-                    rusqlite::types::Type::Integer,
-                    Box::new(error),
-                )
-            })?;
-        }
-        tx.execute(
-            "UPDATE derivation_index SET trust_level = MAX(trust_level, ?2) WHERE derivation_id = ?1",
-            rusqlite::params![derivation_id, level.as_i64()],
+        // Fence obsolete integers in the write itself, including negative values that
+        // MAX would otherwise silently promote into current authority.
+        let updated = self.conn.execute(
+            "UPDATE derivation_index SET trust_level = MAX(trust_level, ?2)
+             WHERE derivation_id = ?1 AND trust_level IN (?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                derivation_id,
+                level.as_i64(),
+                DerivationTrustLevel::Unverified.as_i64(),
+                DerivationTrustLevel::Substituted.as_i64(),
+                DerivationTrustLevel::LocallyBuilt.as_i64(),
+                DerivationTrustLevel::IndependentlyVerified.as_i64(),
+                DerivationTrustLevel::DiverseVerified.as_i64()
+            ],
         )?;
-        tx.commit()?;
+        if updated == 0 {
+            let stored = self
+                .conn
+                .query_row(
+                    "SELECT trust_level FROM derivation_index WHERE derivation_id = ?1",
+                    [derivation_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if let Some(stored) = stored {
+                DerivationTrustLevel::try_from(stored).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Integer,
+                        Box::new(error),
+                    )
+                })?;
+            }
+        }
         Ok(())
     }
 

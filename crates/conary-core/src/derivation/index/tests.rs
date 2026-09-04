@@ -273,3 +273,24 @@ fn trust_upgrade_write_failure_propagates() {
         DerivationTrustLevel::Unverified
     );
 }
+
+#[test]
+fn trust_upgrade_uses_the_callers_transaction() {
+    let mut conn = setup();
+    DerivationIndex::new(&conn)
+        .insert(&sample_record("nested", "pkg"))
+        .unwrap();
+    let tx = conn.transaction().unwrap();
+    DerivationIndex::new(&tx)
+        .set_trust_level("nested", DerivationTrustLevel::LocallyBuilt)
+        .unwrap();
+    tx.rollback().unwrap();
+    assert_eq!(
+        DerivationIndex::new(&conn)
+            .lookup("nested")
+            .unwrap()
+            .unwrap()
+            .trust_level,
+        DerivationTrustLevel::Unverified
+    );
+}
