@@ -1046,7 +1046,7 @@ fn release_artifact_workflow_installs_every_published_native_package() {
 
     let lifecycle = named_step(
         &job.steps,
-        "Run Cartesian lifecycle parity with explicit binary authority",
+        "Run container lifecycle parity with explicit binary authority",
     );
     assert!(
         lifecycle

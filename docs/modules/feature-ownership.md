@@ -111,7 +111,6 @@ and top-level command UX.
 `apps/conary/src/dispatch/root.rs`;
 `apps/conary/src/dispatch/root/try_preflight.rs`;
 `apps/conary/src/dispatch/context.rs`;
-`apps/conary/src/dispatch/`; `apps/conary/src/cli/`;
 `apps/conary/src/command_risk.rs`; `apps/conary/src/live_host_safety.rs`.
 
 **Neighbor systems:** command implementation modules under

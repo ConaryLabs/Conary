@@ -3545,6 +3545,29 @@ test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step() {
         "published binary hook-free lifecycle coverage"
 }
 
+test_check_release_matrix_requires_named_hook_for_every_container_mutation() {
+    local original
+    local repo
+    local replacement
+
+    while IFS='|' read -r original replacement; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+            "$original" \
+            "$replacement"
+
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "four explicit hook-dependent lifecycle mutations"
+    done <<'CASES'
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v1_package}"
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v2_package}"
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT \|run_conary_requiring_hook CONARY_TEST_UNDECLARED \
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove "${package_name}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED remove "${package_name}"
+CASES
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3990,6 +4013,7 @@ main() {
         test_check_release_matrix_requires_ordinary_conary_hook_fence
         test_check_release_matrix_rejects_published_binary_as_hook_runner
         test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step
+        test_check_release_matrix_requires_named_hook_for_every_container_mutation
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary

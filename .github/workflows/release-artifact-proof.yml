@@ -24,6 +24,13 @@ concurrency:
 jobs:
   native-package-lifecycle:
     name: native-package-lifecycle (${{ matrix.distro }})
+    # GitHub-hosted containers do not provide the real generation-mount and
+    # fs-verity substrate required by Conary publication. This lane proves the
+    # package-owned binary's hook rejection, initialization, planning, dry-run,
+    # and every other hook-free operation. Its four mutations use the separate
+    # integration binary only through explicitly named hooks. Release-byte
+    # mutation belongs in the real-mount QEMU gate; #848 tracks binding that
+    # gate to an immutable published artifact, so this job makes no such claim.
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
@@ -239,7 +246,7 @@ jobs:
             grep -F "test-hook environment variables are disabled" /tmp/ordinary.err
             CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/libexec/conary-test/conary-test-hooks --version
           '
-      - name: Run Cartesian lifecycle parity with explicit binary authority
+      - name: Run container lifecycle parity with explicit binary authority
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
           CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks

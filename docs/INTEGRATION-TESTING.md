@@ -199,7 +199,19 @@ test-hook variables, then passes the ordinary and integration paths as separate
 typed lifecycle inputs. Hook-free setup, fixture construction, and install or
 update planning run through the package-owned binary. Only mutation steps that
 explicitly name `CONARY_TEST_SKIP_GENERATION_MOUNT` use the integration binary.
-The integration path is never packaged.
+The integration path is never packaged. GitHub-hosted containers do not supply
+the real generation-mount and fs-verity substrate, so this lane does not claim
+that release bytes performed install, update, rollback, or remove mutations.
+Release-byte mutation evidence belongs only in a real-mount QEMU/KVM lane.
+
+Groups O and P provide that real-mount substrate, but their current
+`stage_conary = true` path resolves to the locally built static integration
+artifact, which carries `test-hooks`; the local wrapper does not download or
+bind an immutable native release package. Issue #848 owns the separate work to
+verify a published artifact, stage those exact ordinary bytes, and run the
+Group O/P mutations with them. Until that lands, documentation and release
+automation must not claim published-byte mutation coverage.
+
 For the protected PR matrix, `--with-test-harness` also produces fully static
 `conary-test` and library-test executables. One producer packages those three
 binaries with exact source, toolchain, flag, cache-policy, and digest evidence;
