@@ -18,8 +18,9 @@ pub struct ProfileSyncRunRecovery {
 ///
 /// The caller must hold the process-wide runtime-root lock. Lease expiry
 /// determines whether a run is stale; filesystem contents never establish that
-/// authority. Every expired state is decoded before mutation. Unknown states
-/// return a typed persisted-value error and leave the entire transaction unchanged.
+/// authority. Known terminal states are excluded before loading expired rows.
+/// Every remaining state is decoded before mutation; unknown states return a
+/// typed persisted-value error and leave the entire transaction unchanged.
 pub fn recover_expired_profile_sync_runs(conn: &Connection) -> Result<Vec<ProfileSyncRunRecovery>> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
@@ -35,17 +36,24 @@ pub(super) fn recover_expired_profile_sync_runs_at(
     recover_expired_profile_sync_runs_in_transaction(tx, now)
 }
 
+// Exclude only known terminal encodings. Every other stored value must reach
+// typed decoding before it can grant recovery mutation authority.
+pub(super) fn expired_runs_sql() -> String {
+    format!(
+        "SELECT run_id, source_profile, fencing_epoch, state
+         FROM repository_sync_runs
+         WHERE lease_expires_at <= ?1 AND state NOT IN ({})
+         ORDER BY source_profile, fencing_epoch",
+        ProfileSyncRunState::terminal_sql()
+    )
+}
+
 fn recover_expired_profile_sync_runs_in_transaction(
     tx: Transaction<'_>,
     now: i64,
 ) -> Result<Vec<ProfileSyncRunRecovery>> {
     let expired = {
-        let mut statement = tx.prepare(
-            "SELECT run_id, source_profile, fencing_epoch, state
-             FROM repository_sync_runs
-             WHERE lease_expires_at <= ?1
-             ORDER BY source_profile, fencing_epoch",
-        )?;
+        let mut statement = tx.prepare(&expired_runs_sql())?;
         statement
             .query_map([now], |row| {
                 Ok((

@@ -506,13 +506,39 @@ fn unknown_run_state_fences_mutation_and_successor() {
 }
 
 #[test]
-fn expired_unknown_state_preserves_evidence_and_fences_recovery() {
+fn expiry_prefilter_excludes_terminal_history_and_preserves_unknown_evidence() {
     let conn = Connection::open_in_memory().unwrap();
     ensure_current(&conn).unwrap();
     // The valid run sorts first, so a later unknown row must prevent even an
     // earlier valid row from being committed as abandoned.
     let valid = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
     let corrupt = begin_profile_sync_run_at(&conn, "ubuntu-26.04", None, OWNER_TWO, 100).unwrap();
+    let now = 100 + REMI_SYNC_LEASE_SECONDS;
+    for state in ProfileSyncRunState::TERMINAL_STATES {
+        let profile = format!("terminal-{}", state.as_str());
+        let run = begin_profile_sync_run_at(&conn, &profile, None, OWNER_ONE, 100).unwrap();
+        let successful = matches!(
+            state,
+            ProfileSyncRunState::Candidate | ProfileSyncRunState::Published
+        );
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET state = ?1, finished_at = ?2, candidate_cleaned_at = ?2,
+                 candidate_profile_digest = ?4, failure_stage = ?5,
+                 failure_category = ?6, failure_evidence = ?7
+             WHERE run_id = ?3",
+            params![
+                state.as_str(),
+                now,
+                &run.run_id,
+                successful.then(|| digest('a')),
+                (!successful).then_some(ProfileSyncFailureStage::Publishing.as_str()),
+                (!successful).then_some(ProfileSyncFailureCategory::Fenced.as_str()),
+                (!successful).then_some("terminal fixture"),
+            ],
+        )
+        .unwrap();
+    }
     conn.execute_batch("PRAGMA ignore_check_constraints = ON")
         .unwrap();
     conn.execute(
@@ -541,7 +567,16 @@ fn expired_unknown_state_preserves_evidence_and_fences_recovery() {
         .unwrap()
     };
     let before = snapshot();
-    let now = 100 + REMI_SYNC_LEASE_SECONDS;
+    // Inspect the exact production query before decoding: completed history
+    // must not be loaded, while unknown encodings must still reach the decoder.
+    let selected = conn
+        .prepare(&recovery::expired_runs_sql())
+        .unwrap()
+        .query_map([now], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(selected, vec![valid.run_id.clone(), corrupt.run_id.clone()]);
     let recovery_error = recover_expired_profile_sync_runs_at(&conn, now).unwrap_err();
     let successor_error =
         begin_profile_sync_run_at(&conn, &corrupt.source_profile, None, OWNER_ONE, now)
