@@ -318,6 +318,24 @@ pub fn require_public_repository_ip(ip: IpAddr) -> Result<()> {
     Ok(())
 }
 
+async fn resolve_repository_addrs<F>(
+    host: &str,
+    connect_timeout: std::time::Duration,
+    resolution: F,
+) -> Result<Vec<SocketAddr>>
+where
+    F: std::future::Future<Output = std::io::Result<Vec<SocketAddr>>>,
+{
+    tokio::time::timeout(connect_timeout, resolution)
+        .await
+        .map_err(|_| {
+            Error::TimeoutError(format!(
+                "repository DNS resolution for '{host}' exceeded the connection timeout"
+            ))
+        })?
+        .map_err(|error| Error::DownloadError(format!("failed to resolve '{host}': {error}")))
+}
+
 pub(super) async fn pinned_client_for_url(url: &str, timeouts: &TimeoutConfig) -> Result<Client> {
     let parsed = url::Url::parse(url)
         .map_err(|error| Error::ConfigError(format!("invalid repository URL: {error}")))?;
@@ -334,12 +352,12 @@ pub(super) async fn pinned_client_for_url(url: &str, timeouts: &TimeoutConfig) -
         .ok_or_else(|| Error::ConfigError("repository URL has no host".to_string()))?
     {
         Host::Domain(host) => {
-            let addrs = tokio::net::lookup_host((host, port))
-                .await
-                .map_err(|error| {
-                    Error::DownloadError(format!("failed to resolve '{host}': {error}"))
-                })?
-                .collect::<Vec<SocketAddr>>();
+            let resolution = async {
+                tokio::net::lookup_host((host, port))
+                    .await
+                    .map(|addrs| addrs.collect::<Vec<SocketAddr>>())
+            };
+            let addrs = resolve_repository_addrs(host, timeouts.connect, resolution).await?;
             if addrs.is_empty() {
                 return Err(Error::DownloadError(format!(
                     "DNS resolution for '{host}' returned no addresses"
@@ -533,5 +551,21 @@ mod tests {
             .join("https://user:secret@example.test/keyring")
             .unwrap();
         assert!(validate_public_request_url(&credentials, true).is_err());
+    }
+
+    #[tokio::test]
+    async fn stalled_dns_resolution_uses_the_connection_timeout() {
+        let error = resolve_repository_addrs(
+            "stalled.example",
+            std::time::Duration::from_millis(1),
+            std::future::pending::<std::io::Result<Vec<SocketAddr>>>(),
+        )
+        .await
+        .expect_err("a stalled resolver must time out");
+
+        assert!(
+            matches!(&error, Error::TimeoutError(message) if message.contains("stalled.example")),
+            "unexpected resolver error: {error}"
+        );
     }
 }
