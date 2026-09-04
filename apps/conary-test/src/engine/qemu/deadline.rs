@@ -1,4 +1,4 @@
-// conary-test/src/engine/qemu/deadline.rs
+// apps/conary-test/src/engine/qemu/deadline.rs
 //! One monotonic runtime budget for a complete QEMU manifest step.
 
 use std::process::Stdio;

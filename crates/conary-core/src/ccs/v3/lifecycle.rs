@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/lifecycle.rs
+// crates/conary-core/src/ccs/v3/lifecycle.rs
 
 //! Exact projection between native manifest lifecycle declarations and signed
 //! CCS v3 lifecycle authority.

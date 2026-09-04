@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/debian/lifecycle.rs
+// crates/conary-core/src/ccs/native_transaction/tests/debian/lifecycle.rs
 
 use super::*;
 

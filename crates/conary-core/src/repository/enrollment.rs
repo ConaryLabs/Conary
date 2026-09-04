@@ -1,4 +1,4 @@
-// conary-core/src/repository/enrollment.rs
+// crates/conary-core/src/repository/enrollment.rs
 
 //! Shared repository authority and signed package-enrollment intents.
 

@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat.rs
+// crates/conary-core/src/resolver/sat.rs
 
 //! SAT-based dependency resolution using resolvo.
 //!

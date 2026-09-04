@@ -1,4 +1,4 @@
-// conary-test/src/engine/runner/tests.rs
+// apps/conary-test/src/engine/runner/tests.rs
 
 use super::*;
 use crate::config::distro::{

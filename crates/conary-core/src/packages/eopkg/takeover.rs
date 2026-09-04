@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/takeover.rs
+// crates/conary-core/src/packages/eopkg/takeover.rs
 
 //! Durable eopkg installed-authority removal for system takeover.
 

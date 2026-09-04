@@ -1,4 +1,4 @@
-// conary-core/src/capability/declaration.rs
+// crates/conary-core/src/capability/declaration.rs
 //! Capability declaration types for CCS packages
 //!
 //! This module defines the structures for declaring what system resources

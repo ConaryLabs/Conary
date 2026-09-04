@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm_query/inventory.rs
+// crates/conary-core/src/packages/rpm_query/inventory.rs
 
 //! Fixed-process coherent RPM installed-inventory acquisition.
 

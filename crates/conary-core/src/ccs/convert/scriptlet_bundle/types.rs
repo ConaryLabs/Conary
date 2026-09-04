@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/types.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/types.rs
 
 use crate::ccs::convert::ForeignConversionInput;
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;

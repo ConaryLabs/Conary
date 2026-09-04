@@ -1,4 +1,4 @@
-// conary-core/src/repository/dependencies.rs
+// crates/conary-core/src/repository/dependencies.rs
 
 //! Dependency downloads
 //!

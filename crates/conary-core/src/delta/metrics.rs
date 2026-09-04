@@ -1,4 +1,4 @@
-// conary-core/src/delta/metrics.rs
+// crates/conary-core/src/delta/metrics.rs
 
 //! Delta generation metrics
 //!

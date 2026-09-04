@@ -1,4 +1,4 @@
-// conary-core/src/db/models/debian_debconf_state.rs
+// crates/conary-core/src/db/models/debian_debconf_state.rs
 
 //! Normalized persistence for Debian debconf's byte-exact shared state.
 

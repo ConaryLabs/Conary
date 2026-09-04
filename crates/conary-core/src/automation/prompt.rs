@@ -1,4 +1,4 @@
-// conary-core/src/automation/prompt.rs
+// crates/conary-core/src/automation/prompt.rs
 
 //! User interaction prompts for automation decisions.
 //!

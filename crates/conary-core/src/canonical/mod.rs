@@ -1,4 +1,4 @@
-// conary-core/src/canonical/mod.rs
+// crates/conary-core/src/canonical/mod.rs
 
 //! Canonical package mapping: cross-distro name resolution from explicit sources.
 //!

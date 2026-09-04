@@ -1,4 +1,4 @@
-// conary-test/src/engine/release_root.rs
+// apps/conary-test/src/engine/release_root.rs
 
 //! Runtime capture for authenticated Debian-derivative target evidence.
 

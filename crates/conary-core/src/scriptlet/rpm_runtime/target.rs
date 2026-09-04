@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/target.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/target.rs
 //! Symlink-aware path resolution confined to an RPM install target.
 
 use anyhow::{Result, bail};

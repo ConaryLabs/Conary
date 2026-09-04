@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/openrc.rs
+// crates/conary-core/src/ccs/hooks/openrc.rs
 
 //! OpenRC target-provider adapter for declarative service hooks.
 

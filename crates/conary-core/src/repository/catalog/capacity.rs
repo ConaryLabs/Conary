@@ -1,4 +1,4 @@
-// conary-core/src/repository/catalog/capacity.rs
+// crates/conary-core/src/repository/catalog/capacity.rs
 
 //! Typed scratch-space contracts for immutable catalog construction.
 

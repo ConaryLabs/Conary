@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/metadata.rs
+// crates/conary-core/src/repository/parsers/fedora/metadata.rs
 
 //! Authenticated Fedora repository metadata acquisition.
 

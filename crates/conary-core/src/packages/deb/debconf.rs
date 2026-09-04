@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf.rs
+// crates/conary-core/src/packages/deb/debconf.rs
 
 //! Exact, persistence-independent debconf protocol and state engine.
 //!

@@ -1,4 +1,4 @@
-// src/cli/verify.rs
+// apps/conary/src/cli/verify.rs
 
 //! CLI definitions for verification commands.
 

@@ -1,4 +1,4 @@
-// src/commands/adopt/refresh.rs
+// apps/conary/src/commands/adopt/refresh.rs
 
 //! Drift detection and refresh for adopted packages
 //!

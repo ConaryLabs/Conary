@@ -1,0 +1,35 @@
+# Rust source files currently above the 1,000 non-test-line cap or the
+# 300-line inline-test-item cap.
+# Format: <repo-relative path> #<decomposition issue>
+# Entries must reference an OPEN issue that owns the remaining decomposition.
+apps/conary-test/src/config/manifest.rs #849
+apps/conary-test/src/container/image.rs #849
+apps/conary-test/src/engine/executor.rs #849
+apps/conary-test/src/engine/qemu.rs #154
+apps/conary-test/src/engine/variables.rs #849
+apps/conary/src/commands/adopt/cas_capture.rs #850
+apps/conary/src/commands/adopt/system/captured_root.rs #850
+apps/conary/src/commands/ccs/install/command_metadata_tests.rs #850
+apps/conary/src/commands/ccs/install/command_payload_tests.rs #850
+apps/conary/src/commands/ccs/install/command_reinstall_tests.rs #850
+apps/conary/src/commands/export.rs #850
+apps/conary/src/commands/generation/activation_intents.rs #850
+apps/conary/src/commands/generation/config_transaction.rs #515
+apps/conary/src/commands/generation/publication.rs #850
+apps/conary/src/commands/generation/selected_root.rs #850
+apps/conary/src/commands/install/native_events/deb_state.rs #850
+apps/conary/src/commands/publish.rs #850
+apps/conary/src/commands/remove/autoremove.rs #850
+apps/conary/src/commands/try_session/mod.rs #850
+apps/conary/src/commands/try_session/validation.rs #850
+apps/conary/src/commands/update/selection.rs #850
+apps/conaryd/src/daemon/package_ops.rs #851
+crates/conary-core/src/ccs/budget.rs #852
+crates/conary-core/src/ccs/native_transaction/rpm_tests.rs #852
+crates/conary-core/src/db/models/payload_claim/sharing_tests.rs #852
+crates/conary-core/src/generation/root_manifest/delta.rs #852
+crates/conary-core/src/model/replatform/execution_tests.rs #852
+crates/conary-core/src/model/replatform/snapshot_tests.rs #852
+crates/conary-core/src/resolver/canonical.rs #814
+crates/conary-core/src/resolver/provides_index.rs #814
+crates/conary-mcp/src/stateless_http.rs #306

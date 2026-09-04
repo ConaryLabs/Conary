@@ -1,4 +1,4 @@
-// conary-core/src/ccs/manifest/tests/hooks.rs
+// crates/conary-core/src/ccs/manifest/tests/hooks.rs
 
 use super::super::*;
 

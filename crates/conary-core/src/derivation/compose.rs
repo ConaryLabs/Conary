@@ -1,4 +1,4 @@
-// conary-core/src/derivation/compose.rs
+// crates/conary-core/src/derivation/compose.rs
 
 //! Exact generation-root composition from derivation outputs.
 

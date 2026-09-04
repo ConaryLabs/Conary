@@ -1,4 +1,4 @@
-// conary-core/src/model/parser/federation.rs
+// crates/conary-core/src/model/parser/federation.rs
 
 //! Federation configuration types owned by the system-model parser.
 

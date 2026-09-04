@@ -1,4 +1,4 @@
-// src/commands/derivation_sbom.rs
+// apps/conary/src/commands/derivation_sbom.rs
 //! Derivation-aware SBOM generation (CycloneDX).
 
 use anyhow::Result;

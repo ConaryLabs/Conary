@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch/snapshot.rs
+// crates/conary-core/src/repository/trust/openpgp/arch/snapshot.rs
 
 //! The authenticated Arch trust snapshot.
 //!

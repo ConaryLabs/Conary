@@ -1,4 +1,4 @@
-// conary-core/src/ccs/inspector.rs
+// crates/conary-core/src/ccs/inspector.rs
 //! Explicitly non-authoritative CCS package inspection.
 //!
 //! Tools for reading and examining .ccs packages.

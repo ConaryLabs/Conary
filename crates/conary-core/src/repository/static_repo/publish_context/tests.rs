@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish_context/tests.rs
+// crates/conary-core/src/repository/static_repo/publish_context/tests.rs
 
 use super::*;
 use crate::repository::static_repo::publish::{StaticPublishOptions, publish_static_repo};

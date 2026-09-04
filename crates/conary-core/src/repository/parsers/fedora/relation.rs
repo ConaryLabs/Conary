@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/relation.rs
+// crates/conary-core/src/repository/parsers/fedora/relation.rs
 
 //! Exact RPM repository relation and provide grammar.
 //!

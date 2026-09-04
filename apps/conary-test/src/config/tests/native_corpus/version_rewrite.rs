@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/native_corpus/version_rewrite.rs
+// apps/conary-test/src/config/tests/native_corpus/version_rewrite.rs
 
 use super::conary_fixture_path;
 

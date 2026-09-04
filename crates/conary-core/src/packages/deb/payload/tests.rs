@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/payload/tests.rs
+// crates/conary-core/src/packages/deb/payload/tests.rs
 
 use super::*;
 use std::io::Cursor;

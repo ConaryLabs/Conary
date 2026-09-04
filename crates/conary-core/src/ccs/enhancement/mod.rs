@@ -1,4 +1,4 @@
-// conary-core/src/ccs/enhancement/mod.rs
+// crates/conary-core/src/ccs/enhancement/mod.rs
 //! Enhancement framework for converted packages
 //!
 //! This module provides the infrastructure for enhancing converted packages

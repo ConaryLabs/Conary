@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder.rs
+// crates/conary-core/src/generation/builder.rs
 
 //! Generation builder - creates EROFS images from system state.
 //!

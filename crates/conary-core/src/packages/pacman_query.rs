@@ -1,4 +1,4 @@
-// conary-core/src/packages/pacman_query.rs
+// crates/conary-core/src/packages/pacman_query.rs
 
 //! Query installed pacman packages from the system database
 //!

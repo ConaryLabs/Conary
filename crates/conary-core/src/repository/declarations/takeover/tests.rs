@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/tests.rs
+// crates/conary-core/src/repository/declarations/takeover/tests.rs
 
 use super::*;
 use crate::repository::{OpenPgpTrustRoot, RpmMetadataAuthority};

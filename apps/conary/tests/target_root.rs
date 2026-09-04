@@ -1,4 +1,4 @@
-// tests/target_root.rs
+// apps/conary/tests/target_root.rs
 
 //! Integration tests for target root (bootstrap) functionality.
 //!

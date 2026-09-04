@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/maintscript_helper.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/maintscript_helper.rs
 
 use super::common::{
     DpkgLifecycleGrammarError, MAINTSCRIPT_HELPER, private_internal_command, require_absolute,

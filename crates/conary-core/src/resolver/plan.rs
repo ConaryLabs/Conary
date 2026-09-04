@@ -1,4 +1,4 @@
-// conary-core/src/resolver/plan.rs
+// crates/conary-core/src/resolver/plan.rs
 
 //! Resolution plan data structures
 //!

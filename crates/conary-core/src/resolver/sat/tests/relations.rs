@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/tests/relations.rs
+// crates/conary-core/src/resolver/sat/tests/relations.rs
 
 use super::*;
 use crate::repository::dependency_model::RepositoryRequirementKind;

@@ -1,4 +1,4 @@
-// conary-core/src/repository/selector/tests.rs
+// crates/conary-core/src/repository/selector/tests.rs
 
 use super::*;
 use crate::db::models::{Repository, RepositoryPackage};

@@ -1,4 +1,4 @@
-// src/commands/provenance.rs
+// apps/conary/src/commands/provenance.rs
 
 //! Command implementations for Package DNA / Provenance queries
 

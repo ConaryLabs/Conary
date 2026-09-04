@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/install.rs
+// crates/conary-core/src/resolver/sat/install.rs
 
 use resolvo::{ConditionalRequirement, SolvableId};
 use rusqlite::Connection;

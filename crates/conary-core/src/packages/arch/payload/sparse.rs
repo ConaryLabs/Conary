@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/payload/sparse.rs
+// crates/conary-core/src/packages/arch/payload/sparse.rs
 
 //! GNU PAX sparse v1 authority and payload decoding.
 

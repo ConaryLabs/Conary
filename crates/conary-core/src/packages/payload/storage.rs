@@ -1,4 +1,4 @@
-// conary-core/src/packages/payload/storage.rs
+// crates/conary-core/src/packages/payload/storage.rs
 
 //! Temporary payload storage and exact u64 disk-capacity preflight.
 

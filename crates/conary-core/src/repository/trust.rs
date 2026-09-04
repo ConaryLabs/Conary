@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust.rs
+// crates/conary-core/src/repository/trust.rs
 
 //! Typed trust contracts for native package repositories.
 //!

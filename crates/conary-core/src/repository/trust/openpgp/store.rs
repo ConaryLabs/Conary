@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/store.rs
+// crates/conary-core/src/repository/trust/openpgp/store.rs
 
 //! Trust-store layout, key-source transport, and pinned single-certificate
 //! roots.

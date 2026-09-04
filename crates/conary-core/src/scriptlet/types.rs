@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/types.rs
+// crates/conary-core/src/scriptlet/types.rs
 
 /// Package format types for argument handling
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

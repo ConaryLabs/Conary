@@ -1,4 +1,4 @@
-// src/cli/ccs.rs
+// apps/conary/src/cli/ccs.rs
 //! CCS (Conary Container System) package format commands
 
 use super::{CommonArgs, DbArgs};

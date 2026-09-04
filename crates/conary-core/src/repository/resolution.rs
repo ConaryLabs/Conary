@@ -1,4 +1,4 @@
-// conary-core/src/repository/resolution.rs
+// crates/conary-core/src/repository/resolution.rs
 
 //! Unified package resolution with per-package routing
 //!

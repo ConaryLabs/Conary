@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/cook/tests.rs
+// crates/conary-core/src/recipe/kitchen/cook/tests.rs
 
 use super::*;
 use crate::recipe::format::{

@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/overlay/indexed.rs
+// crates/conary-core/src/generation/root_manifest/overlay/indexed.rs
 
 //! SQLite-indexed prior-authority resolution for OverlayFS upper decoding.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/download/durability_tests.rs
+// crates/conary-core/src/repository/download/durability_tests.rs
 
 use super::{download_delta, download_package_inner};
 use crate::db::models::RepositoryPackage;

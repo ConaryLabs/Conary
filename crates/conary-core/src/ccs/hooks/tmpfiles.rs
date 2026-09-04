@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/tmpfiles.rs
+// crates/conary-core/src/ccs/hooks/tmpfiles.rs
 
 //! Tmpfiles integration for CCS hooks
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository_capability/kind.rs
+// crates/conary-core/src/db/models/repository_capability/kind.rs
 
 //! Current-schema decoding for normalized repository capability kinds.
 

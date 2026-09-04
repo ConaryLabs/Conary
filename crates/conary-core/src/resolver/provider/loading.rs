@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/loading.rs
+// crates/conary-core/src/resolver/provider/loading.rs
 
 //! Database loading functions for the resolver provider.
 //!

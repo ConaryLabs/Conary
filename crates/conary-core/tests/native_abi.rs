@@ -1,4 +1,4 @@
-// conary-core/tests/native_abi.rs
+// crates/conary-core/tests/native_abi.rs
 
 use conary_core::ccs::convert::ForeignConversionInput;
 use conary_core::ccs::{

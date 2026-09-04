@@ -1,4 +1,4 @@
-// conary-core/src/db/models/chunk_access.rs
+// crates/conary-core/src/db/models/chunk_access.rs
 
 //! Chunk access tracking model for LRU cache management
 //!

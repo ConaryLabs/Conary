@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle/validation.rs
+// crates/conary-core/src/ccs/native_lifecycle/validation.rs
 //! Validation for lifecycle evidence and secondary format metadata.
 
 use super::*;

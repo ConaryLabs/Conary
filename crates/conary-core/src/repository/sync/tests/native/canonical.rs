@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/tests/native/canonical.rs
+// crates/conary-core/src/repository/sync/tests/native/canonical.rs
 
 use super::*;
 

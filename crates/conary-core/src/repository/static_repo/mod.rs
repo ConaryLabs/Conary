@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/mod.rs
+// crates/conary-core/src/repository/static_repo/mod.rs
 
 pub mod format;
 pub mod location;

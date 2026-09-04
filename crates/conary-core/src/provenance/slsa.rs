@@ -1,4 +1,4 @@
-// conary-core/src/provenance/slsa.rs
+// crates/conary-core/src/provenance/slsa.rs
 
 //! SLSA provenance generation for in-toto attestations.
 

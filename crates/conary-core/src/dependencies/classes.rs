@@ -1,4 +1,4 @@
-// conary-core/src/dependencies/classes.rs
+// crates/conary-core/src/dependencies/classes.rs
 
 //! Dependency class definitions
 //!

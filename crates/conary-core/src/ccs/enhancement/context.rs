@@ -1,4 +1,4 @@
-// conary-core/src/ccs/enhancement/context.rs
+// crates/conary-core/src/ccs/enhancement/context.rs
 //! Enhancement context providing package data and database access
 
 use super::EnhancementStatus;

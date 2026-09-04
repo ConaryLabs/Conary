@@ -1,4 +1,4 @@
-// conary-core/src/db/models/native_publication.rs
+// crates/conary-core/src/db/models/native_publication.rs
 
 //! Native CCS publication model.
 

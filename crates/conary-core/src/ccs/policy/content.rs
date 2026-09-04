@@ -1,4 +1,4 @@
-// conary-core/src/ccs/policy/content.rs
+// crates/conary-core/src/ccs/policy/content.rs
 //! Disk-backed content transforms for CCS build policy.
 
 use super::{BuildPolicy, PolicyAction, PolicyContext, PolicyError};

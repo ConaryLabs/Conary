@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/package_staging.rs
+// crates/conary-core/src/repository/static_repo/package_staging.rs
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};

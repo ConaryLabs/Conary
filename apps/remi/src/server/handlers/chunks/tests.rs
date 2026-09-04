@@ -16,7 +16,7 @@ fn durable_authority_failure_has_stable_typed_http_contract() {
     );
 }
 
-async fn chunk_state_with_db(
+fn chunk_state_with_db(
     hash: &str,
     stale_rows: Vec<bool>,
 ) -> (Arc<RwLock<crate::server::ServerState>>, tempfile::TempDir) {
@@ -193,7 +193,7 @@ fn test_extract_hash_from_path() {
 
 #[tokio::test]
 async fn get_chunk_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]);
 
     let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
@@ -202,7 +202,7 @@ async fn get_chunk_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn head_chunk_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true]);
 
     let response = head_chunk(State(state), Path(TEST_HASH.to_string())).await;
 
@@ -211,7 +211,7 @@ async fn head_chunk_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn get_chunk_allows_hash_shared_with_current_conversion_row() {
-    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]);
 
     let response = get_chunk(State(state), Path(TEST_HASH.to_string()), HeaderMap::new()).await;
 
@@ -220,7 +220,7 @@ async fn get_chunk_allows_hash_shared_with_current_conversion_row() {
 
 #[tokio::test]
 async fn head_chunk_allows_hash_shared_with_current_conversion_row() {
-    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, vec![true, false]);
 
     let response = head_chunk(State(state), Path(TEST_HASH.to_string())).await;
 
@@ -229,7 +229,7 @@ async fn head_chunk_allows_hash_shared_with_current_conversion_row() {
 
 #[tokio::test]
 async fn get_chunk_hides_unreferenced_protected_local_cache_hash() {
-    let (state, _temp) = chunk_state_with_db(TEST_HASH, Vec::new()).await;
+    let (state, _temp) = chunk_state_with_db(TEST_HASH, Vec::new());
     {
         let state_guard = state.read().await;
         let conn = crate::server::open_runtime_db(&state_guard.config.db_path).unwrap();

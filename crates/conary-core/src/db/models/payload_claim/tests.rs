@@ -1,4 +1,4 @@
-// conary-core/src/db/models/payload_claim/tests.rs
+// crates/conary-core/src/db/models/payload_claim/tests.rs
 
 use super::*;
 use crate::db::models::{Component, ExistingDirectoryMaterialization, Trove, TroveType};

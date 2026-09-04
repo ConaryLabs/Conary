@@ -1,4 +1,4 @@
-// conary-core/src/derivation/graph.rs
+// crates/conary-core/src/derivation/graph.rs
 
 //! Shared graph algorithms for the derivation module.
 

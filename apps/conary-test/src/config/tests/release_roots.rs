@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/release_roots.rs
+// apps/conary-test/src/config/tests/release_roots.rs
 
 use std::path::{Path, PathBuf};
 

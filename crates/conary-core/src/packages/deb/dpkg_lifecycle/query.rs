@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/query.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/query.rs
 
 use super::common::{
     DPKG_QUERY, DpkgLifecycleGrammarError, long_value, option_value, push_long_value,

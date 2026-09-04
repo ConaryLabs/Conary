@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/authoring/tests.rs
+// crates/conary-core/src/ccs/v3/authoring/tests.rs
 
 use super::*;
 use crate::ccs::builder::test_support;

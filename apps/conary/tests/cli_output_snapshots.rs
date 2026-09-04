@@ -1,4 +1,4 @@
-// tests/cli_output_snapshots.rs
+// apps/conary/tests/cli_output_snapshots.rs
 
 mod common;
 

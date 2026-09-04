@@ -1,4 +1,4 @@
-// conary-core/src/db/models/converted/tests.rs
+// crates/conary-core/src/db/models/converted/tests.rs
 
 use super::*;
 use crate::ccs::convert::ScriptletBundleSummary;

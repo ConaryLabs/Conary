@@ -1,4 +1,4 @@
-// conary-core/tests/derivation_e2e.rs
+// crates/conary-core/tests/derivation_e2e.rs
 
 //! End-to-end integration tests for the derivation pipeline.
 //!

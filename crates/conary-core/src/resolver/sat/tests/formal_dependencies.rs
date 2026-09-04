@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/tests/formal_dependencies.rs
+// crates/conary-core/src/resolver/sat/tests/formal_dependencies.rs
 
 use super::*;
 fn insert_native_trove(

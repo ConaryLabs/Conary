@@ -1,4 +1,4 @@
-// conary-core/src/repository/download/eopkg.rs
+// crates/conary-core/src/repository/download/eopkg.rs
 
 //! Final package-identity verification for authenticated eopkg downloads.
 

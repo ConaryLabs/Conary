@@ -1,4 +1,4 @@
-// conary-core/src/derivation/manifest.rs
+// crates/conary-core/src/derivation/manifest.rs
 
 //! User-facing system manifest TOML parser for the CAS-layered bootstrap.
 //!

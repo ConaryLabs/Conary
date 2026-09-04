@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/query_format/formatters.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/query_format/formatters.rs
 //! RPM query-format renderers whose behavior depends on typed value classes.
 //! Source authority: RPM `lib/formats.cc` at
 //! `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.

@@ -1,4 +1,4 @@
-// conary-core/src/repository/package_relation.rs
+// crates/conary-core/src/repository/package_relation.rs
 
 //! Exact native package-relation parsing and validation.
 //!

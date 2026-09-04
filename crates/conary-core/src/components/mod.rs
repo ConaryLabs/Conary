@@ -1,4 +1,4 @@
-// conary-core/src/components/mod.rs
+// crates/conary-core/src/components/mod.rs
 
 //! Component model for Conary packages
 //!

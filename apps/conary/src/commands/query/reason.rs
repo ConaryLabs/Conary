@@ -1,4 +1,4 @@
-// src/commands/query/reason.rs
+// apps/conary/src/commands/query/reason.rs
 
 //! Installation reason query commands
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trigger_engine.rs
+// crates/conary-core/src/db/models/trigger_engine.rs
 
 //! Trigger execution and scheduling helpers.
 //!

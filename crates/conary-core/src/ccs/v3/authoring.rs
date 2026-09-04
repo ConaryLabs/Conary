@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/authoring.rs
+// crates/conary-core/src/ccs/v3/authoring.rs
 
 use super::schema::*;
 use crate::ccs::builder::BuildResult;

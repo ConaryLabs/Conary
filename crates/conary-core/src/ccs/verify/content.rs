@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify/content.rs
+// crates/conary-core/src/ccs/verify/content.rs
 
 //! Signed CCS object-set and reconstructed payload authority.
 //!

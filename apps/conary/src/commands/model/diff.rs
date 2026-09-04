@@ -1,4 +1,4 @@
-// src/commands/model/diff.rs
+// apps/conary/src/commands/model/diff.rs
 
 use std::path::Path;
 

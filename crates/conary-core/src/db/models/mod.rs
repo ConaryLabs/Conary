@@ -1,4 +1,4 @@
-// conary-core/src/db/models/mod.rs
+// crates/conary-core/src/db/models/mod.rs
 
 //! Data models for Conary database entities
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/error.rs
+// crates/conary-core/src/error.rs
 
 use thiserror::Error;
 

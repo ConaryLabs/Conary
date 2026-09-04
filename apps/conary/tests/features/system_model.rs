@@ -1,4 +1,4 @@
-// conary/tests/features/system_model.rs
+// apps/conary/tests/features/system_model.rs
 
 use super::*;
 

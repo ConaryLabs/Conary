@@ -1,4 +1,4 @@
-// conary-core/src/model/diff.rs
+// crates/conary-core/src/model/diff.rs
 
 //! Diff computation between system model and current state.
 //!

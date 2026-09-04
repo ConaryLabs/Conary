@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/fsverity.rs
+// crates/conary-core/src/filesystem/fsverity.rs
 
 //! fs-verity enablement for CAS objects
 //!

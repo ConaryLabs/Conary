@@ -1,4 +1,4 @@
-// src/commands/generation/builder.rs
+// apps/conary/src/commands/generation/builder.rs
 //! Generation builder — CLI wrapper around conary_core::generation::builder.
 //!
 //! This module handles CLI-specific concerns (convergence intent checks,

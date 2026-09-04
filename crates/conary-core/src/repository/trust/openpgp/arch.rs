@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch.rs
+// crates/conary-core/src/repository/trust/openpgp/arch.rs
 
 //! Arch (ALPM) keyring authority.
 //!

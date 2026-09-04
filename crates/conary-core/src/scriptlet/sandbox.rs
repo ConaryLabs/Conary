@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/sandbox.rs
+// crates/conary-core/src/scriptlet/sandbox.rs
 
 //! Closed scriptlet execution-boundary types.
 

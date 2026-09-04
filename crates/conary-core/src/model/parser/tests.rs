@@ -1,4 +1,4 @@
-// conary-core/src/model/parser/tests.rs
+// crates/conary-core/src/model/parser/tests.rs
 
 //! Focused parser and model-policy tests.
 

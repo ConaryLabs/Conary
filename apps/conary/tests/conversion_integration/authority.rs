@@ -1,4 +1,4 @@
-// tests/conversion_integration/authority.rs
+// apps/conary/tests/conversion_integration/authority.rs
 
 use super::*;
 

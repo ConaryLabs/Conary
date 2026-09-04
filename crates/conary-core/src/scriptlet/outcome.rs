@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/outcome.rs
+// crates/conary-core/src/scriptlet/outcome.rs
 
 use super::{EffectiveSandbox, SandboxMode, ScriptletExecutor};
 pub use crate::error::ScriptletFailureKind;

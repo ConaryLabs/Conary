@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/install_script.rs
+// crates/conary-core/src/packages/arch/install_script.rs
 
 use crate::packages::traits::NativeLifecyclePath;
 

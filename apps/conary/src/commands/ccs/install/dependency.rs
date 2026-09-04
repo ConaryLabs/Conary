@@ -1,4 +1,4 @@
-// src/commands/ccs/install/dependency.rs
+// apps/conary/src/commands/ccs/install/dependency.rs
 
 //! Exact installed-dependent validation for CCS replacement installs.
 

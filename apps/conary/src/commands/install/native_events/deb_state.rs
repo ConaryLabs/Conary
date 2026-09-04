@@ -1,4 +1,4 @@
-// src/commands/install/native_events/deb_state.rs
+// apps/conary/src/commands/install/native_events/deb_state.rs
 
 //! Persisted Debian package and trigger state transitions.
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository_capability/projection.rs
+// crates/conary-core/src/db/models/repository_capability/projection.rs
 
 //! Canonical capability projection used to invalidate native conversions.
 

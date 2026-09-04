@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/verified_batch/durability.rs
+// crates/conary-core/src/filesystem/cas/verified_batch/durability.rs
 
 //! Durability ordering for permanent verified-object transactions.
 

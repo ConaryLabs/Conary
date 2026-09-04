@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_transaction_staging/sql.rs
+// crates/conary-core/src/db/models/package_transaction_staging/sql.rs
 
 //! Ephemeral SQLite schema owned by package transaction staging.
 

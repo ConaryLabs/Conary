@@ -1,4 +1,4 @@
-// src/commands/model.rs
+// apps/conary/src/commands/model.rs
 
 //! System Model Commands
 //!

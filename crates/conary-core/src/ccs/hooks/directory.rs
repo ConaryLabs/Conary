@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/directory.rs
+// crates/conary-core/src/ccs/hooks/directory.rs
 
 //! Directory management for CCS hooks
 //!

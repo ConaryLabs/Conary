@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/input.rs
+// crates/conary-core/src/ccs/convert/input.rs
 
 //! Fallible package-format projection consumed only by foreign conversion.
 

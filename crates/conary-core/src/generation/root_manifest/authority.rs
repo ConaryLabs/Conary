@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/authority.rs
+// crates/conary-core/src/generation/root_manifest/authority.rs
 
 //! Indexed, append-only selected-root snapshot authority.
 

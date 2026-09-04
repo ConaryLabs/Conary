@@ -1,4 +1,4 @@
-// src/commands/distro.rs
+// apps/conary/src/commands/distro.rs
 //! Named feed and installed source-affinity diagnostics.
 
 use super::open_db;

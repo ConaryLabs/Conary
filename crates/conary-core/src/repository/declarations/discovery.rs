@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/discovery.rs
+// crates/conary-core/src/repository/declarations/discovery.rs
 
 //! Selected-root discovery for native repository declarations.
 

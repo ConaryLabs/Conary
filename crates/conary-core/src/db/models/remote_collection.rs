@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remote_collection.rs
+// crates/conary-core/src/db/models/remote_collection.rs
 
 //! Remote collection cache model for model include resolution
 //!

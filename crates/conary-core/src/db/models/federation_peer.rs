@@ -1,4 +1,4 @@
-// conary-core/src/db/models/federation_peer.rs
+// crates/conary-core/src/db/models/federation_peer.rs
 
 //! Federation peer model - manages peer entries in the federation_peers table
 

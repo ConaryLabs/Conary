@@ -1,4 +1,4 @@
-// apps/remi/src/server/catalog_authority/test_support.rs
+// apps/remi/src/server/catalog_authority/tests/test_support.rs
 
 //! Current-schema immutable catalog fixtures shared by Remi reader tests.
 

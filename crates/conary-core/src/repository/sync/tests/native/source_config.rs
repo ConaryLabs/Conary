@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/tests/native/source_config.rs
+// crates/conary-core/src/repository/sync/tests/native/source_config.rs
 
 use super::*;
 

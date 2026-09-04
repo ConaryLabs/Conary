@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/payload_preparation.rs
+// crates/conary-core/src/ccs/convert/payload_preparation.rs
 
 //! Conversion projection built from the sole prepared payload pass.
 

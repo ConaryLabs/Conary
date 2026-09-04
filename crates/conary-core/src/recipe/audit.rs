@@ -1,4 +1,4 @@
-// conary-core/src/recipe/audit.rs
+// crates/conary-core/src/recipe/audit.rs
 
 //! Recipe dependency audit -- static analysis and build-time tracing.
 //!

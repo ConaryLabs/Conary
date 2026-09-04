@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/config.rs
+// crates/conary-core/src/recipe/kitchen/config.rs
 
 //! Configuration types for the Kitchen build system
 

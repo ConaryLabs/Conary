@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 92
+last_updated: 2026-09-04
+revision: 96
 summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
@@ -1211,6 +1211,50 @@ set, and each case binds its claims to source-artifact roles that must resolve
 to unique runtime SHA-256 identities. Only completed cases contribute coverage;
 the declared and emitted case counts and required/covered semantic sets must
 agree.
+
+## Repository Maintainability Gates
+
+**Slug:** maintainability
+
+**Capability:** enforce measurable Rust source-size, unit-test placement, and
+source-path header truth across the workspace while keeping every temporary
+exception tied to an owned decomposition issue.
+
+**Start here:** `crates/conary-xtask/src/line_cap.rs`;
+`crates/conary-xtask/Cargo.toml`; `scripts/check-line-cap.sh`;
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`; `AGENTS.md`;
+`CONTRIBUTING.md`.
+
+**Neighbor systems:** every Rust source owner, pull-request shell gates,
+contributor guidance, and feature ownership routing.
+
+**Paths:** `crates/conary-xtask/**`; `scripts/check-line-cap.sh`;
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`.
+
+**Focused proof:** `cargo test -p conary-xtask`;
+`bash scripts/check-line-cap.sh`; `bash scripts/test-line-cap.sh`.
+
+**Interaction gate:** `bash scripts/check-doc-truth.sh` and
+`bash scripts/agent-context.sh --validate` when policy or routing changes.
+
+**Docs to update:** `AGENTS.md`; `CONTRIBUTING.md`;
+`docs/modules/feature-ownership.md`.
+
+**Safety notes:** the cap parses Rust syntax and treats an item as test-only
+when its combined `cfg` predicates can hold with `test` set and cannot hold
+with `test` unset under any assignment of the other atoms.
+Conditional `cfg` attributes introduced by nested `cfg_attr` retain the
+unrestricted branch when their condition is false.
+Attributed fields, statements, and expressions participate in the same span
+count as items.
+Attributes whose final path segment is `test`, including conditional annotations
+enabled by `cfg_attr` in a test build, also mark inline tests.
+Files with more than 300 total test-only lines fail. Files named `tests.rs`
+and Rust files below a `tests/`
+directory are excluded. Every allowlist entry carries the open issue that owns
+the remaining production or test-placement decomposition; stale entries fail
+the gate. Every Rust file, including excluded test files, must begin exactly
+with `// {repo-relative path}`; missing and legacy headers fail the gate.
 
 ## Developer Build Environment
 

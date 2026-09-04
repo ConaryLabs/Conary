@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/trust_import/tests.rs
+// crates/conary-core/src/repository/declarations/trust_import/tests.rs
 
 use super::*;
 use crate::repository::declarations::discover_selected_root;

@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/header.rs
+// crates/conary-core/src/packages/rpm/payload/header.rs
 
 //! Exact projection of RPM's parallel file-header arrays.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/provenance.rs
+// crates/conary-core/src/db/models/provenance.rs
 
 //! Provenance model - supply chain tracking for troves
 

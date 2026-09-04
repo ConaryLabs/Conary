@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/durable.rs
+// crates/conary-core/src/filesystem/durable.rs
 
 use crate::{Error, Result};
 use serde::Serialize;

@@ -1,4 +1,4 @@
-// conary/src/commands/export.rs
+// apps/conary/src/commands/export.rs
 //! Export Conary generations as OCI container images.
 //!
 //! Produces a standards-compliant OCI Image Layout directory from a

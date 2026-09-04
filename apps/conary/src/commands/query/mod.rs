@@ -1,4 +1,4 @@
-// src/commands/query/mod.rs
+// apps/conary/src/commands/query/mod.rs
 
 //! Query and dependency inspection commands
 //!

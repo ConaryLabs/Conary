@@ -1,4 +1,4 @@
-// conary-core/src/db/models/changeset.rs
+// crates/conary-core/src/db/models/changeset.rs
 
 //! Changeset model - atomic transactional operations
 

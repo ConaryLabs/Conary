@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/build_helpers.rs
+// crates/conary-core/src/bootstrap/build_helpers.rs
 
 //! Shared build utilities for bootstrap builders
 //!

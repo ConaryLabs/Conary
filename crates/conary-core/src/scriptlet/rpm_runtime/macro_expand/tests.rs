@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand/tests.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/tests.rs
 
 use super::RpmMacroEngine;
 use crate::ccs::native_lifecycle::{

@@ -1,4 +1,4 @@
-// conary-core/src/db/schema.rs
+// crates/conary-core/src/db/schema.rs
 
 //! Current-only SQLite schema initialization.
 //!

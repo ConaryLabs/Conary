@@ -1,4 +1,4 @@
-// src/commands/update/pinning.rs
+// apps/conary/src/commands/update/pinning.rs
 
 //! Update pinning command handlers.
 

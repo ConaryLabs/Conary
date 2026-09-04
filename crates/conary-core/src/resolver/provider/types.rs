@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/types.rs
+// crates/conary-core/src/resolver/provider/types.rs
 
 //! Data types for the resolver provider bridge.
 //!

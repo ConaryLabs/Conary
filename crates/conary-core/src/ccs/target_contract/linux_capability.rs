@@ -1,4 +1,4 @@
-// conary-core/src/ccs/target_contract/linux_capability.rs
+// crates/conary-core/src/ccs/target_contract/linux_capability.rs
 //! Closed Linux process-capability vocabulary for static target contracts.
 
 use serde::{Deserialize, Serialize};

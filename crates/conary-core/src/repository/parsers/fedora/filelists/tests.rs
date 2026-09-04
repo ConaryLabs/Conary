@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/filelists/tests.rs
+// crates/conary-core/src/repository/parsers/fedora/filelists/tests.rs
 
 use super::*;
 use crate::db::models::Repository;

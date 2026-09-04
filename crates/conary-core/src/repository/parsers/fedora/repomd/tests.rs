@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/repomd/tests.rs
+// crates/conary-core/src/repository/parsers/fedora/repomd/tests.rs
 
 use super::*;
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/diagnostics.rs
+// crates/conary-core/src/ccs/v3/diagnostics.rs
 
 use serde::{Deserialize, Serialize};
 

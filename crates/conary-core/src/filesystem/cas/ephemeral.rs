@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/ephemeral.rs
+// crates/conary-core/src/filesystem/cas/ephemeral.rs
 
 //! Exact object staging whose complete root is private to one operation.
 

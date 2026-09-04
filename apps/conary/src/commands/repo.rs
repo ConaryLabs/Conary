@@ -1,4 +1,4 @@
-// src/commands/repo.rs
+// apps/conary/src/commands/repo.rs
 //! Repository management commands
 
 mod authority;

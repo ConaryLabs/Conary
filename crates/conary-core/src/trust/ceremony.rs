@@ -1,4 +1,4 @@
-// conary-core/src/trust/ceremony.rs
+// crates/conary-core/src/trust/ceremony.rs
 
 //! TUF key generation and rotation ceremony helpers
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/activation/boot_runtime.rs
+// crates/conary-core/src/activation/boot_runtime.rs
 
 //! Persisted boot and kernel maintenance work for an exact generation.
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/lifecycle_event.rs
+// crates/conary-core/src/db/models/lifecycle_event.rs
 
 //! Persisted per-changeset evidence for lifecycle failures the source format
 //! allowed the transaction to continue past.

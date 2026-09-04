@@ -1,4 +1,4 @@
-// conary-core/src/repository/remi_metadata.rs
+// crates/conary-core/src/repository/remi_metadata.rs
 
 //! Exact normalized package metadata exchanged by Remi and Conary.
 

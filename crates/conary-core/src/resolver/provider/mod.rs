@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/mod.rs
+// crates/conary-core/src/resolver/provider/mod.rs
 
 //! Bridge between Conary's data model and resolvo's SAT solver.
 //!

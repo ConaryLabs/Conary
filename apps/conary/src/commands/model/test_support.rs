@@ -1,4 +1,4 @@
-// src/commands/model/test_support.rs
+// apps/conary/src/commands/model/test_support.rs
 
 use std::collections::HashMap;
 use std::io::{Read, Write};

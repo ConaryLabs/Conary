@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/expression.rs
+// crates/conary-core/src/resolver/provider/expression.rs
 
 //! Exact compilation of native Boolean dependency expressions for resolvo.
 

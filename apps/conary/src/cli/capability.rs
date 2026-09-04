@@ -1,4 +1,4 @@
-// src/cli/capability.rs
+// apps/conary/src/cli/capability.rs
 //! CLI commands for package capability declarations
 //!
 //! These commands allow users to inspect and validate capability declarations

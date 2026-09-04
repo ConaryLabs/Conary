@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/context.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/context.rs
 //! Shared target-root, environment, and process state for RPM's Lua APIs.
 
 use crate::scriptlet::ScriptletExecutor;

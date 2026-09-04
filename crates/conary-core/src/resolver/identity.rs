@@ -1,4 +1,4 @@
-// conary-core/src/resolver/identity.rs
+// crates/conary-core/src/resolver/identity.rs
 
 //! Enriched package identity for resolution.
 //!

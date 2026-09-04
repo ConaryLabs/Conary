@@ -1,4 +1,4 @@
-// conary-core/src/db/mod.rs
+// crates/conary-core/src/db/mod.rs
 
 //! Database layer for Conary
 //!

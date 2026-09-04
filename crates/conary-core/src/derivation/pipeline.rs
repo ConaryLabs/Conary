@@ -1,4 +1,4 @@
-// conary-core/src/derivation/pipeline.rs
+// crates/conary-core/src/derivation/pipeline.rs
 
 //! Build pipeline orchestrator.
 //!

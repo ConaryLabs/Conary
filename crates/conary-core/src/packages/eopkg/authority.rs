@@ -1,4 +1,4 @@
-// conary-core/src/packages/eopkg/authority.rs
+// crates/conary-core/src/packages/eopkg/authority.rs
 
 //! Exact eopkg package identity and declaration authority.
 

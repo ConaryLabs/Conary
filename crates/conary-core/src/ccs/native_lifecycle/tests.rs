@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle/tests.rs
+// crates/conary-core/src/ccs/native_lifecycle/tests.rs
 
 use super::*;
 use crate::packages::native_abi::RpmScriptletSlot;

@@ -1,4 +1,4 @@
-// src/commands/package_parsing.rs
+// apps/conary/src/commands/package_parsing.rs
 
 //! Shared package spec parsing utilities.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/process.rs
+// crates/conary-core/src/scriptlet/process.rs
 
 use super::ScriptletExecutor;
 use super::activation_capture::ActivationCaptureSession;

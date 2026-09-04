@@ -1,4 +1,4 @@
-// src/commands/adopt/mod.rs
+// apps/conary/src/commands/adopt/mod.rs
 
 //! Commands for adopting existing system packages into Conary tracking
 //!

@@ -1,4 +1,4 @@
-// src/commands/replatform_rendering.rs
+// apps/conary/src/commands/replatform_rendering.rs
 
 //! Shared rendering functions for replatform execution plans.
 //!

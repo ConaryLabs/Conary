@@ -1,4 +1,4 @@
-// conary-core/src/capability/mod.rs
+// crates/conary-core/src/capability/mod.rs
 //! Capability declarations for CCS packages
 //!
 //! This module provides types and utilities for declaring what system resources

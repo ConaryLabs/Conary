@@ -1,4 +1,4 @@
-// conary-core/src/db/models/redirect.rs
+// crates/conary-core/src/db/models/redirect.rs
 
 //! Redirect model for package name aliasing and supersession
 //!

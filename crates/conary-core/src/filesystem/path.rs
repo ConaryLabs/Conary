@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/path.rs
+// crates/conary-core/src/filesystem/path.rs
 
 //! Path sanitization utilities for security
 //!

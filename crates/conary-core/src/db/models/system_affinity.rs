@@ -1,4 +1,4 @@
-// conary-core/src/db/models/system_affinity.rs
+// crates/conary-core/src/db/models/system_affinity.rs
 
 //! Diagnostic source-affinity statistics derived from installed provenance.
 

@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/chroot_env.rs
+// crates/conary-core/src/bootstrap/chroot_env.rs
 
 //! Chroot environment setup and teardown for LFS bootstrap builds.
 //!

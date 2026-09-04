@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/test_support.rs
+// crates/conary-core/src/scriptlet/test_support.rs
 
 //! Test-only materialized selected roots and namespace re-execution.
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository.rs
+// crates/conary-core/src/db/models/repository.rs
 
 //! Repository package-row persistence and repository source re-exports.
 

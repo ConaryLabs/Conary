@@ -1,4 +1,4 @@
-// conary-core/src/components/types.rs
+// crates/conary-core/src/components/types.rs
 
 //! Explicit component identifiers used by package metadata and install requests.
 

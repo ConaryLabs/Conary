@@ -1,4 +1,4 @@
-// conary-core/src/repository/substituter.rs
+// crates/conary-core/src/repository/substituter.rs
 
 //! Nix-style substituter chain for ordered package source resolution
 //!

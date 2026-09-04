@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/debian/lifecycle/basic.rs
+// crates/conary-core/src/ccs/native_transaction/tests/debian/lifecycle/basic.rs
 
 //! Debian happy-path install and upgrade invocation coverage.
 

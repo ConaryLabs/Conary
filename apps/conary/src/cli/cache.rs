@@ -1,4 +1,4 @@
-// src/cli/cache.rs
+// apps/conary/src/cli/cache.rs
 
 //! CLI definitions for cache commands.
 

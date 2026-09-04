@@ -1,4 +1,4 @@
-// conary/tests/component.rs
+// apps/conary/tests/component.rs
 
 //! Explicit component-contract and selective-install integration tests.
 

@@ -1,4 +1,4 @@
-// src/commands/query/repo.rs
+// apps/conary/src/commands/query/repo.rs
 
 //! Repository query commands
 //!

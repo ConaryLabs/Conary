@@ -1,4 +1,4 @@
-// conary-core/src/ccs/mod.rs
+// crates/conary-core/src/ccs/mod.rs
 //! CCS (Conary Component Specification) Package Format
 //!
 //! This module implements the CCS native package format, including:

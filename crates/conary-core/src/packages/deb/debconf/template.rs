@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/template.rs
+// crates/conary-core/src/packages/deb/debconf/template.rs
 
 //! Exact import bridge from parsed Debian template records.
 

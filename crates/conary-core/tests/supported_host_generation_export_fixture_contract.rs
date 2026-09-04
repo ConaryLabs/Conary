@@ -1,4 +1,4 @@
-// conary-core/tests/supported_host_generation_export_fixture_contract.rs
+// crates/conary-core/tests/supported_host_generation_export_fixture_contract.rs
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

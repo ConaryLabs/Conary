@@ -1,4 +1,4 @@
-// conary-core/src/db/models/appstream_cache.rs
+// crates/conary-core/src/db/models/appstream_cache.rs
 
 use rusqlite::{Connection, params};
 

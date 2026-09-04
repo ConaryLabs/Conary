@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/converter.rs
+// crates/conary-core/src/ccs/convert/converter.rs
 //! Native package to CCS format converter
 //!
 //! Takes exact native package metadata plus extracted payloads and emits a

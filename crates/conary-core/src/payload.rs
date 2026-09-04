@@ -1,4 +1,4 @@
-// conary-core/src/payload.rs
+// crates/conary-core/src/payload.rs
 
 //! Exact POSIX payload-node authority shared by native parsers and CCS.
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/state.rs
+// crates/conary-core/src/db/models/state.rs
 
 //! System state snapshot model for full system state tracking
 

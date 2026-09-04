@@ -1,4 +1,4 @@
-// conary-core/src/provenance/source.rs
+// crates/conary-core/src/provenance/source.rs
 
 //! Source layer provenance - where the code came from
 

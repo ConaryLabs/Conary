@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/deb/refcount.rs
+// crates/conary-core/src/ccs/native_transaction/deb/refcount.rs
 
 //! Event-time `DPKG_MAINTSCRIPT_PACKAGE_REFCOUNT` projection.
 

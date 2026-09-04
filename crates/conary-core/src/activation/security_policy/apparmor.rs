@@ -1,4 +1,4 @@
-// conary-core/src/activation/security_policy/apparmor.rs
+// crates/conary-core/src/activation/security_policy/apparmor.rs
 
 //! Closed AppArmor parser and mode-helper grammars from current upstream tools.
 

@@ -1,4 +1,4 @@
-// src/commands/install/semantics.rs
+// apps/conary/src/commands/install/semantics.rs
 
 use super::{PackageFormatType, prepare};
 use conary_core::repository::versioning::VersionScheme;

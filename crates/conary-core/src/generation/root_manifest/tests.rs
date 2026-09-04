@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/tests.rs
+// crates/conary-core/src/generation/root_manifest/tests.rs
 
 use super::*;
 use crate::filesystem::CasStore;

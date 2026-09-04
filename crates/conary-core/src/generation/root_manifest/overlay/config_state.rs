@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/overlay/config_state.rs
+// crates/conary-core/src/generation/root_manifest/overlay/config_state.rs
 
 //! Generation config-upper decoding into indexed root authority.
 

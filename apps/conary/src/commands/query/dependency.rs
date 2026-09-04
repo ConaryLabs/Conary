@@ -1,4 +1,4 @@
-// src/commands/query/dependency.rs
+// apps/conary/src/commands/query/dependency.rs
 
 //! Dependency query commands
 //!

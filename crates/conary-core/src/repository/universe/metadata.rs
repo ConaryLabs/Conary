@@ -1,4 +1,4 @@
-// conary-core/src/repository/universe/metadata.rs
+// crates/conary-core/src/repository/universe/metadata.rs
 
 //! Exact TUF target binding for one signed Remi universe.
 

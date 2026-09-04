@@ -1,4 +1,4 @@
-// conary-core/src/derivation/index.rs
+// crates/conary-core/src/derivation/index.rs
 
 //! Persistent derivation index backed by SQLite.
 //!

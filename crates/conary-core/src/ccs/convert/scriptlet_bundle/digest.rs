@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/digest.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/digest.rs
 
 use crate::ccs::native_lifecycle::NativeLifecycleBundle;
 

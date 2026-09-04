@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/deb.rs
+// crates/conary-core/src/ccs/native_transaction/deb.rs
 
 //! Debian maintainer-script transaction planning and error recovery.
 //!

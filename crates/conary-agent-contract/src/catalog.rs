@@ -1,4 +1,4 @@
-// conary-agent-contract/src/catalog.rs
+// crates/conary-agent-contract/src/catalog.rs
 //! Catalog metadata for Conary agent-facing resources, tools, and prompts.
 
 use schemars::JsonSchema;

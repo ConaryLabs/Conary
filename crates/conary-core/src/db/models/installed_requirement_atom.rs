@@ -1,4 +1,4 @@
-// conary-core/src/db/models/installed_requirement_atom.rs
+// crates/conary-core/src/db/models/installed_requirement_atom.rs
 
 //! Read-only atom projection of installed exact requirement groups.
 //!

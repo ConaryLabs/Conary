@@ -1,4 +1,4 @@
-// conary-core/src/repository/supported_profiles/types.rs
+// crates/conary-core/src/repository/supported_profiles/types.rs
 
 use serde::{Deserialize, Serialize};
 

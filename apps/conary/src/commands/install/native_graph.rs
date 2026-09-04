@@ -1,4 +1,4 @@
-// src/commands/install/native_graph.rs
+// apps/conary/src/commands/install/native_graph.rs
 
 //! Shared app-layer execution of the typed native transaction graph.
 

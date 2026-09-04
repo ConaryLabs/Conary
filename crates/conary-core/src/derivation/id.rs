@@ -1,4 +1,4 @@
-// conary-core/src/derivation/id.rs
+// crates/conary-core/src/derivation/id.rs
 
 //! Derivation ID computation via canonical serialization.
 //!

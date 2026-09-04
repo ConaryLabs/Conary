@@ -1,4 +1,4 @@
-// conary-core/src/resolver/conflict.rs
+// crates/conary-core/src/resolver/conflict.rs
 
 //! Conflict types for dependency resolution
 //!

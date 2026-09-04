@@ -1,4 +1,4 @@
-// src/commands/install/dependencies.rs
+// apps/conary/src/commands/install/dependencies.rs
 
 //! Dependency resolution for package installation
 //!

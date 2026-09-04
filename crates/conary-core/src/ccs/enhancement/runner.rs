@@ -1,4 +1,4 @@
-// conary-core/src/ccs/enhancement/runner.rs
+// crates/conary-core/src/ccs/enhancement/runner.rs
 //! Enhancement runner that orchestrates enhancement execution
 
 use super::context::{ConvertedPackageInfo, EnhancementContext, EnhancementStats};

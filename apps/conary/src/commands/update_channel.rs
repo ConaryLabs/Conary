@@ -1,4 +1,4 @@
-// src/commands/update_channel.rs
+// apps/conary/src/commands/update_channel.rs
 //! Update channel management commands
 
 use super::open_db;

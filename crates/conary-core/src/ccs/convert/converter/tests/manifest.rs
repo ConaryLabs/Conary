@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/converter/tests/manifest.rs
+// crates/conary-core/src/ccs/convert/converter/tests/manifest.rs
 
 use super::*;
 use crate::repository::dependency_model::ProvidedCapability;

@@ -1,4 +1,4 @@
-// conary-core/src/resolver/canonical.rs
+// crates/conary-core/src/resolver/canonical.rs
 
 //! Canonical package resolver
 //!

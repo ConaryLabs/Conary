@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/process/device_projection.rs
+// crates/conary-core/src/scriptlet/process/device_projection.rs
 
 //! Controlled selected-root device projection for lifecycle execution.
 

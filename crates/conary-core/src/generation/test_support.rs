@@ -1,4 +1,4 @@
-// conary-core/src/generation/test_support.rs
+// crates/conary-core/src/generation/test_support.rs
 
 //! Shared constructors for complete generation-artifact test authority.
 

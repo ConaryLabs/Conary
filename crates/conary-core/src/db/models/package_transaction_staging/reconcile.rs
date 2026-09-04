@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_transaction_staging/reconcile.rs
+// crates/conary-core/src/db/models/package_transaction_staging/reconcile.rs
 
 //! Set-based projection from transaction staging into canonical package state.
 

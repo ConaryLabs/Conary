@@ -1,4 +1,4 @@
-// conary-core/src/ccs/export/oci.rs
+// crates/conary-core/src/ccs/export/oci.rs
 //! OCI image export for CCS packages
 //!
 //! Generates OCI-compatible container images from CCS packages.

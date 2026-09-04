@@ -1,4 +1,4 @@
-// conary-test/src/error.rs
+// apps/conary-test/src/error.rs
 
 use thiserror::Error;
 

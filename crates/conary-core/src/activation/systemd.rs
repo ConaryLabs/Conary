@@ -1,4 +1,4 @@
-// conary-core/src/activation/systemd.rs
+// crates/conary-core/src/activation/systemd.rs
 
 //! Closed parser for systemd unit activation operations.
 //!

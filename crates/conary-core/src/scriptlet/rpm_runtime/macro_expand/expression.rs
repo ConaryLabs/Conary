@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand/expression.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/expression.rs
 
 //! Recursive-descent implementation of RPM's integer/string/version expression grammar.
 

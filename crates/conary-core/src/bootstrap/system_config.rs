@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/system_config.rs
+// crates/conary-core/src/bootstrap/system_config.rs
 
 //! Phase 4: System configuration (LFS Chapter 9)
 //!

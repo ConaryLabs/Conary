@@ -1,4 +1,4 @@
-// conary-core/src/ccs/enhancement/registry.rs
+// crates/conary-core/src/ccs/enhancement/registry.rs
 //! Enhancement registry for managing enhancement plugins
 
 use super::{EnhancementContext, EnhancementEngine, EnhancementResult, EnhancementType};

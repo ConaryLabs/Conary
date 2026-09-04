@@ -1,4 +1,4 @@
-// conary-core/src/activation/security_policy/selinux.rs
+// crates/conary-core/src/activation/security_policy/selinux.rs
 
 //! Closed SELinux helper grammars backed by current upstream policycoreutils.
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/reader.rs
+// crates/conary-core/src/ccs/v3/reader.rs
 
 use super::schema::AuthorityDocumentV3;
 use super::validation::validate_authority_structure;

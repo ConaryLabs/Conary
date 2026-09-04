@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/sysusers.rs
+// crates/conary-core/src/scriptlet/sysusers.rs
 
 //! Typed execution of RPM's pre-payload sysusers target interface.
 

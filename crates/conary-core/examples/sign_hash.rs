@@ -1,4 +1,4 @@
-// conary-core/examples/sign_hash.rs
+// crates/conary-core/examples/sign_hash.rs
 //
 // CI signing helper: reads an Ed25519 seed from RELEASE_SIGNING_KEY,
 // materializes the matching CCS release authority, or signs a file hash.

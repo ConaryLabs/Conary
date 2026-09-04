@@ -1,4 +1,4 @@
-// conary-core/src/db/paths.rs
+// crates/conary-core/src/db/paths.rs
 //! Centralized path derivation for Conary directories
 
 use std::path::{Path, PathBuf};

@@ -1,4 +1,4 @@
-// conary-core/src/repository/effective_policy.rs
+// crates/conary-core/src/repository/effective_policy.rs
 
 //! Shared runtime source-policy loading.
 

@@ -1,4 +1,4 @@
-// conary-core/src/resolver/component_resolver.rs
+// crates/conary-core/src/resolver/component_resolver.rs
 
 //! Component-level dependency resolution
 //!

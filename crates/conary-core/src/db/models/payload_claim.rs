@@ -1,4 +1,4 @@
-// conary-core/src/db/models/payload_claim.rs
+// crates/conary-core/src/db/models/payload_claim.rs
 //! Format-owned many-to-many claims for materialized payload nodes.
 
 use super::FileEntry;

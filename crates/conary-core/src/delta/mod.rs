@@ -1,4 +1,4 @@
-// conary-core/src/delta/mod.rs
+// crates/conary-core/src/delta/mod.rs
 
 //! Delta compression for efficient package updates
 //!

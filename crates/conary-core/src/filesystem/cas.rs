@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas.rs
+// crates/conary-core/src/filesystem/cas.rs
 
 //! Content-addressable storage (CAS) for files
 //!

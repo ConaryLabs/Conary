@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/contract_tests.rs
+// crates/conary-core/src/repository/declarations/contract_tests.rs
 
 use super::alpm::AlpmConfigFile;
 use super::apt::{AptSourceDocument, AptSyntax};

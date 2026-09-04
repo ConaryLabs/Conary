@@ -1,4 +1,4 @@
-// conary-core/src/db/backup.rs
+// crates/conary-core/src/db/backup.rs
 
 //! Durable SQLite checkpoint backups for Conary live-state recovery.
 

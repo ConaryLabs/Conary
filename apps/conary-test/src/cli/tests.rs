@@ -1,4 +1,4 @@
-// conary-test/src/cli/tests.rs
+// apps/conary-test/src/cli/tests.rs
 
 use super::*;
 use std::path::PathBuf;

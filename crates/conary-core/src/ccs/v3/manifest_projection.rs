@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/manifest_projection.rs
+// crates/conary-core/src/ccs/v3/manifest_projection.rs
 
 //! Shared projection of signed v3 identity into the compatibility manifest.
 

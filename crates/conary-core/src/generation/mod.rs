@@ -1,4 +1,4 @@
-// conary-core/src/generation/mod.rs
+// crates/conary-core/src/generation/mod.rs
 
 //! Generation management for composefs-based system deployment.
 //!

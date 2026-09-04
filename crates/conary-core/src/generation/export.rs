@@ -1,4 +1,4 @@
-// conary-core/src/generation/export.rs
+// crates/conary-core/src/generation/export.rs
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};

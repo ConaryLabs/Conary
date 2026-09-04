@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/file_capabilities.rs
+// crates/conary-core/src/ccs/convert/file_capabilities.rs
 
 //! Exact Linux file-capability projection from source-native payload authority.
 

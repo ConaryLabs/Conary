@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/toolchain.rs
+// crates/conary-core/src/bootstrap/toolchain.rs
 
 //! Toolchain representation and management
 //!

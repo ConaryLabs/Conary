@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/mod.rs
+// crates/conary-core/src/ccs/convert/mod.rs
 //! Foreign package to CCS conversion.
 //!
 //! This module converts foreign packages (RPM/DEB/Arch/eopkg) to CCS format during

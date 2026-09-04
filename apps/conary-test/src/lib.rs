@@ -1,4 +1,4 @@
-// conary-test/src/lib.rs
+// apps/conary-test/src/lib.rs
 
 pub mod bootstrap;
 pub mod build_info;

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository/tests.rs
+// crates/conary-core/src/db/models/repository/tests.rs
 
 use super::*;
 

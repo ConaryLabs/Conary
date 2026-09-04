@@ -1,4 +1,4 @@
-// conary-core/src/db/models/download_stats.rs
+// crates/conary-core/src/db/models/download_stats.rs
 //! Download statistics models for the Remi package index
 //!
 //! Two tables work together:

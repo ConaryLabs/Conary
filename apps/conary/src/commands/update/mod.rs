@@ -1,4 +1,4 @@
-// src/commands/update/mod.rs
+// apps/conary/src/commands/update/mod.rs
 //! Update command module routing.
 
 mod adopted_authority;

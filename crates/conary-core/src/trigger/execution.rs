@@ -1,4 +1,4 @@
-// conary-core/src/trigger/execution.rs
+// crates/conary-core/src/trigger/execution.rs
 
 use super::TriggerExecutor;
 use crate::child_wait::wait_with_output_process_group;

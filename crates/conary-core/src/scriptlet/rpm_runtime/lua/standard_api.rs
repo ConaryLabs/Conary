@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/standard_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/standard_api.rs
 //! Target-root implementations of RPM's `os` and `posix` Lua surfaces.
 
 mod helpers;

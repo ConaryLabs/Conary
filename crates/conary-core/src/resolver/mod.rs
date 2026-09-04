@@ -1,4 +1,4 @@
-// conary-core/src/resolver/mod.rs
+// crates/conary-core/src/resolver/mod.rs
 
 //! SAT-based dependency resolution and conflict detection
 //!

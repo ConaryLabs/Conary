@@ -1,4 +1,4 @@
-// conary-test/src/handlers.rs
+// apps/conary-test/src/handlers.rs
 
 use super::{
     BOLD, GREEN, RED, RESET, YELLOW, color, manifest_dir, print_step, project_dir, run_command,

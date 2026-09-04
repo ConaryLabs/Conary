@@ -1,4 +1,4 @@
-// conary-core/src/db/models/component_dependency.rs
+// crates/conary-core/src/db/models/component_dependency.rs
 
 //! ComponentDependency model - dependencies between components
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/arch.rs
+// crates/conary-core/src/ccs/native_export/arch.rs
 //! Arch Linux package generator
 //!
 //! Generates Arch .pkg.tar.zst packages from CCS build results.

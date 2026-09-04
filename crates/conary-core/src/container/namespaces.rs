@@ -1,4 +1,4 @@
-// conary-core/src/container/namespaces.rs
+// crates/conary-core/src/container/namespaces.rs
 
 use std::ffi::CStr;
 use std::fs;

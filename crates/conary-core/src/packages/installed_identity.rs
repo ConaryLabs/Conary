@@ -1,4 +1,4 @@
-// conary-core/src/packages/installed_identity.rs
+// crates/conary-core/src/packages/installed_identity.rs
 
 //! Typed identity for one exact native package-manager database record.
 

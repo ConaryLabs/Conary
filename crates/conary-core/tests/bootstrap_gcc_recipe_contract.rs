@@ -1,3 +1,4 @@
+// crates/conary-core/tests/bootstrap_gcc_recipe_contract.rs
 use std::path::{Path, PathBuf};
 
 use conary_core::recipe::parse_recipe_file;

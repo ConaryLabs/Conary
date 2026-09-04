@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/scriptlets.rs
+// crates/conary-core/src/packages/rpm/scriptlets.rs
 
 use super::*;
 use crate::scriptlet::RpmClassAuthority;

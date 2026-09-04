@@ -1,4 +1,4 @@
-// conary-core/src/packages/mod.rs
+// crates/conary-core/src/packages/mod.rs
 
 //! Package format support for Conary
 //!

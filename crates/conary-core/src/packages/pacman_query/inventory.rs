@@ -1,4 +1,4 @@
-// conary-core/src/packages/pacman_query/inventory.rs
+// crates/conary-core/src/packages/pacman_query/inventory.rs
 
 //! Coherent ALPM local-database inventory acquisition.
 

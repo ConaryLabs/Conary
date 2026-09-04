@@ -1,4 +1,4 @@
-// conary-core/src/db/models/label.rs
+// crates/conary-core/src/db/models/label.rs
 
 //! Label model for package provenance tracking
 //!

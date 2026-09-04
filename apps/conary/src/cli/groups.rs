@@ -1,4 +1,4 @@
-// src/cli/groups.rs
+// apps/conary/src/cli/groups.rs
 //! Package group management commands
 
 use super::DbArgs;

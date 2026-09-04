@@ -1,4 +1,4 @@
-// src/cli/derivation.rs
+// apps/conary/src/cli/derivation.rs
 
 //! Derivation engine CLI commands
 

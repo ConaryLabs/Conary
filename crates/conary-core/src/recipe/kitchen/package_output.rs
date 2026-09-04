@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/package_output.rs
+// crates/conary-core/src/recipe/kitchen/package_output.rs
 
 //! CCS package finalization for a completed recipe build.
 

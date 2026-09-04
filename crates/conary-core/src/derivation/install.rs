@@ -1,4 +1,4 @@
-// conary-core/src/derivation/install.rs
+// crates/conary-core/src/derivation/install.rs
 
 //! Install derivation outputs from CAS into a live chroot sysroot.
 //!

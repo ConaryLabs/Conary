@@ -1,4 +1,4 @@
-// conary-core/src/packages/installed_inventory.rs
+// crates/conary-core/src/packages/installed_inventory.rs
 
 //! Coherent installed native-package inventory authority.
 

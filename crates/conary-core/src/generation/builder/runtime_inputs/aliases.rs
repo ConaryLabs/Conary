@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/runtime_inputs/aliases.rs
+// crates/conary-core/src/generation/builder/runtime_inputs/aliases.rs
 
 //! Exact projection from package-invoked paths through manifest-owned aliases.
 

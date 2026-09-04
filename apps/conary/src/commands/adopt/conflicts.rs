@@ -1,4 +1,4 @@
-// src/commands/adopt/conflicts.rs
+// apps/conary/src/commands/adopt/conflicts.rs
 
 //! Conflict detection for adopted packages
 //!

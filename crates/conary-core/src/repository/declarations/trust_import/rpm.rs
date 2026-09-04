@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/trust_import/rpm.rs
+// crates/conary-core/src/repository/declarations/trust_import/rpm.rs
 
 use super::openpgp::collect_declared_roots;
 use super::{

@@ -1,4 +1,4 @@
-// conary-core/tests/selected_root_current_generation_fixture.rs
+// crates/conary-core/tests/selected_root_current_generation_fixture.rs
 
 use conary_core::generation::artifact::load_generation_artifact_with_verified_cas;
 use conary_core::generation::mount::current_generation;

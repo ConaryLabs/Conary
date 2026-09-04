@@ -126,7 +126,7 @@ impl ChunkCache {
     }
 
     /// Check if a chunk exists
-    pub async fn has_chunk(&self, hash: &str) -> bool {
+    pub fn has_chunk(&self, hash: &str) -> bool {
         self.chunk_path(hash).exists()
     }
 
@@ -306,11 +306,11 @@ mod tests {
         let hash = test_hash(data);
 
         // Before storing - cache miss
-        assert!(!cache.has_chunk(&hash).await);
+        assert!(!cache.has_chunk(&hash));
 
         // After storing - cache hit
         cache.store_chunk(&hash, data).await.unwrap();
-        assert!(cache.has_chunk(&hash).await);
+        assert!(cache.has_chunk(&hash));
     }
 
     #[test]

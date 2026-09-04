@@ -1,4 +1,4 @@
-// src/commands/ccs/enhance.rs
+// apps/conary/src/commands/ccs/enhance.rs
 //! Enhancement command for retroactive CCS feature addition
 
 use super::super::open_db;

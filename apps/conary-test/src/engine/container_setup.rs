@@ -1,4 +1,4 @@
-// conary-test/src/engine/container_setup.rs
+// apps/conary-test/src/engine/container_setup.rs
 //! Shared container initialization logic for test runners and service code.
 //!
 //! Extracted from the runner and service so both paths use identical

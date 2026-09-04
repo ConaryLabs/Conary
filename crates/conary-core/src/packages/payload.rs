@@ -1,4 +1,4 @@
-// conary-core/src/packages/payload.rs
+// crates/conary-core/src/packages/payload.rs
 
 //! Reopenable package payload sources.
 //!

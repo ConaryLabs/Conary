@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/audit.rs
+// crates/conary-core/src/repository/parsers/fedora/audit.rs
 
 //! Exact audit for RPM repositories that omit `filelists.xml`.
 

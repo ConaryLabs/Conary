@@ -1,4 +1,4 @@
-// src/commands/query/history.rs
+// apps/conary/src/commands/query/history.rs
 
 //! Changeset history commands
 //!

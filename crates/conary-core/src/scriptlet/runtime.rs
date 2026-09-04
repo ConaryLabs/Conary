@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/runtime.rs
+// crates/conary-core/src/scriptlet/runtime.rs
 
 use crate::child_wait::wait_with_output_process_group;
 use crate::error::{Error, Result, ScriptletFailureKind};

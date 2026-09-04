@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction.rs
+// crates/conary-core/src/ccs/native_transaction.rs
 
 //! Exact transaction-event planning for preserved native package lifecycles.
 //!

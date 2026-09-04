@@ -1,4 +1,4 @@
-// conary-core/src/packages/registry.rs
+// crates/conary-core/src/packages/registry.rs
 
 //! Package format registry and structural identification
 //!

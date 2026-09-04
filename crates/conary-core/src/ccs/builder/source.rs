@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/source.rs
+// crates/conary-core/src/ccs/builder/source.rs
 //! Native filesystem discovery and exact node-authority collection.
 
 use super::{BuilderError, CcsBuilder, FileEntry};

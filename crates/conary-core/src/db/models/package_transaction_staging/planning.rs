@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_transaction_staging/planning.rs
+// crates/conary-core/src/db/models/package_transaction_staging/planning.rs
 
 //! Typed staging validation and canonical-anchor decisions.
 

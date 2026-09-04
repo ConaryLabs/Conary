@@ -187,8 +187,7 @@ mod tests {
         assert_eq!(report.bytes_freed, 4);
         assert_eq!(report.objects_evicted, 1);
         assert_eq!(
-            usize::from(cache.has_chunk(&first).await)
-                + usize::from(cache.has_chunk(&second).await),
+            usize::from(cache.has_chunk(&first)) + usize::from(cache.has_chunk(&second)),
             1
         );
     }
@@ -208,7 +207,7 @@ mod tests {
             .to_string();
 
         assert!(error.contains("R2 does not contain"), "{error}");
-        assert!(cache.has_chunk(&hash).await);
+        assert!(cache.has_chunk(&hash));
     }
 
     #[tokio::test]
@@ -224,7 +223,7 @@ mod tests {
             .to_string();
 
         assert!(error.contains("verify durable chunk"), "{error}");
-        assert!(cache.has_chunk(&hash).await);
+        assert!(cache.has_chunk(&hash));
     }
 
     #[tokio::test]
@@ -243,6 +242,6 @@ mod tests {
             .to_string();
 
         assert!(error.contains("remains above its limit"), "{error}");
-        assert!(cache.has_chunk(&hash).await);
+        assert!(cache.has_chunk(&hash));
     }
 }

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/capabilities/interface_contract.rs
+// crates/conary-core/src/ccs/hooks/capabilities/interface_contract.rs
 
 //! Exact executable identities for target-owned hook interfaces.
 

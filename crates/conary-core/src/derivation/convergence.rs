@@ -1,4 +1,4 @@
-// conary-core/src/derivation/convergence.rs
+// crates/conary-core/src/derivation/convergence.rs
 
 //! Cross-seed convergence verification.
 //!

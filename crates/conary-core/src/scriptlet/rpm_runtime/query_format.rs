@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/query_format.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/query_format.rs
 
 //! RPM header query-format parser used by scriptlet `QFORMAT` transforms.
 

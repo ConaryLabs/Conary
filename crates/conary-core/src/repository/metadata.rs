@@ -1,4 +1,4 @@
-// conary-core/src/repository/metadata.rs
+// crates/conary-core/src/repository/metadata.rs
 
 //! Repository metadata data structures
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/plan.rs
+// crates/conary-core/src/recipe/hermetic/plan.rs
 
 use crate::error::{Error, Result};
 use crate::hash;

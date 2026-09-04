@@ -1,4 +1,4 @@
-// conary-core/src/db/models/admin_token.rs
+// crates/conary-core/src/db/models/admin_token.rs
 
 //! Admin API token storage and management
 

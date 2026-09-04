@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/native_corpus/daily_driver.rs
+// apps/conary-test/src/config/tests/native_corpus/daily_driver.rs
 
 use super::{conary_fixture_path, load_manifest, remi_manifest_path};
 use conary_core::packages::{PackageFormat, traits::NativeLifecyclePath};

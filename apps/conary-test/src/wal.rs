@@ -1,4 +1,4 @@
-// conary-test/src/wal.rs
+// apps/conary-test/src/wal.rs
 //! SQLite-backed write-ahead log for buffering test results when Remi is
 //! unreachable.
 //!

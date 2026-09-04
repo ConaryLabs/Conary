@@ -1,4 +1,4 @@
-// conary-agent-contract/src/lib.rs
+// crates/conary-agent-contract/src/lib.rs
 //! Transport-neutral operation contract for Conary agent-facing workflows.
 
 pub mod catalog;

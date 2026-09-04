@@ -1,4 +1,4 @@
-// src/commands/automation.rs
+// apps/conary/src/commands/automation.rs
 
 //! Command implementations for automation system.
 

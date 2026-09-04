@@ -1,4 +1,4 @@
-// conary-core/src/repository/rpm_runtime.rs
+// crates/conary-core/src/repository/rpm_runtime.rs
 
 //! Typed RPM package-format feature requirements.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers.rs
 
 //! Version-pinned typed argv grammars for Debian lifecycle service helpers.
 //!

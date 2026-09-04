@@ -1,4 +1,4 @@
-// conary-core/tests/bootstrap_recipe_idempotence.rs
+// crates/conary-core/tests/bootstrap_recipe_idempotence.rs
 
 use std::path::Path;
 

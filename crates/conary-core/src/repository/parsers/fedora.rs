@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora.rs
+// crates/conary-core/src/repository/parsers/fedora.rs
 
 //! Fedora/RPM repository metadata parser
 //!

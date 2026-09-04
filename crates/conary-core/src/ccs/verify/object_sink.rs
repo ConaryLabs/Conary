@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify/object_sink.rs
+// crates/conary-core/src/ccs/verify/object_sink.rs
 
 //! Storage authority for signature-first CCS object verification.
 

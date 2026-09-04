@@ -1,4 +1,4 @@
-// conary-core/src/ccs/manifest.rs
+// crates/conary-core/src/ccs/manifest.rs
 //! CCS Manifest (ccs.toml) parsing and data structures
 //!
 //! This module defines the structure of a CCS package manifest and provides

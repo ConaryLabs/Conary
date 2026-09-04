@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/fedora/repomd.rs
+// crates/conary-core/src/repository/parsers/fedora/repomd.rs
 
 //! Exact `repomd.xml` record admission for the RPM metadata documents Conary
 //! reads.

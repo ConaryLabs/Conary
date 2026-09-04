@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/write_batch.rs
+// crates/conary-core/src/filesystem/cas/write_batch.rs
 
 //! Batched durability for exact private CAS captures.
 

@@ -1,4 +1,4 @@
-// conary/src/commands/system/init.rs
+// apps/conary/src/commands/system/init.rs
 
 use super::*;
 use anyhow::Context;

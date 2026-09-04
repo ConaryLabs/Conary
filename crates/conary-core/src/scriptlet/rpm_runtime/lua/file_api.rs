@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/file_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/file_api.rs
 //! Target-root file objects for RPM and standard Lua I/O.
 
 use super::context::LuaRuntimeContext;

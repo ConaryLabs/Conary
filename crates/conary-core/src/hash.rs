@@ -1,4 +1,4 @@
-// conary-core/src/hash.rs
+// crates/conary-core/src/hash.rs
 
 //! Configurable hashing for file integrity and content addressing
 //!

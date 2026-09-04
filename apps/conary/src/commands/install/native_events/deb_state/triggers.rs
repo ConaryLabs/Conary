@@ -1,4 +1,4 @@
-// src/commands/install/native_events/deb_state/triggers.rs
+// apps/conary/src/commands/install/native_events/deb_state/triggers.rs
 
 //! Debian trigger pending/awaited state ownership.
 

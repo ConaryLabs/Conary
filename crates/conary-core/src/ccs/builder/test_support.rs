@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/test_support.rs
+// crates/conary-core/src/ccs/builder/test_support.rs
 //! Crate-private CCS builder fixtures for package verification tests.
 
 use super::BuildResult;

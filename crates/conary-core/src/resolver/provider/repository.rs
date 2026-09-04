@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/repository.rs
+// crates/conary-core/src/resolver/provider/repository.rs
 
 //! Repository-backed SAT candidate discovery and admission.
 

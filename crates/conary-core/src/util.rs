@@ -1,4 +1,4 @@
-// conary-core/src/util.rs
+// crates/conary-core/src/util.rs
 
 //! General-purpose utility functions shared across conary-core modules.
 

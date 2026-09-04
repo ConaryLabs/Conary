@@ -1,4 +1,4 @@
-// conary-test/src/config/distro.rs
+// apps/conary-test/src/config/distro.rs
 
 use anyhow::Result;
 use serde::Deserialize;

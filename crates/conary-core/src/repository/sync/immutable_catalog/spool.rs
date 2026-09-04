@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/immutable_catalog/spool.rs
+// crates/conary-core/src/repository/sync/immutable_catalog/spool.rs
 
 //! Admitted, authenticated-input-derived spool for one native projection pass.
 

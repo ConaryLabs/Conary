@@ -1,4 +1,4 @@
-// conary-core/src/repository/substituter/tests.rs
+// crates/conary-core/src/repository/substituter/tests.rs
 
 use super::*;
 use crate::db::schema;

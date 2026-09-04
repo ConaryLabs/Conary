@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/tests.rs
+// crates/conary-core/src/packages/arch/tests.rs
 
 use super::*;
 use crate::packages::traits::{

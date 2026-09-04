@@ -1,4 +1,4 @@
-// src/commands/install/conversion/tests/capabilities.rs
+// apps/conary/src/commands/install/conversion/tests/capabilities.rs
 
 use super::*;
 

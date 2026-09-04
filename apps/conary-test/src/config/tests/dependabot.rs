@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/dependabot.rs
+// apps/conary-test/src/config/tests/dependabot.rs
 
 use serde::Deserialize;
 use std::{

@@ -1,4 +1,4 @@
-// conary-core/src/packages/query_common.rs
+// crates/conary-core/src/packages/query_common.rs
 //! Shared types and helpers for native package manager queries.
 
 use crate::packages::InstalledPackageIdentity;

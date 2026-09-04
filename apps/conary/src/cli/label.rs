@@ -1,4 +1,4 @@
-// src/cli/label.rs
+// apps/conary/src/cli/label.rs
 //! Label and provenance management commands
 
 use super::DbArgs;
