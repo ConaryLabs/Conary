@@ -1,14 +1,18 @@
 // crates/conary-core/src/packages/deb/dpkg_lifecycle/dpkg.rs
 
+#[path = "dpkg/action.rs"]
+mod action;
 #[path = "dpkg/options.rs"]
 mod options;
 #[path = "dpkg/render.rs"]
 mod render;
 
 use super::common::{
-    DPKG, DpkgLifecycleGrammarError, push_long_value, render_with_operands, require_arity,
+    DPKG, DPKG_QUERY, DpkgLifecycleGrammarError, push_long_value, render_with_operands,
+    require_arity,
 };
 use super::query::DpkgQueryAction;
+use action::DpkgNamedAction;
 use options::parse_option;
 use render::disposition_argv;
 
@@ -551,7 +555,7 @@ impl DpkgInvocation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Action {
-    Named(&'static [u8]),
+    Named(DpkgNamedAction),
     Assert(DpkgAssertFeature),
     Validate(DpkgValidationKind),
     ForceHelp,
@@ -610,52 +614,7 @@ fn parse_action(argument: &[u8]) -> Result<Option<Action>, DpkgLifecycleGrammarE
                 action: argument.to_vec(),
             });
     }
-    Ok(action_name(argument).map(Action::Named))
-}
-
-fn action_name(argument: &[u8]) -> Option<&'static [u8]> {
-    Some(match argument {
-        b"-i" | b"--install" => b"install",
-        b"--unpack" => b"unpack",
-        b"-A" | b"--record-avail" => b"record-avail",
-        b"--configure" => b"configure",
-        b"-r" | b"--remove" => b"remove",
-        b"-P" | b"--purge" => b"purge",
-        b"--triggers-only" => b"triggers-only",
-        b"-V" | b"--verify" => b"verify",
-        b"-L" | b"--listfiles" => b"listfiles",
-        b"-s" | b"--status" => b"status",
-        b"--get-selections" => b"get-selections",
-        b"--set-selections" => b"set-selections",
-        b"--clear-selections" => b"clear-selections",
-        b"-p" | b"--print-avail" => b"print-avail",
-        b"--update-avail" => b"update-avail",
-        b"--merge-avail" => b"merge-avail",
-        b"--clear-avail" => b"clear-avail",
-        b"--forget-old-unavail" => b"forget-old-unavail",
-        b"-C" | b"--audit" => b"audit",
-        b"--yet-to-unpack" => b"yet-to-unpack",
-        b"-l" | b"--list" => b"list",
-        b"-S" | b"--search" => b"search",
-        b"--add-architecture" => b"add-architecture",
-        b"--remove-architecture" => b"remove-architecture",
-        b"--print-architecture" => b"print-architecture",
-        b"--print-foreign-architectures" => b"print-foreign-architectures",
-        b"--predep-package" => b"predep-package",
-        b"--compare-versions" => b"compare-versions",
-        b"-?" | b"--help" => b"help",
-        b"--version" => b"version",
-        b"-b" | b"--build" => b"build",
-        b"-c" | b"--contents" => b"contents",
-        b"-e" | b"--control" => b"control",
-        b"-I" | b"--info" => b"info",
-        b"-f" | b"--field" => b"field",
-        b"-x" | b"--extract" => b"extract",
-        b"-X" | b"--vextract" => b"vextract",
-        b"--ctrl-tarfile" => b"ctrl-tarfile",
-        b"--fsys-tarfile" => b"fsys-tarfile",
-        _ => return None,
-    })
+    Ok(DpkgNamedAction::parse(argument).map(Action::Named))
 }
 
 fn set_action(
@@ -677,251 +636,227 @@ fn set_action(
 }
 
 fn finish_named(
-    name: &[u8],
+    action: DpkgNamedAction,
     options: &[DpkgOption],
     operands: Vec<Vec<u8>>,
 ) -> Result<DpkgDisposition, DpkgLifecycleGrammarError> {
+    use DpkgDisposition::{ArchiveBackendDelegation, ReadOnly, RecursiveMutation};
+    use DpkgNamedAction::*;
+
     let pending = options
         .iter()
         .any(|option| matches!(option, DpkgOption::Pending));
-    let read_only = match name {
-        b"verify" => {
-            require_arity(DPKG, "verify", &operands, 0, None, "package")?;
-            Some(DpkgReadOnlyAction::Verify(operands.clone()))
+    let arity = |minimum, maximum, missing| {
+        require_arity(DPKG, action.as_str(), &operands, minimum, maximum, missing)
+    };
+    let query_arity = |minimum, missing| {
+        require_arity(
+            DPKG_QUERY,
+            action.as_str(),
+            &operands,
+            minimum,
+            None,
+            missing,
+        )
+    };
+    let package_arity = || {
+        if pending {
+            arity(0, Some(0), "argument")
+        } else {
+            arity(1, None, "package")
         }
-        b"listfiles" | b"status" | b"print-avail" | b"list" | b"search" => {
-            let action = DpkgQueryAction::from_name_and_operands(name, operands.clone())?;
-            Some(DpkgReadOnlyAction::Query(action))
+    };
+    Ok(match action {
+        Install => {
+            arity(1, None, "package archive")?;
+            RecursiveMutation(DpkgMutationAction::Install(operands))
         }
-        b"get-selections" => {
-            require_arity(DPKG, "get-selections", &operands, 0, None, "pattern")?;
-            Some(DpkgReadOnlyAction::GetSelections(operands.clone()))
+        Unpack => {
+            arity(1, None, "package archive")?;
+            RecursiveMutation(DpkgMutationAction::Unpack(operands))
         }
-        b"audit" => {
-            require_arity(DPKG, "audit", &operands, 0, None, "package")?;
-            Some(DpkgReadOnlyAction::Audit(operands.clone()))
+        RecordAvailable => {
+            arity(1, None, "package archive")?;
+            RecursiveMutation(DpkgMutationAction::RecordAvailable(operands))
         }
-        b"yet-to-unpack" => {
-            require_arity(DPKG, "yet-to-unpack", &operands, 0, Some(0), "argument")?;
-            Some(DpkgReadOnlyAction::YetToUnpack)
+        Configure => {
+            package_arity()?;
+            RecursiveMutation(DpkgMutationAction::Configure(operands))
         }
-        b"predep-package" => {
-            require_arity(DPKG, "predep-package", &operands, 0, Some(0), "argument")?;
-            Some(DpkgReadOnlyAction::PredependencyPackage)
+        Remove => {
+            package_arity()?;
+            RecursiveMutation(DpkgMutationAction::Remove(operands))
         }
-        b"print-architecture" => {
-            require_arity(
-                DPKG,
-                "print-architecture",
-                &operands,
-                0,
-                Some(0),
-                "argument",
-            )?;
-            Some(DpkgReadOnlyAction::PrintArchitecture)
+        Purge => {
+            package_arity()?;
+            RecursiveMutation(DpkgMutationAction::Purge(operands))
         }
-        b"print-foreign-architectures" => {
-            require_arity(
-                DPKG,
-                "print-foreign-architectures",
-                &operands,
-                0,
-                Some(0),
-                "argument",
-            )?;
-            Some(DpkgReadOnlyAction::PrintForeignArchitectures)
+        ProcessTriggers => {
+            package_arity()?;
+            RecursiveMutation(DpkgMutationAction::ProcessTriggers(operands))
         }
-        b"compare-versions" => {
-            require_arity(
-                DPKG,
-                "compare-versions",
-                &operands,
-                3,
-                Some(3),
-                "two versions and relation",
-            )?;
+        Verify => {
+            arity(0, None, "package")?;
+            ReadOnly(DpkgReadOnlyAction::Verify(operands))
+        }
+        ListFiles => {
+            query_arity(1, "package name")?;
+            ReadOnly(DpkgReadOnlyAction::Query(DpkgQueryAction::ListFiles {
+                packages: operands,
+            }))
+        }
+        Status => {
+            query_arity(0, "package name")?;
+            ReadOnly(DpkgReadOnlyAction::Query(DpkgQueryAction::Status {
+                packages: operands,
+            }))
+        }
+        GetSelections => {
+            arity(0, None, "pattern")?;
+            ReadOnly(DpkgReadOnlyAction::GetSelections(operands))
+        }
+        SetSelections => {
+            arity(0, Some(0), "argument")?;
+            RecursiveMutation(DpkgMutationAction::SetSelections)
+        }
+        ClearSelections => {
+            arity(0, Some(0), "argument")?;
+            RecursiveMutation(DpkgMutationAction::ClearSelections)
+        }
+        PrintAvailable => {
+            query_arity(0, "package name")?;
+            ReadOnly(DpkgReadOnlyAction::Query(DpkgQueryAction::PrintAvailable {
+                packages: operands,
+            }))
+        }
+        UpdateAvailable => {
+            arity(0, Some(1), "Packages file")?;
+            RecursiveMutation(DpkgMutationAction::UpdateAvailable(
+                operands.first().cloned(),
+            ))
+        }
+        MergeAvailable => {
+            arity(0, Some(1), "Packages file")?;
+            RecursiveMutation(DpkgMutationAction::MergeAvailable(
+                operands.first().cloned(),
+            ))
+        }
+        ClearAvailable => {
+            arity(0, Some(0), "argument")?;
+            RecursiveMutation(DpkgMutationAction::ClearAvailable)
+        }
+        ForgetOldUnavailable => {
+            arity(0, Some(0), "argument")?;
+            RecursiveMutation(DpkgMutationAction::ForgetOldUnavailable)
+        }
+        Audit => {
+            arity(0, None, "package")?;
+            ReadOnly(DpkgReadOnlyAction::Audit(operands))
+        }
+        YetToUnpack => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::YetToUnpack)
+        }
+        List => {
+            query_arity(0, "package pattern")?;
+            ReadOnly(DpkgReadOnlyAction::Query(DpkgQueryAction::List {
+                patterns: operands,
+            }))
+        }
+        Search => {
+            query_arity(1, "filename pattern")?;
+            ReadOnly(DpkgReadOnlyAction::Query(DpkgQueryAction::Search {
+                patterns: operands,
+            }))
+        }
+        AddArchitecture => {
+            arity(1, Some(1), "architecture")?;
+            RecursiveMutation(DpkgMutationAction::AddArchitecture(operands[0].clone()))
+        }
+        RemoveArchitecture => {
+            arity(1, Some(1), "architecture")?;
+            RecursiveMutation(DpkgMutationAction::RemoveArchitecture(operands[0].clone()))
+        }
+        PrintArchitecture => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::PrintArchitecture)
+        }
+        PrintForeignArchitectures => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::PrintForeignArchitectures)
+        }
+        PredependencyPackage => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::PredependencyPackage)
+        }
+        CompareVersions => {
+            arity(3, Some(3), "two versions and relation")?;
             let relation = VersionRelation::parse(&operands[1]).ok_or_else(|| {
                 DpkgLifecycleGrammarError::InvalidOperand {
                     tool: DPKG,
-                    action: "compare-versions",
+                    action: action.as_str(),
                     operand: "relation",
                     value: operands[1].clone(),
                     reason: "is not a dpkg 1.23.7 version relation",
                 }
             })?;
-            Some(DpkgReadOnlyAction::CompareVersions {
+            ReadOnly(DpkgReadOnlyAction::CompareVersions {
                 left: operands[0].clone(),
                 relation,
                 right: operands[2].clone(),
             })
         }
-        b"help" => {
-            require_arity(DPKG, "help", &operands, 0, Some(0), "argument")?;
-            Some(DpkgReadOnlyAction::Help)
+        Help => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::Help)
         }
-        b"version" => {
-            require_arity(DPKG, "version", &operands, 0, Some(0), "argument")?;
-            Some(DpkgReadOnlyAction::Version)
+        Version => {
+            arity(0, Some(0), "argument")?;
+            ReadOnly(DpkgReadOnlyAction::Version)
         }
-        _ => None,
-    };
-    if let Some(action) = read_only {
-        return Ok(DpkgDisposition::ReadOnly(action));
-    }
-    if let Some(action) = finish_mutation(name, pending, &operands)? {
-        return Ok(DpkgDisposition::RecursiveMutation(action));
-    }
-    finish_backend(name, &operands).map(DpkgDisposition::ArchiveBackendDelegation)
-}
-
-fn finish_mutation(
-    name: &[u8],
-    pending: bool,
-    operands: &[Vec<u8>],
-) -> Result<Option<DpkgMutationAction>, DpkgLifecycleGrammarError> {
-    let action = match name {
-        b"install" | b"unpack" | b"record-avail" => {
-            require_arity(
-                DPKG,
-                action_text(name),
-                operands,
-                1,
-                None,
-                "package archive",
-            )?;
-            Some(match name {
-                b"install" => DpkgMutationAction::Install(operands.to_vec()),
-                b"unpack" => DpkgMutationAction::Unpack(operands.to_vec()),
-                _ => DpkgMutationAction::RecordAvailable(operands.to_vec()),
+        Build => {
+            arity(1, Some(2), "directory")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Build(operands))
+        }
+        Contents => {
+            arity(1, Some(1), "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Contents(operands[0].clone()))
+        }
+        Control => {
+            arity(1, Some(2), "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Control(operands))
+        }
+        Info => {
+            arity(1, None, "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Info(operands))
+        }
+        Field => {
+            arity(1, None, "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Field(operands))
+        }
+        Extract => {
+            arity(2, Some(2), "archive and directory")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::Extract {
+                archive: operands[0].clone(),
+                directory: operands[1].clone(),
             })
         }
-        b"configure" | b"remove" | b"purge" | b"triggers-only" => {
-            if pending {
-                require_arity(DPKG, action_text(name), operands, 0, Some(0), "argument")?;
-            } else {
-                require_arity(DPKG, action_text(name), operands, 1, None, "package")?;
-            }
-            Some(match name {
-                b"configure" => DpkgMutationAction::Configure(operands.to_vec()),
-                b"remove" => DpkgMutationAction::Remove(operands.to_vec()),
-                b"purge" => DpkgMutationAction::Purge(operands.to_vec()),
-                _ => DpkgMutationAction::ProcessTriggers(operands.to_vec()),
+        VerboseExtract => {
+            arity(2, Some(2), "archive and directory")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::VerboseExtract {
+                archive: operands[0].clone(),
+                directory: operands[1].clone(),
             })
         }
-        b"set-selections" => {
-            require_arity(DPKG, "set-selections", operands, 0, Some(0), "argument")?;
-            Some(DpkgMutationAction::SetSelections)
+        ControlTar => {
+            arity(1, Some(1), "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::ControlTar(operands[0].clone()))
         }
-        b"clear-selections" => {
-            require_arity(DPKG, "clear-selections", operands, 0, Some(0), "argument")?;
-            Some(DpkgMutationAction::ClearSelections)
+        FilesystemTar => {
+            arity(1, Some(1), "archive")?;
+            ArchiveBackendDelegation(DpkgArchiveBackendAction::FilesystemTar(operands[0].clone()))
         }
-        b"update-avail" | b"merge-avail" => {
-            require_arity(
-                DPKG,
-                action_text(name),
-                operands,
-                0,
-                Some(1),
-                "Packages file",
-            )?;
-            let file = operands.first().cloned();
-            Some(if name == b"update-avail" {
-                DpkgMutationAction::UpdateAvailable(file)
-            } else {
-                DpkgMutationAction::MergeAvailable(file)
-            })
-        }
-        b"clear-avail" => {
-            require_arity(DPKG, "clear-avail", operands, 0, Some(0), "argument")?;
-            Some(DpkgMutationAction::ClearAvailable)
-        }
-        b"forget-old-unavail" => {
-            require_arity(DPKG, "forget-old-unavail", operands, 0, Some(0), "argument")?;
-            Some(DpkgMutationAction::ForgetOldUnavailable)
-        }
-        b"add-architecture" | b"remove-architecture" => {
-            require_arity(
-                DPKG,
-                action_text(name),
-                operands,
-                1,
-                Some(1),
-                "architecture",
-            )?;
-            Some(if name == b"add-architecture" {
-                DpkgMutationAction::AddArchitecture(operands[0].clone())
-            } else {
-                DpkgMutationAction::RemoveArchitecture(operands[0].clone())
-            })
-        }
-        _ => None,
-    };
-    Ok(action)
-}
-
-fn finish_backend(
-    name: &[u8],
-    operands: &[Vec<u8>],
-) -> Result<DpkgArchiveBackendAction, DpkgLifecycleGrammarError> {
-    let (minimum, maximum, missing) = match name {
-        b"build" => (1, Some(2), "directory"),
-        b"contents" | b"ctrl-tarfile" | b"fsys-tarfile" => (1, Some(1), "archive"),
-        b"control" => (1, Some(2), "archive"),
-        b"extract" | b"vextract" => (2, Some(2), "archive and directory"),
-        b"field" | b"info" => (1, None, "archive"),
-        _ => {
-            return Err(DpkgLifecycleGrammarError::UnknownAction {
-                tool: DPKG,
-                action: name.to_vec(),
-            });
-        }
-    };
-    require_arity(DPKG, action_text(name), operands, minimum, maximum, missing)?;
-    Ok(match name {
-        b"build" => DpkgArchiveBackendAction::Build(operands.to_vec()),
-        b"contents" => DpkgArchiveBackendAction::Contents(operands[0].clone()),
-        b"control" => DpkgArchiveBackendAction::Control(operands.to_vec()),
-        b"extract" => DpkgArchiveBackendAction::Extract {
-            archive: operands[0].clone(),
-            directory: operands[1].clone(),
-        },
-        b"vextract" => DpkgArchiveBackendAction::VerboseExtract {
-            archive: operands[0].clone(),
-            directory: operands[1].clone(),
-        },
-        b"field" => DpkgArchiveBackendAction::Field(operands.to_vec()),
-        b"ctrl-tarfile" => DpkgArchiveBackendAction::ControlTar(operands[0].clone()),
-        b"fsys-tarfile" => DpkgArchiveBackendAction::FilesystemTar(operands[0].clone()),
-        b"info" => DpkgArchiveBackendAction::Info(operands.to_vec()),
-        _ => unreachable!("validated backend action"),
     })
-}
-
-fn action_text(name: &[u8]) -> &'static str {
-    match name {
-        b"install" => "install",
-        b"unpack" => "unpack",
-        b"record-avail" => "record-avail",
-        b"configure" => "configure",
-        b"remove" => "remove",
-        b"purge" => "purge",
-        b"triggers-only" => "triggers-only",
-        b"update-avail" => "update-avail",
-        b"merge-avail" => "merge-avail",
-        b"add-architecture" => "add-architecture",
-        b"remove-architecture" => "remove-architecture",
-        b"build" => "build",
-        b"contents" => "contents",
-        b"control" => "control",
-        b"extract" => "extract",
-        b"vextract" => "vextract",
-        b"field" => "field",
-        b"ctrl-tarfile" => "ctrl-tarfile",
-        b"fsys-tarfile" => "fsys-tarfile",
-        b"info" => "info",
-        _ => "dpkg action",
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
