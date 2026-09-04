@@ -468,13 +468,14 @@ native explanation. The inventory retains at most 5,000 failure records while
 reporting the uncapped `total_failures`, retained count, limit, and explicit
 `truncated` state.
 
-`diagnostic_outcomes` separately records every `conflicting_closure` root with
-its exact typed outcome and byte-bounded native explanation. These records are
-successful outcomes, contribute to `not_installable_roots`, and never
-contribute to failure counts or the error histogram. No other successful
-outcome carries survey evidence. The explanation budget is shared with
-retained failure evidence and changes to explicit `withheld` records once
-exhausted.
+`diagnostic_outcomes` separately retains at most 5,000
+`conflicting_closure` roots with their exact typed outcome and byte-bounded
+native explanation. The survey reports the uncapped total, retained count,
+record limit, and explicit truncation state. These records are successful
+outcomes, contribute to `not_installable_roots`, and never contribute to
+failure counts or the error histogram. No other successful outcome carries
+survey evidence. The explanation budget is shared with retained failure
+evidence and changes to explicit `withheld` records once exhausted.
 
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,

@@ -122,6 +122,7 @@ pub use resolution_parallel::{
     ensure_resolution_walk_evidence_outside_bundle, write_resolution_walk_implementation_evidence,
 };
 pub use resolution_survey::{
+    NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT,
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,
     NATIVE_RESOLUTION_SURVEY_SCHEMA_V3, NativeResolutionSurveyAlpmConflictV1,
     NativeResolutionSurveyAlpmMissingV1, NativeResolutionSurveyAlpmPackageV1,

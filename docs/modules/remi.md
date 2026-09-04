@@ -843,8 +843,9 @@ missing requirements. The RPM projection is schema 5; Debian, ALPM, Conary
 candidate, and comparison projections are schema 3. Every retained resolution,
 candidate, and comparison bundle from the superseded schemas must be rebuilt;
 the package oracle is unchanged. Native diagnostics surveys are schema 3 and
-retain solver-native evidence for conflict outcomes in `diagnostic_outcomes`
-without inflating the failure count.
+retain up to 5,000 solver-native conflict outcomes in `diagnostic_outcomes`,
+with uncapped total and explicit retention/truncation counts, without
+inflating the failure count.
 
 ### Initial Full-Universe Conversion Crawl
 

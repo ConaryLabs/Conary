@@ -268,6 +268,10 @@ def resolution_survey_evidence(
             "retained_explanations",
             "withheld_explanations",
             "truncated_evidence",
+            "diagnostic_outcome_record_limit",
+            "total_diagnostic_outcomes",
+            "retained_diagnostic_outcomes",
+            "diagnostic_outcomes_truncated",
             "diagnostic_outcomes",
             "failures",
         },
@@ -312,9 +316,19 @@ def resolution_survey_evidence(
         or survey["retained_failures"] > survey["total_failures"]
         or survey["truncated"]
         != (survey["retained_failures"] < survey["total_failures"])
+        or survey["retained_diagnostic_outcomes"] != len(diagnostic_outcomes)
+        or survey["retained_diagnostic_outcomes"]
+        > survey["total_diagnostic_outcomes"]
+        or survey["retained_diagnostic_outcomes"]
+        > survey["diagnostic_outcome_record_limit"]
+        or survey["diagnostic_outcomes_truncated"]
+        != (
+            survey["retained_diagnostic_outcomes"]
+            < survey["total_diagnostic_outcomes"]
+        )
     ):
         raise ValueError("native resolution survey counts drifted")
-    if len(diagnostic_outcomes) > counts.get("not_installable_roots", -1):
+    if survey["total_diagnostic_outcomes"] > counts.get("not_installable_roots", -1):
         raise ValueError("native resolution survey has excess diagnostic outcomes")
     previous_root = None
     for index, record in enumerate(diagnostic_outcomes):
@@ -360,6 +374,14 @@ def resolution_survey_evidence(
         "total_failures": survey["total_failures"],
         "retained_failures": survey["retained_failures"],
         "truncated": survey["truncated"],
+        "diagnostic_outcome_record_limit": survey[
+            "diagnostic_outcome_record_limit"
+        ],
+        "total_diagnostic_outcomes": survey["total_diagnostic_outcomes"],
+        "retained_diagnostic_outcomes": survey["retained_diagnostic_outcomes"],
+        "diagnostic_outcomes_truncated": survey[
+            "diagnostic_outcomes_truncated"
+        ],
         "truncated_evidence": survey["truncated_evidence"],
     }
 

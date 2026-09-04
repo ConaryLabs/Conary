@@ -421,6 +421,10 @@ jobs:
             .survey.schema_version == 3 and
             .survey.sha256 == $survey_sha256 and
             .survey.size > 0 and
+            (.survey.diagnostic_outcome_record_limit | type == "number") and
+            (.survey.total_diagnostic_outcomes | type == "number") and
+            (.survey.retained_diagnostic_outcomes | type == "number") and
+            (.survey.diagnostic_outcomes_truncated | type == "boolean") and
             .resolution_implementation.schema_version == 1 and
             .resolution_implementation.workers >= 1 and
             (.resolution_implementation.worker_load_milliseconds | length) ==
@@ -432,7 +436,15 @@ jobs:
             (.counts.roots_walked | type == "number") and
             (.counts.failed_roots | type == "number") and
             (.diagnostic_outcomes | type == "array") and
-            (.diagnostic_outcomes | length) <= .counts.not_installable_roots and
+            (.diagnostic_outcome_record_limit | type == "number") and
+            (.total_diagnostic_outcomes | type == "number") and
+            (.retained_diagnostic_outcomes | type == "number") and
+            (.diagnostic_outcomes_truncated | type == "boolean") and
+            .retained_diagnostic_outcomes == (.diagnostic_outcomes | length) and
+            .retained_diagnostic_outcomes <= .total_diagnostic_outcomes and
+            .retained_diagnostic_outcomes <= .diagnostic_outcome_record_limit and
+            .diagnostic_outcomes_truncated == (.retained_diagnostic_outcomes < .total_diagnostic_outcomes) and
+            .total_diagnostic_outcomes <= .counts.not_installable_roots and
             .total_failures == .counts.failed_roots
           ' "$survey" >/dev/null
           case "$PROFILE" in
