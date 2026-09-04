@@ -83,12 +83,22 @@ else:
         "workers": 2,
     }))
     if "--survey" in args:
+        explanation = {"ecosystem": "rpm", "result": {"problems": [], "status": "problems"}}
+        diagnostic_outcome = {
+            "architecture": one("--architecture"),
+            "name": "conflict-root",
+            "native_explanation": explanation,
+            "outcome": {"reason": "conflicting_closure", "status": "not_installable"},
+            "release": "1",
+            "root_package_key_sha256": "f" * 64,
+            "version": "1",
+        }
         survey = {
-            "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 0, "resolved_roots": 0, "roots_walked": 0, "unresolved_roots": 0},
-            "evidence_byte_limit": 67108864,
+            "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 1, "resolved_roots": 0, "roots_walked": 1, "unresolved_roots": 0},
+            "evidence_byte_limit": 33554432,
             "failure_record_limit": 5000,
             "diagnostic_outcome_record_limit": 5000,
-            "diagnostic_outcomes": [],
+            "diagnostic_outcomes": [diagnostic_outcome],
             "diagnostic_outcomes_truncated": False,
             "failures": [],
             "implementation": impl,
@@ -96,14 +106,14 @@ else:
             "policy": policy,
             "profile": profile["profile"],
             "profile_revision_sha256": revision_sha,
-            "retained_evidence_bytes": 0,
-            "retained_diagnostic_outcomes": 0,
-            "retained_explanations": 0,
+            "retained_evidence_bytes": len(canonical(explanation)),
+            "retained_diagnostic_outcomes": 1,
+            "retained_explanations": 1,
             "retained_failures": 0,
             "schema_version": 3,
             "target_architecture": one("--architecture"),
             "total_failures": 0,
-            "total_diagnostic_outcomes": 0,
+            "total_diagnostic_outcomes": 1,
             "truncated": False,
             "truncated_evidence": False,
             "withheld_explanations": 0,
@@ -285,6 +295,10 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
         self.assertEqual(manifest["survey"]["sha256"], digest(survey))
         self.assertEqual(manifest["survey"]["schema_version"], 3)
+        self.assertEqual(
+            survey["diagnostic_outcomes"][0]["outcome"],
+            {"reason": "conflicting_closure", "status": "not_installable"},
+        )
         self.assertEqual(manifest["resolution_implementation"]["workers"], 2)
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:

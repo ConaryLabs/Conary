@@ -425,6 +425,7 @@ jobs:
             (.survey.total_diagnostic_outcomes | type == "number") and
             (.survey.retained_diagnostic_outcomes | type == "number") and
             (.survey.diagnostic_outcomes_truncated | type == "boolean") and
+            .survey.evidence_byte_limit == 33554432 and
             .resolution_implementation.schema_version == 1 and
             .resolution_implementation.workers >= 1 and
             (.resolution_implementation.worker_load_milliseconds | length) ==
@@ -440,6 +441,9 @@ jobs:
             (.total_diagnostic_outcomes | type == "number") and
             (.retained_diagnostic_outcomes | type == "number") and
             (.diagnostic_outcomes_truncated | type == "boolean") and
+            .failure_record_limit == 5000 and
+            .diagnostic_outcome_record_limit == 5000 and
+            .evidence_byte_limit == 33554432 and
             .retained_diagnostic_outcomes == (.diagnostic_outcomes | length) and
             .retained_diagnostic_outcomes <= .total_diagnostic_outcomes and
             .retained_diagnostic_outcomes <= .diagnostic_outcome_record_limit and

@@ -23,9 +23,9 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
-    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
-    walk_ordered_parallel,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
@@ -299,18 +299,18 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
     workers: ResolutionWorkerCount,
 ) -> Result<OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| {
             Ok(RpmResolutionWorker {
                 pool: load_resolution_pool(profile, staged, &policy.architecture)?,
                 package_index: package_index.worker()?,
             })
         },
-        |worker, root, byte_limit| match worker
+        |worker, root, limits| match worker
             .package_index
             .selected_native_index(&root.package_key_sha256)
         {
@@ -320,7 +320,7 @@ fn walk_resolution_roots(
                 root_index,
                 root,
                 policy,
-                byte_limit,
+                limits,
             ),
             Err(error) => Err(NativeRootResolutionError::new(
                 error,
@@ -334,7 +334,7 @@ fn walk_resolution_roots(
         },
         |root, result| {
             sink.root(root, result)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }
@@ -537,7 +537,7 @@ fn resolve_exact_root(
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     policy: &NativeResolutionPolicyV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     let root_architecture = root.architecture.as_deref().ok_or_else(|| {
         NativeRootResolutionError::new(
@@ -627,7 +627,7 @@ fn resolve_exact_root(
                         pool,
                         package_index,
                         &packages,
-                        explanation_byte_limit,
+                        explanation_limits.diagnostic_outcome_bytes(),
                     ),
                 ));
             }
@@ -645,12 +645,21 @@ fn resolve_exact_root(
                     },
                 ) => Ok(NativeRootResolutionSuccess::explained(
                     outcome,
-                    rpm_explanation(pool, package_index, &problems, explanation_byte_limit),
+                    rpm_explanation(
+                        pool,
+                        package_index,
+                        &problems,
+                        explanation_limits.diagnostic_outcome_bytes(),
+                    ),
                 )),
                 Ok(outcome) => Ok(NativeRootResolutionSuccess::plain(outcome)),
                 Err(error) => {
-                    let explanation =
-                        rpm_explanation(pool, package_index, &problems, explanation_byte_limit);
+                    let explanation = rpm_explanation(
+                        pool,
+                        package_index,
+                        &problems,
+                        explanation_limits.failure_bytes(),
+                    );
                     Err(NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,

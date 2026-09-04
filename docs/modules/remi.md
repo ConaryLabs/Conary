@@ -845,7 +845,10 @@ candidate, and comparison bundle from the superseded schemas must be rebuilt;
 the package oracle is unchanged. Native diagnostics surveys are schema 3 and
 retain up to 5,000 solver-native conflict outcomes in `diagnostic_outcomes`,
 with uncapped total and explicit retention/truncation counts, without
-inflating the failure count.
+inflating the failure count. Candidate-resolution and resolution-comparison
+surveys are schema 2 because they embed the outcome vocabulary. Native and
+candidate explanations use a 32 MiB retained-evidence budget; native survey
+documents remain capped at 64 MiB end to end.
 
 ### Initial Full-Universe Conversion Crawl
 

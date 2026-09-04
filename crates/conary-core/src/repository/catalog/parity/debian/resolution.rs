@@ -31,9 +31,9 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
-    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
-    walk_ordered_parallel,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
@@ -299,7 +299,7 @@ fn walk_resolution_roots(
     workers: ResolutionWorkerCount,
     worker_executable: Option<&Path>,
 ) -> Result<OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     if workers.get() == 1 {
         let started = std::time::Instant::now();
         let mut apt = AptResolution::open(solver_inputs, &policy.architecture)?;
@@ -312,7 +312,7 @@ fn walk_resolution_roots(
                 &package_index,
                 &projected,
                 policy,
-                sink.explanation_byte_limit(),
+                sink.explanation_limits(),
             );
             sink.root(&root, result)
         })?;
@@ -326,7 +326,7 @@ fn walk_resolution_roots(
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| {
             DebianResolutionProcess::spawn(
                 executable,
@@ -335,10 +335,10 @@ fn walk_resolution_roots(
                 &policy.architecture,
             )
         },
-        |worker, root, byte_limit| worker.resolve(root, byte_limit),
+        |worker, root, limits| worker.resolve(root, limits),
         |root, result| {
             sink.root(root, result?)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }
@@ -361,7 +361,7 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndexReader,
     root: &DebianResolutionRoot,
     policy: &NativeResolutionPolicyV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     let Some(root_architecture) = root.architecture.as_deref() else {
         return Err(NativeRootResolutionError::new(
@@ -416,7 +416,7 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
-                        debian_explanation(&native, explanation_byte_limit),
+                        debian_explanation(&native, explanation_limits.failure_bytes()),
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
@@ -424,7 +424,7 @@ fn resolve_exact_root(
                     NativeResolutionOutcomeV1::NotInstallable {
                         reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
                     },
-                    debian_explanation(&native, explanation_byte_limit),
+                    debian_explanation(&native, explanation_limits.diagnostic_outcome_bytes()),
                 ));
             }
             Ok(NativeRootResolutionSuccess::plain(
@@ -442,7 +442,7 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                        debian_explanation(&native, explanation_byte_limit),
+                        debian_explanation(&native, explanation_limits.failure_bytes()),
                     )
                 })?;
             if dependencies.is_empty() {
@@ -452,7 +452,7 @@ fn resolve_exact_root(
                         root.name
                     )),
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    debian_explanation(&native, explanation_byte_limit),
+                    debian_explanation(&native, explanation_limits.failure_bytes()),
                 ));
             }
             Ok(NativeRootResolutionSuccess::plain(
@@ -465,7 +465,7 @@ fn resolve_exact_root(
             NativeResolutionOutcomeV1::NotInstallable {
                 reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
             },
-            debian_explanation(&native, explanation_byte_limit),
+            debian_explanation(&native, explanation_limits.diagnostic_outcome_bytes()),
         )),
     }
 }
@@ -474,6 +474,9 @@ fn debian_explanation(
     outcome: &AptResolutionOutcome,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return evidence_withheld();
+    }
     record_explanation_build();
     match outcome {
         AptResolutionOutcome::Resolved(source_packages) => {

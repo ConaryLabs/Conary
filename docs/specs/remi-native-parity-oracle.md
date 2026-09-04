@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 57
+revision: 58
 status: active
 ---
 
@@ -446,6 +446,9 @@ is invalid and must be regenerated before comparison or promotion proof. The
 package oracle is unchanged. Native diagnostics surveys move to schema 3 so
 conflict-class outcomes can retain their solver-native evidence without
 reclassifying those roots as failures; older retained surveys are invalid.
+Candidate-resolution surveys move to schema 2 and resolution-comparison
+surveys move to schema 2 because both embed the expanded outcome vocabulary;
+their schema-1 artifacts are invalid and have no compatibility reader.
 
 ### Diagnostics-only resolution survey
 
@@ -475,7 +478,11 @@ record limit, and explicit truncation state. These records are successful
 outcomes, contribute to `not_installable_roots`, and never contribute to
 failure counts or the error histogram. No other successful outcome carries
 survey evidence. The explanation budget is shared with retained failure
-evidence and changes to explicit `withheld` records once exhausted.
+evidence and changes to explicit `withheld` records once exhausted. Retained
+explanations are capped at 32 MiB, reserving half of the lane's 64 MiB complete
+survey-document limit for root records and the canonical envelope. Rust
+validation and the lane reader both reject a document above that complete-file
+limit.
 
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
@@ -504,13 +511,17 @@ therefore cannot contaminate a later solve.
 Every strict and survey root walk is parallel behind one bounded,
 sequence-numbered sink. Input dispatch follows package-oracle order and only
 the parent/calling thread updates writers, collectors, histograms, record caps,
-or the 64 MiB explanation budget. The next sequence goes to the first available
+or the 32 MiB explanation budget. The next sequence goes to the first available
 worker, so an uneven solve cannot strand idle capacity behind a busy worker's
 private queue. Results may finish out of order, but the sink does not observe
 root `n + 1` before root `n`; strict mode stops dispatch after the first failing
 canonical root, drains workers, and returns that failure.
 Consequently worker scheduling cannot change `roots.jsonl`, manifest bytes or
 digests, survey JSON, counts, histograms, caps, or budget decisions.
+The sink publishes independent conflict-outcome and fatal-failure explanation
+allowances to workers. Reaching the 5,000 conflict-record cap suppresses later
+conflict explanation construction without consuming or hiding evidence still
+available to a later retained fatal failure.
 
 RPM and ALPM use threads with a private libsolv pool or libalpm handle and a
 private read-only SQLite index connection per worker. Conary workers likewise
@@ -582,7 +593,7 @@ their existing `--packages` and `--database` member inputs respectively.
 
 ### Candidate-resolution and comparison surveys
 
-`ConaryResolutionSurveyV1` schema 1 is the diagnostics-only Conary counterpart
+`ConaryResolutionSurveyV1` schema 2 is the diagnostics-only Conary counterpart
 to the native survey. It binds the profile revision, package-oracle
 manifest, `conary-sat` implementation and projection schema, native-only
 policy, and the profile's typed target architecture. The policy architecture,
@@ -601,12 +612,12 @@ They retain unresolved-node incoming edges with the requiring solvable and
 rendered requirement/version sets, conflict edges with both solvable
 identities and typed conflict kind, and excluded solvables with their typed
 provider reason. No `display_user_friendly` text is parsed. Explanations share
-the native survey's canonical-JSON accounting, 64 MiB budget,
+the native survey's canonical-JSON accounting, 32 MiB explanation budget,
 failure-record cap, first-exhaustion withholding rule, and independently
 validated count/truncation invariants. They are built only on a hard per-root
 failure.
 
-`NativeResolutionComparisonSurveyV1` schema 1 first reopens two complete,
+`NativeResolutionComparisonSurveyV1` schema 2 first reopens two complete,
 package-oracle-bound resolution bundles, then walks every root pair in
 canonical key order. Every retained mismatch records the root identity,
 typed mismatch kind, both complete outcomes, and the manifest SHA-256 that
@@ -691,7 +702,8 @@ per-worker load-time vector, effective memory budget, and retained worker RSS
 allowance. The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
-relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
+relationships, including the fixed 5,000-record, 32-MiB retained-evidence, and
+64-MiB native survey-document limits. It
 binds candidate implementation to the profile ecosystem, `conary-sat`, and
 projection schema 3. Comparison counts must cover the exact complete
 zero-failure candidate root population, and every retained mismatch root,

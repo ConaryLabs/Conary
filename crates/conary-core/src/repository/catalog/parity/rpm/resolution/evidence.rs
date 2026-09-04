@@ -25,6 +25,9 @@ pub(super) fn rpm_explanation(
     source_problems: &[SolvProblem],
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return withheld();
+    }
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
         result: NativeResolutionSurveyRpmResultV1::Problems {
@@ -53,6 +56,9 @@ pub(super) fn rpm_resolved_explanation(
     source_packages: &[usize],
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return withheld();
+    }
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
         result: NativeResolutionSurveyRpmResultV1::Resolved {

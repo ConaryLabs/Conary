@@ -29,7 +29,8 @@ pub(super) use collector::{NativeResolutionSurveyCollector, RootOutcomeSink};
 pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V3: u32 = 3;
 pub const NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = 5_000;
 pub const NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT: usize = 5_000;
-pub const NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
+pub const NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT: u64 = 32 * 1024 * 1024;
+pub const NATIVE_RESOLUTION_SURVEY_DOCUMENT_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// Diagnostics-only inventory of all per-root native projection failures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +116,14 @@ impl NativeResolutionSurveyV1 {
             ));
         }
         self.validate_evidence()?;
+        if canonical_value_size_with_limit(self, NATIVE_RESOLUTION_SURVEY_DOCUMENT_BYTE_LIMIT)?
+            .is_none()
+        {
+            return Err(Error::ConfigError(format!(
+                "native resolution survey exceeds its {} byte document limit",
+                NATIVE_RESOLUTION_SURVEY_DOCUMENT_BYTE_LIMIT
+            )));
+        }
         Ok(())
     }
 
@@ -776,7 +785,28 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(collector.remaining_evidence_bytes(), 0);
+        let limits = collector.explanation_limits();
+        assert_eq!(limits.diagnostic_outcome_bytes(), 0);
+        assert!(limits.failure_bytes() > 0);
+        let mut failure_root = root();
+        failure_root.package_key_sha256 = format!(
+            "{:064x}",
+            NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT + 1
+        );
+        collector
+            .failure(
+                &failure_root,
+                *NativeRootResolutionError::new(
+                    Error::ConfigError("later diagnostic failure".to_string()),
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    NativeResolutionSurveyNativeExplanationV1::Rpm {
+                        result: NativeResolutionSurveyRpmResultV1::Problems {
+                            problems: Vec::new(),
+                        },
+                    },
+                ),
+            )
+            .unwrap();
         let survey = collector.finish().unwrap();
         assert_eq!(
             survey.total_diagnostic_outcomes,
@@ -789,9 +819,14 @@ mod tests {
         assert!(survey.diagnostic_outcomes_truncated);
         assert_eq!(
             survey.retained_explanations,
-            NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT as u64
+            NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT as u64 + 1
         );
         assert_eq!(survey.withheld_explanations, 0);
+        assert_eq!(survey.retained_failures, 1);
+        assert!(matches!(
+            survey.failures[0].native_explanation,
+            NativeResolutionSurveyNativeExplanationV1::Rpm { .. }
+        ));
     }
 
     #[test]

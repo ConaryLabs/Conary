@@ -31,9 +31,9 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
-    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
-    walk_ordered_parallel,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
@@ -272,11 +272,11 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
     workers: ResolutionWorkerCount,
 ) -> Result<OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| {
             let (staging, alpm) = open_alpm(profile, inputs, &[&policy.architecture])?;
             Ok(AlpmResolutionWorker {
@@ -285,7 +285,7 @@ fn walk_resolution_roots(
                 package_index: package_index.worker()?,
             })
         },
-        |worker, root, byte_limit| {
+        |worker, root, limits| {
             resolve_exact_root(
                 &mut worker.alpm,
                 profile,
@@ -293,12 +293,12 @@ fn walk_resolution_roots(
                 &worker.package_index,
                 root,
                 policy,
-                byte_limit,
+                limits,
             )
         },
         |root, result| {
             sink.root(root, result)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }
@@ -480,7 +480,7 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndexReader,
     root: &NativeParityPackageV1,
     policy: &NativeResolutionPolicyV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     let Some(root_architecture) = root.architecture.as_deref() else {
         return Err(NativeRootResolutionError::new(
@@ -562,7 +562,7 @@ fn resolve_exact_root(
         inputs,
         package_index,
         root,
-        explanation_byte_limit,
+        explanation_limits,
     );
     let release = alpm.trans_release();
     match (outcome, release) {
@@ -596,7 +596,7 @@ fn resolve_initialized_transaction(
     inputs: &[AlpmParityMemberInput<'_>],
     package_index: &PackageResolutionIndexReader,
     root: &NativeParityPackageV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     enum Preparation {
         Prepared,
@@ -632,7 +632,7 @@ fn resolve_initialized_transaction(
                                 NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                                 alpm_unsatisfied_explanation(
                                     source_missing.iter(),
-                                    explanation_byte_limit,
+                                    explanation_limits.failure_bytes(),
                                 ),
                             )
                         })?;
@@ -645,7 +645,7 @@ fn resolve_initialized_transaction(
                             NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                             alpm_unsatisfied_explanation(
                                 source_missing.iter(),
-                                explanation_byte_limit,
+                                explanation_limits.failure_bytes(),
                             ),
                         ));
                     }
@@ -674,7 +674,10 @@ fn resolve_initialized_transaction(
                         NativeResolutionOutcomeV1::NotInstallable {
                             reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
                         },
-                        alpm_conflict_explanation(conflicts.iter(), explanation_byte_limit),
+                        alpm_conflict_explanation(
+                            conflicts.iter(),
+                            explanation_limits.diagnostic_outcome_bytes(),
+                        ),
                     ));
                 }
                 None => {
@@ -698,7 +701,7 @@ fn resolve_initialized_transaction(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
-                        alpm_prepared_explanation(alpm, explanation_byte_limit),
+                        alpm_prepared_explanation(alpm, explanation_limits.failure_bytes()),
                     )
                 })?
                 .into_values()
@@ -708,7 +711,7 @@ fn resolve_initialized_transaction(
                     NativeResolutionOutcomeV1::NotInstallable {
                         reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
                     },
-                    alpm_prepared_explanation(alpm, explanation_byte_limit),
+                    alpm_prepared_explanation(alpm, explanation_limits.diagnostic_outcome_bytes()),
                 ));
             }
             Ok(NativeRootResolutionSuccess::plain(

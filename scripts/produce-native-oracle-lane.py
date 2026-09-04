@@ -50,6 +50,9 @@ MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 3
 NATIVE_RESOLUTION_SURVEY_SCHEMA = 3
+NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT = 5_000
+NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT = 5_000
+NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT = 32 * 1024 * 1024
 NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
 NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
@@ -313,10 +316,14 @@ def resolution_survey_evidence(
         or not isinstance(failures, list)
         or survey["total_failures"] != counts.get("failed_roots")
         or survey["retained_failures"] != len(failures)
+        or survey["failure_record_limit"]
+        != NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT
         or survey["retained_failures"] > survey["total_failures"]
         or survey["truncated"]
         != (survey["retained_failures"] < survey["total_failures"])
         or survey["retained_diagnostic_outcomes"] != len(diagnostic_outcomes)
+        or survey["diagnostic_outcome_record_limit"]
+        != NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT
         or survey["retained_diagnostic_outcomes"]
         > survey["total_diagnostic_outcomes"]
         or survey["retained_diagnostic_outcomes"]
@@ -352,7 +359,7 @@ def resolution_survey_evidence(
             or any(character not in "0123456789abcdef" for character in root_key)
             or (previous_root is not None and root_key <= previous_root)
             or record["outcome"]
-            != {"kind": "not_installable", "reason": "conflicting_closure"}
+            != {"status": "not_installable", "reason": "conflicting_closure"}
             or not isinstance(record["native_explanation"], dict)
         ):
             raise ValueError("native resolution survey diagnostic outcome is invalid")
@@ -361,6 +368,8 @@ def resolution_survey_evidence(
     if (
         survey["retained_explanations"] + survey["withheld_explanations"]
         != explanation_records
+        or survey["evidence_byte_limit"]
+        != NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT
         or survey["retained_evidence_bytes"] > survey["evidence_byte_limit"]
         or survey["truncated_evidence"] != (survey["withheld_explanations"] > 0)
     ):

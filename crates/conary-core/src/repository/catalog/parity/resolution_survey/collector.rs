@@ -23,6 +23,7 @@ use crate::repository::catalog::parity::resolution_contract::{
     NativeResolutionRootV1,
 };
 use crate::repository::catalog::parity::resolution_io::NativeResolutionOracleWriter;
+use crate::repository::catalog::parity::resolution_parallel::ResolutionExplanationLimits;
 use crate::repository::catalog::parity::resolution_root::{
     NativeRootResolutionError, NativeRootResolutionResult, NativeRootResolutionSuccess,
 };
@@ -36,10 +37,12 @@ pub(in crate::repository::catalog::parity) enum RootOutcomeSink<'a> {
 
 #[allow(dead_code)]
 impl RootOutcomeSink<'_> {
-    pub(in crate::repository::catalog::parity) fn explanation_byte_limit(&self) -> u64 {
+    pub(in crate::repository::catalog::parity) fn explanation_limits(
+        &self,
+    ) -> ResolutionExplanationLimits {
         match self {
-            Self::Strict(_) => 0,
-            Self::Survey(collector) => collector.remaining_evidence_bytes(),
+            Self::Strict(_) => ResolutionExplanationLimits::none(),
+            Self::Survey(collector) => collector.explanation_limits(),
         }
     }
 
@@ -175,14 +178,28 @@ impl NativeResolutionSurveyCollector {
     }
 
     pub(in crate::repository::catalog::parity) fn remaining_evidence_bytes(&self) -> u64 {
-        if self.evidence_budget_exhausted
-            || self.diagnostic_outcomes.len() >= NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT
-        {
+        if self.evidence_budget_exhausted {
             0
         } else {
             self.evidence_byte_limit
                 .saturating_sub(self.retained_evidence_bytes)
         }
+    }
+
+    pub(super) fn explanation_limits(&self) -> ResolutionExplanationLimits {
+        let remaining_bytes = self.remaining_evidence_bytes();
+        ResolutionExplanationLimits::new(
+            if self.diagnostic_outcomes.len() >= NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT {
+                0
+            } else {
+                remaining_bytes
+            },
+            if self.failures.len() >= NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT {
+                0
+            } else {
+                remaining_bytes
+            },
+        )
     }
 
     pub(super) fn failure(

@@ -37,7 +37,8 @@ use super::resolution_io::{
     verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
 };
 use super::resolution_parallel::{
-    RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest,
+    RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest,
     resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::db::models::{
@@ -354,10 +355,13 @@ enum ConaryRootOutcomeSink<'a> {
 }
 
 impl ConaryRootOutcomeSink<'_> {
-    fn explanation_byte_limit(&self) -> u64 {
+    fn explanation_limits(&self) -> ResolutionExplanationLimits {
         match self {
-            Self::Strict(_) => 0,
-            Self::Survey(collector) => collector.explanation_byte_limit(),
+            Self::Strict(_) => ResolutionExplanationLimits::none(),
+            Self::Survey(collector) => {
+                let byte_limit = collector.explanation_byte_limit();
+                ResolutionExplanationLimits::new(byte_limit, byte_limit)
+            }
         }
     }
 
@@ -384,16 +388,18 @@ fn walk_resolution_roots(
     mut sink: ConaryRootOutcomeSink<'_>,
     workers: super::resolution_parallel::ResolutionWorkerCount,
 ) -> Result<super::resolution_parallel::OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| projection.worker(),
-        |worker, root, byte_limit| worker.resolve(&root.package_key_sha256, policy, byte_limit),
+        |worker, root, limits| {
+            worker.resolve(&root.package_key_sha256, policy, limits.failure_bytes())
+        },
         |root, result| {
             sink.root(root, result)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }

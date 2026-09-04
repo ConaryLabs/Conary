@@ -250,6 +250,63 @@ pub(crate) struct OrderedResolutionMetrics {
     pub(crate) worker_load_milliseconds: Vec<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResolutionExplanationLimits {
+    diagnostic_outcome_bytes: u64,
+    failure_bytes: u64,
+}
+
+impl ResolutionExplanationLimits {
+    pub(crate) const fn new(diagnostic_outcome_bytes: u64, failure_bytes: u64) -> Self {
+        Self {
+            diagnostic_outcome_bytes,
+            failure_bytes,
+        }
+    }
+
+    pub(crate) const fn none() -> Self {
+        Self::new(0, 0)
+    }
+
+    #[allow(dead_code)] // Consumed by feature-gated native producer binaries.
+    pub(crate) const fn diagnostic_outcome_bytes(self) -> u64 {
+        self.diagnostic_outcome_bytes
+    }
+
+    pub(crate) const fn failure_bytes(self) -> u64 {
+        self.failure_bytes
+    }
+}
+
+struct AtomicResolutionExplanationLimits {
+    diagnostic_outcome_bytes: AtomicU64,
+    failure_bytes: AtomicU64,
+}
+
+impl AtomicResolutionExplanationLimits {
+    fn new(limits: ResolutionExplanationLimits) -> Self {
+        Self {
+            diagnostic_outcome_bytes: AtomicU64::new(limits.diagnostic_outcome_bytes),
+            failure_bytes: AtomicU64::new(limits.failure_bytes),
+        }
+    }
+
+    fn load(&self) -> ResolutionExplanationLimits {
+        ResolutionExplanationLimits::new(
+            self.diagnostic_outcome_bytes.load(Ordering::Acquire),
+            self.failure_bytes.load(Ordering::Acquire),
+        )
+    }
+
+    fn store(&self, limits: ResolutionExplanationLimits) {
+        self.diagnostic_outcome_bytes
+            .store(limits.diagnostic_outcome_bytes, Ordering::Release);
+        self.failure_bytes
+            .store(limits.failure_bytes, Ordering::Release);
+    }
+}
+
 enum WorkerMessage<R> {
     Ready {
         worker: usize,
@@ -276,10 +333,10 @@ enum WorkerMessage<R> {
 pub(crate) fn walk_ordered_parallel<W, R>(
     package_oracle: &NativeParityOracleReader,
     workers: ResolutionWorkerCount,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
     initialize: impl Fn(usize) -> Result<W> + Sync,
-    resolve: impl Fn(&mut W, &NativeParityPackageV1, u64) -> R + Sync,
-    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    resolve: impl Fn(&mut W, &NativeParityPackageV1, ResolutionExplanationLimits) -> R + Sync,
+    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<OrderedResolutionMetrics>
 where
     R: Send,
@@ -293,7 +350,8 @@ where
             .ok_or_else(|| {
                 Error::ConfigError("resolution in-flight capacity exceeds u64".to_string())
             })?;
-        let explanation_byte_limit = Arc::new(AtomicU64::new(explanation_byte_limit));
+        let explanation_limits =
+            Arc::new(AtomicResolutionExplanationLimits::new(explanation_limits));
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
         let mut handles = Vec::with_capacity(worker_count);
@@ -303,7 +361,7 @@ where
             let result_sender = result_sender.clone();
             let initialize = &initialize;
             let resolve = &resolve;
-            let explanation_byte_limit = Arc::clone(&explanation_byte_limit);
+            let explanation_limits = Arc::clone(&explanation_limits);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let mut state = match catch_worker_panic(worker, None, || initialize(worker)) {
@@ -332,12 +390,12 @@ where
                 }
                 let mut terminal_failure: Option<String> = None;
                 while let Ok((sequence, root)) = job_receiver.recv() {
-                    let byte_limit = explanation_byte_limit.load(Ordering::Acquire);
+                    let limits = explanation_limits.load();
                     let result = if let Some(message) = &terminal_failure {
                         Err(Error::InternalError(message.clone()))
                     } else {
                         match catch_worker_panic(worker, Some(sequence), || {
-                            resolve(&mut state, &root, byte_limit)
+                            resolve(&mut state, &root, limits)
                         }) {
                             Ok(result) => Ok(result),
                             Err(error) => {
@@ -402,7 +460,7 @@ where
                     &mut pending,
                     &mut available_workers,
                     &mut next_sequence,
-                    explanation_byte_limit.as_ref(),
+                    explanation_limits.as_ref(),
                     &mut emit,
                 )?;
             }
@@ -412,7 +470,7 @@ where
                     &mut pending,
                     &mut available_workers,
                     &mut next_sequence,
-                    explanation_byte_limit.as_ref(),
+                    explanation_limits.as_ref(),
                     &mut emit,
                 )?;
             }
@@ -443,7 +501,7 @@ where
                 &mut pending,
                 &mut available_workers,
                 &mut next_sequence,
-                explanation_byte_limit.as_ref(),
+                explanation_limits.as_ref(),
                 &mut emit,
             )
         });
@@ -457,7 +515,7 @@ where
                         &mut pending,
                         &mut available_workers,
                         &mut next_sequence,
-                        explanation_byte_limit.as_ref(),
+                        explanation_limits.as_ref(),
                         &mut emit,
                     )?;
                 }
@@ -493,14 +551,14 @@ fn receive_and_emit<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     let message = receiver
         .recv()
         .map_err(|_| Error::InternalError("resolution worker result channel closed".to_string()))?;
     retain_result(message, pending, available_workers)?;
-    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit)
 }
 
 fn drain_available<R>(
@@ -508,8 +566,8 @@ fn drain_available<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     loop {
         match receiver.try_recv() {
@@ -518,7 +576,7 @@ fn drain_available<R>(
             Err(TryRecvError::Disconnected) => break,
         }
     }
-    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit)
 }
 
 fn retain_result<R>(
@@ -549,11 +607,11 @@ fn retain_result<R>(
 fn emit_ready<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     while let Some((root, result)) = pending.remove(next_sequence) {
-        explanation_byte_limit.store(emit(&root, result?)?, Ordering::Release);
+        explanation_limits.store(emit(&root, result?)?);
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
             Error::ConfigError("resolution root sequence exceeds u64".to_string())
         })?;
@@ -940,21 +998,25 @@ mod tests {
     }
 
     #[test]
-    fn ordered_emit_publishes_exhausted_evidence_budget_to_workers() {
+    fn ordered_emit_publishes_independent_explanation_limits_to_workers() {
         let mut pending = BTreeMap::from([(0, (root(), Ok(())))]);
         let mut next_sequence = 0;
-        let explanation_byte_limit = AtomicU64::new(64);
+        let explanation_limits =
+            AtomicResolutionExplanationLimits::new(ResolutionExplanationLimits::new(64, 128));
 
         emit_ready(
             &mut pending,
             &mut next_sequence,
-            &explanation_byte_limit,
-            &mut |_, ()| Ok(0),
+            &explanation_limits,
+            &mut |_, ()| Ok(ResolutionExplanationLimits::new(0, 32)),
         )
         .unwrap();
 
         assert_eq!(next_sequence, 1);
-        assert_eq!(explanation_byte_limit.load(Ordering::Acquire), 0);
+        assert_eq!(
+            explanation_limits.load(),
+            ResolutionExplanationLimits::new(0, 32)
+        );
     }
 
     #[test]

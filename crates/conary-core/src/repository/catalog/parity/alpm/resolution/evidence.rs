@@ -15,6 +15,9 @@ pub(super) fn alpm_prepared_explanation(
     alpm: &Alpm,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return evidence_withheld();
+    }
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Prepared {
@@ -45,6 +48,9 @@ pub(super) fn alpm_unsatisfied_explanation<'a>(
     dependencies: impl IntoIterator<Item = &'a alpm::DepMissing>,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return evidence_withheld();
+    }
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Unsatisfied {
@@ -79,6 +85,9 @@ pub(super) fn alpm_conflict_explanation<'a>(
     conflicts: impl IntoIterator<Item = &'a alpm::Conflict>,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return evidence_withheld();
+    }
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
         result: NativeResolutionSurveyAlpmResultV1::Conflicts {
