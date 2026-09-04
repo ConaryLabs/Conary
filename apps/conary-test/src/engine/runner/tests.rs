@@ -38,6 +38,7 @@ fn test_config() -> GlobalConfig {
         paths: PathsConfig {
             db: "/tmp/conary-test.db".to_string(),
             conary_bin: "/usr/local/bin/conary".to_string(),
+            test_hooks_conary_bin: None,
             results_dir: "/tmp/results".to_string(),
             fixture_dir: Some("/opt/remi-tests/fixtures".to_string()),
         },

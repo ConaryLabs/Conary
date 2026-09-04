@@ -3,16 +3,52 @@ set -euo pipefail
 
 all_source_formats=(rpm deb arch)
 source_formats=("${all_source_formats[@]}")
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "Usage: $0 <native-oracle-format> [source-format]" >&2
+ordinary_conary_bin=""
+test_hooks_conary_bin=""
+usage() {
+  echo "Usage: $0 --conary-bin <path> --test-hooks-conary-bin <path> <native-oracle-format> [source-format]" >&2
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      ordinary_conary_bin="$2"
+      shift 2
+      ;;
+    --test-hooks-conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      test_hooks_conary_bin="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      usage
+      exit 64
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [[ -z "${ordinary_conary_bin}" || -z "${test_hooks_conary_bin}" || $# -lt 1 || $# -gt 2 ]]; then
+  usage
   exit 64
 fi
+for binary in "${ordinary_conary_bin}" "${test_hooks_conary_bin}"; do
+  if [[ "${binary}" != /* || ! -x "${binary}" ]]; then
+    echo "Conary binary input must be an executable absolute path: ${binary}" >&2
+    exit 64
+  fi
+done
 case "$1" in
   rpm|deb|arch)
     native_format="$1"
     ;;
   *)
-    echo "Usage: $0 <native-oracle-format> [source-format]" >&2
+    usage
     exit 64
     ;;
 esac
@@ -22,7 +58,7 @@ if [[ $# -eq 2 ]]; then
       source_formats=("$2")
       ;;
     *)
-      echo "Usage: $0 <native-oracle-format> [source-format]" >&2
+      usage
       exit 64
       ;;
   esac
@@ -31,7 +67,6 @@ fi
 work="/tmp/conary-cross-source-lifecycle-matrix"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fixtures_dir="$(cd "${script_dir}/.." && pwd)"
-conary_bin="${CONARY_BIN:-conary}"
 assert_generation="${script_dir}/assert-selected-generation.py"
 prepare_selected_root="${script_dir}/prepare-selected-root.sh"
 capture_native_oracle="${script_dir}/capture-native-lifecycle-oracle.sh"
@@ -73,9 +108,9 @@ for source_format in "${build_formats[@]}"; do
   v2_output="${packages_root}/${source_format}/v2"
   mkdir -p "${v1_output}" "${v2_output}"
 
-  CONARY_BIN="${conary_bin}" "${script_dir}/build-native-fixtures.sh" \
+  CONARY_BIN="${ordinary_conary_bin}" "${script_dir}/build-native-fixtures.sh" \
     "${source_format}" "${v1_output}" "${v1_fixture}"
-  CONARY_BIN="${conary_bin}" "${script_dir}/build-native-fixtures.sh" \
+  CONARY_BIN="${ordinary_conary_bin}" "${script_dir}/build-native-fixtures.sh" \
     "${source_format}" "${v2_output}" "${v2_fixture}"
 
   # shellcheck disable=SC1090
@@ -190,6 +225,23 @@ assert_trace() {
     --expect-sha256 "${trace_path}=$(expected_trace_digest "${source_format}" "${operation}")"
 }
 
+run_hook_free_conary() {
+  "${hook_free_env[@]}" "${ordinary_conary_bin}" "$@"
+}
+
+run_conary_requiring_hook() {
+  local hook="$1"
+  shift
+  case "${hook}" in
+    CONARY_TEST_SKIP_GENERATION_MOUNT) ;;
+    *)
+      echo "Undeclared Conary lifecycle test hook: ${hook}" >&2
+      exit 64
+      ;;
+  esac
+  "${hooked_lifecycle_env[@]}" "${hook}=1" "${test_hooks_conary_bin}" "$@"
+}
+
 for source_format in "${source_formats[@]}"; do
   case_root="${work}/${source_format}"
   db="${case_root}/conary.db"
@@ -239,19 +291,22 @@ for source_format in "${source_formats[@]}"; do
     corpus_v2_version="${v2_version}"
   fi
 
-  conary_env=(
+  hook_free_env=(
     env
     "HOME=${home}"
     "XDG_DATA_HOME=${home}/xdg-data"
     "XDG_CONFIG_HOME=${home}/xdg-config"
-    "CONARY_TEST_SKIP_GENERATION_MOUNT=1"
+    "PATH=${forbid_dir}:${PATH}"
   )
-  matrix_env=("${conary_env[@]}" "PATH=${forbid_dir}:${PATH}")
+  hooked_lifecycle_env=("${hook_free_env[@]}")
 
-  "${conary_env[@]}" "${conary_bin}" system init --db-path "${db}"
-  CONARY_BIN="${conary_bin}" "${prepare_selected_root}" "${db}" "${case_root}"
+  run_hook_free_conary system init --db-path "${db}"
+  "${prepare_selected_root}" \
+    --conary-bin "${ordinary_conary_bin}" \
+    --test-hooks-conary-bin "${test_hooks_conary_bin}" \
+    "${db}" "${case_root}"
 
-  preview="$("${matrix_env[@]}" "${conary_bin}" install "${v1_package}" \
+  preview="$(run_hook_free_conary install "${v1_package}" \
     --convert-to-ccs \
     --db-path "${db}" \
     --sandbox always \
@@ -271,7 +326,7 @@ for source_format in "${source_formats[@]}"; do
     --absent "/usr/share/conary-native-lifecycle-parity/payload-version"
 
   begin_corpus_stage installation
-  "${matrix_env[@]}" "${conary_bin}" install "${v1_package}" \
+  run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}" \
     --convert-to-ccs \
     --db-path "${db}" \
     --sandbox always \
@@ -290,7 +345,17 @@ for source_format in "${source_formats[@]}"; do
   complete_corpus_stage installation
 
   begin_corpus_stage update
-  "${matrix_env[@]}" "${conary_bin}" install "${v2_package}" \
+  update_preview="$(run_hook_free_conary install "${v2_package}" \
+    --convert-to-ccs \
+    --db-path "${db}" \
+    --sandbox always \
+    --no-deps \
+    --from "${source_profile}" \
+    --dry-run 2>&1)"
+  printf '%s\n' "${update_preview}"
+  grep -F "Would install package: ${package_name} version ${v2_version}" <<<"${update_preview}"
+  grep -F "Dry run complete. No changes made." <<<"${update_preview}"
+  run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}" \
     --convert-to-ccs \
     --db-path "${db}" \
     --sandbox always \
@@ -319,7 +384,8 @@ for source_format in "${source_formats[@]}"; do
       ;;
   esac
   begin_corpus_stage rollback
-  "${matrix_env[@]}" "${conary_bin}" system state rollback "${upgrade_changeset}" \
+  run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT \
+    system state rollback "${upgrade_changeset}" \
     --db-path "${db}" \
     --yes
   test "$(
@@ -334,7 +400,7 @@ for source_format in "${source_formats[@]}"; do
   complete_corpus_stage rollback
 
   begin_corpus_stage removal
-  "${matrix_env[@]}" "${conary_bin}" remove "${package_name}" \
+  run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove "${package_name}" \
     --db-path "${db}" \
     --purge \
     --sandbox always \

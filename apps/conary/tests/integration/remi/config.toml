@@ -6,6 +6,7 @@
 #   REMI_ENDPOINT  - override [remi] endpoint
 #   DB_PATH        - override [paths] db
 #   CONARY_BIN     - override [paths] conary_bin
+#   CONARY_HOOKS_BIN - override [paths] test_hooks_conary_bin
 #   RESULTS_DIR    - override [paths] results_dir
 #   DISTRO         - select which [distros.*] section to use
 
@@ -15,6 +16,7 @@ endpoint = "https://remi.conary.io"
 [paths]
 db = "/var/lib/conary/conary.db"
 conary_bin = "/usr/bin/conary"
+test_hooks_conary_bin = "/usr/bin/conary"
 results_dir = "/results"
 fixture_dir = "/opt/remi-tests/fixtures"
 

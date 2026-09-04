@@ -263,6 +263,8 @@ create_release_policy_fixture() {
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
         "$repo/apps/remi/src/server" \
+        "$repo/apps/conary/tests/fixtures/native" \
+        "$repo/apps/conary/tests/integration/remi/manifests" \
         "$repo/docs/operations" \
         "$repo/site/src/lib" \
         "$repo/site/static" \
@@ -316,6 +318,10 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" \
         "$repo/deploy/remi-deploy-helper.sh"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
+    cp "$REPO_ROOT/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
+    cp "$REPO_ROOT/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml" \
+        "$repo/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
     cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
@@ -3518,12 +3524,25 @@ test_check_release_matrix_rejects_published_binary_as_hook_runner() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-artifact-proof.yml" \
-        '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks' \
-        '          CONARY_BIN: /usr/bin/conary'
+        '          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks' \
+        '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks'
 
     assert_check_release_matrix_fails \
         "$repo" \
         "published native package fence and separate test-hook lifecycle proof"
+}
+
+test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+        'preview="$(run_hook_free_conary install "${v1_package}" \' \
+        'preview="$(run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}" \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published binary hook-free lifecycle coverage"
 }
 
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
@@ -3970,6 +3989,7 @@ main() {
         test_check_release_matrix_rejects_test_hooks_in_release_workflow
         test_check_release_matrix_requires_ordinary_conary_hook_fence
         test_check_release_matrix_rejects_published_binary_as_hook_runner
+        test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary

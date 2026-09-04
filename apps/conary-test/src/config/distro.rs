@@ -29,6 +29,9 @@ impl GlobalConfig {
         if let Ok(val) = std::env::var("CONARY_BIN") {
             self.paths.conary_bin = val;
         }
+        if let Ok(val) = std::env::var("CONARY_HOOKS_BIN") {
+            self.paths.test_hooks_conary_bin = Some(val);
+        }
         if let Ok(val) = std::env::var("RESULTS_DIR") {
             self.paths.results_dir = val;
         }
@@ -45,6 +48,8 @@ pub struct RemiConfig {
 pub struct PathsConfig {
     pub db: String,
     pub conary_bin: String,
+    #[serde(default)]
+    pub test_hooks_conary_bin: Option<String>,
     pub results_dir: String,
     #[serde(default)]
     pub fixture_dir: Option<String>,

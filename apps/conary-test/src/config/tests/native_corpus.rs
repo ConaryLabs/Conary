@@ -70,6 +70,13 @@ fn phase4_native_pm_parity_manifest_carries_cross_source_contract() {
         "system state rollback",
         "--purge",
         "assert-selected-generation.py",
+        "--conary-bin",
+        "--test-hooks-conary-bin",
+        "run_hook_free_conary system init",
+        "preview=\"$(run_hook_free_conary install",
+        "update_preview=\"$(run_hook_free_conary install",
+        "run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install",
+        "run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove",
     ] {
         assert!(
             matrix_script.contains(required),
@@ -420,6 +427,15 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
             rendered.contains("${native_lifecycle_oracle_format}"),
             "focused manifest must pass an explicit typed native-oracle format"
         );
+        for binary_input in [
+            "--conary-bin ${CONARY_BIN}",
+            "--test-hooks-conary-bin ${CONARY_HOOKS_BIN}",
+        ] {
+            assert!(
+                rendered.contains(binary_input),
+                "focused manifest must pass {binary_input}"
+            );
+        }
         for operation in ["install", "update", "rollback", "remove"] {
             assert!(
                 test.description.contains(operation),
@@ -431,9 +447,11 @@ fn focused_native_cross_source_manifest_runs_the_shared_lifecycle_contract() {
     assert_eq!(openrc.id, "TNPMX02O");
     assert_eq!(openrc.fatal, Some(false));
     assert!(openrc.corpus.is_none());
-    assert!(
-        format!("{openrc:?}").contains("run-openrc-service-lifecycle.sh ${target_init_system}")
-    );
+    let openrc_rendered = format!("{openrc:?}");
+    assert!(openrc_rendered.contains("run-openrc-service-lifecycle.sh"));
+    assert!(openrc_rendered.contains("--conary-bin ${CONARY_BIN}"));
+    assert!(openrc_rendered.contains("--test-hooks-conary-bin ${CONARY_HOOKS_BIN}"));
+    assert!(openrc_rendered.contains("${target_init_system}"));
     for (distro, expected_format, expected_init) in [
         ("fedora44", "rpm", "systemd"),
         ("ubuntu-26.04", "deb", "systemd"),

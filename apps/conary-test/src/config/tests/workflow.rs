@@ -1046,7 +1046,7 @@ fn release_artifact_workflow_installs_every_published_native_package() {
 
     let lifecycle = named_step(
         &job.steps,
-        "Run Cartesian lifecycle parity with the test-hook binary",
+        "Run Cartesian lifecycle parity with explicit binary authority",
     );
     assert!(
         lifecycle
@@ -1062,8 +1062,12 @@ fn release_artifact_workflow_installs_every_published_native_package() {
         Some("1")
     );
     assert_eq!(
-        lifecycle.env.get("CONARY_BIN").map(String::as_str),
+        lifecycle.env.get("CONARY_HOOKS_BIN").map(String::as_str),
         Some("/usr/libexec/conary-test/conary-test-hooks")
+    );
+    assert!(
+        !lifecycle.env.contains_key("CONARY_BIN"),
+        "the package-owned /usr/bin/conary must remain the ordinary suite binary"
     );
 
     let gate: GateJob = parse_job(&workflow, RELEASE_ARTIFACT_GATE_ID);

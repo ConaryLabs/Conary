@@ -32,6 +32,8 @@ timed_rustc_wrapper="scripts/timed-rustc-wrapper.sh"
 static_build_script="scripts/build-static-conary.sh"
 candidate_cache_action=".github/actions/setup-remi-candidate-compiler-cache/action.yml"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
+cross_source_lifecycle_manifest="apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
+cross_source_lifecycle_script="apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
@@ -112,6 +114,20 @@ require_job_match() {
     [[ -n "$block" ]] || fail "$job job missing in $file"
     rg -q --multiline -- "$pattern" <<<"$block" ||
         fail "$description missing in $file job $job"
+}
+
+forbid_job_match() {
+    local file="$1"
+    local job="$2"
+    local pattern="$3"
+    local description="$4"
+    local block
+
+    block="$(extract_job_block "$file" "$job")"
+    [[ -n "$block" ]] || fail "$job job missing in $file"
+    if rg -q --multiline -- "$pattern" <<<"$block"; then
+        fail "$description unexpectedly present in $file job $job"
+    fi
 }
 
 require_literal_count() {
@@ -591,7 +607,11 @@ require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s
 require_job_match "$artifact_proof_workflow" native-package-lifecycle '\.schema_version == 1 and \(\.dry_run \| type\) == "boolean"' 'published artifact metadata schema and boolean dry-run validation'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release download "\$RELEASE_TAG"[\s\S]*--pattern metadata\.json[\s\S]*sha256sum -c SHA256SUMS --ignore-missing[\s\S]*published_digest[\s\S]*actual_digest' 'published artifact metadata, checksum, and GitHub digest proof'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'Prove the signed bootstrap in a clean supported host[\s\S]*install-conary-preview\.sh[\s\S]*--manifest-url[\s\S]*--apply --yes' 'clean-host signed bootstrap proof'
-require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*Prove the published binary rejects test hooks[\s\S]*/usr/bin/conary --version[\s\S]*test-hook environment variables are disabled[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks[\s\S]*--suite native-cross-source-lifecycle' 'published native package fence and separate test-hook lifecycle proof'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*Prove the published binary rejects test hooks[\s\S]*/usr/bin/conary --version[\s\S]*test-hook environment variables are disabled[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks[\s\S]*--suite native-cross-source-lifecycle' 'published native package fence and separate test-hook lifecycle proof'
+forbid_job_match "$artifact_proof_workflow" native-package-lifecycle '^[[:space:]]+CONARY_BIN:' 'whole-suite Conary binary override'
+require_match "$cross_source_lifecycle_manifest" 'run-cross-source-lifecycle-matrix\.sh --conary-bin \$\{CONARY_BIN\} --test-hooks-conary-bin \$\{CONARY_HOOKS_BIN\}' 'typed ordinary and test-hook lifecycle binary inputs'
+require_match "$cross_source_lifecycle_script" 'run_hook_free_conary\(\)[\s\S]*"\$\{ordinary_conary_bin\}"[\s\S]*run_hook_free_conary system init[\s\S]*preview="\$\(run_hook_free_conary install[\s\S]*update_preview="\$\(run_hook_free_conary install' 'published binary hook-free lifecycle coverage'
+require_match "$cross_source_lifecycle_script" 'run_conary_requiring_hook\(\)[\s\S]*CONARY_TEST_SKIP_GENERATION_MOUNT[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT[[:space:]\\]*[[:space:]]*system state rollback[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove' 'explicit hook-dependent lifecycle coverage'
 require_job_match "$artifact_proof_workflow" release-artifact-proof 'needs: native-package-lifecycle[\s\S]*MATRIX_RESULT[\s\S]*"\$MATRIX_RESULT" != "success"' 'stable all-distro published-artifact proof gate'
 
 require_artifact_matrix_row conary "protected release assets"

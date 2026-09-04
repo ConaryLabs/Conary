@@ -239,10 +239,10 @@ jobs:
             grep -F "test-hook environment variables are disabled" /tmp/ordinary.err
             CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/libexec/conary-test/conary-test-hooks --version
           '
-      - name: Run Cartesian lifecycle parity with the test-hook binary
+      - name: Run Cartesian lifecycle parity with explicit binary authority
         env:
           CONARY_TEST_REUSE_IMAGE: "1"
-          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks
+          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks
         run: >-
           cargo run -p conary-test --
           run

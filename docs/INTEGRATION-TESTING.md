@@ -195,8 +195,11 @@ images stage the same artifact through `build_context = "static-binary"`.
 Published-native-package proof images keep that integration artifact at
 `/usr/libexec/conary-test/conary-test-hooks` while the package owns the
 ordinary `/usr/bin/conary`. The release lane proves `/usr/bin/conary` rejects
-test-hook variables, then selects the separate integration binary only for the
-hook-dependent lifecycle suite. The integration path is never packaged.
+test-hook variables, then passes the ordinary and integration paths as separate
+typed lifecycle inputs. Hook-free setup, fixture construction, and install or
+update planning run through the package-owned binary. Only mutation steps that
+explicitly name `CONARY_TEST_SKIP_GENERATION_MOUNT` use the integration binary.
+The integration path is never packaged.
 For the protected PR matrix, `--with-test-harness` also produces fully static
 `conary-test` and library-test executables. One producer packages those three
 binaries with exact source, toolchain, flag, cache-policy, and digest evidence;

@@ -1,10 +1,46 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "Usage: $0 <target-init-system>" >&2
+ordinary_conary_bin=""
+test_hooks_conary_bin=""
+usage() {
+  echo "Usage: $0 --conary-bin <path> --test-hooks-conary-bin <path> <target-init-system>" >&2
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      ordinary_conary_bin="$2"
+      shift 2
+      ;;
+    --test-hooks-conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      test_hooks_conary_bin="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      usage
+      exit 64
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [[ -z "${ordinary_conary_bin}" || -z "${test_hooks_conary_bin}" || $# -ne 1 ]]; then
+  usage
   exit 64
 fi
+for binary in "${ordinary_conary_bin}" "${test_hooks_conary_bin}"; do
+  if [[ "${binary}" != /* || ! -x "${binary}" ]]; then
+    echo "Conary binary input must be an executable absolute path: ${binary}" >&2
+    exit 64
+  fi
+done
 if [[ "$1" != "openrc" ]]; then
   exit 0
 fi
@@ -14,7 +50,6 @@ fixtures_dir="$(cd "${script_dir}/.." && pwd)"
 fixture="${fixtures_dir}/openrc-service"
 foreign_fixture="${fixtures_dir}/openrc-foreign-service"
 authority="${fixtures_dir}/ccs-test-authority"
-conary_bin="${CONARY_BIN:-conary}"
 work="/tmp/conary-openrc-service-lifecycle"
 root="${work}"
 db="${work}/conary.db"
@@ -25,9 +60,12 @@ home="${work}/home"
 rm -rf "${work}"
 mkdir -p "${root}" "${output}" "${home}"
 
-HOME="${home}" "${conary_bin}" system init --db-path "${db}"
-CONARY_BIN="${conary_bin}" "${script_dir}/prepare-selected-root.sh" "${db}" "${root}"
-"${conary_bin}" ccs build "${fixture}" \
+HOME="${home}" "${ordinary_conary_bin}" system init --db-path "${db}"
+"${script_dir}/prepare-selected-root.sh" \
+  --conary-bin "${ordinary_conary_bin}" \
+  --test-hooks-conary-bin "${test_hooks_conary_bin}" \
+  "${db}" "${root}"
+"${ordinary_conary_bin}" ccs build "${fixture}" \
   --source "${fixture}/stage" \
   --output "${output}" \
   --target ccs \
@@ -41,7 +79,7 @@ fi
 
 CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   HOME="${home}" \
-  "${conary_bin}" ccs install "${packages[0]}" \
+  "${test_hooks_conary_bin}" ccs install "${packages[0]}" \
     --policy "${authority}/trust-policy.toml" \
     --db-path "${db}" \
     --root "${root}" \
@@ -81,13 +119,13 @@ if [[ "${pending_count}" != "1" ]]; then
   exit 1
 fi
 
-CONARY_BIN="${conary_bin}" "${script_dir}/build-native-fixtures.sh" \
+CONARY_BIN="${ordinary_conary_bin}" "${script_dir}/build-native-fixtures.sh" \
   rpm "${foreign_output}" "${foreign_fixture}"
 # shellcheck disable=SC1091
 source "${foreign_output}/native-fixture.env"
 CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
   HOME="${home}" \
-  "${conary_bin}" install "${NATIVE_PKG_FILE}" \
+  "${test_hooks_conary_bin}" install "${NATIVE_PKG_FILE}" \
     --convert-to-ccs \
     --from fedora-44 \
     --db-path "${db}" \
