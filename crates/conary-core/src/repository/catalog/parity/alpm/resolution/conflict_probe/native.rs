@@ -9,8 +9,8 @@ use super::super::evidence::{
     alpm_conflict_explanation, alpm_unavailable, alpm_unsatisfied_explanation,
 };
 use super::{
-    CheckBudget, ConflictReport, Error, NativeParityPackageV1, NativeRootResolutionError,
-    ProbeResult, ResolutionExplanationLimits, exact_root, package_id,
+    CheckBudget, ConflictReport, ConflictSource, Error, NativeParityPackageV1,
+    NativeRootResolutionError, ProbeResult, ResolutionExplanationLimits, exact_root, package_id,
 };
 use crate::repository::catalog::parity::{
     NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyErrorReasonV1,
@@ -79,9 +79,13 @@ pub(super) fn prepare_once(
                     }
                     Preparation::Unsatisfied(missing)
                 }
-                Some(PrepareData::ConflictingDeps(conflicts)) => Preparation::Conflicting(
-                    conflict_report(conflicts.iter(), limits.diagnostic_outcome_bytes()),
-                ),
+                Some(PrepareData::ConflictingDeps(conflicts)) => {
+                    Preparation::Conflicting(conflict_report(
+                        conflicts.iter(),
+                        limits.diagnostic_outcome_bytes(),
+                        ConflictSource::Transaction,
+                    ))
+                }
                 Some(PrepareData::PkgInvalidArch(_)) => {
                     return Err(NativeRootResolutionError::new(
                         Error::ConfigError(format!("libalpm rejected architecture '{target_architecture}' while resolving exact root '{}'", root.name)),
@@ -118,6 +122,7 @@ pub(super) fn prepare_once(
             return Ok(Preparation::Conflicting(conflict_report(
                 conflicts.iter(),
                 limits.diagnostic_outcome_bytes(),
+                ConflictSource::MissingFirst,
             )));
         }
     }
@@ -127,9 +132,11 @@ pub(super) fn prepare_once(
 fn conflict_report<'a>(
     conflicts: impl Iterator<Item = &'a alpm::Conflict>,
     byte_limit: u64,
+    source: ConflictSource,
 ) -> ConflictReport {
     let conflicts = conflicts.collect::<Vec<_>>();
     ConflictReport {
+        source,
         parties: conflicts
             .iter()
             .flat_map(|conflict| {
@@ -146,7 +153,7 @@ fn conflict_report<'a>(
 /// Follow required dependencies depth-first, in native dependency-list order.
 /// Both satisfaction by already selected packages and database provider choice
 /// remain native queries. There is no alternate-set search or custom matching.
-fn default_reachable<'a>(alpm: &'a Alpm, root: &'a Package) -> Vec<&'a Package> {
+pub(super) fn default_reachable<'a>(alpm: &'a Alpm, root: &'a Package) -> Vec<&'a Package> {
     let mut reachable = vec![root];
     let mut pending = root
         .depends()

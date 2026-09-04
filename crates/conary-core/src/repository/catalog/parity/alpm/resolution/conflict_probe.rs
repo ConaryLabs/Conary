@@ -9,6 +9,7 @@ use std::rc::Rc;
 use alpm::{Alpm, Package, TransFlag};
 
 mod native;
+mod reachability;
 
 use super::super::database_name;
 use super::evidence::alpm_unavailable;
@@ -20,6 +21,7 @@ use crate::repository::catalog::parity::{
 
 pub(super) use native::Preparation;
 use native::prepare_once;
+use reachability::relevant_providers;
 
 /// Maximum actual native preparation/conflict evaluations for one exact root.
 pub(super) const PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256;
@@ -27,8 +29,15 @@ pub(super) const PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256;
 type ProbeResult<T> = std::result::Result<T, Box<NativeRootResolutionError>>;
 
 pub(super) struct ConflictReport {
+    source: ConflictSource,
     parties: BTreeSet<PackageId>,
     pub(super) explanation: NativeResolutionSurveyNativeExplanationV1,
+}
+
+#[derive(Clone, Copy)]
+enum ConflictSource {
+    Transaction,
+    MissingFirst,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -94,7 +103,7 @@ impl CheckBudget<'_> {
 }
 
 /// Keep every unrelated dependency at its native default. Only replay answers
-/// for choices whose selected provider is a party to the baseline conflict,
+/// for choices whose selected provider reaches a baseline conflict party,
 /// in the order libalpm asked them. Answers are never combined across choices.
 pub(super) fn prepare_with_conflict_probe(
     alpm: &mut Alpm,
@@ -153,8 +162,11 @@ fn probe(
         return Ok(baseline);
     };
     let choices = std::mem::take(&mut answers.borrow_mut().choices);
+    // Snapshot relevance while the failed native transaction still contains
+    // its baseline choices; retries release and replace that transaction.
+    let relevant = relevant_providers(alpm, root, &choices, &conflict)?;
     for choice in choices {
-        if !conflict.parties.contains(&choice.selected) {
+        if !relevant.contains(&choice.selected) {
             continue;
         }
         for provider in choice.providers {
