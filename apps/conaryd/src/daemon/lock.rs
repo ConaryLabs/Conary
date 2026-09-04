@@ -35,8 +35,7 @@ use std::path::{Path, PathBuf};
 /// The lock is held using `flock(LOCK_EX)` for the daemon's entire lifetime.
 pub struct SystemLock {
     /// The lock file handle (kept open to maintain lock)
-    #[allow(dead_code)]
-    file: File,
+    _file: File,
     /// Path to the lock file
     path: PathBuf,
 }
@@ -57,7 +56,7 @@ impl SystemLock {
         })?;
 
         log::info!("Acquired system lock at {:?}", path);
-        Ok(Self { file, path })
+        Ok(Self { _file: file, path })
     }
 
     /// Try to acquire an exclusive lock without blocking
@@ -72,7 +71,7 @@ impl SystemLock {
         match file.try_lock_exclusive() {
             Ok(()) => {
                 log::info!("Acquired system lock at {:?}", path);
-                Ok(Some(Self { file, path }))
+                Ok(Some(Self { _file: file, path }))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 log::debug!("System lock already held at {:?}", path);

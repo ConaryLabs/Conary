@@ -56,7 +56,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tokio::sync::broadcast;
 
-pub use auth::{Action, AuditEntry, AuditLogger, AuthChecker, PeerCredentials, Permission};
+pub use auth::{Action, AuthChecker, PeerCredentials, Permission};
 pub use client::{DaemonClient, should_forward_to_daemon, try_connect};
 pub use config::DaemonConfig;
 pub use enhance::{
@@ -718,8 +718,6 @@ async fn acquire_unix_listener(
         unix_path: config.socket_path.clone(),
         unix_mode: config.socket_mode,
         unix_group: config.socket_group.clone(),
-        enable_tcp: config.enable_tcp,
-        tcp_bind: config.tcp_bind.clone(),
     };
 
     let mut mgr = socket::SocketManager::new(socket_config);

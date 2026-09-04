@@ -13,11 +13,6 @@ fn test_default_config_uses_canonical_daemon_defaults() {
     );
     assert_eq!(config.lock_path, PathBuf::from(SystemLock::DEFAULT_PATH));
     assert_eq!(config.socket_mode, DaemonConfig::DEFAULT_SOCKET_MODE);
-    assert_eq!(
-        config.tcp_bind.as_deref(),
-        Some(DaemonConfig::DEFAULT_TCP_BIND)
-    );
-    assert!(!config.enable_tcp);
 }
 
 #[test]

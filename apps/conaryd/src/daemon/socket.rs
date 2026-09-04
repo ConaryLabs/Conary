@@ -3,7 +3,7 @@
 //! Unix socket listener for conaryd
 //!
 //! Provides a Unix domain socket listener for the daemon. This is the primary
-//! interface for CLI communication. TCP is optional and disabled by default.
+//! interface for CLI communication.
 //!
 //! # Peer Credentials
 //!
@@ -16,7 +16,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
-use tokio::net::{TcpListener, UnixListener};
+use tokio::net::UnixListener;
 
 use crate::daemon::DaemonConfig;
 
@@ -29,10 +29,6 @@ pub struct SocketConfig {
     pub unix_mode: u32,
     /// Optional group for socket ownership
     pub unix_group: Option<String>,
-    /// Whether to enable TCP listener
-    pub enable_tcp: bool,
-    /// TCP bind address
-    pub tcp_bind: Option<String>,
 }
 
 impl Default for SocketConfig {
@@ -41,8 +37,6 @@ impl Default for SocketConfig {
             unix_path: DaemonConfig::default_socket_path(),
             unix_mode: DaemonConfig::DEFAULT_SOCKET_MODE,
             unix_group: None,
-            enable_tcp: false,
-            tcp_bind: Some(DaemonConfig::default_tcp_bind()),
         }
     }
 }
@@ -51,7 +45,6 @@ impl Default for SocketConfig {
 pub struct SocketManager {
     config: SocketConfig,
     unix_listener: Option<UnixListener>,
-    tcp_listener: Option<TcpListener>,
 }
 
 impl SocketManager {
@@ -60,7 +53,6 @@ impl SocketManager {
         Self {
             config,
             unix_listener: None,
-            tcp_listener: None,
         }
     }
 
@@ -106,17 +98,6 @@ impl SocketManager {
 
         self.unix_listener = Some(unix_listener);
 
-        // TCP listener support is not yet implemented (the accept loop only
-        // handles the Unix socket). Return an error so operators don't silently
-        // get a bound-but-dead TCP port.
-        if self.config.enable_tcp {
-            return Err(conary_core::Error::IoError(
-                "TCP listener not yet implemented. The daemon currently only accepts \
-                 connections on the Unix socket. Remove enable_tcp from your config."
-                    .to_string(),
-            ));
-        }
-
         Ok(())
     }
 
@@ -125,19 +106,9 @@ impl SocketManager {
         self.unix_listener.as_ref()
     }
 
-    /// Get the TCP listener (if bound)
-    pub fn tcp_listener(&self) -> Option<&TcpListener> {
-        self.tcp_listener.as_ref()
-    }
-
     /// Take ownership of the Unix listener
     pub fn take_unix_listener(&mut self) -> Option<UnixListener> {
         self.unix_listener.take()
-    }
-
-    /// Take ownership of the TCP listener
-    pub fn take_tcp_listener(&mut self) -> Option<TcpListener> {
-        self.tcp_listener.take()
     }
 
     /// Get the socket path
@@ -288,8 +259,6 @@ mod tests {
             unix_path: socket_path.clone(),
             unix_mode: 0o660,
             unix_group: None,
-            enable_tcp: false,
-            tcp_bind: None,
         };
 
         let mut manager = SocketManager::new(config);
@@ -297,7 +266,6 @@ mod tests {
 
         assert!(socket_path.exists());
         assert!(manager.unix_listener().is_some());
-        assert!(manager.tcp_listener().is_none());
     }
 
     #[tokio::test]
@@ -309,8 +277,6 @@ mod tests {
             unix_path: socket_path.clone(),
             unix_mode: 0o660,
             unix_group: None,
-            enable_tcp: false,
-            tcp_bind: None,
         };
 
         {
@@ -331,10 +297,6 @@ mod tests {
             PathBuf::from(DaemonConfig::DEFAULT_SOCKET_PATH)
         );
         assert_eq!(socket.unix_mode, DaemonConfig::DEFAULT_SOCKET_MODE);
-        assert_eq!(
-            socket.tcp_bind.as_deref(),
-            Some(DaemonConfig::DEFAULT_TCP_BIND)
-        );
     }
 
     #[test]
