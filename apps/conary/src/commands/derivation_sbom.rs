@@ -167,8 +167,8 @@ fn build_component(
             name: "conary:trust_level".to_owned(),
             value: format!(
                 "{} ({})",
-                record.trust_level,
-                index::trust_level_name(record.trust_level)
+                record.trust_level.as_i64(),
+                record.trust_level.name()
             ),
         },
     ];

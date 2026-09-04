@@ -227,7 +227,7 @@ mod tests {
             build_env_hash: Some(seed_id.to_owned()),
             built_at: "2026-03-23T00:00:00Z".to_owned(),
             build_duration_secs: 1,
-            trust_level: 2,
+            trust_level: crate::derivation::index::DerivationTrustLevel::LocallyBuilt,
             provenance_cas_hash: None,
             reproducible: None,
         };

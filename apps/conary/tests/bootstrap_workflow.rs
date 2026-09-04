@@ -36,7 +36,7 @@ fn write_run_workdir(
                 build_env_hash: Some(seed_id.to_string()),
                 built_at: "2026-03-31T00:00:00Z".to_string(),
                 build_duration_secs: 1,
-                trust_level: 2,
+                trust_level: conary_core::derivation::index::DerivationTrustLevel::LocallyBuilt,
                 provenance_cas_hash: None,
                 reproducible: None,
             })

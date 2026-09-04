@@ -38,6 +38,8 @@ pub enum ExecutorError {
     /// An error occurred reading or writing the derivation index.
     #[error("derivation index error: {0}")]
     Index(String),
+    #[error("provenance serialization failed: {0}")]
+    Provenance(serde_json::Error),
     /// A general I/O error.
     #[error("I/O error: {0}")]
     Io(String),
@@ -190,6 +192,16 @@ pub struct DerivationExecutor {
 }
 
 impl DerivationExecutor {
+    fn store_provenance(
+        &self,
+        provenance: &crate::provenance::Provenance,
+    ) -> Result<String, ExecutorError> {
+        let json = provenance.to_json().map_err(ExecutorError::Provenance)?;
+        self.cas
+            .store(json.as_bytes())
+            .map_err(|error| ExecutorError::Cas(error.to_string()))
+    }
+
     /// Create a new executor backed by the given CAS store.
     #[must_use]
     pub fn new(cas: CasStore, cas_dir: PathBuf, config: ExecutorConfig) -> Self {
@@ -482,22 +494,10 @@ impl DerivationExecutor {
         let provenance =
             crate::provenance::Provenance::new(source_prov, build_prov, sig_prov, content_prov);
 
-        let provenance_cas_hash = match provenance.to_json() {
-            Ok(json) => match self.cas.store(json.as_bytes()) {
-                Ok(hash) => Some(hash),
-                Err(e) => {
-                    tracing::warn!("failed to store provenance: {e}");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!("failed to serialize provenance: {e}");
-                None
-            }
-        };
+        let provenance_cas_hash = Some(self.store_provenance(&provenance)?);
 
-        // Step 7: Record in derivation index with provenance included.
-        let trust_level = if provenance_cas_hash.is_some() { 2 } else { 0 };
+        // The executor persists provenance and local-build trust in one index record.
+        let trust_level = super::index::DerivationTrustLevel::LocallyBuilt;
         let record = DerivationRecord {
             derivation_id: derivation_id.as_str().to_owned(),
             output_hash: pkg_output.manifest.output_hash.clone(),

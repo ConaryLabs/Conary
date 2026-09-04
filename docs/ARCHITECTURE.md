@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 64
+last_updated: 2026-09-05
+revision: 65
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -699,6 +699,18 @@ Supports x86_64, aarch64, and riscv64 targets. Dry-run mode
 (`--dry-run`) validates the full pipeline without building.
 
 ## Database Schema
+
+Persisted lifecycle vocabularies belong to their model enums. Operational SQL
+binds those owners' encodings, and stored-value readers retain
+`InvalidPersistedValue` when obsolete data cannot authorize work. Backup
+publication and changeset verification lives in `db/backup/publication.rs`.
+Sync refresh states and the terminal-state SQL set belong to
+`repository/sync/remi/run/contract.rs::ProfileSyncRunState`.
+`derivation/index.rs::DerivationTrustLevel` owns the existing integer mapping;
+the executor stores provenance before recording local-build trust in the same
+index row. Serialization, CAS, and index failures propagate. The pipeline does
+not write trust a second time. These ownership changes preserve current stored
+strings and integers and require no schema revision or rebuild of valid data.
 
 Operational runtime state lives in SQLite. The pre-alpha database contract has
 one current schema epoch initialized by `crates/conary-core/src/db/schema.rs`.

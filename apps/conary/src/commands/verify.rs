@@ -50,15 +50,15 @@ pub fn cmd_verify_chain(
             match index.lookup(&drv.derivation_id) {
                 Ok(Some(record)) => {
                     found += 1;
-                    let level = record.trust_level.min(4) as usize;
+                    let level = record.trust_level.as_i64() as usize;
                     trust_counts[level] += 1;
 
                     println!(
                         "  {}-{}    [level {}: {}]",
                         drv.package,
                         drv.version,
-                        record.trust_level,
-                        index::trust_level_name(record.trust_level)
+                        record.trust_level.as_i64(),
+                        record.trust_level.name()
                     );
 
                     if verbose {
@@ -190,8 +190,14 @@ pub fn cmd_verify_diverse(profile_a_path: &str, profile_b_path: &str, db_path: &
                     "  {}-{}:  MATCH (diverse-verified)",
                     drv.package, drv.version
                 );
-                index.set_trust_level(a_id, 4)?;
-                index.set_trust_level(&drv.derivation_id, 4)?;
+                index.set_trust_level(
+                    a_id,
+                    conary_core::derivation::index::DerivationTrustLevel::DiverseVerified,
+                )?;
+                index.set_trust_level(
+                    &drv.derivation_id,
+                    conary_core::derivation::index::DerivationTrustLevel::DiverseVerified,
+                )?;
             } else {
                 mismatches += 1;
                 println!("  {}-{}:  MISMATCH", drv.package, drv.version);
