@@ -859,7 +859,10 @@ fn validate_sha256(label: &str, value: &str) -> anyhow::Result<()> {
     if algorithm != "sha256" {
         bail!("{label} must use sha256:<64 hex>");
     }
-    if !crate::hash::is_canonical_sha256(digest) {
+    // Persisted lifecycle digests are case-insensitive hex under the current
+    // schema revision; tightening to the canonical lowercase spelling would
+    // reject installed bundles without a typed obsolete-form path.
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         bail!("{label} must use sha256:<64 hex>");
     }
     Ok(())
