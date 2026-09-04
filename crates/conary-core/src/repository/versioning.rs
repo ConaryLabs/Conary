@@ -573,17 +573,12 @@ const fn relation_includes_greater(relation: ProvideVersionRelation) -> bool {
     )
 }
 
-/// Resolve the persisted scheme authority for a repository package.
-pub fn resolve_package_version_scheme(pkg: &RepositoryPackage) -> VersionScheme {
-    pkg.version_scheme
-}
-
 pub fn compare_repo_package_versions(
     a: &RepositoryPackage,
     b: &RepositoryPackage,
 ) -> VersionResult<Ordering> {
-    let a_scheme = resolve_package_version_scheme(a);
-    let b_scheme = resolve_package_version_scheme(b);
+    let a_scheme = a.version_scheme;
+    let b_scheme = b.version_scheme;
     compare_package_identities(
         a_scheme,
         &a.version,
@@ -713,7 +708,7 @@ fn validate_rpm_evr(raw: &str) -> std::result::Result<(), String> {
         return Err("leading or trailing whitespace is not allowed".to_string());
     }
 
-    let (epoch, version_release) = match raw.split_once(':') {
+    let version_release = match raw.split_once(':') {
         Some((epoch, rest)) => {
             if epoch.is_empty() || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
                 return Err("epoch must be a non-empty decimal integer".to_string());
@@ -721,11 +716,10 @@ fn validate_rpm_evr(raw: &str) -> std::result::Result<(), String> {
             epoch
                 .parse::<u64>()
                 .map_err(|_| "epoch exceeds the supported integer range".to_string())?;
-            (Some(epoch), rest)
+            rest
         }
-        None => (None, raw),
+        None => raw,
     };
-    let _ = epoch;
 
     if version_release.contains(':') {
         return Err("multiple epoch separators are not allowed".to_string());

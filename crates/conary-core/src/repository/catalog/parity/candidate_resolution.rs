@@ -537,11 +537,7 @@ impl CandidateResolutionWorker {
         })?;
         match policy
             .architecture_admission
-            .admits(
-                root_profile,
-                crate::repository::versioning::resolve_package_version_scheme(&root),
-                root_architecture,
-            )
+            .admits(root_profile, root.version_scheme, root_architecture)
             .and_then(|decision| decision.into_result())
             .map_err(|error| {
                 root_failure(

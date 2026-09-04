@@ -7,7 +7,6 @@ use conary_core::ccs::verify::{TrustPolicy, verify_package, verify_package_into_
 use conary_core::db::models::{Repository, RepositoryPackage, RepositoryPackageKey};
 use conary_core::filesystem::CasStore;
 use conary_core::repository::RepositorySourceKind;
-use conary_core::repository::versioning::resolve_package_version_scheme;
 use conary_core::scriptlet::SandboxMode;
 use std::path::Path;
 
@@ -80,7 +79,7 @@ pub(crate) fn repository_install_provenance_from_package(
     let repository_id = repository
         .id
         .ok_or_else(|| anyhow::anyhow!("Selected repository has no database ID"))?;
-    let version_scheme = resolve_package_version_scheme(package);
+    let version_scheme = package.version_scheme;
     let source_identity =
         conary_core::repository::selector::candidate_source_identity(package, repository)?
             .map(str::to_string);

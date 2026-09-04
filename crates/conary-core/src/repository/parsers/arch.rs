@@ -29,11 +29,6 @@ use super::common::{self, MAX_PACKAGE_SIZE};
 
 mod preflight;
 
-#[cfg(test)]
-fn authenticated_database_snapshot(bytes: &[u8]) -> AuthenticatedSnapshotIdentity {
-    AuthenticatedSnapshotIdentity::for_bytes(bytes)
-}
-
 /// Arch Linux repository parser
 pub struct ArchParser {
     /// Repository name (e.g., "core", "extra", "community")

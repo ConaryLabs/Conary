@@ -412,10 +412,11 @@ impl CatalogCandidateWriter {
                  CHECK (desc IS NOT NULL OR depends IS NOT NULL)
              ) STRICT, WITHOUT ROWID;",
         )?;
-        let (field, label) = match kind {
-            ArchPackageFragmentKind::Desc => ("desc", "desc"),
-            ArchPackageFragmentKind::Depends => ("depends", "depends"),
+        let field = match kind {
+            ArchPackageFragmentKind::Desc => "desc",
+            ArchPackageFragmentKind::Depends => "depends",
         };
+        let label = field;
         let changed = connection.execute(
             &format!(
                 "INSERT INTO catalog_ingest_arch_fragments (directory, {field}) VALUES (?1, ?2)

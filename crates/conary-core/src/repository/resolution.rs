@@ -60,7 +60,7 @@ use crate::repository::resolution_policy::ResolutionPolicy;
 use crate::repository::selector::{
     PackageArchitectureVariant, PackageSelector, PackageWithRepo, SelectionOptions,
 };
-use crate::repository::versioning::{VersionScheme, resolve_package_version_scheme};
+use crate::repository::versioning::VersionScheme;
 use crate::repository::{
     DownloadOptions, download_package_verified, download_static_package_verified,
 };
@@ -761,7 +761,7 @@ pub(super) fn remi_transport_trust_policy(
 }
 
 fn repository_source_metadata(pkg_with_repo: &PackageWithRepo) -> Result<RepositorySourceMetadata> {
-    let version_scheme = resolve_package_version_scheme(&pkg_with_repo.package);
+    let version_scheme = pkg_with_repo.package.version_scheme;
     let source_identity = crate::repository::selector::candidate_source_identity(
         &pkg_with_repo.package,
         &pkg_with_repo.repository,

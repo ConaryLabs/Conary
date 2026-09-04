@@ -21,9 +21,7 @@ use crate::repository::architecture::{
     require_profile_host_architecture_token,
 };
 use crate::repository::resolution_policy::{DependencyMixingPolicy, ResolutionPolicy};
-use crate::repository::versioning::{
-    VersionScheme, compare_repo_package_versions, resolve_package_version_scheme,
-};
+use crate::repository::versioning::{VersionScheme, compare_repo_package_versions};
 use rusqlite::Connection;
 use tracing::{debug, info};
 
@@ -230,7 +228,7 @@ impl PackageSelector {
         // Get repository information for each package
         let mut results = Vec::new();
         for pkg in packages {
-            let scheme = resolve_package_version_scheme(&pkg);
+            let scheme = pkg.version_scheme;
             let package_architecture = pkg.architecture.as_deref().ok_or_else(|| {
                 Error::ConfigError(format!(
                     "repository package '{}-{}' has no architecture authority",
@@ -490,7 +488,7 @@ fn exact_winner_index(
         .iter()
         .map(|index| {
             let candidate = &candidates[*index];
-            resolve_package_version_scheme(&candidate.package)
+            candidate.package.version_scheme
         })
         .collect::<Vec<_>>();
 

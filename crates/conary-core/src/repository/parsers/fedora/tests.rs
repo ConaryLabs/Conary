@@ -20,17 +20,18 @@ pub(super) fn parser() -> FedoraParser {
 }
 
 fn valid_builder() -> PackageBuilder {
-    let mut builder = PackageBuilder::new();
-    builder.name = Some("test-package".to_string());
-    builder.epoch = Some("1".to_string());
-    builder.ver = Some("2.3.4".to_string());
-    builder.rel = Some("5.fc44".to_string());
-    builder.arch = Some("x86_64".to_string());
-    builder.checksum = Some("a".repeat(64));
-    builder.checksum_type = Some("sha256".to_string());
-    builder.size = Some("1024".to_string());
-    builder.location = Some("Packages/t/test-package-2.3.4-5.fc44.x86_64.rpm".to_string());
-    builder
+    PackageBuilder {
+        name: Some("test-package".to_string()),
+        epoch: Some("1".to_string()),
+        ver: Some("2.3.4".to_string()),
+        rel: Some("5.fc44".to_string()),
+        arch: Some("x86_64".to_string()),
+        checksum: Some("a".repeat(64)),
+        checksum_type: Some("sha256".to_string()),
+        size: Some("1024".to_string()),
+        location: Some("Packages/t/test-package-2.3.4-5.fc44.x86_64.rpm".to_string()),
+        ..PackageBuilder::default()
+    }
 }
 
 #[test]
