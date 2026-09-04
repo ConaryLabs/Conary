@@ -32,7 +32,6 @@ apps/remi/src/server/federated_index.rs #843
 apps/remi/src/server/handlers/admin/repos.rs #843
 apps/remi/src/server/handlers/models.rs #843
 apps/remi/src/server/handlers/tuf.rs #843
-apps/remi/src/server/mod.rs #843
 apps/remi/src/server/prewarm.rs #843
 apps/remi/src/server/promotion_evidence.rs #843
 apps/remi/src/server/promotion_tests.rs #843
@@ -40,6 +39,7 @@ apps/remi/src/server/r2_durability.rs #843
 apps/remi/src/server/readiness.rs #843
 apps/remi/src/server/release_publish.rs #843
 apps/remi/src/server/routes.rs #843
+apps/remi/src/server/search.rs #853
 apps/remi/src/server/universe_publish.rs #843
 crates/conary-core/src/ccs/budget.rs #852
 crates/conary-core/src/generation/root_manifest/delta.rs #852
