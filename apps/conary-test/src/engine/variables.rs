@@ -13,18 +13,12 @@ use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, 
 /// via `${VAR}` substitution in manifest fields.
 pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
+    let conary_binaries = config.paths.resolve_conary_binaries();
     vars.insert("DISTRO".to_string(), distro.to_string());
     vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
     vars.insert("DB_PATH".to_string(), config.paths.db.clone());
-    vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
-    vars.insert(
-        "CONARY_HOOKS_BIN".to_string(),
-        config
-            .paths
-            .test_hooks_conary_bin
-            .clone()
-            .unwrap_or_else(|| config.paths.conary_bin.clone()),
-    );
+    vars.insert("CONARY_BIN".to_string(), conary_binaries.ordinary);
+    vars.insert("CONARY_HOOKS_BIN".to_string(), conary_binaries.test_hooks);
     if let Some(fixture_dir) = &config.paths.fixture_dir {
         vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
         let fixture_root = std::path::Path::new(fixture_dir);
