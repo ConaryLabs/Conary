@@ -1,7 +1,7 @@
 // crates/conary-core/src/ccs/v3/reader.rs
 
 use super::schema::AuthorityDocumentV3;
-use super::validation::validate_authority_structure;
+use super::validation::validate_authority;
 use crate::ccs::verify::{PackageSignature, TrustPolicy, VerifyError, verify_manifest_signature};
 use anyhow::{Context, Result, bail};
 
@@ -24,7 +24,7 @@ pub fn read_authority_document(
 ) -> Result<ReadAuthorityV3> {
     let authority =
         AuthorityDocumentV3::from_cbor(raw_manifest).context("decode CCS v3 MANIFEST")?;
-    validate_authority_structure(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
+    validate_authority(&authority).map_err(|error| anyhow::anyhow!("{error}"))?;
     let signature_raw = signature_raw.ok_or(VerifyError::NotSigned)?;
     let signature: PackageSignature =
         serde_json::from_str(signature_raw).context("parse MANIFEST.sig")?;

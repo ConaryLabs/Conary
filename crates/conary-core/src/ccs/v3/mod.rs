@@ -29,5 +29,5 @@ pub use schema::{
     AuthorityDocumentV3, DependencyEntryV3, FORMAT_VERSION_V3, FileContentLayoutV3,
     PackageKindTagV3, PackageKindV3, ProvidedCapabilityV3,
 };
+pub use validation::authority_census;
 pub use validation::validate_authority;
-pub use validation::{authority_census, validate_authority_structure};
