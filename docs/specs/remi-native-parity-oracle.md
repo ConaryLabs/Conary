@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 68
+revision: 69
 status: active
 ---
 
@@ -801,12 +801,18 @@ question are eligible. A candidate is accepted only after native preparation
 and, for missing-first results, the native default-closure conflict check report
 no conflict. Successful preparation produces `resolved`; a still-missing result
 keeps exactly that preparation's typed missing edges. If a retry still conflicts,
-its own chosen set and reported parties determine relevance again. Newly exposed
-relevant questions are pushed onto the stack and their alternatives explored
-before backtracking to the previous question's next provider. Exhausted frames
-discard their answers. Questions already visible in an ancestor context remain
-owned by that context; unrelated choices are never combined into a global
-Cartesian product. The shim only replays native questions and reads native
+its own chosen set and reported parties determine relevance again. Relevant
+questions not yet explored on the current path are pushed onto the stack and
+their alternatives explored before backtracking to the previous question's next
+provider. Visibility alone never marks a question explored: a question seen but
+irrelevant in an ancestor failure remains searchable when a descendant failure
+first makes it relevant. The explored set is derived only from active stack
+answers that have actually been probed; an ancestor's question is not pushed
+again on that path. Backtracking discards the exhausted frame's answer and
+exploration state, so the question can be explored independently in a sibling
+branch if relevant there. Unrelated choices remain at native defaults rather
+than being combined into a global Cartesian product.
+The shim only replays native questions and reads native
 transaction state; libalpm performs every resolution and conflict decision.
 
 `PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256` bounds each exact root's actual native

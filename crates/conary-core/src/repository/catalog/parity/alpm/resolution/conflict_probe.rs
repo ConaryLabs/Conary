@@ -71,11 +71,10 @@ struct ProviderAnswers {
 }
 
 /// One failed native context, with alternatives in native question/provider
-/// order. Ancestor answers are retained only while exploring newly exposed
-/// questions; siblings never inherit an exhausted sibling's answer.
+/// order. Ancestor answers are retained only while exploring relevant questions
+/// not yet probed on that path; siblings never inherit an exhausted answer.
 struct QuestionFrame {
     alternatives: std::vec::IntoIter<(String, PackageId)>,
-    known_questions: BTreeSet<String>,
     answer: Option<(String, PackageId)>,
 }
 
@@ -85,15 +84,16 @@ impl QuestionFrame {
         root: &NativeParityPackageV1,
         choices: Vec<ProviderChoice>,
         conflict: &ConflictReport,
-        mut known_questions: BTreeSet<String>,
+        explored_questions: BTreeSet<String>,
     ) -> ProbeResult<Self> {
         // Read this failure's chosen set before a retry replaces it. Questions
-        // already visible in an ancestor context stay there, not in a global
-        // product of answers. Only newly exposed relevant questions descend.
+        // already explored on this path stay owned by their ancestor frames.
+        // Mere visibility never suppresses a question: a retry can make a
+        // previously irrelevant selected provider reach a new conflict party.
         let relevant = relevant_providers(alpm, root, &choices, conflict)?;
         let mut alternatives = Vec::new();
         for choice in choices {
-            if known_questions.insert(choice.dependency.clone())
+            if !explored_questions.contains(&choice.dependency)
                 && relevant.contains(&choice.selected)
             {
                 alternatives.extend(
@@ -107,7 +107,6 @@ impl QuestionFrame {
         }
         Ok(Self {
             alternatives: alternatives.into_iter(),
-            known_questions,
             answer: None,
         })
     }
@@ -147,7 +146,7 @@ impl CheckBudget<'_> {
 
 /// Keep every unrelated dependency at its native default. Only replay answers
 /// for choices whose selected provider reaches the current conflict, descending
-/// through newly exposed native questions before backtracking to alternatives.
+/// through newly relevant native questions before backtracking to alternatives.
 pub(super) fn prepare_with_conflict_probe(
     alpm: &mut Alpm,
     root: &NativeParityPackageV1,
@@ -220,7 +219,6 @@ fn probe(
             continue;
         };
         frame.answer = Some(answer);
-        let known_questions = frame.known_questions.clone();
         {
             let mut answers = answers.borrow_mut();
             answers.overrides = stack
@@ -236,13 +234,21 @@ fn probe(
         let Preparation::Conflicting(current_conflict) = candidate else {
             return Ok(candidate);
         };
+        // Derive suppression only after the active answers were actually
+        // probed. Pending alternatives and merely visible questions are not
+        // explored. Popping a frame automatically removes its path-local state
+        // so a sibling may explore that question once on its own path.
+        let explored_questions = stack
+            .iter()
+            .filter_map(|frame| frame.answer.as_ref().map(|(question, _)| question.clone()))
+            .collect();
         let choices = std::mem::take(&mut answers.borrow_mut().choices);
         stack.push(QuestionFrame::from_failure(
             alpm,
             root,
             choices,
             &current_conflict,
-            known_questions,
+            explored_questions,
         )?);
     }
     Ok(Preparation::Conflicting(conflict))
