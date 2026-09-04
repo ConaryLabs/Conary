@@ -21,7 +21,13 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
         directory.path().join("extra.db"),
     ];
     let checksums = ['a', 'b', 'c'].map(digest);
-    let mut root = PackageFixture::new("precedence-root", &checksums[0]);
+    let root_name = if selected_conflicts {
+        "precedence-conflict-root"
+    } else {
+        "precedence-healthy-root"
+    };
+    let root_conflict = [root_name];
+    let mut root = PackageFixture::new(root_name, &checksums[0]);
     root.depends = &["provider>=1"];
     let mut selected = PackageFixture::new("provider", &checksums[1]);
     let mut shadowed = PackageFixture::new("provider", &checksums[2]);
@@ -33,7 +39,7 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
     } else {
         &mut shadowed
     };
-    conflicting.conflicts = &["precedence-root"];
+    conflicting.conflicts = &root_conflict;
     // Make native preparation fail on missing dependencies before checking
     // conflicts, so the regression exercises the reachable conflict probe.
     conflicting.depends = &["absent-provider-dependency"];
@@ -61,7 +67,7 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
     let mut selected_key = String::new();
     packages
         .for_each_package(|package| {
-            if package.name == "precedence-root" {
+            if package.name == root_name {
                 root_key = package.package_key_sha256;
             } else if package.member_ordinal == 0 {
                 selected_key = package.package_key_sha256;
@@ -92,6 +98,12 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
         }
     };
     assert_eq!(outcome, Some(expected.clone()));
+    let checks = if selected_conflicts { 2 } else { 1 };
+    assert_eq!(
+        resolution::native_probe_checks(&root_key),
+        checks,
+        "strict checks"
+    );
 
     let survey = produce_alpm_resolution_survey(
         &profile,
@@ -104,6 +116,11 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
     assert_eq!(survey.counts.roots_walked, 3);
     assert_eq!(survey.counts.failed_roots, 0);
     assert!(survey.failures.is_empty());
+    assert_eq!(
+        resolution::native_probe_checks(&root_key),
+        checks,
+        "survey checks"
+    );
     if selected_conflicts {
         let diagnostic = survey
             .diagnostic_outcomes
@@ -115,4 +132,5 @@ fn assert_precedence_outcome(selected_conflicts: bool) {
         assert_eq!(survey.counts.resolved_roots, 2);
         assert_eq!(survey.counts.not_installable_roots, 0);
     }
+    println!("{root_name}: strict and survey each performed {checks} native checks");
 }

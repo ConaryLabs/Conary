@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 67
+revision: 68
 status: active
 ---
 
@@ -783,36 +783,42 @@ conflict, including a transitively introduced party. After native conflict
 preparation, this is a graph walk over `alpm_trans_get_add()` plus the exact
 root. Each edge binds a required dependency to a satisfier within that chosen
 set using libalpm's own selected-package precedence (`alpm_find_satisfier`);
-unselected sync-database providers cannot change the graph. Relevance is frozen
-before any retry releases the baseline transaction. When preparation fails
-early with missing dependencies, before the native add set is populated, the
+unselected sync-database providers cannot change the graph. Relevance is read
+from each failed transaction before the next retry releases it. When preparation
+fails early with missing dependencies, before the native add set is populated, the
 fallback walks the selected provider's sync-database dependency closure with
 native database-precedence selection. This fallback requires an actually
 unpopulated add set (empty or containing only the root); a later missing result
-with a populated add set still uses the native chosen graph. Neither walk explores alternatives or
-adds transaction/conflict evaluations; retries remain inside the existing
-per-root check budget. Parties are bound
-by their native source database, name, and version, since libalpm copies package
-objects into conflict records. In native
-`ALPM_QUESTION_SELECT_PROVIDER` question order, the producer re-prepares the
-exact root with one alternative answer for one such dependency, leaving every
-other dependency at its native default. Only providers offered by that native
+with a populated add set still uses the native chosen graph. Neither walk explores
+alternatives or adds transaction/conflict evaluations; retries remain inside the
+existing per-root check budget. Parties are bound by their native source database,
+name, and version, since libalpm copies package objects into conflict records. In native
+`ALPM_QUESTION_SELECT_PROVIDER` question order, the producer walks a stack of
+provider choices depth-first. It re-prepares the exact root with the stack's
+ancestor answers and one alternative for the current question, leaving unrelated
+dependencies at their native defaults. Only providers offered by that native
 question are eligible. A candidate is accepted only after native preparation
 and, for missing-first results, the native default-closure conflict check report
 no conflict. Successful preparation produces `resolved`; a still-missing result
-keeps exactly that preparation's typed missing edges. All alternatives of the
-current conflict-party dependency are checked before moving to the next one.
-Answers for different dependencies are never combined, and unrelated provider
-choices are never enumerated. This is a linear sequence of native probes, not
-a second solver or a Cartesian-product closure search.
+keeps exactly that preparation's typed missing edges. If a retry still conflicts,
+its own chosen set and reported parties determine relevance again. Newly exposed
+relevant questions are pushed onto the stack and their alternatives explored
+before backtracking to the previous question's next provider. Exhausted frames
+discard their answers. Questions already visible in an ancestor context remain
+owned by that context; unrelated choices are never combined into a global
+Cartesian product. The shim only replays native questions and reads native
+transaction state; libalpm performs every resolution and conflict decision.
 
 `PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256` bounds each exact root's actual native
 evaluations: every `trans_prepare` and each additional missing-first
 `check_conflicts` consumes one check. Dependency/satisfier queries are not
 transaction/conflict evaluations. Before evaluation 257 the producer returns
-typed `ProviderSearchBudgetExceeded { root, checks: 256 }`; it never guesses an
-outcome after exhaustion. Strict production fails without publishing a complete
-bundle. Survey production records `provider_search_budget_exceeded` as the
+typed `ProviderSearchBudgetExceeded { root, checks: 256 }`. All stack depths share
+that budget, and exhaustion propagates before closure classification, never as
+a fallback to the baseline conflict. Only an exhausted question stack with all
+required checks completed can retain the baseline `conflicting_closure`.
+Strict production fails without publishing a complete bundle. Survey production
+records `provider_search_budget_exceeded` as the
 failure reason and error variant, with the exact root and completed check count
 in typed ALPM failure evidence, and continues to later roots. The budget and
 provider-answer callback are reset for each root. This is part of #814's

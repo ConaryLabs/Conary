@@ -26,6 +26,7 @@ use crate::repository::{
 mod conflict_budget;
 mod conflict_precedence;
 mod conflict_reachability;
+mod conflict_stack;
 
 #[derive(Clone)]
 struct PackageFixture<'a> {

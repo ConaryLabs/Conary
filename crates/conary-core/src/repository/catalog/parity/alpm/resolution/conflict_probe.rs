@@ -66,8 +66,51 @@ struct ProviderChoice {
 
 #[derive(Default)]
 struct ProviderAnswers {
-    override_choice: Option<(String, PackageId)>,
+    overrides: Vec<(String, PackageId)>,
     choices: Vec<ProviderChoice>,
+}
+
+/// One failed native context, with alternatives in native question/provider
+/// order. Ancestor answers are retained only while exploring newly exposed
+/// questions; siblings never inherit an exhausted sibling's answer.
+struct QuestionFrame {
+    alternatives: std::vec::IntoIter<(String, PackageId)>,
+    known_questions: BTreeSet<String>,
+    answer: Option<(String, PackageId)>,
+}
+
+impl QuestionFrame {
+    fn from_failure(
+        alpm: &Alpm,
+        root: &NativeParityPackageV1,
+        choices: Vec<ProviderChoice>,
+        conflict: &ConflictReport,
+        mut known_questions: BTreeSet<String>,
+    ) -> ProbeResult<Self> {
+        // Read this failure's chosen set before a retry replaces it. Questions
+        // already visible in an ancestor context stay there, not in a global
+        // product of answers. Only newly exposed relevant questions descend.
+        let relevant = relevant_providers(alpm, root, &choices, conflict)?;
+        let mut alternatives = Vec::new();
+        for choice in choices {
+            if known_questions.insert(choice.dependency.clone())
+                && relevant.contains(&choice.selected)
+            {
+                alternatives.extend(
+                    choice
+                        .providers
+                        .into_iter()
+                        .filter(|provider| *provider != choice.selected)
+                        .map(|provider| (choice.dependency.clone(), provider)),
+                );
+            }
+        }
+        Ok(Self {
+            alternatives: alternatives.into_iter(),
+            known_questions,
+            answer: None,
+        })
+    }
 }
 
 struct CheckBudget<'a> {
@@ -103,8 +146,8 @@ impl CheckBudget<'_> {
 }
 
 /// Keep every unrelated dependency at its native default. Only replay answers
-/// for choices whose selected provider reaches a baseline conflict party,
-/// in the order libalpm asked them. Answers are never combined across choices.
+/// for choices whose selected provider reaches the current conflict, descending
+/// through newly exposed native questions before backtracking to alternatives.
 pub(super) fn prepare_with_conflict_probe(
     alpm: &mut Alpm,
     root: &NativeParityPackageV1,
@@ -121,8 +164,10 @@ pub(super) fn prepare_with_conflict_probe(
                 .iter()
                 .map(package_id)
                 .collect::<Vec<_>>();
-            if let Some((overridden, provider)) = &answers.override_choice
-                && overridden == &dependency
+            if let Some((_, provider)) = answers
+                .overrides
+                .iter()
+                .find(|(overridden, _)| overridden == &dependency)
                 && let Some(index) = providers.iter().position(|id| id == provider)
             {
                 // Native provider counts and callback indices are C ints.
@@ -162,25 +207,43 @@ fn probe(
         return Ok(baseline);
     };
     let choices = std::mem::take(&mut answers.borrow_mut().choices);
-    // Snapshot relevance while the failed native transaction still contains
-    // its baseline choices; retries release and replace that transaction.
-    let relevant = relevant_providers(alpm, root, &choices, &conflict)?;
-    for choice in choices {
-        if !relevant.contains(&choice.selected) {
+    let mut stack = vec![QuestionFrame::from_failure(
+        alpm,
+        root,
+        choices,
+        &conflict,
+        BTreeSet::new(),
+    )?];
+    while let Some(frame) = stack.last_mut() {
+        let Some(answer) = frame.alternatives.next() else {
+            stack.pop();
             continue;
+        };
+        frame.answer = Some(answer);
+        let known_questions = frame.known_questions.clone();
+        {
+            let mut answers = answers.borrow_mut();
+            answers.overrides = stack
+                .iter()
+                .filter_map(|frame| frame.answer.clone())
+                .collect();
+            answers.choices.clear();
         }
-        for provider in choice.providers {
-            if provider == choice.selected {
-                continue;
-            }
-            answers.borrow_mut().override_choice = Some((choice.dependency.clone(), provider));
-            answers.borrow_mut().choices.clear();
-            restart_transaction(alpm, root)?;
-            let candidate = prepare_once(alpm, root, limits, budget)?;
-            if !matches!(candidate, Preparation::Conflicting(_)) {
-                return Ok(candidate);
-            }
-        }
+        restart_transaction(alpm, root)?;
+        // Every depth shares this budget. Exhaustion propagates as a typed
+        // producer failure before any fallback closure classification.
+        let candidate = prepare_once(alpm, root, limits, budget)?;
+        let Preparation::Conflicting(current_conflict) = candidate else {
+            return Ok(candidate);
+        };
+        let choices = std::mem::take(&mut answers.borrow_mut().choices);
+        stack.push(QuestionFrame::from_failure(
+            alpm,
+            root,
+            choices,
+            &current_conflict,
+            known_questions,
+        )?);
     }
     Ok(Preparation::Conflicting(conflict))
 }
