@@ -262,6 +262,63 @@ fn private_source_runtime_drives_async_io_without_an_ambient_runtime() {
 }
 
 #[test]
+fn profile_catalog_fetch_uses_the_public_network_policy() {
+    let root = tempfile::tempdir().unwrap();
+    let mut repository = repository();
+    repository.url = "https://127.0.0.1:9/repository".to_string();
+    repository
+        .set_trust_policy(RepositoryTrustPolicy::Rpm {
+            metadata: RpmMetadataAuthority::Metalink {
+                url: "https://127.0.0.1:9/metalink".to_string(),
+            },
+            package_keys: vec![
+                OpenPgpTrustRoot::new(
+                    "https://127.0.0.1:9/repository.gpg".to_string(),
+                    "A".repeat(40),
+                )
+                .unwrap(),
+            ],
+        })
+        .unwrap();
+    repository
+        .set_native_source_policy(
+            repository.source_policy.clone().expect("source policy"),
+            repository
+                .repository_identity
+                .clone()
+                .expect("repository identity"),
+            None,
+        )
+        .unwrap();
+    let admission: Arc<dyn CatalogScratchAdmission> = Arc::new(RecordingAdmission {
+        source_candidates: Mutex::new(Vec::new()),
+        finalizations: Mutex::new(Vec::new()),
+        metadata: Mutex::new(Vec::new()),
+        streams: Mutex::new(Vec::new()),
+        projection_spools: Mutex::new(Vec::new()),
+        stream_chunks: Arc::new(Mutex::new(Vec::new())),
+        lease_drops: Arc::new(AtomicUsize::new(0)),
+        refuse_source: false,
+    });
+    let candidate = root.path().join("candidate.sqlite");
+
+    let result = stream_native_source_catalog_verified_blocking_with_reuse_public_network(
+        &repository,
+        root.path(),
+        &candidate,
+        None,
+        admission,
+        None,
+    );
+    let Err(error) = result else {
+        panic!("profile catalog fetch accepted a loopback trust URL")
+    };
+
+    assert!(error.to_string().contains("non-global"), "{error}");
+    assert!(!candidate.exists());
+}
+
+#[test]
 fn immutable_sink_retains_metadata_lease_until_work_files_are_removed() {
     let root = tempfile::tempdir().unwrap();
     let candidate = root.path().join("catalog.sqlite");

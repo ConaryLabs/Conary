@@ -96,6 +96,7 @@ pub(crate) async fn publish_current_universe_from_state(
     .await
     .context("signed Remi universe publication task did not complete")??;
 
+    let activated = matches!(&outcome, UniversePublicationOutcome::Activated { .. });
     if !matches!(outcome, UniversePublicationOutcome::Unavailable) {
         let (db_path, catalog_authority, search_engine) = {
             let guard = state.read().await;
@@ -127,16 +128,20 @@ pub(crate) async fn publish_current_universe_from_state(
                 };
                 rebuild_engine
                     .rebuild_from_universe(&db_path, &catalog_authority, &universe)
-                    .context("rebuild search projection for activated Remi universe")?;
+                    .context("rebuild search projection for current Remi universe")?;
                 Ok::<_, anyhow::Error>(())
             })
             .await;
             if let Err(error) = rebuild
-                .context("activated-universe search rebuild task did not complete")
+                .context("current-universe search rebuild task did not complete")
                 .and_then(|result| result)
             {
-                search_engine.mark_unavailable();
-                tracing::error!(%error, "Activated Remi universe has no current search projection");
+                if activated {
+                    search_engine.mark_unavailable();
+                    tracing::error!(%error, "Activated Remi universe has no current search projection");
+                } else {
+                    tracing::error!(%error, "Unchanged Remi universe search refresh failed; preserving its existing search authority");
+                }
             }
         }
     }
@@ -885,6 +890,95 @@ mod tests {
             search_engine.search_public_universe(universe.identity(), "bash", None, 10),
             Err(crate::server::search::PublicSearchError::Unavailable)
         ));
+    }
+
+    #[tokio::test]
+    async fn unchanged_outcome_preserves_valid_search_authority_on_rebuild_failure() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-unchanged-search-failure",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            crate::server::public_universe::PublicUniverseSnapshot::load(
+                fixture.catalogs.db_path(),
+            )
+            .expect("load active universe")
+        else {
+            panic!("initial universe is not current")
+        };
+
+        let root = fixture
+            .catalogs
+            .catalog_dir()
+            .parent()
+            .expect("fixture root");
+        let search_engine = Arc::new(
+            crate::server::SearchEngine::new(&root.join("search")).expect("create search engine"),
+        );
+        search_engine
+            .rebuild_from_universe(
+                fixture.catalogs.db_path(),
+                fixture.catalogs.authority(),
+                &universe,
+            )
+            .expect("seed current search authority");
+        assert_eq!(
+            search_engine
+                .search_public_universe(universe.identity(), "bash", None, 10)
+                .expect("search current universe")
+                .len(),
+            1
+        );
+
+        let config = crate::server::ServerConfig {
+            db_path: fixture.catalogs.db_path().to_path_buf(),
+            catalog_dir: fixture.catalogs.catalog_dir().to_path_buf(),
+            catalog_candidate_dir: fixture.candidate_dir.clone(),
+            chunk_dir: root.join("chunks"),
+            cache_dir: root.join("cache"),
+            release_publish: crate::server::config::ReleasePublishSection {
+                repository_keys_dir: Some(fixture.keys_root.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        fs::create_dir_all(&config.chunk_dir).expect("create chunk root");
+        fs::create_dir_all(&config.cache_dir).expect("create cache root");
+        let mut server_state = crate::server::ServerState::new(config).expect("server state");
+        server_state.catalog_authority =
+            crate::server::catalog_authority::CatalogAuthority::from_paths(
+                fixture.catalogs.db_path().to_path_buf(),
+                root.join("missing-search-catalogs"),
+                server_state.database_writer.clone(),
+            );
+        server_state.search_engine = Some(Arc::clone(&search_engine));
+        let state = Arc::new(RwLock::new(server_state));
+
+        let outcome = publish_current_universe_from_state(&state)
+            .await
+            .expect("unchanged publication must survive search refresh failure");
+        assert!(matches!(
+            outcome,
+            UniversePublicationOutcome::Unchanged { sequence: 1, .. }
+        ));
+        assert_eq!(
+            search_engine
+                .search_public_universe(universe.identity(), "bash", None, 10)
+                .expect("existing search authority remains valid")
+                .len(),
+            1
+        );
     }
 
     #[test]

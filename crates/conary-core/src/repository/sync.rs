@@ -45,6 +45,7 @@ pub use immutable_catalog::{
     DurableSourceCatalogReuseV1, SourceCatalogMaterializationV1, VerifiedSourceCatalogCandidateV1,
     fetch_native_source_catalog, stream_native_source_catalog,
     stream_native_source_catalog_verified_blocking_with_reuse,
+    stream_native_source_catalog_verified_blocking_with_reuse_public_network,
     stream_native_source_catalog_verified_with_scratch_admission,
     stream_native_source_catalog_verified_with_scratch_admission_blocking,
     stream_native_source_catalog_with_scratch_admission,

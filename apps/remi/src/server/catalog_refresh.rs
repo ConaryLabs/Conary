@@ -363,7 +363,7 @@ pub async fn stage_profile_sources(
                 let source_started = Instant::now();
                 let result = run_source_pipeline_on_blocking_worker(
                     move || {
-                        let candidate = conary_core::repository::stream_native_source_catalog_verified_blocking_with_reuse(
+                        let candidate = conary_core::repository::stream_native_source_catalog_verified_blocking_with_reuse_public_network(
                             &plan.repository,
                             &keyring_dir,
                             &candidate_directory.join(CATALOG_FILE_NAME),

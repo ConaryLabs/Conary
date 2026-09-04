@@ -80,6 +80,7 @@ pub async fn stream_native_source_catalog(
         projection_cache_root,
         None,
         None,
+        false,
     )
     .await?
     .manifest)
@@ -100,6 +101,7 @@ pub async fn stream_native_source_catalog_with_scratch_admission(
         projection_cache_root,
         Some(scratch_admission),
         None,
+        false,
     )
     .await?
     .manifest)
@@ -121,6 +123,7 @@ pub async fn stream_native_source_catalog_verified_with_scratch_admission(
         projection_cache_root,
         Some(scratch_admission),
         None,
+        false,
     )
     .await
 }
@@ -145,6 +148,7 @@ pub fn stream_native_source_catalog_verified_with_scratch_admission_blocking(
         projection_cache_root,
         Some(scratch_admission),
         None,
+        false,
     ))
 }
 
@@ -171,6 +175,28 @@ pub fn stream_native_source_catalog_verified_blocking_with_reuse(
         projection_cache_root,
         Some(scratch_admission),
         durable_reuse,
+        false,
+    ))
+}
+
+/// Run one verified native-source pipeline while allowing only public network
+/// destinations and pinning every request to its validated DNS answers.
+pub fn stream_native_source_catalog_verified_blocking_with_reuse_public_network(
+    repo: &Repository,
+    keyring_dir: &Path,
+    candidate_path: &Path,
+    projection_cache_root: Option<&Path>,
+    scratch_admission: Arc<dyn CatalogScratchAdmission>,
+    durable_reuse: Option<DurableSourceCatalogReuseV1>,
+) -> Result<VerifiedSourceCatalogCandidateV1> {
+    drive_native_source_future_on_private_runtime(stream_native_source_catalog_inner(
+        repo,
+        keyring_dir,
+        candidate_path,
+        projection_cache_root,
+        Some(scratch_admission),
+        durable_reuse,
+        true,
     ))
 }
 
@@ -190,8 +216,9 @@ async fn stream_native_source_catalog_inner(
     projection_cache_root: Option<&Path>,
     scratch_admission: Option<Arc<dyn CatalogScratchAdmission>>,
     durable_reuse: Option<DurableSourceCatalogReuseV1>,
+    public_network_only: bool,
 ) -> Result<VerifiedSourceCatalogCandidateV1> {
-    let parser = prepare_repository_native_parser(repo, keyring_dir, false).await?;
+    let parser = prepare_repository_native_parser(repo, keyring_dir, public_network_only).await?;
     let mut sink = NativeCatalogSnapshotSink::create_with_reuse(
         repo,
         candidate_path,

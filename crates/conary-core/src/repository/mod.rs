@@ -95,6 +95,7 @@ pub use sync::{
     fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
     stream_native_source_catalog, stream_native_source_catalog_verified_blocking_with_reuse,
+    stream_native_source_catalog_verified_blocking_with_reuse_public_network,
     stream_native_source_catalog_verified_with_scratch_admission,
     stream_native_source_catalog_verified_with_scratch_admission_blocking,
     stream_native_source_catalog_with_scratch_admission, sync_repository,

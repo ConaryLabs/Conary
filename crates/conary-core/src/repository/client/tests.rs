@@ -3,15 +3,34 @@
 use super::*;
 
 #[tokio::test]
-async fn public_network_client_rejects_private_dns_answers_before_connecting() {
+async fn every_repository_http_fetch_uses_the_public_network_policy() {
     let client = RepositoryClient::new_public_network().unwrap();
-    let error = client
+    let byte_error = client
         .download_to_bytes("http://localhost/repository.json")
         .await
         .expect_err("loopback resolution must be rejected");
     assert!(
-        error.to_string().contains("private or link-local"),
-        "{error}"
+        byte_error.to_string().contains("non-global"),
+        "{byte_error}"
+    );
+
+    let metadata_error = client
+        .fetch_metadata("http://localhost/repository")
+        .await
+        .expect_err("metadata fetch must reject loopback resolution");
+    assert!(
+        metadata_error.to_string().contains("non-global"),
+        "{metadata_error}"
+    );
+
+    let destination = tempfile::tempdir().unwrap().path().join("package");
+    let file_error = client
+        .download_file("http://localhost/package", &destination)
+        .await
+        .expect_err("file fetch must reject loopback resolution");
+    assert!(
+        file_error.to_string().contains("non-global"),
+        "{file_error}"
     );
 }
 use std::sync::Mutex;

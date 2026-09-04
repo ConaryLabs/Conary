@@ -11,6 +11,247 @@ use super::TimeoutConfig;
 use crate::error::{Error, Result};
 use crate::repository::error_helpers::http_client_builder_error_message;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NonGlobalRepositoryAddress {
+    Unspecified,
+    Loopback,
+    Private,
+    Shared,
+    LinkLocal,
+    Documentation,
+    Benchmarking,
+    Multicast,
+    Reserved,
+    UniqueLocal,
+    SiteLocal,
+    Ipv4Mapped,
+    Ipv4Compatible,
+    ProtocolAssignment,
+    Translation,
+    DiscardOnly,
+    SixToFour,
+    SegmentRouting,
+}
+
+impl NonGlobalRepositoryAddress {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Loopback => "loopback",
+            Self::Private => "private",
+            Self::Shared => "shared address space",
+            Self::LinkLocal => "link-local",
+            Self::Documentation => "documentation",
+            Self::Benchmarking => "benchmarking",
+            Self::Multicast => "multicast",
+            Self::Reserved => "reserved",
+            Self::UniqueLocal => "unique-local",
+            Self::SiteLocal => "site-local",
+            Self::Ipv4Mapped => "IPv4-mapped",
+            Self::Ipv4Compatible => "IPv4-compatible",
+            Self::ProtocolAssignment => "protocol-assignment",
+            Self::Translation => "translation",
+            Self::DiscardOnly => "discard-only",
+            Self::SixToFour => "6to4",
+            Self::SegmentRouting => "segment-routing",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Ipv4Range {
+    network: u32,
+    prefix: u8,
+    class: NonGlobalRepositoryAddress,
+}
+
+#[derive(Clone, Copy)]
+struct Ipv6Range {
+    network: u128,
+    prefix: u8,
+    class: NonGlobalRepositoryAddress,
+}
+
+const IPV4_NON_GLOBAL_RANGES: &[Ipv4Range] = &[
+    ipv4_range([0, 0, 0, 0], 8, NonGlobalRepositoryAddress::Unspecified),
+    ipv4_range([10, 0, 0, 0], 8, NonGlobalRepositoryAddress::Private),
+    ipv4_range([100, 64, 0, 0], 10, NonGlobalRepositoryAddress::Shared),
+    ipv4_range([127, 0, 0, 0], 8, NonGlobalRepositoryAddress::Loopback),
+    ipv4_range([169, 254, 0, 0], 16, NonGlobalRepositoryAddress::LinkLocal),
+    ipv4_range([172, 16, 0, 0], 12, NonGlobalRepositoryAddress::Private),
+    ipv4_range(
+        [192, 0, 0, 0],
+        24,
+        NonGlobalRepositoryAddress::ProtocolAssignment,
+    ),
+    ipv4_range(
+        [192, 0, 2, 0],
+        24,
+        NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv4_range([192, 168, 0, 0], 16, NonGlobalRepositoryAddress::Private),
+    ipv4_range(
+        [198, 18, 0, 0],
+        15,
+        NonGlobalRepositoryAddress::Benchmarking,
+    ),
+    ipv4_range(
+        [198, 51, 100, 0],
+        24,
+        NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv4_range(
+        [203, 0, 113, 0],
+        24,
+        NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv4_range([224, 0, 0, 0], 4, NonGlobalRepositoryAddress::Multicast),
+    ipv4_range([240, 0, 0, 0], 4, NonGlobalRepositoryAddress::Reserved),
+];
+
+const IPV6_NON_GLOBAL_RANGES: &[Ipv6Range] = &[
+    ipv6_range(
+        0x0064_ff9b_0001_0000_0000_0000_0000_0000,
+        48,
+        NonGlobalRepositoryAddress::Translation,
+    ),
+    ipv6_range(
+        0x0100_0000_0000_0000_0000_0000_0000_0000,
+        64,
+        NonGlobalRepositoryAddress::DiscardOnly,
+    ),
+    ipv6_range(
+        0x2001_0002_0000_0000_0000_0000_0000_0000,
+        48,
+        NonGlobalRepositoryAddress::Benchmarking,
+    ),
+    ipv6_range(
+        0x2001_0000_0000_0000_0000_0000_0000_0000,
+        23,
+        NonGlobalRepositoryAddress::ProtocolAssignment,
+    ),
+    ipv6_range(
+        0x2002_0000_0000_0000_0000_0000_0000_0000,
+        16,
+        NonGlobalRepositoryAddress::SixToFour,
+    ),
+    ipv6_range(
+        0x2001_0db8_0000_0000_0000_0000_0000_0000,
+        32,
+        NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv6_range(
+        0x3fff_0000_0000_0000_0000_0000_0000_0000,
+        20,
+        NonGlobalRepositoryAddress::Documentation,
+    ),
+    ipv6_range(
+        0x5f00_0000_0000_0000_0000_0000_0000_0000,
+        16,
+        NonGlobalRepositoryAddress::SegmentRouting,
+    ),
+    ipv6_range(
+        0xfc00_0000_0000_0000_0000_0000_0000_0000,
+        7,
+        NonGlobalRepositoryAddress::UniqueLocal,
+    ),
+    ipv6_range(
+        0xfe80_0000_0000_0000_0000_0000_0000_0000,
+        10,
+        NonGlobalRepositoryAddress::LinkLocal,
+    ),
+    ipv6_range(
+        0xfec0_0000_0000_0000_0000_0000_0000_0000,
+        10,
+        NonGlobalRepositoryAddress::SiteLocal,
+    ),
+    ipv6_range(
+        0xff00_0000_0000_0000_0000_0000_0000_0000,
+        8,
+        NonGlobalRepositoryAddress::Multicast,
+    ),
+];
+
+const fn ipv4_range(octets: [u8; 4], prefix: u8, class: NonGlobalRepositoryAddress) -> Ipv4Range {
+    Ipv4Range {
+        network: u32::from_be_bytes(octets),
+        prefix,
+        class,
+    }
+}
+
+const fn ipv6_range(network: u128, prefix: u8, class: NonGlobalRepositoryAddress) -> Ipv6Range {
+    Ipv6Range {
+        network,
+        prefix,
+        class,
+    }
+}
+
+fn prefix_matches(value: u128, network: u128, width: u8, prefix: u8) -> bool {
+    let shift = u32::from(width - prefix);
+    value >> shift == network >> shift
+}
+
+fn is_global_ietf_protocol_assignment(value: u128) -> bool {
+    value == 0x2001_0001_0000_0000_0000_0000_0000_0001
+        || value == 0x2001_0001_0000_0000_0000_0000_0000_0002
+        || prefix_matches(value, 0x2001_0003_0000_0000_0000_0000_0000_0000, 128, 32)
+        || prefix_matches(value, 0x2001_0004_0112_0000_0000_0000_0000_0000, 128, 48)
+        || (0x20..=0x3f).contains(&((value >> 96) as u16))
+}
+
+fn classify_non_global_repository_ip(ip: IpAddr) -> Option<NonGlobalRepositoryAddress> {
+    match ip {
+        IpAddr::V4(ip) => {
+            let value = u32::from(ip);
+            IPV4_NON_GLOBAL_RANGES
+                .iter()
+                .find(|range| {
+                    if range.class == NonGlobalRepositoryAddress::ProtocolAssignment
+                        && matches!(ip.octets(), [192, 0, 0, 9 | 10])
+                    {
+                        return false;
+                    }
+                    prefix_matches(
+                        u128::from(value),
+                        u128::from(range.network),
+                        32,
+                        range.prefix,
+                    )
+                })
+                .map(|range| range.class)
+        }
+        IpAddr::V6(ip) => {
+            if ip.is_unspecified() {
+                return Some(NonGlobalRepositoryAddress::Unspecified);
+            }
+            if ip.is_loopback() {
+                return Some(NonGlobalRepositoryAddress::Loopback);
+            }
+            if ip.to_ipv4_mapped().is_some() {
+                return Some(NonGlobalRepositoryAddress::Ipv4Mapped);
+            }
+            let octets = ip.octets();
+            if octets[..12].iter().all(|octet| *octet == 0) {
+                return Some(NonGlobalRepositoryAddress::Ipv4Compatible);
+            }
+            let value = u128::from(ip);
+            IPV6_NON_GLOBAL_RANGES
+                .iter()
+                .find(|range| {
+                    if range.class == NonGlobalRepositoryAddress::ProtocolAssignment
+                        && is_global_ietf_protocol_assignment(value)
+                    {
+                        return false;
+                    }
+                    prefix_matches(value, range.network, 128, range.prefix)
+                })
+                .map(|range| range.class)
+        }
+    }
+}
+
 /// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
 pub fn validate_url_scheme(url: &str) -> Result<()> {
     if url.starts_with("https://") || url.starts_with("http://") {
@@ -47,24 +288,10 @@ pub(super) fn has_url_scheme(input: &str) -> bool {
 }
 
 pub fn require_public_repository_ip(ip: IpAddr) -> Result<()> {
-    let forbidden = match ip {
-        IpAddr::V4(ip) => {
-            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
-        }
-        IpAddr::V6(ip) => {
-            if let Some(mapped) = ip.to_ipv4_mapped() {
-                return require_public_repository_ip(IpAddr::V4(mapped));
-            }
-            let first = ip.segments()[0];
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
-        }
-    };
-    if forbidden {
+    if let Some(class) = classify_non_global_repository_ip(ip) {
         return Err(Error::ConfigError(format!(
-            "repository URL resolved to private or link-local address {ip}"
+            "repository URL resolved to non-global {kind} address {ip}",
+            kind = class.as_str()
         )));
     }
     Ok(())
@@ -109,4 +336,80 @@ pub(super) async fn pinned_client_for_url(url: &str, timeouts: &TimeoutConfig) -
     builder
         .build()
         .map_err(|error| Error::InitError(http_client_builder_error_message(error)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_every_forbidden_repository_address_family() {
+        let cases = [
+            ("0.0.0.0", NonGlobalRepositoryAddress::Unspecified),
+            ("127.0.0.1", NonGlobalRepositoryAddress::Loopback),
+            ("10.0.0.1", NonGlobalRepositoryAddress::Private),
+            ("100.64.0.1", NonGlobalRepositoryAddress::Shared),
+            ("169.254.1.1", NonGlobalRepositoryAddress::LinkLocal),
+            ("192.0.2.1", NonGlobalRepositoryAddress::Documentation),
+            ("198.18.0.1", NonGlobalRepositoryAddress::Benchmarking),
+            ("224.0.0.1", NonGlobalRepositoryAddress::Multicast),
+            ("240.0.0.1", NonGlobalRepositoryAddress::Reserved),
+            ("::", NonGlobalRepositoryAddress::Unspecified),
+            ("::1", NonGlobalRepositoryAddress::Loopback),
+            ("fc00::1", NonGlobalRepositoryAddress::UniqueLocal),
+            ("fe80::1", NonGlobalRepositoryAddress::LinkLocal),
+            ("fec0::1", NonGlobalRepositoryAddress::SiteLocal),
+            ("2001:db8::1", NonGlobalRepositoryAddress::Documentation),
+            ("2001:2::1", NonGlobalRepositoryAddress::Benchmarking),
+            (
+                "2001:100::1",
+                NonGlobalRepositoryAddress::ProtocolAssignment,
+            ),
+            ("2002::1", NonGlobalRepositoryAddress::SixToFour),
+            ("64:ff9b:1::1", NonGlobalRepositoryAddress::Translation),
+            ("100::1", NonGlobalRepositoryAddress::DiscardOnly),
+            ("5f00::1", NonGlobalRepositoryAddress::SegmentRouting),
+            ("ff02::1", NonGlobalRepositoryAddress::Multicast),
+            ("::ffff:8.8.8.8", NonGlobalRepositoryAddress::Ipv4Mapped),
+            ("::8.8.8.8", NonGlobalRepositoryAddress::Ipv4Compatible),
+        ];
+
+        for (address, expected) in cases {
+            let ip = address.parse().expect("valid test IP address");
+            assert_eq!(
+                classify_non_global_repository_ip(ip),
+                Some(expected),
+                "wrong classification for {address}"
+            );
+            assert!(
+                require_public_repository_ip(ip).is_err(),
+                "allowed {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_global_unicast_repository_addresses() {
+        for address in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "192.0.0.9",
+            "192.0.0.10",
+            "2001:4860:4860::8888",
+            "2606:4700:4700::1111",
+            "2001:1::1",
+            "2001:1::2",
+            "2001:3::1",
+            "2001:4:112::1",
+            "2001:20::1",
+        ] {
+            let ip = address.parse().expect("valid test IP address");
+            assert_eq!(
+                classify_non_global_repository_ip(ip),
+                None,
+                "rejected {address}"
+            );
+            require_public_repository_ip(ip).expect("global unicast address");
+        }
+    }
 }
