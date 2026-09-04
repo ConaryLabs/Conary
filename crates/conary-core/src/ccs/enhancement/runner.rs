@@ -5,7 +5,7 @@ use super::context::{ConvertedPackageInfo, EnhancementContext, EnhancementStats}
 use super::error::{EnhancementError, EnhancementResult};
 use super::registry::EnhancementRegistry;
 use super::{ENHANCEMENT_VERSION, EnhancementResult_, EnhancementStatus, EnhancementType};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::{debug, info, warn};
@@ -273,16 +273,16 @@ pub fn schedule_for_enhancement(
     priority: EnhancementPriority,
 ) -> EnhancementResult<bool> {
     // Check current status
-    let status: Option<String> = conn
+    let status: Option<EnhancementStatus> = conn
         .query_row(
             "SELECT enhancement_status FROM converted_packages WHERE trove_id = ?1",
             [trove_id],
-            |row| row.get(0),
+            |row| EnhancementStatus::from_row(row, 0),
         )
-        .ok();
+        .optional()?;
 
-    match status.as_deref() {
-        Some("complete") | Some("in_progress") => {
+    match status {
+        Some(EnhancementStatus::Complete | EnhancementStatus::InProgress) => {
             debug!(
                 "Skipping schedule for trove_id={}: already enhanced/in progress",
                 trove_id
@@ -295,9 +295,13 @@ pub fn schedule_for_enhancement(
     // Update status to pending with priority
     conn.execute(
         "UPDATE converted_packages
-         SET enhancement_status = 'pending', enhancement_priority = ?2
+         SET enhancement_status = ?3, enhancement_priority = ?2
          WHERE trove_id = ?1",
-        rusqlite::params![trove_id, priority.as_i32()],
+        rusqlite::params![
+            trove_id,
+            priority.as_i32(),
+            EnhancementStatus::Pending.to_db_str()
+        ],
     )?;
 
     info!(
@@ -365,13 +369,16 @@ impl std::fmt::Display for EnhancementPriority {
 pub fn get_pending_by_priority(conn: &Connection, limit: usize) -> EnhancementResult<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT trove_id FROM converted_packages
-         WHERE enhancement_status = 'pending'
+         WHERE enhancement_status = ?2
          ORDER BY COALESCE(enhancement_priority, 1) DESC, id ASC
          LIMIT ?1",
     )?;
 
     let trove_ids = stmt
-        .query_map([limit as i64], |row| row.get(0))?
+        .query_map(
+            rusqlite::params![limit as i64, EnhancementStatus::Pending.to_db_str()],
+            |row| row.get(0),
+        )?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -392,31 +399,35 @@ pub fn get_pending_by_priority(conn: &Connection, limit: usize) -> EnhancementRe
 ///
 /// # Returns
 /// * `EnhancementWindowStatus` indicating the package's enhancement state
-pub fn check_enhancement_window(conn: &Connection, trove_id: i64) -> EnhancementWindowStatus {
-    let status: Option<(String, Option<String>)> = conn
+pub fn check_enhancement_window(
+    conn: &Connection,
+    trove_id: i64,
+) -> EnhancementResult<EnhancementWindowStatus> {
+    let status: Option<(EnhancementStatus, Option<String>)> = conn
         .query_row(
             "SELECT cp.enhancement_status, t.name
              FROM converted_packages cp
              JOIN troves t ON t.id = cp.trove_id
              WHERE cp.trove_id = ?1",
             [trove_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((EnhancementStatus::from_row(row, 0)?, row.get(1)?)),
         )
-        .ok();
+        .optional()?;
 
-    match status {
+    Ok(match status {
         Some((status, name)) => {
             let package_name = name.unwrap_or_else(|| "unknown".to_string());
-            match status.as_str() {
-                "complete" => EnhancementWindowStatus::Complete,
-                "pending" | "in_progress" => EnhancementWindowStatus::InProgress { package_name },
-                "failed" => EnhancementWindowStatus::Failed { package_name },
-                "skipped" => EnhancementWindowStatus::Skipped,
-                _ => EnhancementWindowStatus::Unknown,
+            match status {
+                EnhancementStatus::Complete => EnhancementWindowStatus::Complete,
+                EnhancementStatus::Pending | EnhancementStatus::InProgress => {
+                    EnhancementWindowStatus::InProgress { package_name }
+                }
+                EnhancementStatus::Failed => EnhancementWindowStatus::Failed { package_name },
+                EnhancementStatus::Skipped => EnhancementWindowStatus::Skipped,
             }
         }
         None => EnhancementWindowStatus::NotConverted,
-    }
+    })
 }
 
 /// Status of a package's enhancement window

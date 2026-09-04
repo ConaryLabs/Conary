@@ -36,7 +36,9 @@ impl ConvertedPackage {
             // Enhancement starts as pending with version 0
             enhancement_version: 0,
             extracted_provenance_json: None,
-            enhancement_status: "pending".to_string(),
+            enhancement_status: crate::ccs::enhancement::EnhancementStatus::Pending
+                .to_db_str()
+                .to_string(),
             enhancement_error: None,
             enhancement_attempted_at: None,
             // Server-side fields start as None
@@ -84,7 +86,9 @@ impl ConvertedPackage {
             converted_at: None,
             enhancement_version: 0,
             extracted_provenance_json: None,
-            enhancement_status: "pending".to_string(),
+            enhancement_status: crate::ccs::enhancement::EnhancementStatus::Pending
+                .to_db_str()
+                .to_string(),
             enhancement_error: None,
             enhancement_attempted_at: None,
             package_name: Some(package_name),
@@ -129,7 +133,9 @@ impl ConvertedPackage {
             converted_at: row.get(8)?,
             enhancement_version: row.get(9)?,
             extracted_provenance_json: row.get(10)?,
-            enhancement_status: row.get(11)?,
+            enhancement_status: crate::ccs::enhancement::EnhancementStatus::from_row(row, 11)?
+                .to_db_str()
+                .to_string(),
             enhancement_error: row.get(12)?,
             enhancement_attempted_at: row.get(13)?,
             package_name: row.get(14)?,
@@ -167,7 +173,8 @@ impl ConvertedPackage {
                 self.conversion_version,
                 self.enhancement_version,
                 &self.extracted_provenance_json,
-                &self.enhancement_status,
+                crate::ccs::enhancement::EnhancementStatus::try_from(self.enhancement_status.as_str())
+                    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(11, rusqlite::types::Type::Text, Box::new(error)))?.to_db_str(),
                 &self.package_name,
                 &self.package_version,
                 &self.source_profile,

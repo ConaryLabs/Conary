@@ -109,9 +109,9 @@ impl<'a> EnhancementContext<'a> {
     pub fn set_enhancement_version(&self, version: i32) -> EnhancementResult<()> {
         self.conn.execute(
             "UPDATE converted_packages
-             SET enhancement_version = ?1, enhancement_status = 'complete', enhancement_attempted_at = CURRENT_TIMESTAMP
+             SET enhancement_version = ?1, enhancement_status = ?3, enhancement_attempted_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
-            rusqlite::params![version, self.converted_id],
+            rusqlite::params![version, self.converted_id, EnhancementStatus::Complete.to_db_str()],
         )?;
         Ok(())
     }
@@ -144,19 +144,19 @@ impl ConvertedPackageInfo {
                     cp.enhancement_status, cp.enhancement_version
              FROM converted_packages cp
              JOIN troves t ON t.id = cp.trove_id
-             WHERE cp.enhancement_status = 'pending'
+             WHERE cp.enhancement_status = ?1
              ORDER BY t.name",
         )?;
 
         let packages = stmt
-            .query_map([], |row| {
+            .query_map([EnhancementStatus::Pending.to_db_str()], |row| {
                 Ok(ConvertedPackageInfo {
                     id: row.get(0)?,
                     trove_id: row.get(1)?,
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
+                    enhancement_status: EnhancementStatus::from_row(row, 5)?,
                     enhancement_version: row.get(6)?,
                 })
             })?
@@ -185,7 +185,7 @@ impl ConvertedPackageInfo {
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
+                    enhancement_status: EnhancementStatus::from_row(row, 5)?,
                     enhancement_version: row.get(6)?,
                 })
             })?
@@ -204,17 +204,17 @@ impl ConvertedPackageInfo {
         )?;
 
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((EnhancementStatus::from_row(row, 0)?, row.get::<_, i64>(1)?))
         })?;
 
-        for row in rows.flatten() {
-            match row.0.as_str() {
-                "pending" => stats.pending = row.1 as usize,
-                "in_progress" => stats.in_progress = row.1 as usize,
-                "complete" => stats.complete = row.1 as usize,
-                "failed" => stats.failed = row.1 as usize,
-                "skipped" => stats.skipped = row.1 as usize,
-                _ => {}
+        for row in rows {
+            let row = row?;
+            match row.0 {
+                EnhancementStatus::Pending => stats.pending = row.1 as usize,
+                EnhancementStatus::InProgress => stats.in_progress = row.1 as usize,
+                EnhancementStatus::Complete => stats.complete = row.1 as usize,
+                EnhancementStatus::Failed => stats.failed = row.1 as usize,
+                EnhancementStatus::Skipped => stats.skipped = row.1 as usize,
             }
         }
 

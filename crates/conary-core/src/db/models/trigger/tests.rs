@@ -221,7 +221,7 @@ fn corrupt_persisted_status_stops_execution_before_the_handler_loop() {
 }
 
 #[test]
-fn insert_revalidates_public_pattern_field() {
+fn invalid_pattern_replacement_preserves_compiled_patterns() {
     let (_temp, conn) = create_test_db();
     let mut trigger = Trigger::new(
         "mutated".to_string(),
@@ -229,9 +229,10 @@ fn insert_revalidates_public_pattern_field() {
         "/bin/true".to_string(),
     )
     .unwrap();
-    trigger.pattern = "/usr/lib/[broken".to_string();
-
-    let error = trigger.insert(&conn).unwrap_err();
+    let error = trigger
+        .set_pattern("/usr/lib/[broken".to_string())
+        .unwrap_err();
+    assert!(trigger.matches("/usr/lib/libc.so").unwrap());
     assert!(
         error.to_string().contains("invalid path pattern"),
         "{error}"

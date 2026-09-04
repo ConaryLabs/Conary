@@ -354,9 +354,9 @@ impl DerivedPackage {
         })?;
 
         conn.execute(
-            "UPDATE derived_packages SET status = 'built', built_trove_id = ?1,
+            "UPDATE derived_packages SET status = ?3, built_trove_id = ?1,
              error_message = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![built_trove_id, id],
+            params![built_trove_id, id, DerivedStatus::Built.as_str()],
         )?;
 
         self.status = DerivedStatus::Built;
@@ -381,7 +381,7 @@ impl DerivedPackage {
 
         conn.execute(
             "UPDATE derived_packages
-             SET status = 'built',
+             SET status = ?7,
                  last_built_version = ?1,
                  last_built_parent_version = ?2,
                  build_artifact_hash = ?3,
@@ -396,7 +396,8 @@ impl DerivedPackage {
                 artifact_hash,
                 artifact_path,
                 artifact_size,
-                id
+                id,
+                DerivedStatus::Built.as_str()
             ],
         )?;
 
@@ -417,9 +418,9 @@ impl DerivedPackage {
         })?;
 
         conn.execute(
-            "UPDATE derived_packages SET status = 'error', error_message = ?1,
+            "UPDATE derived_packages SET status = ?3, error_message = ?1,
              updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
-            params![message, id],
+            params![message, id, DerivedStatus::Error.as_str()],
         )?;
 
         self.status = DerivedStatus::Error;
@@ -430,9 +431,13 @@ impl DerivedPackage {
     /// Mark as stale (parent was updated)
     pub fn mark_stale(conn: &Connection, parent_name: &str) -> Result<usize> {
         let count = conn.execute(
-            "UPDATE derived_packages SET status = 'stale', updated_at = CURRENT_TIMESTAMP
-             WHERE parent_name = ?1 AND status = 'built'",
-            [parent_name],
+            "UPDATE derived_packages SET status = ?2, updated_at = CURRENT_TIMESTAMP
+             WHERE parent_name = ?1 AND status = ?3",
+            params![
+                parent_name,
+                DerivedStatus::Stale.as_str(),
+                DerivedStatus::Built.as_str()
+            ],
         )?;
 
         Ok(count)

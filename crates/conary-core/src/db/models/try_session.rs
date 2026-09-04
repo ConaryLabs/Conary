@@ -4,9 +4,9 @@
 
 use crate::error::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use strum_macros::{AsRefStr, Display, EnumString};
+use strum_macros::{AsRefStr, Display};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum TrySessionStatus {
     Active,
@@ -26,7 +26,7 @@ impl TrySessionStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum TrySessionMode {
     Namespace,
@@ -112,13 +112,19 @@ impl TrySession {
     pub fn find_active_or_orphaned(conn: &Connection) -> Result<Option<Self>> {
         let sql = format!(
             "SELECT {} FROM try_sessions
-             WHERE status IN ('active', 'orphaned')
+             WHERE status IN (?1, ?2)
              ORDER BY updated_at DESC, started_at DESC, id DESC
              LIMIT 1",
             Self::COLUMNS
         );
         conn.prepare(&sql)?
-            .query_row([], Self::from_row)
+            .query_row(
+                params![
+                    TrySessionStatus::Active.as_str(),
+                    TrySessionStatus::Orphaned.as_str()
+                ],
+                Self::from_row,
+            )
             .optional()
             .map_err(Into::into)
     }
@@ -137,8 +143,13 @@ impl TrySession {
              SET try_generation_id = ?1,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?2
-               AND status IN ('active', 'orphaned')",
-            params![try_generation_id, self.id],
+               AND status IN (?3, ?4)",
+            params![
+                try_generation_id,
+                self.id,
+                TrySessionStatus::Active.as_str(),
+                TrySessionStatus::Orphaned.as_str()
+            ],
         )?;
         self.require_open_update(conn, affected)
     }
@@ -158,7 +169,7 @@ impl TrySession {
                  try_generation_id = ?3,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?4
-               AND status = 'active'
+               AND status = ?6
                AND try_generation_id = ?5",
             params![
                 package_path,
@@ -166,6 +177,7 @@ impl TrySession {
                 next_try_generation_id,
                 self.id,
                 expected_try_generation_id,
+                TrySessionStatus::Active.as_str()
             ],
         )?;
         Ok(rows == 1)
@@ -183,8 +195,14 @@ impl TrySession {
                  launcher_boot_id = ?2,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?3
-               AND status IN ('active', 'orphaned')",
-            params![launcher_pid, launcher_boot_id, self.id],
+               AND status IN (?4, ?5)",
+            params![
+                launcher_pid,
+                launcher_boot_id,
+                self.id,
+                TrySessionStatus::Active.as_str(),
+                TrySessionStatus::Orphaned.as_str()
+            ],
         )?;
         self.require_open_update(conn, affected)
     }
@@ -196,8 +214,12 @@ impl TrySession {
                  launcher_boot_id = NULL,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?1
-               AND status IN ('active', 'orphaned')",
-            params![self.id],
+               AND status IN (?2, ?3)",
+            params![
+                self.id,
+                TrySessionStatus::Active.as_str(),
+                TrySessionStatus::Orphaned.as_str()
+            ],
         )?;
         self.require_open_update(conn, affected)
     }
@@ -209,8 +231,13 @@ impl TrySession {
                  launcher_boot_id = ?1,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?2
-               AND status IN ('active', 'orphaned')",
-            params![boot_id, self.id],
+               AND status IN (?3, ?4)",
+            params![
+                boot_id,
+                self.id,
+                TrySessionStatus::Active.as_str(),
+                TrySessionStatus::Orphaned.as_str()
+            ],
         )?;
         self.require_open_update(conn, affected)
     }
@@ -248,8 +275,15 @@ impl TrySession {
                  END,
                  updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
              WHERE id = ?4
-               AND status IN ('active', 'orphaned')",
-            params![status.as_str(), last_error, complete, self.id],
+               AND status IN (?5, ?6)",
+            params![
+                status.as_str(),
+                last_error,
+                complete,
+                self.id,
+                TrySessionStatus::Active.as_str(),
+                TrySessionStatus::Orphaned.as_str()
+            ],
         )?;
         self.require_open_update(conn, affected)
     }
@@ -299,10 +333,10 @@ impl TrySession {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let status_raw: String = row.get(9)?;
         let mode_raw: String = row.get(10)?;
-        let status = status_raw.parse::<TrySessionStatus>().map_err(|e| {
+        let status = TrySessionStatus::try_from(status_raw.as_str()).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
         })?;
-        let mode = mode_raw.parse::<TrySessionMode>().map_err(|e| {
+        let mode = TrySessionMode::try_from(mode_raw.as_str()).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, Box::new(e))
         })?;
 
@@ -324,6 +358,52 @@ impl TrySession {
             updated_at: row.get(14)?,
             completed_at: row.get(15)?,
         })
+    }
+}
+
+impl TryFrom<&str> for TrySessionStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [Self::Active, Self::Orphaned, Self::Kept, Self::RolledBack]
+            .into_iter()
+            .find(|state| state.as_str() == value)
+            .ok_or_else(|| {
+                Self::Error::new(
+                    "TrySessionStatus",
+                    value,
+                    "a current typed value; rebuild or fence obsolete stored state",
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for TrySessionStatus {
+    type Err = crate::db::models::InvalidPersistedValue;
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Self::try_from(value)
+    }
+}
+
+impl TryFrom<&str> for TrySessionMode {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [Self::Namespace, Self::Activated]
+            .into_iter()
+            .find(|state| state.as_str() == value)
+            .ok_or_else(|| {
+                Self::Error::new(
+                    "TrySessionMode",
+                    value,
+                    "a current typed value; rebuild or fence obsolete stored state",
+                )
+            })
+    }
+}
+
+impl std::str::FromStr for TrySessionMode {
+    type Err = crate::db::models::InvalidPersistedValue;
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Self::try_from(value)
     }
 }
 

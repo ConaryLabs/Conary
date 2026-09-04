@@ -120,16 +120,14 @@ pub enum EnhancementStatus {
 }
 
 impl EnhancementStatus {
-    /// Parse from database string
-    pub fn from_db_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "pending" => Self::Pending,
-            "in_progress" => Self::InProgress,
-            "complete" => Self::Complete,
-            "failed" => Self::Failed,
-            "skipped" => Self::Skipped,
-            _ => Self::Pending,
-        }
+    pub(crate) fn from_row(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Self> {
+        Self::try_from(row.get::<_, String>(column)?.as_str()).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
+                column,
+                rusqlite::types::Type::Text,
+                Box::new(error),
+            )
+        })
     }
 
     /// Convert to database string
@@ -141,6 +139,28 @@ impl EnhancementStatus {
             Self::Failed => "failed",
             Self::Skipped => "skipped",
         }
+    }
+}
+
+impl TryFrom<&str> for EnhancementStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        [
+            Self::Pending,
+            Self::InProgress,
+            Self::Complete,
+            Self::Failed,
+            Self::Skipped,
+        ]
+        .into_iter()
+        .find(|status| status.to_db_str() == value)
+        .ok_or_else(|| {
+            Self::Error::new(
+                "enhancement status",
+                value,
+                "a current enhancement status; rebuild before using this record",
+            )
+        })
     }
 }
 
@@ -243,7 +263,7 @@ mod tests {
             EnhancementStatus::Skipped,
         ] {
             let db_str = status.to_db_str();
-            let parsed = EnhancementStatus::from_db_str(db_str);
+            let parsed = EnhancementStatus::try_from(db_str).unwrap();
             assert_eq!(status, parsed);
         }
     }

@@ -220,7 +220,21 @@ fn activate_profile_revision_in_transaction(
                 crate::repository::ProfileSyncRunState::Candidate.as_str(),
                 crate::repository::ProfileSyncRunState::Published.as_str()
             ],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            |row| {
+                Ok((
+                    crate::repository::ProfileSyncRunState::try_from(
+                        row.get::<_, String>(0)?.as_str(),
+                    )
+                    .map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    })?,
+                    row.get::<_, Option<String>>(1)?,
+                ))
+            },
         )
         .optional()?;
     let Some((run_state, candidate_profile_digest)) = run_state else {
@@ -255,7 +269,7 @@ fn activate_profile_revision_in_transaction(
                 && current.activation_run_id == request.run_id
                 && current.owner_instance_uuid == request.owner_instance_uuid
             {
-                if run_state == "published" {
+                if run_state == crate::repository::ProfileSyncRunState::Published {
                     return Ok(RemiProfileActivationOutcome::AlreadyActive(current));
                 }
                 return Err(Error::ConflictError(format!(
@@ -270,7 +284,7 @@ fn activate_profile_revision_in_transaction(
         }
     }
 
-    if run_state != "candidate" {
+    if run_state != crate::repository::ProfileSyncRunState::Candidate {
         return Err(Error::ConflictError(format!(
             "profile {} run {} is already published without its active pointer",
             request.source_profile, request.run_id

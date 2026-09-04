@@ -3,9 +3,9 @@
 use crate::config_transaction::GenerationConfigTransaction;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, Row, params};
-use strum_macros::{AsRefStr, Display, EnumString};
+use strum_macros::{AsRefStr, Display};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum GenerationPublicationPhase {
     PendingBuild,
@@ -31,7 +31,7 @@ impl GenerationPublicationPhase {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, AsRefStr, Display)]
 #[strum(serialize_all = "snake_case")]
 pub enum GenerationPublicationStatus {
     Pending,
@@ -132,12 +132,19 @@ impl GenerationPublication {
     pub fn pending_recoverable(conn: &Connection) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM generation_publications
-             WHERE recoverable = 1 AND status IN ('pending', 'running', 'failed')
+             WHERE recoverable = 1 AND status IN (?1, ?2, ?3)
              ORDER BY id ASC",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], Self::from_row)?;
+        let rows = stmt.query_map(
+            params![
+                GenerationPublicationStatus::Pending.as_str(),
+                GenerationPublicationStatus::Running.as_str(),
+                GenerationPublicationStatus::Failed.as_str()
+            ],
+            Self::from_row,
+        )?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -151,15 +158,22 @@ impl GenerationPublication {
         let sql = format!(
             "SELECT {} FROM generation_publications
              WHERE generation_number = ?1
-               AND phase = 'database_backed_up'
-               AND status = 'complete'
+               AND phase = ?2
+               AND status = ?3
                AND recoverable = 0
              ORDER BY id DESC
              LIMIT 1",
             Self::COLUMNS
         );
         conn.prepare(&sql)?
-            .query_row([generation_number], Self::from_row)
+            .query_row(
+                params![
+                    generation_number,
+                    GenerationPublicationPhase::DatabaseBackedUp.as_str(),
+                    GenerationPublicationStatus::Complete.as_str()
+                ],
+                Self::from_row,
+            )
             .optional()
             .map_err(Into::into)
     }
@@ -189,12 +203,20 @@ impl GenerationPublication {
             "SELECT {} FROM generation_publications
              WHERE trigger_changeset_id = ?1
                AND recoverable = 1
-               AND status IN ('pending', 'running', 'failed')
+               AND status IN (?2, ?3, ?4)
              ORDER BY id DESC LIMIT 1",
             Self::COLUMNS
         );
         conn.prepare(&sql)?
-            .query_row([changeset_id], Self::from_row)
+            .query_row(
+                params![
+                    changeset_id,
+                    GenerationPublicationStatus::Pending.as_str(),
+                    GenerationPublicationStatus::Running.as_str(),
+                    GenerationPublicationStatus::Failed.as_str()
+                ],
+                Self::from_row,
+            )
             .optional()
             .map_err(Into::into)
     }
@@ -225,22 +247,28 @@ impl GenerationPublication {
     ) -> Result<usize> {
         conn.execute(
             "UPDATE generation_publications
-             SET status = 'abandoned',
+             SET status = ?2,
                  recoverable = 0,
                  updated_at = CURRENT_TIMESTAMP,
                  completed_at = CURRENT_TIMESTAMP
              WHERE trigger_changeset_id = ?1
                AND recoverable = 1
-               AND status IN ('pending', 'running', 'failed')",
-            [changeset_id],
+               AND status IN (?3, ?4, ?5)",
+            params![
+                changeset_id,
+                GenerationPublicationStatus::Abandoned.as_str(),
+                GenerationPublicationStatus::Pending.as_str(),
+                GenerationPublicationStatus::Running.as_str(),
+                GenerationPublicationStatus::Failed.as_str()
+            ],
         )
         .map_err(Into::into)
     }
 
     pub fn applied_high_water_changeset_id(conn: &Connection) -> Result<Option<i64>> {
         conn.query_row(
-            "SELECT MAX(id) FROM changesets WHERE status = 'applied'",
-            [],
+            "SELECT MAX(id) FROM changesets WHERE status = ?1",
+            params![crate::db::models::ChangesetStatus::Applied.as_str()],
             |row| row.get(0),
         )
         .map_err(Into::into)
@@ -252,12 +280,12 @@ impl GenerationPublication {
             .ok_or_else(|| crate::error::Error::MissingId("publication id missing".to_string()))?;
         conn.execute(
             "UPDATE generation_publications
-             SET status = 'failed',
+             SET status = ?3,
                  last_error = ?1,
                  retry_count = retry_count + 1,
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
-            params![message, id],
+            params![message, id, GenerationPublicationStatus::Failed.as_str()],
         )?;
         Ok(())
     }
@@ -306,13 +334,19 @@ impl GenerationPublication {
             "SELECT EXISTS(
                  SELECT 1 FROM generation_publications
                  WHERE id = ?1
-                   AND phase = 'database_backed_up'
-                   AND status = 'running'
+                   AND phase = ?4
+                   AND status = ?5
                    AND recoverable = 1
                    AND state_number = ?2
                    AND generation_number = ?3
              )",
-            params![id, state_number, generation_number],
+            params![
+                id,
+                state_number,
+                generation_number,
+                GenerationPublicationPhase::DatabaseBackedUp.as_str(),
+                GenerationPublicationStatus::Running.as_str()
+            ],
             |row| row.get::<_, bool>(0),
         )?;
         if !backup_is_durable {
@@ -322,8 +356,8 @@ impl GenerationPublication {
         }
         let rows = conn.execute(
             "UPDATE generation_publications
-             SET status = 'complete',
-                 phase = 'database_backed_up',
+             SET status = ?4,
+                 phase = ?5,
                  published_through_changeset_id = ?1,
                  state_number = COALESCE(state_number, ?2),
                  generation_number = COALESCE(generation_number, ?3),
@@ -331,12 +365,17 @@ impl GenerationPublication {
                  completed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
              WHERE recoverable = 1
-               AND status IN ('pending', 'running', 'failed')
+               AND status IN (?6, ?7, ?8)
                AND (?1 IS NULL OR trigger_changeset_id IS NULL OR trigger_changeset_id <= ?1)",
             params![
                 applied_high_water_changeset_id,
                 state_number,
-                generation_number
+                generation_number,
+                GenerationPublicationStatus::Complete.as_str(),
+                GenerationPublicationPhase::DatabaseBackedUp.as_str(),
+                GenerationPublicationStatus::Pending.as_str(),
+                GenerationPublicationStatus::Running.as_str(),
+                GenerationPublicationStatus::Failed.as_str()
             ],
         )?;
         Ok(rows)
@@ -347,10 +386,17 @@ impl GenerationPublication {
             "SELECT DISTINCT generation_number
              FROM generation_publications
              WHERE recoverable = 1
-               AND status IN ('pending', 'running', 'failed')
+               AND status IN (?1, ?2, ?3)
                AND generation_number IS NOT NULL",
         )?;
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        let rows = stmt.query_map(
+            params![
+                GenerationPublicationStatus::Pending.as_str(),
+                GenerationPublicationStatus::Running.as_str(),
+                GenerationPublicationStatus::Failed.as_str()
+            ],
+            |row| row.get::<_, i64>(0),
+        )?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
@@ -358,24 +404,12 @@ impl GenerationPublication {
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
         let phase_raw: String = row.get(7)?;
         let status_raw: String = row.get(8)?;
-        let phase = phase_raw
-            .parse::<GenerationPublicationPhase>()
-            .map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    7,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
-        let status = status_raw
-            .parse::<GenerationPublicationStatus>()
-            .map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    8,
-                    rusqlite::types::Type::Text,
-                    Box::new(e),
-                )
-            })?;
+        let phase = GenerationPublicationPhase::try_from(phase_raw.as_str()).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        let status = GenerationPublicationStatus::try_from(status_raw.as_str()).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
+        })?;
         let config_transaction_json: String = row.get(12)?;
         let config_transaction = serde_json::from_str::<GenerationConfigTransaction>(
             &config_transaction_json,
@@ -416,6 +450,66 @@ impl GenerationPublication {
             updated_at: row.get(17)?,
             completed_at: row.get(18)?,
         })
+    }
+}
+
+impl TryFrom<&str> for GenerationPublicationPhase {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [
+            Self::PendingBuild,
+            Self::Building,
+            Self::ArtifactReady,
+            Self::CurrentPublished,
+            Self::ConfigurationProjected,
+            Self::ActiveMarked,
+            Self::DatabaseBackedUp,
+        ]
+        .into_iter()
+        .find(|state| state.as_str() == value)
+        .ok_or_else(|| {
+            Self::Error::new(
+                "GenerationPublicationPhase",
+                value,
+                "a current typed value; rebuild or fence obsolete stored state",
+            )
+        })
+    }
+}
+
+impl std::str::FromStr for GenerationPublicationPhase {
+    type Err = crate::db::models::InvalidPersistedValue;
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Self::try_from(value)
+    }
+}
+
+impl TryFrom<&str> for GenerationPublicationStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [
+            Self::Pending,
+            Self::Running,
+            Self::Failed,
+            Self::Complete,
+            Self::Abandoned,
+        ]
+        .into_iter()
+        .find(|state| state.as_str() == value)
+        .ok_or_else(|| {
+            Self::Error::new(
+                "GenerationPublicationStatus",
+                value,
+                "a current typed value; rebuild or fence obsolete stored state",
+            )
+        })
+    }
+}
+
+impl std::str::FromStr for GenerationPublicationStatus {
+    type Err = crate::db::models::InvalidPersistedValue;
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Self::try_from(value)
     }
 }
 

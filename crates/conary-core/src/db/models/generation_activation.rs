@@ -46,20 +46,6 @@ impl ActivationRequestSourceKind {
             RuntimeActivationInvocation::BootRuntime(_) => Self::CapturedBootRuntime,
         }
     }
-
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "captured-systemctl" => Ok(Self::CapturedSystemctl),
-            "captured-openrc" => Ok(Self::CapturedOpenRc),
-            "ccs-service" => Ok(Self::CcsService),
-            "captured-selinux" => Ok(Self::CapturedSelinux),
-            "captured-apparmor" => Ok(Self::CapturedApparmor),
-            "captured-boot-runtime" => Ok(Self::CapturedBootRuntime),
-            _ => Err(Error::InternalError(format!(
-                "persisted activation request has unknown source kind '{value}'"
-            ))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,19 +141,6 @@ impl GenerationActivationIntentStatus {
             Self::Superseded => "superseded",
         }
     }
-
-    fn parse(value: &str) -> Result<Self> {
-        match value {
-            "pending" => Ok(Self::Pending),
-            "executing" => Ok(Self::Executing),
-            "applied" => Ok(Self::Applied),
-            "failed" => Ok(Self::Failed),
-            "superseded" => Ok(Self::Superseded),
-            _ => Err(Error::InternalError(format!(
-                "persisted generation activation intent has unknown status '{value}'"
-            ))),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,7 +194,8 @@ impl RawRequest {
             });
         }
         let invocation: RuntimeActivationInvocation = serde_json::from_str(&self.invocation_json)?;
-        let source_kind = ActivationRequestSourceKind::parse(&self.source_kind)?;
+        let source_kind = ActivationRequestSourceKind::try_from(self.source_kind.as_str())
+            .map_err(|error| persisted_enum_error(0, error))?;
         NewActivationRequest {
             source_kind,
             source_package: self.source_package.clone(),
@@ -275,7 +249,8 @@ impl RawIntent {
         Ok(GenerationActivationIntent {
             generation_number: self.generation_number,
             request: self.request.decode()?,
-            status: GenerationActivationIntentStatus::parse(&self.status)?,
+            status: GenerationActivationIntentStatus::try_from(self.status.as_str())
+                .map_err(|error| persisted_enum_error(1, error))?,
             attempt_count: self.attempt_count,
             last_error: self.last_error,
             started_at: self.started_at,
@@ -302,15 +277,24 @@ impl ActivationRequest {
         if requests.is_empty() {
             return Ok(Vec::new());
         }
-        let status: Option<String> = conn
+        let status: Option<crate::db::models::ChangesetStatus> = conn
             .query_row(
                 "SELECT status FROM changesets WHERE id = ?1",
                 [changeset_id],
-                |row| row.get(0),
+                |row| {
+                    crate::db::models::ChangesetStatus::try_from(row.get::<_, String>(0)?.as_str())
+                        .map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                0,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })
+                },
             )
             .optional()?;
-        match status.as_deref() {
-            Some("pending") => {}
+        match status {
+            Some(crate::db::models::ChangesetStatus::Pending) => {}
             Some(other) => {
                 return Err(Error::ConflictError(format!(
                     "activation requests cannot be appended to changeset {changeset_id} in status '{other}'"
@@ -380,12 +364,17 @@ impl ActivationRequest {
                  SELECT 1
                  FROM activation_requests r
                  JOIN changesets c ON c.id = r.changeset_id
-                 WHERE r.source_kind = 'captured-boot-runtime'
-                   AND c.status = 'applied'
+                 WHERE r.source_kind = ?4
+                   AND c.status = ?3
                    AND (?1 IS NULL OR r.changeset_id > ?1)
                    AND r.changeset_id <= ?2
              )",
-            params![after_changeset_id, through_changeset_id],
+            params![
+                after_changeset_id,
+                through_changeset_id,
+                crate::db::models::ChangesetStatus::Applied.as_str(),
+                ActivationRequestSourceKind::CapturedBootRuntime.as_str()
+            ],
             |row| row.get(0),
         )
         .map_err(Into::into)
@@ -411,13 +400,18 @@ impl GenerationActivationIntent {
                 generation_number, request_id, status, attempt_count, last_error,
                 started_at, completed_at, updated_at
              )
-             SELECT ?1, r.id, 'pending', 0, NULL, NULL, NULL, CURRENT_TIMESTAMP
+             SELECT ?1, r.id, ?3, 0, NULL, NULL, NULL, CURRENT_TIMESTAMP
              FROM activation_requests r
              JOIN changesets c ON c.id = r.changeset_id
              WHERE r.changeset_id <= ?2
-               AND c.status = 'applied'
+               AND c.status = ?4
              ORDER BY r.changeset_id, r.sequence, r.id",
-            params![generation_number, high_water],
+            params![
+                generation_number,
+                high_water,
+                GenerationActivationIntentStatus::Pending.as_str(),
+                crate::db::models::ChangesetStatus::Applied.as_str()
+            ],
         )
         .map_err(Into::into)
     }
@@ -430,28 +424,35 @@ impl GenerationActivationIntent {
     pub fn ready_for_generation(conn: &Connection, generation_number: i64) -> Result<Vec<Self>> {
         conn.execute(
             "UPDATE generation_activation_intents AS current
-             SET status = 'superseded',
+             SET status = ?2,
                  last_error = NULL,
                  completed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
              WHERE current.generation_number = ?1
-               AND current.status IN ('pending', 'failed')
+               AND current.status IN (?3, ?4)
                AND (
                    EXISTS (
                        SELECT 1
                        FROM generation_activation_intents completed
                        WHERE completed.request_id = current.request_id
-                         AND completed.status = 'applied'
+                         AND completed.status = ?5
                    )
                    OR NOT EXISTS (
                        SELECT 1
                        FROM activation_requests r
                        JOIN changesets c ON c.id = r.changeset_id
                        WHERE r.id = current.request_id
-                         AND c.status = 'applied'
+                         AND c.status = ?6
                    )
                )",
-            [generation_number],
+            params![
+                generation_number,
+                GenerationActivationIntentStatus::Superseded.as_str(),
+                GenerationActivationIntentStatus::Pending.as_str(),
+                GenerationActivationIntentStatus::Failed.as_str(),
+                GenerationActivationIntentStatus::Applied.as_str(),
+                crate::db::models::ChangesetStatus::Applied.as_str()
+            ],
         )?;
         Self::list_with_statuses(
             conn,
@@ -475,13 +476,13 @@ impl GenerationActivationIntent {
     ) -> Result<usize> {
         conn.execute(
             "UPDATE generation_activation_intents
-             SET status = 'failed',
+             SET status = ?2,
                  last_error = 'activation consumer interrupted before durable completion; retrying exact request',
                  completed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
              WHERE generation_number = ?1
-               AND status = 'executing'",
-            [generation_number],
+               AND status = ?3",
+            params![generation_number, GenerationActivationIntentStatus::Failed.as_str(), GenerationActivationIntentStatus::Executing.as_str()],
         )
         .map_err(Into::into)
     }
@@ -521,7 +522,7 @@ impl GenerationActivationIntent {
     pub fn mark_executing(&self, conn: &Connection) -> Result<()> {
         let changed = conn.execute(
             "UPDATE generation_activation_intents
-             SET status = 'executing',
+             SET status = ?3,
                  attempt_count = attempt_count + 1,
                  last_error = NULL,
                  started_at = CURRENT_TIMESTAMP,
@@ -529,8 +530,14 @@ impl GenerationActivationIntent {
                  updated_at = CURRENT_TIMESTAMP
              WHERE generation_number = ?1
                AND request_id = ?2
-               AND status IN ('pending', 'failed')",
-            params![self.generation_number, self.request.id],
+               AND status IN (?4, ?5)",
+            params![
+                self.generation_number,
+                self.request.id,
+                GenerationActivationIntentStatus::Executing.as_str(),
+                GenerationActivationIntentStatus::Pending.as_str(),
+                GenerationActivationIntentStatus::Failed.as_str()
+            ],
         )?;
         if changed != 1 {
             return Err(Error::ConflictError(format!(
@@ -546,14 +553,19 @@ impl GenerationActivationIntent {
         let outcome = (|| -> Result<()> {
             let changed = conn.execute(
                 "UPDATE generation_activation_intents
-                 SET status = 'applied',
+                 SET status = ?3,
                      last_error = NULL,
                      completed_at = CURRENT_TIMESTAMP,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE generation_number = ?1
                    AND request_id = ?2
-                   AND status = 'executing'",
-                params![self.generation_number, self.request.id],
+                   AND status = ?4",
+                params![
+                    self.generation_number,
+                    self.request.id,
+                    GenerationActivationIntentStatus::Applied.as_str(),
+                    GenerationActivationIntentStatus::Executing.as_str()
+                ],
             )?;
             if changed != 1 {
                 return Err(Error::ConflictError(format!(
@@ -563,14 +575,20 @@ impl GenerationActivationIntent {
             }
             conn.execute(
                 "UPDATE generation_activation_intents
-                 SET status = 'superseded',
+                 SET status = ?3,
                      last_error = NULL,
                      completed_at = CURRENT_TIMESTAMP,
                      updated_at = CURRENT_TIMESTAMP
                  WHERE request_id = ?1
                    AND generation_number <> ?2
-                   AND status IN ('pending', 'failed')",
-                params![self.request.id, self.generation_number],
+                   AND status IN (?4, ?5)",
+                params![
+                    self.request.id,
+                    self.generation_number,
+                    GenerationActivationIntentStatus::Superseded.as_str(),
+                    GenerationActivationIntentStatus::Pending.as_str(),
+                    GenerationActivationIntentStatus::Failed.as_str()
+                ],
             )?;
             Ok(())
         })();
@@ -590,14 +608,20 @@ impl GenerationActivationIntent {
     pub fn mark_failed(&self, conn: &Connection, error: &str) -> Result<()> {
         let changed = conn.execute(
             "UPDATE generation_activation_intents
-             SET status = 'failed',
+             SET status = ?4,
                  last_error = ?1,
                  completed_at = CURRENT_TIMESTAMP,
                  updated_at = CURRENT_TIMESTAMP
              WHERE generation_number = ?2
                AND request_id = ?3
-               AND status = 'executing'",
-            params![error, self.generation_number, self.request.id],
+               AND status = ?5",
+            params![
+                error,
+                self.generation_number,
+                self.request.id,
+                GenerationActivationIntentStatus::Failed.as_str(),
+                GenerationActivationIntentStatus::Executing.as_str()
+            ],
         )?;
         if changed != 1 {
             return Err(Error::ConflictError(format!(
@@ -606,6 +630,51 @@ impl GenerationActivationIntent {
             )));
         }
         Ok(())
+    }
+}
+
+impl TryFrom<&str> for ActivationRequestSourceKind {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [
+            Self::CapturedSystemctl,
+            Self::CapturedOpenRc,
+            Self::CcsService,
+            Self::CapturedSelinux,
+            Self::CapturedApparmor,
+            Self::CapturedBootRuntime,
+        ]
+        .into_iter()
+        .find(|state| state.as_str() == value)
+        .ok_or_else(|| {
+            Self::Error::new(
+                "ActivationRequestSourceKind",
+                value,
+                "a current typed value; rebuild or fence obsolete stored state",
+            )
+        })
+    }
+}
+
+impl TryFrom<&str> for GenerationActivationIntentStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [
+            Self::Pending,
+            Self::Executing,
+            Self::Applied,
+            Self::Failed,
+            Self::Superseded,
+        ]
+        .into_iter()
+        .find(|state| state.as_str() == value)
+        .ok_or_else(|| {
+            Self::Error::new(
+                "GenerationActivationIntentStatus",
+                value,
+                "a current typed value; rebuild or fence obsolete stored state",
+            )
+        })
     }
 }
 
@@ -895,4 +964,11 @@ mod tests {
         let error = request.validate().unwrap_err().to_string();
         assert!(error.contains("does not match invocation provider 'openrc'"));
     }
+}
+
+fn persisted_enum_error(
+    column: usize,
+    error: crate::db::models::InvalidPersistedValue,
+) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
 }

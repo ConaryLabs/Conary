@@ -29,10 +29,10 @@ pub fn cmd_trigger_list(db_path: &str, show_disabled: bool) -> Result<()> {
     for trigger in &triggers {
         let enabled = if trigger.enabled { "yes" } else { "no" };
 
-        let pattern_display = if trigger.pattern.len() > 38 {
-            format!("{}...", &trigger.pattern[..35])
+        let pattern_display = if trigger.pattern().len() > 38 {
+            format!("{}...", &trigger.pattern()[..35])
         } else {
-            trigger.pattern.clone()
+            trigger.pattern().to_string()
         };
 
         println!(
@@ -56,7 +56,7 @@ pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
     if let Some(desc) = &trigger.description {
         println!("  Description: {}", desc);
     }
-    println!("  Pattern: {}", trigger.pattern);
+    println!("  Pattern: {}", trigger.pattern());
     println!("  Handler: {}", trigger.handler);
     println!("  Priority: {}", trigger.priority);
     println!("  Enabled: {}", if trigger.enabled { "yes" } else { "no" });
