@@ -1,9 +1,10 @@
 // apps/conary/src/commands/install/native_events.rs
 
 //! Install-side execution of exact native package-manager transaction events.
+//! Package identity construction is owned by `native_events/identity.rs`.
 
 use anyhow::{Context, Result};
-use conary_core::ccs::native_lifecycle::{NativeLifecycleBundle, SourceFormat};
+use conary_core::ccs::native_lifecycle::NativeLifecycleBundle;
 use conary_core::ccs::native_transaction::{
     DebPackageState, NativeBundleRole, NativeBundleView, NativeInstalledCapability,
     NativePackageIdentity, NativeTransactionChange, NativeTransactionOperation,
@@ -34,6 +35,7 @@ mod debian_runtime;
 mod execution;
 #[path = "native_events/graph_execution.rs"]
 mod graph_execution;
+mod identity;
 #[path = "native_events/preflight.rs"]
 mod preflight;
 #[path = "native_events/runtime.rs"]
@@ -41,6 +43,8 @@ mod runtime;
 #[path = "native_events/transaction_state.rs"]
 mod transaction_state;
 
+pub(super) use identity::deb_identity_for_trove;
+use identity::owner_identity;
 use preflight::NativePathProjection;
 use transaction_state::{
     declared_capabilities_excluding, declared_path_capabilities_for_trove,
@@ -77,31 +81,6 @@ struct NativeBundleOwner {
     initial_pending_triggers: Vec<String>,
     initial_awaited_packages: Vec<NativePackageIdentity>,
     bundle: NativeLifecycleBundle,
-}
-
-fn owner_identity(owner: &NativeBundleOwner) -> NativePackageIdentity {
-    NativePackageIdentity::new(
-        &owner.package_name,
-        &owner.package_version,
-        owner.bundle.source_arch.as_deref(),
-    )
-}
-
-pub(super) fn deb_identity_for_trove(
-    conn: &rusqlite::Connection,
-    trove_id: i64,
-) -> Result<Option<NativePackageIdentity>> {
-    let Some(installed) = InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)? else {
-        return Ok(None);
-    };
-    let bundle = installed.bundle()?;
-    Ok((bundle.source_format == SourceFormat::Deb).then(|| {
-        NativePackageIdentity::new(
-            &installed.source_package,
-            &installed.source_version,
-            installed.source_arch.as_deref(),
-        )
-    }))
 }
 
 #[derive(Debug)]
