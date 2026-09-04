@@ -362,21 +362,10 @@ impl Bootstrap {
         let lfs_root = &self.config.lfs_root.clone();
 
         // Use the system toolchain that is now available inside the chroot
-        let toolchain = Toolchain {
-            kind: ToolchainKind::System,
-            path: lfs_root.join("usr"),
-            target: self.config.triple().to_string(),
-            gcc_version: None,
-            glibc_version: None,
-            binutils_version: None,
-            is_static: false,
-        };
-
         let completed = self.stages.completed_packages(BootstrapStage::FinalSystem);
 
-        let mut builder =
-            FinalSystemBuilder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
-                .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let mut builder = FinalSystemBuilder::new(&self.work_dir, lfs_root, self.config.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         // IMPORTANT: chroot_env must stay alive until build_all() completes.
         let chroot_env = builder.setup_chroot().map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -412,17 +401,7 @@ impl Bootstrap {
     pub fn build_tier2(&mut self) -> Result<()> {
         let lfs_root = &self.config.lfs_root.clone();
 
-        let toolchain = Toolchain {
-            kind: ToolchainKind::System,
-            path: lfs_root.join("usr"),
-            target: self.config.triple().to_string(),
-            gcc_version: None,
-            glibc_version: None,
-            binutils_version: None,
-            is_static: false,
-        };
-
-        let builder = Tier2Builder::new(&self.work_dir, lfs_root, self.config.clone(), toolchain)
+        let builder = Tier2Builder::new(&self.work_dir, lfs_root, self.config.clone())
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
         match builder.build_all() {

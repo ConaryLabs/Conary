@@ -622,17 +622,9 @@ fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 fn validate_sha256_hex(field: &str, value: &str) -> crate::Result<()> {
-    if value.len() != 64 {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(crate::Error::InvalidPath(format!(
-            "{field} must be a 64-character SHA-256 hex string"
-        )));
-    }
-    if !value
-        .chars()
-        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-    {
-        return Err(crate::Error::InvalidPath(format!(
-            "{field} must be lowercase SHA-256 hex"
+            "{field} must be a 64-character lowercase SHA-256 hex string"
         )));
     }
     Ok(())

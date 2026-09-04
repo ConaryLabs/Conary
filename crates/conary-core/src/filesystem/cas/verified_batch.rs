@@ -491,11 +491,7 @@ impl Drop for VerifiedObjectBatch<'_> {
 }
 
 fn validate_sha256(sha256: &str) -> Result<()> {
-    if sha256.len() != HashAlgorithm::Sha256.hex_len()
-        || !sha256
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !crate::hash::is_canonical_sha256(sha256) {
         return Err(crate::Error::InvalidPath(format!(
             "verified object identity must be canonical lowercase SHA-256: {sha256}"
         )));

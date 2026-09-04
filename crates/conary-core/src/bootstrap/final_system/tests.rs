@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::bootstrap::stages::StageManager;
-use crate::bootstrap::toolchain::ToolchainKind;
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -113,17 +112,8 @@ fn test_new_requires_usr_bin() {
     let work = tempfile::tempdir().unwrap();
     let lfs = tempfile::tempdir().unwrap();
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let result = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc);
+    let result = FinalSystemBuilder::new(work.path(), lfs.path(), config);
     assert!(result.is_err());
 }
 
@@ -134,17 +124,8 @@ fn test_new_succeeds_with_usr_bin() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc);
+    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config);
     assert!(builder.is_ok());
 }
 
@@ -160,18 +141,9 @@ fn test_build_all_placeholder() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
     let mut sm = StageManager::new(work.path()).unwrap();
-    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     assert!(builder.build_all(&[], &mut sm).is_ok());
     assert_eq!(builder.completed().len(), 83);
 }
@@ -188,18 +160,9 @@ fn test_build_from_resume() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
     let mut sm = StageManager::new(work.path()).unwrap();
-    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     assert!(builder.build_from("gcc", &mut sm).is_ok());
     // gcc is at index 27, so 83 - 27 = 56 remaining
     assert_eq!(builder.completed().len(), 56);
@@ -212,18 +175,9 @@ fn test_build_from_invalid_package() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
     let mut sm = StageManager::new(work.path()).unwrap();
-    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let mut builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     let result = builder.build_from("nonexistent-package", &mut sm);
     assert!(result.is_err());
 }
@@ -235,17 +189,8 @@ fn test_prepare_chroot_build_dirs_uses_sysroot_staging_area() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     let (src_dir, build_dir) = builder.prepare_chroot_build_dirs("man-pages").unwrap();
 
     assert_eq!(
@@ -267,17 +212,8 @@ fn test_path_in_chroot_rewrites_sysroot_staging_paths() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     let staged_src = lfs
         .path()
         .join("var/tmp/conary-bootstrap/final-system/man-pages/src");
@@ -295,17 +231,8 @@ fn test_setup_chroot_creates_virtual_fs_directories() {
     std::fs::create_dir_all(lfs.path().join("usr/bin")).unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     let _ = builder.setup_chroot();
 
     assert!(lfs.path().join("dev").exists());
@@ -327,17 +254,8 @@ fn test_setup_chroot_repairs_missing_shadow_prerequisite_groups() {
     .unwrap();
 
     let config = BootstrapConfig::new();
-    let tc = Toolchain {
-        kind: ToolchainKind::System,
-        path: lfs.path().join("tools"),
-        target: "x86_64-conary-linux-gnu".to_string(),
-        gcc_version: None,
-        glibc_version: None,
-        binutils_version: None,
-        is_static: false,
-    };
 
-    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config, tc).unwrap();
+    let builder = FinalSystemBuilder::new(work.path(), lfs.path(), config).unwrap();
     let _ = builder.setup_chroot();
 
     let group = std::fs::read_to_string(lfs.path().join("etc/group")).unwrap();

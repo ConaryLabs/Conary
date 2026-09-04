@@ -205,7 +205,6 @@ pub fn compute_build_output_identity_from_v3(
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 pub(crate) mod test_support {
     use super::*;
 

@@ -16,14 +16,12 @@ use tracing::info;
 use super::build_runner::{ChecksumContract, PackageBuildRunner};
 use super::chroot_env::ChrootEnv;
 use super::config::BootstrapConfig;
-use super::toolchain::Toolchain;
 use crate::recipe::parse_recipe_file;
 
 /// Tier-2 package build order (BLFS + Conary).
 ///
 /// Currently unused -- `build_all()` returns `NotImplemented` until the
 /// recipe-driven build pipeline is wired end-to-end.
-#[allow(dead_code)]
 const TIER2_ORDER: &[&str] = &[
     "linux-pam",
     "openssh",
@@ -69,16 +67,11 @@ pub enum Tier2Error {
 /// bootstrap.
 pub struct Tier2Builder {
     /// Working directory for build artifacts.
-    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
     work_dir: PathBuf,
     /// Root of the installed system.
     system_root: PathBuf,
     /// Bootstrap configuration.
-    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
     config: BootstrapConfig,
-    /// System toolchain.
-    #[allow(dead_code)] // Used once recipe-driven pipeline is wired
-    toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
     runner: PackageBuildRunner,
 }
@@ -91,7 +84,6 @@ impl Tier2Builder {
     /// * `work_dir` - scratch space for downloads and build trees
     /// * `system_root` - root of the installed LFS system
     /// * `config` - bootstrap configuration
-    /// * `toolchain` - system toolchain from the completed LFS build
     ///
     /// # Errors
     ///
@@ -101,7 +93,6 @@ impl Tier2Builder {
         work_dir: &Path,
         system_root: &Path,
         config: BootstrapConfig,
-        toolchain: Toolchain,
     ) -> Result<Self, Tier2Error> {
         let gcc = system_root.join("usr").join("bin").join("gcc");
         if !gcc.exists() {
@@ -121,7 +112,6 @@ impl Tier2Builder {
             work_dir: work_dir.to_path_buf(),
             system_root: system_root.to_path_buf(),
             config,
-            toolchain,
             runner,
         })
     }
@@ -375,19 +365,6 @@ impl Tier2Builder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootstrap::toolchain::ToolchainKind;
-
-    fn make_toolchain(root: &Path) -> Toolchain {
-        Toolchain {
-            kind: ToolchainKind::System,
-            path: root.join("usr"),
-            target: "x86_64-conary-linux-gnu".to_string(),
-            gcc_version: None,
-            glibc_version: None,
-            binutils_version: None,
-            is_static: false,
-        }
-    }
 
     #[test]
     fn test_tier2_order_count() {
@@ -424,9 +401,8 @@ mod tests {
         let work = tempfile::tempdir().unwrap();
         let root = tempfile::tempdir().unwrap();
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let result = Tier2Builder::new(work.path(), root.path(), config, tc);
+        let result = Tier2Builder::new(work.path(), root.path(), config);
         assert!(result.is_err());
     }
 
@@ -439,9 +415,8 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc);
+        let builder = Tier2Builder::new(work.path(), root.path(), config);
         assert!(builder.is_ok());
     }
 
@@ -454,9 +429,8 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+        let builder = Tier2Builder::new(work.path(), root.path(), config).unwrap();
         let (bundle_path, sidecar_path) = builder.staged_conary_bundle_paths();
 
         assert_eq!(
@@ -482,9 +456,8 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+        let builder = Tier2Builder::new(work.path(), root.path(), config).unwrap();
         let (bundle_path, _) = builder.staged_conary_bundle_paths();
         std::fs::create_dir_all(bundle_path.parent().unwrap()).unwrap();
         std::fs::write(&bundle_path, b"fake bundle").unwrap();
@@ -506,9 +479,8 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+        let builder = Tier2Builder::new(work.path(), root.path(), config).unwrap();
         let (bundle_path, sidecar_path) = builder.staged_conary_bundle_paths();
         std::fs::create_dir_all(bundle_path.parent().unwrap()).unwrap();
         std::fs::write(&bundle_path, b"fake bundle").unwrap();
@@ -538,9 +510,8 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
 
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+        let builder = Tier2Builder::new(work.path(), root.path(), config).unwrap();
         let result = builder.ensure_sqlite_prereq();
         assert!(result.is_err());
         assert!(
@@ -572,8 +543,7 @@ mod tests {
         std::fs::write(gcc_path.join("gcc"), b"").unwrap();
 
         let config = BootstrapConfig::new();
-        let tc = make_toolchain(root.path());
-        let builder = Tier2Builder::new(work.path(), root.path(), config, tc).unwrap();
+        let builder = Tier2Builder::new(work.path(), root.path(), config).unwrap();
 
         let recipe_path = recipe_dir.path().join("linux-pam.toml");
         std::fs::write(
