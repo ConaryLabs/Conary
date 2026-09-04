@@ -441,10 +441,6 @@ impl DerivationExecutor {
             build_duration,
         )?;
 
-        // Output is safely in CAS -- disarm the guard so it does not
-        // double-remove on the success path.
-        destdir_guard.disarm();
-
         // Step 5: Serialize manifest and store in CAS.
         let pkg_output = PackageOutput::from_manifest(manifest)
             .map_err(|e| ExecutorError::Cas(format!("manifest serialization: {e}")))?;
@@ -517,6 +513,8 @@ impl DerivationExecutor {
             .insert(&record)
             .map_err(|e| ExecutorError::Index(e.to_string()))?;
 
+        // Keep error-path cleanup armed until provenance and the index are durable.
+        destdir_guard.disarm();
         // Clean up the temporary DESTDIR (best effort).
         if let Err(e) = std::fs::remove_dir_all(&destdir) {
             tracing::warn!("failed to clean up DESTDIR {}: {e}", destdir.display());
