@@ -14,7 +14,7 @@ use crate::payload::{
     ResolvedPayloadNode,
 };
 use std::collections::BTreeMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
@@ -777,83 +777,11 @@ fn read_xattrs(path: &Path) -> crate::Result<BTreeMap<String, Vec<u8>>> {
             path.display()
         ))
     })?;
-    let names_len = unsafe { libc::llistxattr(c_path.as_ptr(), std::ptr::null_mut(), 0) };
-    if names_len < 0 {
-        return Err(xattr_error("list", path));
-    }
-    if names_len == 0 {
-        return Ok(BTreeMap::new());
-    }
-    let names_len = usize::try_from(names_len).map_err(|_| {
-        crate::Error::InvalidPath(format!(
-            "selected-root xattr name list is too large at {}",
-            path.display()
-        ))
-    })?;
-    let mut names = vec![0_u8; names_len];
-    let actual = unsafe {
-        libc::llistxattr(
-            c_path.as_ptr(),
-            names.as_mut_ptr().cast::<libc::c_char>(),
-            names.len(),
-        )
-    };
-    if actual < 0 {
-        return Err(xattr_error("list", path));
-    }
-    names.truncate(usize::try_from(actual).map_err(|_| {
-        crate::Error::InvalidPath(format!(
-            "selected-root xattr name list length is invalid at {}",
-            path.display()
-        ))
-    })?);
-
-    let mut xattrs = BTreeMap::new();
-    for raw_name in names
-        .split(|byte| *byte == 0)
-        .filter(|name| !name.is_empty())
-    {
-        let name = std::str::from_utf8(raw_name).map_err(|_| {
-            crate::Error::NotImplemented(format!(
-                "selected-root xattr name is not UTF-8 at {}",
-                path.display()
-            ))
-        })?;
-        let c_name = CString::new(raw_name).expect("xattr names are NUL-separated");
-        let value_len =
-            unsafe { libc::lgetxattr(c_path.as_ptr(), c_name.as_ptr(), std::ptr::null_mut(), 0) };
-        if value_len < 0 {
-            return Err(xattr_error(&format!("read {name}"), path));
-        }
-        let value_len = usize::try_from(value_len).map_err(|_| {
-            crate::Error::InvalidPath(format!(
-                "selected-root xattr value is too large for {name} at {}",
-                path.display()
-            ))
-        })?;
-        let mut value = vec![0_u8; value_len];
-        if value_len > 0 {
-            let actual = unsafe {
-                libc::lgetxattr(
-                    c_path.as_ptr(),
-                    c_name.as_ptr(),
-                    value.as_mut_ptr().cast::<libc::c_void>(),
-                    value.len(),
-                )
-            };
-            if actual < 0 {
-                return Err(xattr_error(&format!("read {name}"), path));
-            }
-            value.truncate(usize::try_from(actual).map_err(|_| {
-                crate::Error::InvalidPath(format!(
-                    "selected-root xattr value length is invalid for {name} at {}",
-                    path.display()
-                ))
-            })?);
-        }
-        xattrs.insert(name.to_string(), value);
-    }
-    Ok(xattrs)
+    read_xattrs_with(
+        path,
+        |names, len| unsafe { libc::llistxattr(c_path.as_ptr(), names, len) },
+        |name, value, len| unsafe { libc::lgetxattr(c_path.as_ptr(), name.as_ptr(), value, len) },
+    )
 }
 
 fn read_xattrs_from_fd(
@@ -861,7 +789,23 @@ fn read_xattrs_from_fd(
     path: &Path,
 ) -> crate::Result<BTreeMap<String, Vec<u8>>> {
     let fd = file.as_raw_fd();
-    let names_len = unsafe { libc::flistxattr(fd, std::ptr::null_mut(), 0) };
+    read_xattrs_with(
+        path,
+        |names, len| unsafe { libc::flistxattr(fd, names, len) },
+        |name, value, len| unsafe { libc::fgetxattr(fd, name.as_ptr(), value, len) },
+    )
+}
+
+/// Read every extended attribute through one list/get syscall pair.
+///
+/// Both syscalls follow the libc length-probe-then-fill contract: a NULL
+/// buffer with length 0 returns the required size, a second call fills it.
+fn read_xattrs_with(
+    path: &Path,
+    list: impl Fn(*mut libc::c_char, usize) -> isize,
+    get: impl Fn(&CStr, *mut libc::c_void, usize) -> isize,
+) -> crate::Result<BTreeMap<String, Vec<u8>>> {
+    let names_len = list(std::ptr::null_mut(), 0);
     if names_len < 0 {
         return Err(xattr_error("list", path));
     }
@@ -875,8 +819,7 @@ fn read_xattrs_from_fd(
         ))
     })?;
     let mut names = vec![0_u8; names_len];
-    let actual =
-        unsafe { libc::flistxattr(fd, names.as_mut_ptr().cast::<libc::c_char>(), names.len()) };
+    let actual = list(names.as_mut_ptr().cast::<libc::c_char>(), names.len());
     if actual < 0 {
         return Err(xattr_error("list", path));
     }
@@ -899,7 +842,7 @@ fn read_xattrs_from_fd(
             ))
         })?;
         let c_name = CString::new(raw_name).expect("xattr names are NUL-separated");
-        let value_len = unsafe { libc::fgetxattr(fd, c_name.as_ptr(), std::ptr::null_mut(), 0) };
+        let value_len = get(&c_name, std::ptr::null_mut(), 0);
         if value_len < 0 {
             return Err(xattr_error(&format!("read {name}"), path));
         }
@@ -911,14 +854,11 @@ fn read_xattrs_from_fd(
         })?;
         let mut value = vec![0_u8; value_len];
         if value_len > 0 {
-            let actual = unsafe {
-                libc::fgetxattr(
-                    fd,
-                    c_name.as_ptr(),
-                    value.as_mut_ptr().cast::<libc::c_void>(),
-                    value.len(),
-                )
-            };
+            let actual = get(
+                &c_name,
+                value.as_mut_ptr().cast::<libc::c_void>(),
+                value.len(),
+            );
             if actual < 0 {
                 return Err(xattr_error(&format!("read {name}"), path));
             }
