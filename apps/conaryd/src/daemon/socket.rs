@@ -253,6 +253,7 @@ mod tests {
     #[tokio::test]
     async fn test_socket_manager_bind() {
         let temp_dir = TempDir::new().unwrap();
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let socket_path = temp_dir.path().join("test.sock");
 
         let config = SocketConfig {
@@ -271,6 +272,7 @@ mod tests {
     #[tokio::test]
     async fn test_socket_manager_cleanup() {
         let temp_dir = TempDir::new().unwrap();
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let socket_path = temp_dir.path().join("test.sock");
 
         let config = SocketConfig {
