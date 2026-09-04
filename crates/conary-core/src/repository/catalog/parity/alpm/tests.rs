@@ -23,6 +23,8 @@ use crate::repository::{
     RepositoryTrustPolicy,
 };
 
+mod conflict_precedence;
+
 #[derive(Clone)]
 struct PackageFixture<'a> {
     name: &'a str,
