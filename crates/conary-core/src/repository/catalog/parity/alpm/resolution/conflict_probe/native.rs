@@ -122,7 +122,7 @@ pub(super) fn prepare_once(
             return Ok(Preparation::Conflicting(conflict_report(
                 conflicts.iter(),
                 limits.diagnostic_outcome_bytes(),
-                ConflictSource::MissingFirst,
+                ConflictSource::MissingDependencies,
             )));
         }
     }

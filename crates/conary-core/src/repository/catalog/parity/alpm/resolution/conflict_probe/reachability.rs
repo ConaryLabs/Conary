@@ -19,15 +19,20 @@ pub(super) fn relevant_providers(
     choices: &[ProviderChoice],
     conflict: &ConflictReport,
 ) -> ProbeResult<BTreeSet<PackageId>> {
-    match conflict.source {
-        ConflictSource::Transaction => {
-            // ConflictingDeps follows native dependency resolution: trans_add
-            // is the chosen set. Bind every edge within it using the native
+    let root = exact_root(alpm, root)?;
+    let selected = alpm.trans_add();
+    let root_id = package_id(root);
+    let populated = selected
+        .iter()
+        .any(|package| package_id(package) != root_id);
+    match (conflict.source, populated) {
+        (ConflictSource::Transaction, _) | (ConflictSource::MissingDependencies, true) => {
+            // ConflictingDeps follows native dependency resolution. A later
+            // UnsatisfiedDeps may also retain a populated add set. In both
+            // cases bind edges within that chosen set using the native
             // find_dep_satisfier rule, also retaining the exact root if native
             // conflict handling displaced it. Never consult unselected sync
             // packages here: a different default can change reachability.
-            let root = exact_root(alpm, root)?;
-            let selected = alpm.trans_add();
             let mut packages = selected.iter().collect::<Vec<_>>();
             if !packages
                 .iter()
@@ -76,7 +81,7 @@ pub(super) fn relevant_providers(
             }
             Ok(relevant)
         }
-        ConflictSource::MissingFirst => {
+        (ConflictSource::MissingDependencies, false) => {
             // UnsatisfiedDeps failed before libalpm populated trans_add;
             // resolvedeps restores its prior package list on this early exit.
             // Fall back to each selected provider's sync-db default closure,

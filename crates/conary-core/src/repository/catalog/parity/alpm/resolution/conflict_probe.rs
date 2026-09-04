@@ -37,7 +37,7 @@ pub(super) struct ConflictReport {
 #[derive(Clone, Copy)]
 enum ConflictSource {
     Transaction,
-    MissingFirst,
+    MissingDependencies,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]

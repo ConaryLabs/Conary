@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 66
+revision: 67
 status: active
 ---
 
@@ -787,7 +787,9 @@ unselected sync-database providers cannot change the graph. Relevance is frozen
 before any retry releases the baseline transaction. When preparation fails
 early with missing dependencies, before the native add set is populated, the
 fallback walks the selected provider's sync-database dependency closure with
-native database-precedence selection. Neither walk explores alternatives or
+native database-precedence selection. This fallback requires an actually
+unpopulated add set (empty or containing only the root); a later missing result
+with a populated add set still uses the native chosen graph. Neither walk explores alternatives or
 adds transaction/conflict evaluations; retries remain inside the existing
 per-root check budget. Parties are bound
 by their native source database, name, and version, since libalpm copies package
