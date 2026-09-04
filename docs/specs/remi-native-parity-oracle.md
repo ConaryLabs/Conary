@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 69
+revision: 70
 status: active
 ---
 
@@ -489,6 +489,11 @@ explanations are capped at 32 MiB, reserving half of the lane's 64 MiB complete
 survey-document limit for root records and the canonical envelope. Rust
 validation and the lane reader both reject a document above that complete-file
 limit.
+
+The survey contract and writer live in
+`crates/conary-core/src/repository/catalog/parity/resolution_survey.rs`;
+their retention, hard-cut validation, and private-writer regressions live in the
+sibling `resolution_survey/tests.rs`.
 
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
