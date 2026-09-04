@@ -372,7 +372,7 @@ for index in 0 1 2; do
         --arg package "$package_manifest_sha256" \
         --argjson failures "$failures" '
         {
-          schema_version:1,
+          schema_version:2,
           profile:$profile,
           profile_revision_sha256:$revision,
           package_oracle_manifest_sha256:$package,
@@ -411,7 +411,7 @@ for index in 0 1 2; do
           total_failures:$failures,
           retained_failures:$failures,
           truncated:false,
-          evidence_byte_limit:67108864,
+          evidence_byte_limit:33554432,
           retained_evidence_bytes:0,
           retained_explanations:0,
           withheld_explanations:$failures,
@@ -474,7 +474,7 @@ for index in 0 1 2; do
             --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" \
             --arg candidate "$candidate_manifest_sha256" '
             {
-              schema_version:1,
+              schema_version:2,
               profile:$profile,
               profile_revision_sha256:$revision,
               package_oracle_manifest_sha256:$package,

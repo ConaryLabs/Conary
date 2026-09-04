@@ -41,7 +41,7 @@ RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 4
 SURVEY_RECORD_LIMIT = 5_000
-SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
+SURVEY_EVIDENCE_BYTE_LIMIT = 32 * 1024 * 1024
 ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
@@ -1490,7 +1490,7 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
     )
     architecture = profile["target_architecture"]
     if (
-        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 2
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"]
@@ -1735,7 +1735,7 @@ def validate_comparison_survey(
         name,
     )
     if (
-        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 2
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"] != profile["package_oracle_manifest_sha256"]

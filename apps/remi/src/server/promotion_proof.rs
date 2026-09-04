@@ -317,13 +317,13 @@ mod tests {
     fn promotion_proof_comparison_type_rejects_a_survey_file() {
         use conary_core::repository::catalog::{
             NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT,
-            NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
             NativeResolutionComparisonSurveyCountsV1, NativeResolutionComparisonSurveyV1,
             NativeResolutionComparisonV1, write_native_resolution_comparison_survey,
         };
 
         let survey = NativeResolutionComparisonSurveyV1 {
-            schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
             profile: "fedora-44".to_string(),
             profile_revision_sha256: "a".repeat(64),
             package_oracle_manifest_sha256: "b".repeat(64),

@@ -415,7 +415,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
         "error_kinds": [{"kind": error_kind, "count": 1}],
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "profile": profile,
         "profile_revision_sha256": revision,
         "package_oracle_manifest_sha256": package_manifest,
@@ -452,7 +452,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
         "total_failures": 1,
         "retained_failures": 1,
         "truncated": False,
-        "evidence_byte_limit": 67108864,
+        "evidence_byte_limit": 33554432,
         "retained_evidence_bytes": 0,
         "retained_explanations": 0,
         "withheld_explanations": 1,
@@ -535,7 +535,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             ],
         }
         comparison = {
-            "schema_version": 1,
+            "schema_version": 2,
             "profile": profile["profile"],
             "profile_revision_sha256": profile["profile_revision_sha256"],
             "package_oracle_manifest_sha256": profile[
@@ -583,6 +583,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         TRANSPORT_TOOL.validate_comparison_survey(
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["schema_version"] = 1
+        with self.assertRaisesRegex(ValueError, "identity or oracle binding drifted"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json", candidate, candidate_manifest
+            )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatches"][0]["candidate"]["outcome"] = resolved
@@ -757,6 +764,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 profile["profile_revision_sha256"],
                 profile["package_oracle_manifest_sha256"],
             )
+            TRANSPORT_TOOL.validate_candidate_survey(candidate, profile, "candidate.json")
+            obsolete_candidate = json.loads(canonical(candidate))
+            obsolete_candidate["schema_version"] = 1
+            with self.assertRaisesRegex(ValueError, "identity or oracle binding drifted"):
+                TRANSPORT_TOOL.validate_candidate_survey(
+                    obsolete_candidate, profile, "candidate.json"
+                )
             TRANSPORT_TOOL.validate_candidate_package_coverage(
                 fixture.transport,
                 artifacts[profile["profile"]],

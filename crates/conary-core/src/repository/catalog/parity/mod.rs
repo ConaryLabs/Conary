@@ -61,7 +61,7 @@ pub use candidate_resolution::{
 };
 pub use candidate_resolution_survey::{
     CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, CONARY_RESOLUTION_SURVEY_FAILURE_LIMIT,
-    CONARY_RESOLUTION_SURVEY_SCHEMA_V1, ConaryResolutionSurveyConflictEdgeV1,
+    CONARY_RESOLUTION_SURVEY_SCHEMA_V2, ConaryResolutionSurveyConflictEdgeV1,
     ConaryResolutionSurveyConflictKindV1, ConaryResolutionSurveyCountsV1,
     ConaryResolutionSurveyErrorCountV1, ConaryResolutionSurveyErrorKindV1,
     ConaryResolutionSurveyErrorReasonV1, ConaryResolutionSurveyEvidenceWithheldReasonV1,
@@ -93,7 +93,7 @@ pub use resolution_compare::{
 };
 pub use resolution_comparison_survey::{
     NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT,
-    NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1, NativeResolutionComparisonSurveyCountsV1,
+    NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2, NativeResolutionComparisonSurveyCountsV1,
     NativeResolutionComparisonSurveyMismatchCountV1,
     NativeResolutionComparisonSurveyMismatchKindV1, NativeResolutionComparisonSurveyMismatchV1,
     NativeResolutionComparisonSurveyOutcomeEvidenceV1,
