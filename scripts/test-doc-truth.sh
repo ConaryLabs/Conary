@@ -809,7 +809,7 @@ break_live_doc_location_claim() {
 }
 
 break_tracked_admin_login() {
-    printf '\nUse %s@%s for production access.\n' 'peter' 'ssh.conary.io' \
+    printf '\nUse %s@%s for production access.\n' 'exampleadmin' 'ssh.conary.io' \
         >> "$1/docs/operations/external-tester-outreach.md"
 }
 

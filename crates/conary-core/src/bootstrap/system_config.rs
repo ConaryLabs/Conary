@@ -258,7 +258,6 @@ ROOT_FSTYPE="ext4"
 ROOT_FLAGS=""
 CONARY_GEN=""
 CONARY_CARRIER=""
-CONARY_VERITY=on
 for opt in $(cat /proc/cmdline); do
     case "$opt" in
         root=*) ROOT_SPEC="${opt#root=}" ;;
@@ -266,9 +265,9 @@ for opt in $(cat /proc/cmdline); do
         rootflags=*) ROOT_FLAGS="${opt#rootflags=}" ;;
         conary.generation=*) CONARY_GEN="${opt#conary.generation=}" ;;
         conary.carrier=*) CONARY_CARRIER="${opt#conary.carrier=}" ;;
-        conary.verity=*) CONARY_VERITY="${opt#conary.verity=}" ;;
     esac
 done
+CONARY_VERITY="$(conary_read_verity /proc/cmdline)"
 
 if [ -z "$ROOT_FLAGS" ]; then
     if [ "$CONARY_CARRIER" = "readonly" ]; then

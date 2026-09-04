@@ -144,6 +144,70 @@ require_literal_count() {
         fail "$description expected $expected occurrences in $file, found $actual"
 }
 
+check_historical_checkout_local_action_authority() {
+    python3 - <<'PY'
+from pathlib import Path
+
+import yaml
+
+
+errors = []
+for path in sorted(Path(".github/workflows").glob("*.yml")):
+    document = yaml.safe_load(path.read_text())
+    for job_name, job in (document.get("jobs") or {}).items():
+        steps = job.get("steps") or []
+        for checkout_index, step in enumerate(steps):
+            uses = str(step.get("uses", ""))
+            checkout = step.get("with") or {}
+            ref = str(checkout.get("ref", "")).strip()
+            if not uses.startswith("actions/checkout@") or not ref:
+                continue
+            if ref == "${{ github.workflow_sha }}":
+                continue
+
+            later_local_actions = [
+                candidate
+                for candidate in steps[checkout_index + 1 :]
+                if str(candidate.get("uses", "")).startswith("./")
+                and ".github/actions/" in str(candidate.get("uses", ""))
+            ]
+            if not later_local_actions:
+                continue
+
+            authority_checkouts = [
+                candidate
+                for candidate in steps[:checkout_index]
+                if str(candidate.get("uses", "")).startswith("actions/checkout@")
+                and str((candidate.get("with") or {}).get("ref", "")).strip()
+                == "${{ github.workflow_sha }}"
+                and (candidate.get("with") or {}).get("path") == "workflow-authority"
+                and (candidate.get("with") or {}).get("sparse-checkout") == ".github/actions"
+                and (candidate.get("with") or {}).get("persist-credentials") is False
+            ]
+            if not authority_checkouts:
+                errors.append(
+                    f"{path}:{job_name}: historical checkout must be preceded by a "
+                    "credential-free, action-only github.workflow_sha checkout at "
+                    "workflow-authority"
+                )
+            if checkout.get("clean") is not False:
+                errors.append(
+                    f"{path}:{job_name}: historical checkout must preserve workflow-authority "
+                    "with clean: false"
+                )
+            for local_action in later_local_actions:
+                local_uses = str(local_action.get("uses", ""))
+                if not local_uses.startswith("./workflow-authority/.github/actions/"):
+                    errors.append(
+                        f"{path}:{job_name}: local action after a historical checkout must "
+                        "resolve from workflow-authority"
+                    )
+
+if errors:
+    raise SystemExit("\n".join(errors))
+PY
+}
+
 require_artifact_matrix_row() {
     local product="$1"
     local expected_route="$2"
@@ -247,7 +311,7 @@ declare -A production_ssh_action_counts=(
 for workflow in "${!production_ssh_action_counts[@]}"; do
     require_literal_count \
         "$workflow" \
-        'uses: ./.github/actions/setup-pinned-production-ssh' \
+        'setup-pinned-production-ssh' \
         "${production_ssh_action_counts[$workflow]}" \
         'shared pinned production SSH setup'
     require_match \
@@ -273,7 +337,7 @@ for production_ssh_job in "${production_ssh_jobs[@]}"; do
     require_job_match \
         "$workflow" \
         "$job" \
-        '\n    environment: production\n[\s\S]*\n[[:space:]]+uses: \./\.github/actions/setup-pinned-production-ssh' \
+        '\n    environment: production\n[\s\S]*\n[[:space:]]+uses: \./(workflow-authority/)?\.github/actions/setup-pinned-production-ssh' \
         'production SSH job must use the production environment for its protected known-hosts secret'
 done
 
@@ -514,7 +578,7 @@ require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingre
 require_match "$candidate_build_workflow" 'push:\n[[:space:]]+branches:\n[[:space:]]+- main[\s\S]*workflow_dispatch:[\s\S]*commit_sha:[\s\S]*Exact commit already merged into main' 'candidate artifact build must run for protected main and allow exact reproducibility rebuilds'
 require_job_match "$candidate_build_workflow" build-remi-candidate 'CARGO_ENCODED_RUSTFLAGS: ""[\s\S]*RUSTFLAGS: ""[\s\S]*git merge-base --is-ancestor "\$REQUESTED_SHA" origin/main[\s\S]*setup-remi-candidate-compiler-cache[\s\S]*source-sha: \$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*timed-rustc-wrapper\.sh[\s\S]*cargo build -p remi --release --locked[\s\S]*--stop-server[\s\S]*actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' 'candidate artifact build must bind protected source, time exact units, and bulk-save the pinned release cache'
 forbid_match "$candidate_build_workflow" 'SCCACHE_GHA_ENABLED|SCCACHE_GHA_VERSION' 'candidate per-object remote compiler cache'
-require_match "$candidate_cache_action" 'SOURCE_SHA: \$\{\{ inputs\.source-sha \}\}[\s\S]*git rev-parse HEAD[\s\S]*lock=%s[\s\S]*workspace_manifest=%s[\s\S]*remi_manifest=%s[\s\S]*profile=release[\s\S]*namespace="remi-release-local-v1-\$\{identity\}"[\s\S]*SCCACHE_CACHE_BACKEND=local-disk-bulk-v1[\s\S]*actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7[\s\S]*path: \$\{\{ runner\.temp \}\}/remi-release-sccache[\s\S]*mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' 'candidate compiler cache must use one exact-policy bounded local bulk seed'
+require_match "$candidate_cache_action" 'ACTION_DEFINITION: \$\{\{ github\.action_path \}\}/action\.yml[\s\S]*SOURCE_SHA: \$\{\{ inputs\.source-sha \}\}[\s\S]*git rev-parse HEAD[\s\S]*lock=%s[\s\S]*workspace_manifest=%s[\s\S]*remi_manifest=%s[\s\S]*sha256sum "\$ACTION_DEFINITION"[\s\S]*profile=release[\s\S]*namespace="remi-release-local-v1-\$\{identity\}"[\s\S]*SCCACHE_CACHE_BACKEND=local-disk-bulk-v1[\s\S]*actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7[\s\S]*path: \$\{\{ runner\.temp \}\}/remi-release-sccache[\s\S]*mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' 'candidate compiler cache must use one exact-policy bounded local bulk seed'
 require_match "$timed_rustc_wrapper" 'CONARY_REAL_RUSTC_WRAPPER[\s\S]*CONARY_RUSTC_TIMINGS_PATH[\s\S]*--crate-name[\s\S]*--crate-type[\s\S]*flock 9[\s\S]*duration_ms' 'candidate compiler wrapper must retain attributable per-unit timings'
 require_job_match "$candidate_build_workflow" build-remi-candidate 'remi-candidate-artifact\.sh package[\s\S]*remi-candidate-artifact\.sh verify[\s\S]*event=push -f status=success -f head_sha="\$CANDIDATE_SHA"[\s\S]*Prove same-input binary reproducibility[\s\S]*\.artifact\.binary_sha256 == \$prior\[0\]\.artifact\.binary_sha256[\s\S]*name: remi-candidate-\$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*retention-days: 30' 'candidate artifact build must package, verify, reproduce, and retain the exact protected binary'
 require_match "$candidate_artifact_script" 'schema_version: 2[\s\S]*source: \{[\s\S]*commit_sha: \$commit_sha[\s\S]*cargo_lock_sha256: \$lock_sha256[\s\S]*build: \{[\s\S]*command: "cargo build -p remi --release --locked"[\s\S]*compiler_timing_wrapper_sha256[\s\S]*compiler_cache: \{[\s\S]*backend: \$compiler_cache_backend[\s\S]*provenance: \{[\s\S]*workflow_run_id: \$workflow_run_id[\s\S]*artifact: \{[\s\S]*binary_sha256: \$artifact_sha256[\s\S]*compiler_timings_sha256' 'candidate artifact manifest must bind exact source, build, cache policy, provenance, and compiler evidence'
@@ -660,7 +724,7 @@ forbid_match "$deploy_workflow" 'bootstrap_exception' 'retired bootstrap excepti
 require_match "$artifact_proof_workflow" 'workflow_call:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'reusable published-artifact proof input'
 require_match "$artifact_proof_workflow" 'workflow_dispatch:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'manual published-artifact proof input'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'actions/checkout@[0-9a-f]+[\s\S]*ref: \$\{\{ inputs\.tag_name \}\}[\s\S]*fetch-depth: 0[\s\S]*persist-credentials: false' 'published artifact proof must run the exact tag harness'
-require_job_match "$artifact_proof_workflow" native-package-lifecycle "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Require the hosted container runtime" 'published artifact proof exact Rust toolchain'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle "uses: \\./workflow-authority/\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Require the hosted container runtime" 'published artifact proof exact Rust toolchain'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'distro: fedora44[\s\S]*native_format: rpm[\s\S]*distro: ubuntu-26\.04[\s\S]*native_format: deb[\s\S]*distro: arch[\s\S]*native_format: arch' 'published-artifact three-distro typed matrix'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-matrix\.sh resolve-tag "\$RELEASE_TAG"[\s\S]*resolved_version=.*\^version=[\s\S]*git cat-file -t "\$RELEASE_TAG"[\s\S]*== "tag"[\s\S]*git worktree add --detach "\$tag_tree"[\s\S]*"\$version" == "\$resolved_version"[\s\S]*"\$tag_tree/scripts/release-matrix\.sh" assert-owned-version suite "\$version"' 'published artifact proof must bind metadata to the annotated tag version and suite authority'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s\S]*X-GitHub-Api-Version: 2026-03-10[\s\S]*releases/tags/\$\{RELEASE_TAG\}[\s\S]*\$\(jq -r '\''\.draft'\'' <<< "\$release_state"\)" == "false"[\s\S]*\$\(jq -r '\''\.immutable'\'' <<< "\$release_state"\)" == "true"' 'published artifact proof must reject a draft, mutable, or mismatched GitHub release'
@@ -689,5 +753,8 @@ require_match "$artifact_matrix" 'checksums|SHA-256' 'suite checksum evidence co
 require_match "$artifact_matrix" 'signature' 'per-artifact signature evidence contract'
 require_match "$artifact_matrix" 'SBOM' 'per-artifact SBOM evidence contract'
 require_match "$artifact_matrix" 'provenance' 'per-artifact provenance evidence contract'
+
+check_historical_checkout_local_action_authority ||
+    fail "historical checkout local-action authority"
 
 echo "Release matrix workflow checks passed."

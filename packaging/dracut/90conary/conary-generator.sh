@@ -42,6 +42,8 @@ ensure_root_symlink() {
 
 read_kernel_value() {
     local key="$1"
+    local value=""
+    local found=1
 
     if [ ! -r "$CMDLINE_FILE" ]; then
         return 1
@@ -52,13 +54,14 @@ read_kernel_value() {
     for opt in $(cat "$CMDLINE_FILE"); do
         case "$opt" in
             "$key"=*)
-                printf '%s\n' "${opt#*=}"
-                return 0
+                value="${opt#*=}"
+                found=0
                 ;;
         esac
     done
 
-    return 1
+    [ "$found" -eq 0 ] || return 1
+    printf '%s\n' "$value"
 }
 
 read_kernel_generation() {
@@ -138,10 +141,6 @@ prepare_readonly_var_state() {
 
 CONARY_CARRIER="$(read_kernel_value conary.carrier)"
 CONARY_GEN="$(read_kernel_generation)"
-CONARY_VERITY=on
-if verity_value="$(read_kernel_value conary.verity)"; then
-    CONARY_VERITY="$verity_value"
-fi
 if [ -z "$CONARY_GEN" ]; then
     CONARY_GEN="$(read_current_generation)"
 fi
@@ -149,6 +148,15 @@ fi
 if [ -z "$CONARY_GEN" ]; then
     exit 0  # No generation system configured
 fi
+
+verity_policy_path="${CONARY_VERITY_POLICY_PATH:-/usr/lib/conary/conary-verity.sh}"
+[ -r "$verity_policy_path" ] || {
+    echo "conary: composefs verity policy missing at $verity_policy_path" >&2
+    exit 1
+}
+# shellcheck source=packaging/dracut/90conary/conary-verity.sh
+. "$verity_policy_path"
+CONARY_VERITY="$(conary_read_verity "$CMDLINE_FILE")"
 
 prepare_readonly_var_state || exit 1
 
@@ -164,13 +172,6 @@ CAS_DIR="${SYSROOT}/conary/objects"
 
 # Mount composefs at staging point
 mkdir -p "${SYSROOT}/conary/mnt"
-verity_policy_path="${CONARY_VERITY_POLICY_PATH:-/usr/lib/conary/conary-verity.sh}"
-[ -r "$verity_policy_path" ] || {
-    echo "conary: composefs verity policy missing at $verity_policy_path" >&2
-    exit 1
-}
-# shellcheck source=packaging/dracut/90conary/conary-verity.sh
-. "$verity_policy_path"
 COMPOSEFS_OPTIONS="$(conary_composefs_options "$CONARY_VERITY" "$CAS_DIR")" || exit 1
 mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
     -o "$COMPOSEFS_OPTIONS" || {

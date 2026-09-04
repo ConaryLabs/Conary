@@ -85,6 +85,21 @@ run_generator "$case_root" 0 || fail "explicit verified activation failed"
 grep -q 'verity_check=1' "$case_root/mount.log" ||
     fail "conary.verity=on did not require fs-verity"
 
+case_root="$(prepare_case duplicate-last-on \
+    'quiet conary.generation=1 conary.verity=off conary.verity=on')"
+run_generator "$case_root" 0 || fail "last conary.verity=on was not authoritative"
+grep -q 'verity_check=1' "$case_root/mount.log" ||
+    fail "last conary.verity=on did not require fs-verity"
+
+case_root="$(prepare_case duplicate-last-off \
+    'quiet conary.generation=1 conary.verity=on conary.verity=off')"
+run_generator "$case_root" 1 || fail "last conary.verity=off was not authoritative"
+if grep -q 'verity_check=1' "$case_root/mount.log"; then
+    fail "earlier conary.verity=on overrode the final explicit opt-out"
+fi
+grep -q 'conary.verity=off disables composefs fs-verity verification' "$case_root/stderr" ||
+    fail "final explicit opt-out did not print its downgrade"
+
 case_root="$(prepare_case invalid-value 'quiet conary.generation=1 conary.verity=maybe')"
 if run_generator "$case_root" 0; then
     fail "invalid conary.verity value was accepted"

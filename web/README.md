@@ -8,10 +8,12 @@ This shares the same Remi host as `conary.io`, but it is kept as a separate
 build and deploy target. In tracked config, Remi serves this frontend via its
 `[web]` root.
 
-```bash
-# Build and deploy (historical `packages` subcommand; deploys remi.conary.io)
-../deploy/deploy-sites.sh packages
-```
+Use the protected `deploy-site` workflow for normal deployments. An authorized
+direct deployment requires `REMI_HOST` and a fail-closed `REMI_SSH_CONFIG`;
+construct them from the ignored local access values exactly as described in
+the [direct static-site deployment runbook](../docs/operations/infrastructure.md#direct-static-site-deployment),
+then run `../deploy/deploy-sites.sh packages` (the historical `packages`
+subcommand deploys `remi.conary.io`).
 
 This is NOT the main site. For conary.io, see `../site/`.
 

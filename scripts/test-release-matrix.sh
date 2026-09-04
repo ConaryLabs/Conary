@@ -3867,6 +3867,28 @@ test_check_release_matrix_rejects_release_tag_local_ssh_action() {
         "load the local SSH action from the workflow revision before checking out the release tag"
 }
 
+test_check_release_matrix_rejects_historical_local_action_authority() {
+    local relative repo
+    local -a workflows=(
+        build-remi-candidate.yml
+        deploy-remi-candidate.yml
+        release-artifact-proof.yml
+        remi-r2-durability.yml
+    )
+
+    for relative in "${workflows[@]}"; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$relative" \
+            '          ref: ${{ github.workflow_sha }}' \
+            '          ref: ${{ github.sha }}'
+
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "historical checkout local-action authority"
+    done
+}
+
 test_check_release_matrix_rejects_single_static_site_deploy() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -4128,6 +4150,7 @@ main() {
         test_check_release_matrix_rejects_non_tag_static_site_checkout
         test_check_release_matrix_rejects_missing_local_action_checkout
         test_check_release_matrix_rejects_release_tag_local_ssh_action
+        test_check_release_matrix_rejects_historical_local_action_authority
         test_check_release_matrix_rejects_single_static_site_deploy
     )
 

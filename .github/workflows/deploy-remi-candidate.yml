@@ -30,12 +30,21 @@ jobs:
     timeout-minutes: 300
     environment: production
     steps:
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
       - name: Check out exact candidate
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.inputs.commit_sha }}
           fetch-depth: 0
           persist-credentials: false
+          clean: false
       - name: Require an exact commit already merged into main
         env:
           CANDIDATE_SHA: ${{ github.event.inputs.commit_sha }}
@@ -133,7 +142,7 @@ jobs:
           echo "availability_ms=$availability_ms" >> "$GITHUB_OUTPUT"
       - name: Configure pinned production SSH
         id: production-ssh
-        uses: ./.github/actions/setup-pinned-production-ssh
+        uses: ./workflow-authority/.github/actions/setup-pinned-production-ssh
         with:
           private-key: ${{ secrets.REMI_SSH_KEY }}
           known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
