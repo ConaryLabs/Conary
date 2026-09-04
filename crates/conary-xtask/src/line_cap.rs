@@ -274,11 +274,20 @@ fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
 
 fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
     let syntax = syn::parse_file(source)?;
-    let mut visitor = TestSpanVisitor::default();
-    visitor.visit_file(&syntax);
-    let spans = union_spans(visitor.spans);
-    let inline_test_lines = spans.iter().copied().map(LineSpan::line_count).sum();
     let total_lines = source.lines().count();
+    // Inner attributes such as `#![cfg(test)]` gate the whole file; syn keeps them
+    // on `File::attrs`, which no descendant visit sees.
+    let spans = if total_lines > 0 && cfg::is_test_only(&syntax.attrs) {
+        vec![LineSpan {
+            start: 1,
+            end: total_lines,
+        }]
+    } else {
+        let mut visitor = TestSpanVisitor::default();
+        visitor.visit_file(&syntax);
+        union_spans(visitor.spans)
+    };
+    let inline_test_lines = spans.iter().copied().map(LineSpan::line_count).sum();
     Ok(FileMetrics {
         total_lines,
         production_lines: total_lines.saturating_sub(inline_test_lines),
@@ -530,9 +539,10 @@ const FIXTURE: &str = "value";
         for annotation in [
             "test",
             "tokio::test(flavor = \"current_thread\")",
-            "cfg_attr(test, test)",
-            "cfg_attr(all(test, feature = \"x\"), tokio::test)",
-            "cfg_attr(test, allow(dead_code), cfg_attr(feature = \"x\", test))",
+            "cfg_attr(all(), test)",
+            "cfg_attr(all(), allow(dead_code), cfg_attr(all(), tokio::test))",
+            // Annotated in every non-test build, so no production build keeps it.
+            "cfg_attr(not(test), test)",
         ] {
             let source = format!("#[{annotation}]\nasync fn example() {{}}\n");
             assert_eq!(
@@ -541,9 +551,14 @@ const FIXTURE: &str = "value";
                 "{annotation}"
             );
         }
+        // A conditional annotation whose condition can be false in a non-test
+        // build leaves an ordinary function that production compiles.
         for annotation in [
+            "cfg_attr(test, test)",
+            "cfg_attr(all(test, feature = \"x\"), tokio::test)",
+            "cfg_attr(test, allow(dead_code), cfg_attr(feature = \"x\", test))",
+            "cfg_attr(feature = \"x\", test)",
             "cfg_attr(test, allow(dead_code))",
-            "cfg_attr(not(test), test)",
             "cfg_attr(all(test, not(test)), test)",
             "test_helper",
         ] {
@@ -691,6 +706,24 @@ impl Example {
                 inline_test_lines: 7,
             }
         );
+    }
+
+    #[test]
+    fn file_level_inner_cfg_test_owns_the_whole_file() {
+        let source =
+            "// crates/example/src/support.rs\n#![cfg(test)]\n\nfn helper() {}\nfn other() {}\n";
+        assert_eq!(
+            analyze_source(source).unwrap(),
+            FileMetrics {
+                total_lines: 5,
+                production_lines: 0,
+                inline_test_lines: 5,
+            }
+        );
+        let source = "#![allow(dead_code)]\n#![cfg(not(test))]\nfn production() {}\n";
+        assert_eq!(analyze_source(source).unwrap().production_lines, 3);
+        let source = "#![cfg_attr(feature = \"x\", cfg(test))]\nfn production() {}\n";
+        assert_eq!(analyze_source(source).unwrap().production_lines, 2);
     }
 
     #[test]

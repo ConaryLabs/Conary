@@ -94,19 +94,25 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
     }
     let predicate = Predicate::All(predicates);
     let mut values = BTreeMap::from([("test".to_owned(), false)]);
-    let can_be_production = predicate.satisfiable(&mut values);
-    values.insert("test".to_owned(), true);
-    if !can_be_production {
+    if !predicate.satisfiable(&mut values) {
+        // Never compiled outside test builds: test-only when some test build keeps it.
+        values.insert("test".to_owned(), true);
         return predicate.satisfiable(&mut values);
     }
 
-    // Test annotations also own inline-test lines, including annotations enabled
-    // by cfg_attr in a test build. Other conditional annotations do not qualify.
+    // The node reaches some non-test build. rustc strips test-annotated functions
+    // from non-test output, so the node is test-only only when every non-test
+    // configuration that compiles it also applies a test annotation. A conditional
+    // annotation whose condition can be false leaves an ordinary production item.
     let annotations = attributes
         .iter()
         .filter_map(|attribute| test_annotation(&attribute.meta))
         .collect();
-    Predicate::All(vec![predicate, Predicate::Any(annotations)]).satisfiable(&mut values)
+    let retains_production = Predicate::All(vec![
+        predicate,
+        Predicate::Not(Box::new(Predicate::Any(annotations))),
+    ]);
+    !retains_production.satisfiable(&mut values)
 }
 
 fn effective_cfg(meta: &Meta) -> Option<Predicate> {

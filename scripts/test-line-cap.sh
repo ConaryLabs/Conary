@@ -80,6 +80,11 @@ async fn asynchronous() {}
 #[cfg_attr(test, test)]
 fn conditional() {}
 EOF
+write_fixture "$fixture_root/crates/fixture/src/inner_cfg_test.rs" <<'EOF'
+#![cfg(test)]
+fn helper() {}
+fn other() {}
+EOF
 write_fixture "$fixture_root/crates/fixture/src/cfg_attr_gating.rs" <<'EOF'
 #[cfg_attr(all(), cfg(test))]
 fn unconditional_test() {}
@@ -98,7 +103,8 @@ grep -q $'doc_comment_attribute.rs\ttotal=4\tproduction=1\tinline_test=3' <<<"$r
 grep -q $'all_test_predicate.rs\ttotal=3\tproduction=1\tinline_test=2' <<<"$report"
 grep -q $'not_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$report"
 grep -q $'any_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$report"
-grep -q $'standalone_tests.rs\ttotal=7\tproduction=1\tinline_test=6' <<<"$report"
+grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report"
+grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
 grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
 
 for header_kind in missing legacy; do
