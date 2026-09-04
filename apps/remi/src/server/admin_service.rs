@@ -584,7 +584,7 @@ pub async fn create_repo(
         validate_external_url(content_url)?;
     }
     if let Some(trust) = input.trust.as_ref() {
-        validate_repository_trust(trust).await?;
+        validate_repository_trust(trust)?;
     }
 
     let _publication_guard = publication::guard(state).await;
@@ -636,7 +636,7 @@ pub async fn update_repo(
         validate_external_url(content_url)?;
     }
     if let Some(trust) = input.trust.as_ref() {
-        validate_repository_trust(trust).await?;
+        validate_repository_trust(trust)?;
     }
 
     let _publication_guard = publication::guard(state).await;
@@ -771,7 +771,7 @@ pub async fn repo_exists(
     Ok(repo.is_some())
 }
 
-async fn validate_repository_trust(policy: &RepositoryTrustPolicy) -> Result<(), ServiceError> {
+fn validate_repository_trust(policy: &RepositoryTrustPolicy) -> Result<(), ServiceError> {
     policy.validate().map_err(ServiceError::from)?;
     if let RepositoryTrustPolicy::Rpm {
         metadata: RpmMetadataAuthority::Metalink { url },

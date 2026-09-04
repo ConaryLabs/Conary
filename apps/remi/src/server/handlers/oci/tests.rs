@@ -66,7 +66,7 @@ fn insert_stale_converted_package(
 
 const OCI_TEST_HASH: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-async fn oci_blob_state_with_db(
+fn oci_blob_state_with_db(
     hash: &str,
     stale_rows: Vec<bool>,
 ) -> (
@@ -701,7 +701,7 @@ fn oci_tags_catalog_and_manifest_ignore_stale_rows() {
 
 #[tokio::test]
 async fn oci_blob_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]);
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -711,7 +711,7 @@ async fn oci_blob_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn oci_head_blob_returns_not_found_for_stale_conversion_only_hash() {
-    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true]);
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = head_blob_inner(state, "conary/fedora/pkg", &digest).await;
@@ -721,7 +721,7 @@ async fn oci_head_blob_returns_not_found_for_stale_conversion_only_hash() {
 
 #[tokio::test]
 async fn oci_blob_allows_hash_shared_with_current_conversion_row() {
-    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true, false]).await;
+    let (state, _temp, _catalogs) = oci_blob_state_with_db(OCI_TEST_HASH, vec![true, false]);
     let digest = format!("sha256:{OCI_TEST_HASH}");
 
     let response = get_blob_inner(state, "conary/fedora/pkg", &digest).await;
