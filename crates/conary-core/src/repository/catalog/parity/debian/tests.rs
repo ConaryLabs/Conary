@@ -1456,6 +1456,35 @@ fn ignorable_or_avoidable_conflicts_do_not_override_missing_requirements() {
             "Conflicts: alternative-root\n",
         ),
         resolution_stanza("z-usable-provider", "1", "amd64", 'e', ""),
+        resolution_stanza(
+            "transitive-alternative-root",
+            "1",
+            "amd64",
+            'f',
+            "Depends: transitive-alternative-helper, absent-transitive-alternative-target\n",
+        ),
+        resolution_stanza(
+            "transitive-alternative-helper",
+            "1",
+            "amd64",
+            '0',
+            "Depends: a-transitive-blocker | z-transitive-safe\n",
+        ),
+        resolution_stanza(
+            "a-transitive-blocker",
+            "1",
+            "amd64",
+            '1',
+            "Conflicts: transitive-alternative-root\n",
+        ),
+        resolution_stanza("z-transitive-safe", "1", "amd64", '2', ""),
+        resolution_stanza(
+            "own-provider-root",
+            "1",
+            "amd64",
+            '3',
+            "Provides: own-provider-virtual\nDepends: own-provider-virtual, absent-own-provider-target\n",
+        ),
     ]
     .concat();
     let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
@@ -1466,6 +1495,11 @@ fn ignorable_or_avoidable_conflicts_do_not_override_missing_requirements() {
     for (root, missing_text) in [
         ("self-conflict-root", "absent-self-target"),
         ("alternative-root", "absent-alternative-target"),
+        (
+            "transitive-alternative-root",
+            "absent-transitive-alternative-target",
+        ),
+        ("own-provider-root", "absent-own-provider-target"),
     ] {
         let AptResolutionOutcome::Unresolved(missing) = apt.resolve(root, "1", "amd64").unwrap()
         else {

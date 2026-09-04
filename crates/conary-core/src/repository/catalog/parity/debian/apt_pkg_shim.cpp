@@ -833,21 +833,28 @@ bool selected_closure_conflicts_with_version(ResolutionHandle &handle,
 bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
                                               pkgCache::VerIterator const &root,
                                               pkgCache::VerIterator const &initial) {
+    struct ReachableConflictNode {
+        unsigned long id;
+        bool directly_conflicting;
+        std::vector<std::vector<unsigned long>> required_groups;
+    };
+
     std::vector<pkgCache::VerIterator> pending{initial};
     std::set<unsigned long> visited;
+    std::vector<ReachableConflictNode> nodes;
     while (!pending.empty()) {
         pkgCache::VerIterator version = pending.back();
         pending.pop_back();
         if (!visited.insert(version->ID).second) {
             continue;
         }
-        if (version.ParentPkg() == root.ParentPkg() && version != root) {
-            return true;
-        }
-        if (version_has_negative_relation_to_version(handle, version, root) ||
-            version_has_negative_relation_to_version(handle, root, version)) {
-            return true;
-        }
+        ReachableConflictNode node{
+            version->ID,
+            (version.ParentPkg() == root.ParentPkg() && version != root) ||
+                version_has_negative_relation_to_version(handle, version, root) ||
+                version_has_negative_relation_to_version(handle, root, version),
+            {},
+        };
         for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
             pkgCache::DepIterator start;
             pkgCache::DepIterator end;
@@ -857,11 +864,13 @@ bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
             if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
                 continue;
             }
+            std::vector<unsigned long> group_targets;
             for (pkgCache::DepIterator atom = start;; ++atom) {
                 std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
                 for (std::size_t index = 0; targets[index] != nullptr; ++index) {
                     pkgCache::VerIterator target(*handle.cache, targets[index]);
                     if (handle.policy->GetPriority(target) > 0) {
+                        group_targets.push_back(target->ID);
                         pending.push_back(target);
                     }
                 }
@@ -869,9 +878,50 @@ bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
                     break;
                 }
             }
+            std::sort(group_targets.begin(), group_targets.end());
+            group_targets.erase(
+                std::unique(group_targets.begin(), group_targets.end()), group_targets.end());
+            if (!group_targets.empty()) {
+                node.required_groups.push_back(std::move(group_targets));
+            }
+        }
+        nodes.push_back(std::move(node));
+    }
+
+    // Conflict authority is the least fixed point over hard dependency groups: a version is
+    // blocked when it conflicts directly with the root, or when one of its required groups has
+    // candidates but every candidate is itself blocked. This keeps a usable OR alternative from
+    // being poisoned by a rejected sibling and treats dependency cycles without a conflict as
+    // viable rather than inventing evidence.
+    std::set<unsigned long> conflicting;
+    for (ReachableConflictNode const &node : nodes) {
+        if (node.directly_conflicting) {
+            conflicting.insert(node.id);
         }
     }
-    return false;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (ReachableConflictNode const &node : nodes) {
+            if (conflicting.find(node.id) != conflicting.end()) {
+                continue;
+            }
+            bool const has_blocked_group =
+                std::any_of(node.required_groups.begin(), node.required_groups.end(),
+                            [&conflicting](std::vector<unsigned long> const &targets) {
+                                return std::all_of(
+                                    targets.begin(), targets.end(),
+                                    [&conflicting](unsigned long target_id) {
+                                        return conflicting.find(target_id) != conflicting.end();
+                                    });
+                            });
+            if (has_blocked_group) {
+                conflicting.insert(node.id);
+                changed = true;
+            }
+        }
+    }
+    return conflicting.find(initial->ID) != conflicting.end();
 }
 
 bool target_is_installable_with_root(ResolutionHandle &handle,
@@ -897,7 +947,7 @@ bool target_is_installable_with_root(ResolutionHandle &handle,
         }
         target_probe.SetCandidateVersion(target);
         target_probe.MarkInstall(target.ParentPkg(), true, 0, true, false);
-        conflicting = target.ParentPkg() == root.ParentPkg() ||
+        conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
                       probe_has_conflict_class(handle, target_probe, target) ||
                       selected_closure_conflicts_with_version(handle, target_probe, root) ||
                       reachable_required_targets_have_conflict(handle, root, target);
@@ -907,13 +957,13 @@ bool target_is_installable_with_root(ResolutionHandle &handle,
     probe.SetCandidateVersion(target);
     if (!probe.MarkInstall(target.ParentPkg(), true, 0, true, false)) {
         installable = false;
-        conflicting = target.ParentPkg() == root.ParentPkg() ||
+        conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
                       probe_has_conflict_class(handle, probe, target) ||
                       reachable_required_targets_have_conflict(handle, root, target);
         return true;
     }
     probe.MarkProtected(target.ParentPkg());
-    conflicting = target.ParentPkg() == root.ParentPkg() ||
+    conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
                   probe_has_conflict_class(handle, probe, target) ||
                   reachable_required_targets_have_conflict(handle, root, target);
     installable = !conflicting && probe_has_only_root_no_target_breaks(handle, probe, root);
