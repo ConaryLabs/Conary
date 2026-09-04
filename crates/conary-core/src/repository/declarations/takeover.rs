@@ -546,7 +546,6 @@ fn selected_root_identity(selected_root: &Path) -> Result<String> {
 #[cfg(test)]
 mod conformance_tests;
 #[cfg(test)]
-#[path = "takeover/eopkg_tests.rs"]
 mod eopkg_tests;
 #[cfg(test)]
 mod tests;

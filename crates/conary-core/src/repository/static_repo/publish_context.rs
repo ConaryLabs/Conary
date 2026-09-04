@@ -707,5 +707,4 @@ pub(crate) use key_management::{
 };
 
 #[cfg(test)]
-#[path = "publish_context/tests.rs"]
 mod tests;

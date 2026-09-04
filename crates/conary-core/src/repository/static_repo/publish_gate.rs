@@ -371,5 +371,4 @@ fn failure(code: PublishGateFailureCode, message: &str) -> PublishGateFailure {
 }
 
 #[cfg(test)]
-#[path = "publish_gate/tests.rs"]
 mod tests;

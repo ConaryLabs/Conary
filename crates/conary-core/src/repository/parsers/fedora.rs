@@ -964,5 +964,4 @@ impl RepositoryParser for FedoraParser {
 }
 
 #[cfg(test)]
-#[path = "fedora/tests.rs"]
 mod tests;

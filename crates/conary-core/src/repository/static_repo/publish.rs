@@ -557,7 +557,6 @@ fn check_watermark(destination: &DestinationState, options: &StaticPublishOption
 }
 
 #[cfg(test)]
-#[path = "publish/tests.rs"]
 mod tests;
 
 fn read_state_file(path: &Path) -> Result<Option<Vec<u8>>> {

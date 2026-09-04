@@ -742,5 +742,4 @@ fn native_machine_architecture(architecture: &str) -> MachineArchitecture {
 }
 
 #[cfg(test)]
-#[path = "selector/tests.rs"]
 mod tests;

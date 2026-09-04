@@ -461,5 +461,4 @@ fn duration_to_i64_ms(duration: std::time::Duration) -> i64 {
 }
 
 #[cfg(test)]
-#[path = "substituter/tests.rs"]
 mod tests;

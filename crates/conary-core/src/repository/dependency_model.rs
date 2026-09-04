@@ -885,5 +885,4 @@ impl RepositoryRequirementGroup {
 }
 
 #[cfg(test)]
-#[path = "dependency_model/tests.rs"]
 mod tests;
