@@ -697,4 +697,48 @@ mod tests {
         );
         drop(selection_pin);
     }
+
+    #[tokio::test]
+    async fn conversion_download_uses_the_public_network_policy() {
+        let fixture = ActiveCatalogFixture::new();
+        let mut solus_package = package("1.0-1", Some("x86_64"), "catalog-source");
+        solus_package.source_profile = "solus".to_string();
+        solus_package.version_scheme = conary_core::repository::versioning::VersionScheme::Eopkg;
+        fixture.activate("solus", 1, vec![solus_package]);
+        let selection_pin = fixture
+            .authority()
+            .open_active_profile("solus")
+            .expect("pin Solus catalog selection");
+        let selection = selection_pin.selection().clone();
+        let expected = ProfileCatalog::new(&selection_pin)
+            .find_package_records_by_name("demo")
+            .expect("read exact Solus package")
+            .pop()
+            .expect("Solus package exists");
+        let service = ConversionService::new(
+            fixture.db_path().with_extension("chunks"),
+            fixture.db_path().with_extension("cache"),
+            fixture.db_path().to_path_buf(),
+            None,
+        )
+        .with_catalog_authority(fixture.authority().clone());
+        let mut source = service
+            .find_exact_package_for_selected_revision_async(selection, expected)
+            .await
+            .expect("resolve exact conversion source");
+        source.repo_pkg.download_url = "http://127.0.0.1:9/demo.eopkg".to_string();
+        let destination = tempfile::tempdir().expect("create download destination");
+
+        let result = service
+            .download_package_async(PackageDownloadRequest {
+                source,
+                dest_dir: destination.path(),
+            })
+            .await;
+        let Err(error) = result else {
+            panic!("conversion download accepted a loopback package URL")
+        };
+
+        assert!(format!("{error:#}").contains("non-global"), "{error:#}");
+    }
 }
