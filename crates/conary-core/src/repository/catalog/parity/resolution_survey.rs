@@ -90,6 +90,12 @@ impl NativeResolutionSurveyV1 {
             ));
         }
         self.counts.validate()?;
+        if self.failure_record_limit != NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT as u64 {
+            return Err(Error::ConfigError(format!(
+                "native resolution survey failure record limit {} is unsupported; expected {}",
+                self.failure_record_limit, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT
+            )));
+        }
         if self.diagnostic_outcome_record_limit
             != NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT as u64
         {
@@ -755,6 +761,15 @@ mod tests {
         assert!(!survey.truncated_evidence);
         assert_eq!(survey.counts.error_kinds.len(), 1);
         assert_eq!(survey.counts.error_kinds[0].count, survey.total_failures);
+
+        let mut drifted_limit = survey.clone();
+        drifted_limit.failure_record_limit += 1;
+        let error = drifted_limit.validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failure record limit 5001 is unsupported")
+        );
 
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("survey.json");

@@ -811,11 +811,12 @@ result only when the export run used its own current-main operator
 revision. Callers cannot supply paths, profile order, conversion commands, or
 publication operations.
 
-The diagnostics survey binding is schema 2, the strict per-ecosystem lane
+The diagnostics survey binding is schema 3, the strict per-ecosystem lane
 evidence is schema 5, and the assembled three-lane set is schema 2. The lane
 schema embeds resolution schema 3; the assembled set binds those current lane
 summaries. Survey and lane evidence require the resolution worker count,
-measured per-worker load times and RSS admission inputs. Schema-1 survey
+measured per-worker load times and RSS admission inputs. Survey bindings
+through schema 2,
 bindings, strict lanes through schema 4, and schema-1 assembled sets are fenced
 as obsolete; operators must regenerate all three strict lanes once before
 retained-lane subset production can resume.
@@ -851,9 +852,9 @@ inflating the failure count. Candidate-resolution and resolution-comparison
 surveys are schema 2 because they embed the outcome vocabulary. Native and
 candidate explanations use a 32 MiB retained-evidence budget; native survey
 documents remain capped at 64 MiB end to end.
-For ALPM missing-first failures, the producer rechecks the libalpm-selected
-root-reachable package set with libalpm's typed conflict API before accepting
-an unresolved outcome.
+For ALPM missing-first failures, the producer explores every libalpm-authorized
+provider path and accepts conflict precedence only when native conflict checks
+block them all; a rejected provider alternative cannot taint a usable closure.
 The top-level Remi promotion-evidence envelope is schema 2 because it embeds
 resolution-comparison schema 3. Retained schema-1 promotion evidence is
 obsolete non-authority and must be rebuilt before activation.

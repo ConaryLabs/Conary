@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 61
+revision: 62
 status: active
 ---
 
@@ -103,12 +103,12 @@ carry the export/deployment/producer/image/schema/implementation/binary-digest
 bindings, and remain diagnostics-only. Their type can never satisfy assembly,
 comparison, promotion, activation, or publication.
 
-Native-resolution survey binding evidence is schema 2, strict native-oracle
+Native-resolution survey binding evidence is schema 3, strict native-oracle
 lane evidence is schema 5, and the assembled three-lane set is schema 2. The
 lane schema embeds resolution schema 3; the assembled-set schema binds those
 current lane summaries. The survey and lane versions also require the worker count,
 per-worker pool-load timings, measured worker RSS, and admitted memory budget.
-This is a hard cut: schema-1 survey bindings, strict lanes through schema 4,
+This is a hard cut: survey bindings through schema 2, strict lanes through schema 4,
 and schema-1 assembled sets are obsolete non-authority and must be regenerated.
 In particular, the first
 subset production after this cut must rebuild all three strict lanes before
@@ -422,8 +422,8 @@ solver diagnostics, rather than package semantics, authoritative.
 | --- | --- |
 | libsolv | Any `PKG_CONFLICTS` (`0x105`), `PKG_SAME_NAME` (`0x106`), `PKG_OBSOLETES` (`0x107`), or implicit-obsoletes (`0x108`) rule in any failed problem; also a successful transaction that omits the exact root. Architecture-only `INFARCH` remains outside this class. |
 | apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
-| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or a native `check_conflicts` result over libalpm-selected packages reached from the exact root when preparation reports missing dependencies first. |
-| Conary/Resolvo | Any `ConflictEdge::Conflict` or `ConflictNode::Excluded` in the exact-root graph. When a minimized graph exposes missing first, the producer re-solves with those exact persisted missing groups discharged until it exposes a root-reachable conflict or proves the remainder conflict-free. |
+| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or native `check_conflicts` results that block every libalpm-authorized provider path reached from the exact root when preparation reports missing dependencies first. A conflict on a rejected provider alternative is not part of the required closure. |
+| Conary/Resolvo | A `ConflictEdge::Conflict` or `ConflictNode::Excluded` that remains on every viable exact-root provider path. When a minimized graph exposes missing first, the producer re-solves with those exact persisted missing groups discharged until it exposes an unavoidable root-reachable conflict or proves an alternative path conflict-free. |
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,

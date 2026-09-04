@@ -406,7 +406,7 @@ jobs:
             --arg resolution_sha256 "$resolution_sha256" \
             --arg survey_sha256 "$survey_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 2 and
+            .schema_version == 3 and
             .artifact_type == "native-resolution-survey-diagnostics" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
