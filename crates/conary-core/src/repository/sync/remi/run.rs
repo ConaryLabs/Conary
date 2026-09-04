@@ -23,10 +23,7 @@ pub use candidate::{
 use contract::{
     is_terminal_state, validate_digest, validate_member, validate_profile, validate_uuid,
 };
-pub use failure::{
-    ProfileSyncFailureCategory, ProfileSyncFailureStage, RemiSyncFailureCategory,
-    RemiSyncFailureStage,
-};
+pub use failure::{ProfileSyncFailureCategory, ProfileSyncFailureStage};
 
 #[cfg(test)]
 use recovery::recover_expired_profile_sync_runs_at;
@@ -57,8 +54,6 @@ pub struct ProfileSyncRun {
     pub recovery_run_ids: Vec<String>,
 }
 
-pub type RemiSyncRun = ProfileSyncRun;
-
 /// Exact ordered member binding recorded by a profile refresh.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSyncRunMember {
@@ -75,15 +70,13 @@ pub struct ProfileSyncRunMember {
     pub candidate_source_snapshot_sha256: Option<String>,
 }
 
-pub type RemiSyncRunMember = ProfileSyncRunMember;
-
 /// Begin a profile-scoped refresh using the active profile revision as its
 /// exact input digest. The first refresh may legitimately have no input.
 pub fn begin_profile_sync_run(
     conn: &Connection,
     source_profile: &str,
     owner_instance_uuid: &str,
-) -> Result<RemiSyncRun> {
+) -> Result<ProfileSyncRun> {
     validate_profile(source_profile)?;
     validate_uuid(owner_instance_uuid, "sync run owner instance UUID")?;
     begin_profile_sync_run_internal(conn, source_profile, None, false, owner_instance_uuid)
@@ -97,7 +90,7 @@ pub fn begin_profile_sync_run_with_input(
     source_profile: &str,
     input_profile_digest: Option<&str>,
     owner_instance_uuid: &str,
-) -> Result<RemiSyncRun> {
+) -> Result<ProfileSyncRun> {
     validate_profile(source_profile)?;
     validate_uuid(owner_instance_uuid, "sync run owner instance UUID")?;
     if let Some(digest) = input_profile_digest {
@@ -118,7 +111,7 @@ fn begin_profile_sync_run_internal(
     input_profile_digest: Option<&str>,
     assert_input: bool,
     owner_instance_uuid: &str,
-) -> Result<RemiSyncRun> {
+) -> Result<ProfileSyncRun> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
     begin_profile_sync_run_in_transaction(
@@ -138,7 +131,7 @@ fn begin_profile_sync_run_at(
     input_profile_digest: Option<&str>,
     owner_instance_uuid: &str,
     now: i64,
-) -> Result<RemiSyncRun> {
+) -> Result<ProfileSyncRun> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     begin_profile_sync_run_in_transaction(
         tx,
@@ -157,7 +150,7 @@ fn begin_profile_sync_run_in_transaction(
     assert_input: bool,
     owner_instance_uuid: &str,
     now: i64,
-) -> Result<RemiSyncRun> {
+) -> Result<ProfileSyncRun> {
     let active_input_digest = tx
         .query_row(
             "SELECT profile_revision_sha256
@@ -251,7 +244,7 @@ fn begin_profile_sync_run_in_transaction(
         .collect();
     tx.commit()?;
 
-    Ok(RemiSyncRun {
+    Ok(ProfileSyncRun {
         run_id,
         source_profile: source_profile.to_string(),
         owner_instance_uuid: owner_instance_uuid.to_string(),
@@ -268,8 +261,8 @@ pub fn begin_profile_sync_run_with_members(
     source_profile: &str,
     input_profile_digest: Option<&str>,
     owner_instance_uuid: &str,
-    members: &[RemiSyncRunMember],
-) -> Result<RemiSyncRun> {
+    members: &[ProfileSyncRunMember],
+) -> Result<ProfileSyncRun> {
     let run = begin_profile_sync_run_with_input(
         conn,
         source_profile,
@@ -292,7 +285,7 @@ pub fn begin_profile_sync_run_with_members(
 }
 
 /// Renew a live profile run without changing its candidate identity.
-pub fn heartbeat_profile_sync_run(conn: &Connection, run: &RemiSyncRun) -> Result<()> {
+pub fn heartbeat_profile_sync_run(conn: &Connection, run: &ProfileSyncRun) -> Result<()> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
     require_owned_run(
@@ -311,8 +304,8 @@ pub fn heartbeat_profile_sync_run(conn: &Connection, run: &RemiSyncRun) -> Resul
 /// Record one exact ordered source member and its candidate source snapshot.
 pub fn record_profile_sync_run_member(
     conn: &Connection,
-    run: &RemiSyncRun,
-    member: &RemiSyncRunMember,
+    run: &ProfileSyncRun,
+    member: &ProfileSyncRunMember,
 ) -> Result<()> {
     validate_member(member)?;
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
@@ -327,7 +320,7 @@ pub fn record_profile_sync_run_member(
              FROM repository_sync_run_members
              WHERE run_id = ?1 AND ordinal = ?2",
             params![&run.run_id, member.ordinal],
-            RemiSyncRunMember::from_row,
+            ProfileSyncRunMember::from_row,
         )
         .optional()?;
     match existing {
@@ -407,7 +400,7 @@ pub fn record_profile_sync_run_member(
 /// supplied one exact source snapshot digest.
 pub fn ready_profile_sync_run(
     conn: &Connection,
-    run: &RemiSyncRun,
+    run: &ProfileSyncRun,
     candidate_profile_digest: &str,
 ) -> Result<()> {
     validate_digest(
@@ -470,9 +463,9 @@ pub fn ready_profile_sync_run(
 /// are deleted because this coordinator never owns candidate row storage.
 pub fn abort_profile_sync_run(
     conn: &Connection,
-    run: &RemiSyncRun,
-    stage: RemiSyncFailureStage,
-    category: RemiSyncFailureCategory,
+    run: &ProfileSyncRun,
+    stage: ProfileSyncFailureStage,
+    category: ProfileSyncFailureCategory,
     evidence: &str,
 ) -> Result<()> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
@@ -530,7 +523,7 @@ pub fn abort_profile_sync_run(
 
 fn require_owned_run(
     tx: &Transaction<'_>,
-    run: &RemiSyncRun,
+    run: &ProfileSyncRun,
     first_state: &str,
     second_state: &str,
     third_state: &str,
@@ -567,7 +560,7 @@ fn require_owned_run(
     Ok(())
 }
 
-fn touch_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, now: i64) -> Result<()> {
+fn touch_owned_run(tx: &Transaction<'_>, run: &ProfileSyncRun, now: i64) -> Result<()> {
     let updated = tx.execute(
         "UPDATE repository_sync_runs
          SET state = CASE WHEN state = 'created' THEN 'fetching_objects' ELSE state END,
@@ -593,7 +586,7 @@ fn touch_owned_run(tx: &Transaction<'_>, run: &RemiSyncRun, now: i64) -> Result<
     Ok(())
 }
 
-impl RemiSyncRunMember {
+impl ProfileSyncRunMember {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         let role = ProfileSourceRole::parse(&row.get::<_, String>(6)?)
             .map_err(|error| row_conversion_error(6, error))?;
@@ -647,7 +640,7 @@ fn row_conversion_error(index: usize, error: String) -> rusqlite::Error {
     )
 }
 
-fn fenced_error(run: &RemiSyncRun, reason: &str) -> Error {
+fn fenced_error(run: &ProfileSyncRun, reason: &str) -> Error {
     Error::ConflictError(format!(
         "profile {} sync run {} lost fencing epoch {}: {reason}",
         run.source_profile, run.run_id, run.fencing_epoch

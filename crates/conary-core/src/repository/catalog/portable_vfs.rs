@@ -884,5 +884,4 @@ fn ffi_boundary(fallback: c_int, callback: impl FnOnce() -> c_int) -> c_int {
 }
 
 #[cfg(test)]
-#[path = "portable_vfs/tests.rs"]
 mod tests;

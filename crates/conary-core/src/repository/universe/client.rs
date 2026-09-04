@@ -903,5 +903,4 @@ fn checked_i64(value: u64, label: &str) -> Result<i64> {
 }
 
 #[cfg(test)]
-#[path = "client/tests.rs"]
 mod tests;

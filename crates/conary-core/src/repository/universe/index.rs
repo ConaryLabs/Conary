@@ -15,7 +15,6 @@ use crate::repository::catalog::{CatalogBindingV1, CatalogReader, CatalogScopeV1
 
 use super::RemiUniverseManifestV2;
 
-#[path = "index/replay.rs"]
 mod replay;
 
 const CLIENT_INDEX_SCHEMA: &str = r#"

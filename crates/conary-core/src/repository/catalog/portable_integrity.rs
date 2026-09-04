@@ -729,5 +729,4 @@ impl Drop for TemporaryManifest {
 }
 
 #[cfg(test)]
-#[path = "portable_integrity/tests.rs"]
 mod tests;

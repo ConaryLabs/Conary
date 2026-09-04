@@ -7,8 +7,7 @@ use anyhow::Result;
 use conary_core::db::models::{Repository, RepositoryPackage, SecurityAdvisorySupport, Trove};
 use conary_core::repository::{
     PackageArchitectureVariant, PackageSelector, SelectionOptions,
-    resolution_policy::ResolutionPolicy,
-    versioning::{compare_package_identities, resolve_package_version_scheme},
+    resolution_policy::ResolutionPolicy, versioning::compare_package_identities,
 };
 use std::cmp::Ordering;
 use tracing::debug;
@@ -19,7 +18,7 @@ use tracing::debug;
 /// Mixed schemes and malformed versions are typed errors.
 fn is_repo_version_newer(trove: &Trove, package: &RepositoryPackage) -> Result<bool> {
     let installed_scheme = trove.version_scheme;
-    let repository_scheme = resolve_package_version_scheme(package);
+    let repository_scheme = package.version_scheme;
     let ordering = compare_package_identities(
         installed_scheme,
         &trove.version,

@@ -472,5 +472,4 @@ pub(super) fn require_no_filelists_dependent_requirements(
 }
 
 #[cfg(test)]
-#[path = "filelists/tests.rs"]
 mod tests;

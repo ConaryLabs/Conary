@@ -12,7 +12,6 @@ use conary_core::repository::resolution_policy::{
 use conary_core::repository::selector::{
     PackageSelector, SelectionOptions, candidate_source_identity,
 };
-use conary_core::repository::versioning::resolve_package_version_scheme;
 use conary_core::scriptlet::SandboxMode;
 use conary_core::version::VersionConstraint;
 
@@ -189,7 +188,7 @@ fn bind_package_set_source_identity(
         let candidates = PackageSelector::search_packages(conn, name, &options)?;
         let mut candidate_identities = BTreeSet::new();
         for candidate in candidates {
-            let scheme = resolve_package_version_scheme(&candidate.package);
+            let scheme = candidate.package.version_scheme;
             if super::dep_resolution::version_satisfies_constraint(
                 scheme,
                 &candidate.package.version,

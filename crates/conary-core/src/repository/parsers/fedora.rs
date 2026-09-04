@@ -29,7 +29,7 @@ use crate::repository::trust::RpmMetadataAuthority;
 use crate::repository::trust::openpgp::PreparedOpenPgpTrust;
 use crate::repository::versioning::VersionScheme;
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use serde_json::json;
 use std::io::BufRead;
 use tracing::info;
@@ -86,6 +86,35 @@ impl FormatSection {
 /// Namespace-prefixed and unprefixed element names name the same element.
 fn local_tag_name(tag_name: &str) -> &str {
     tag_name.rsplit(':').next().unwrap_or(tag_name)
+}
+
+/// Decode every attribute of one primary.xml element as owned `(key, value)`
+/// pairs, naming the element in the typed parse error.
+fn decoded_attributes<R: BufRead>(
+    element: &BytesStart<'_>,
+    reader: &Reader<R>,
+    element_name: &str,
+) -> Result<Vec<(String, String)>> {
+    element
+        .attributes()
+        .map(|attribute| {
+            let attribute = attribute.map_err(|error| {
+                Error::ParseError(format!(
+                    "Failed to parse RPM {element_name} attribute: {error}"
+                ))
+            })?;
+            let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+            let value = attribute
+                .decoded_and_normalized_value(quick_xml::XmlVersion::Implicit1_0, reader.decoder())
+                .map_err(|error| {
+                    Error::ParseError(format!(
+                        "Failed to decode RPM {element_name} attribute: {error}"
+                    ))
+                })?
+                .into_owned();
+            Ok((key, value))
+        })
+        .collect()
 }
 
 /// Build one RPM version string from the exact epoch, version, and release a
@@ -146,7 +175,7 @@ impl FedoraParser {
 
                     match local_tag {
                         "package" => {
-                            current_package = Some(PackageBuilder::new());
+                            current_package = Some(PackageBuilder::default());
                         }
                         "format" => in_format = true,
                         "requires" if in_format => {
@@ -183,26 +212,9 @@ impl FedoraParser {
                         }
                         "checksum" => {
                             if let Some(ref mut pkg) = current_package {
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM checksum attribute: {error}"
-                                        ))
-                                    })?;
-                                    if attr.key.as_ref() == b"type" {
-                                        pkg.checksum_type = Some(
-                                            attr.decoded_and_normalized_value(
-                                                quick_xml::XmlVersion::Implicit1_0,
-                                                reader.decoder(),
-                                            )
-                                            .map_err(|error| {
-                                                Error::ParseError(format!(
-                                                    "Failed to decode RPM checksum attribute: \
-                                                     {error}"
-                                                ))
-                                            })?
-                                            .into_owned(),
-                                        );
+                                for (key, value) in decoded_attributes(&e, &reader, "checksum")? {
+                                    if key == "type" {
+                                        pkg.checksum_type = Some(value);
                                     }
                                 }
                             }
@@ -218,28 +230,11 @@ impl FedoraParser {
                     match local_tag {
                         "version" => {
                             if let Some(ref mut pkg) = current_package {
-                                // Extract epoch, ver, rel attributes
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM version attribute: {error}"
-                                        ))
-                                    })?;
-                                    let key = String::from_utf8_lossy(attr.key.as_ref());
-                                    let value = attr
-                                        .decoded_and_normalized_value(
-                                            quick_xml::XmlVersion::Implicit1_0,
-                                            reader.decoder(),
-                                        )
-                                        .map_err(|error| {
-                                            Error::ParseError(format!(
-                                                "Failed to decode RPM version attribute: {error}"
-                                            ))
-                                        })?;
-                                    match key.as_ref() {
-                                        "epoch" => pkg.epoch = Some(value.to_string()),
-                                        "ver" => pkg.ver = Some(value.to_string()),
-                                        "rel" => pkg.rel = Some(value.to_string()),
+                                for (key, value) in decoded_attributes(&e, &reader, "version")? {
+                                    match key.as_str() {
+                                        "epoch" => pkg.epoch = Some(value),
+                                        "ver" => pkg.ver = Some(value),
+                                        "rel" => pkg.rel = Some(value),
                                         _ => {}
                                     }
                                 }
@@ -247,77 +242,27 @@ impl FedoraParser {
                         }
                         "checksum" => {
                             if let Some(ref mut pkg) = current_package {
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM checksum attribute: {error}"
-                                        ))
-                                    })?;
-                                    let key = String::from_utf8_lossy(attr.key.as_ref());
+                                for (key, value) in decoded_attributes(&e, &reader, "checksum")? {
                                     if key == "type" {
-                                        let value = attr
-                                            .decoded_and_normalized_value(
-                                                quick_xml::XmlVersion::Implicit1_0,
-                                                reader.decoder(),
-                                            )
-                                            .map_err(|error| {
-                                                Error::ParseError(format!(
-                                                    "Failed to decode RPM checksum attribute: \
-                                                     {error}"
-                                                ))
-                                            })?;
-                                        pkg.checksum_type = Some(value.to_string());
+                                        pkg.checksum_type = Some(value);
                                     }
                                 }
                             }
                         }
                         "size" => {
                             if let Some(ref mut pkg) = current_package {
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM size attribute: {error}"
-                                        ))
-                                    })?;
-                                    let key = String::from_utf8_lossy(attr.key.as_ref());
+                                for (key, value) in decoded_attributes(&e, &reader, "size")? {
                                     if key == "package" {
-                                        let value = attr
-                                            .decoded_and_normalized_value(
-                                                quick_xml::XmlVersion::Implicit1_0,
-                                                reader.decoder(),
-                                            )
-                                            .map_err(|error| {
-                                                Error::ParseError(format!(
-                                                    "Failed to decode RPM size attribute: {error}"
-                                                ))
-                                            })?;
-                                        pkg.size = Some(value.to_string());
+                                        pkg.size = Some(value);
                                     }
                                 }
                             }
                         }
                         "location" => {
                             if let Some(ref mut pkg) = current_package {
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM location attribute: {error}"
-                                        ))
-                                    })?;
-                                    let key = String::from_utf8_lossy(attr.key.as_ref());
+                                for (key, value) in decoded_attributes(&e, &reader, "location")? {
                                     if key == "href" {
-                                        let value = attr
-                                            .decoded_and_normalized_value(
-                                                quick_xml::XmlVersion::Implicit1_0,
-                                                reader.decoder(),
-                                            )
-                                            .map_err(|error| {
-                                                Error::ParseError(format!(
-                                                    "Failed to decode RPM location attribute: \
-                                                     {error}"
-                                                ))
-                                            })?;
-                                        pkg.location = Some(value.to_string());
+                                        pkg.location = Some(value);
                                     }
                                 }
                             }
@@ -332,30 +277,14 @@ impl FedoraParser {
                                 let mut dep_rel = None;
                                 let mut dep_pre = None;
 
-                                for attr in e.attributes() {
-                                    let attr = attr.map_err(|error| {
-                                        Error::ParseError(format!(
-                                            "Failed to parse RPM dependency attribute: {error}"
-                                        ))
-                                    })?;
-                                    let key = String::from_utf8_lossy(attr.key.as_ref());
-                                    let value = attr
-                                        .decoded_and_normalized_value(
-                                            quick_xml::XmlVersion::Implicit1_0,
-                                            reader.decoder(),
-                                        )
-                                        .map_err(|error| {
-                                            Error::ParseError(format!(
-                                                "Failed to decode RPM dependency attribute: {error}"
-                                            ))
-                                        })?;
-                                    match key.as_ref() {
-                                        "name" => dep_name = Some(value.to_string()),
-                                        "flags" => dep_flags = Some(value.to_string()),
-                                        "epoch" => dep_epoch = Some(value.to_string()),
-                                        "ver" => dep_ver = Some(value.to_string()),
-                                        "rel" => dep_rel = Some(value.to_string()),
-                                        "pre" => dep_pre = Some(value.to_string()),
+                                for (key, value) in decoded_attributes(&e, &reader, "dependency")? {
+                                    match key.as_str() {
+                                        "name" => dep_name = Some(value),
+                                        "flags" => dep_flags = Some(value),
+                                        "epoch" => dep_epoch = Some(value),
+                                        "ver" => dep_ver = Some(value),
+                                        "rel" => dep_rel = Some(value),
+                                        "pre" => dep_pre = Some(value),
                                         _ => {}
                                     }
                                 }
@@ -367,6 +296,29 @@ impl FedoraParser {
                                             section.metadata_name()
                                         ))
                                     })?;
+                                    // The pre marker is an RPM requires-only flag.
+                                    if dep_pre.is_some() {
+                                        match section {
+                                            FormatSection::Requires => {}
+                                            FormatSection::Recommends
+                                            | FormatSection::Suggests
+                                            | FormatSection::Supplements
+                                            | FormatSection::Enhances => {
+                                                return Err(Error::ParseError(format!(
+                                                    "RPM primary pre marker is invalid on a {} entry",
+                                                    section.metadata_name()
+                                                )));
+                                            }
+                                            FormatSection::Provides
+                                            | FormatSection::Conflicts
+                                            | FormatSection::Obsoletes => {
+                                                return Err(Error::ParseError(
+                                                    "RPM primary pre marker is valid only on a requires entry"
+                                                        .to_string(),
+                                                ));
+                                            }
+                                        }
+                                    }
                                     match section {
                                         FormatSection::Requires => {
                                             if let Some(requirement) = rpm_require_to_group(
@@ -384,12 +336,6 @@ impl FedoraParser {
                                         | FormatSection::Suggests
                                         | FormatSection::Supplements
                                         | FormatSection::Enhances => {
-                                            if dep_pre.is_some() {
-                                                return Err(Error::ParseError(format!(
-                                                    "RPM primary pre marker is invalid on a {} entry",
-                                                    section.metadata_name()
-                                                )));
-                                            }
                                             let kind = match section {
                                                 FormatSection::Recommends => {
                                                     RepositoryRequirementKind::Recommends
@@ -417,12 +363,6 @@ impl FedoraParser {
                                             );
                                         }
                                         FormatSection::Provides => {
-                                            if dep_pre.is_some() {
-                                                return Err(Error::ParseError(
-                                                    "RPM primary pre marker is valid only on a requires entry"
-                                                        .to_string(),
-                                                ));
-                                            }
                                             let provide = rpm_provide_constraint(
                                                 &name,
                                                 dep_flags.as_deref(),
@@ -433,12 +373,6 @@ impl FedoraParser {
                                             pkg.provides.push((name, provide));
                                         }
                                         FormatSection::Conflicts => {
-                                            if dep_pre.is_some() {
-                                                return Err(Error::ParseError(
-                                                    "RPM primary pre marker is valid only on a requires entry"
-                                                        .to_string(),
-                                                ));
-                                            }
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Conflict,
                                                 rpm_relation_native_text(
@@ -451,12 +385,6 @@ impl FedoraParser {
                                             ));
                                         }
                                         FormatSection::Obsoletes => {
-                                            if dep_pre.is_some() {
-                                                return Err(Error::ParseError(
-                                                    "RPM primary pre marker is valid only on a requires entry"
-                                                        .to_string(),
-                                                ));
-                                            }
                                             pkg.relations.push((
                                                 RepositoryRequirementKind::Obsolete,
                                                 rpm_relation_native_text(
@@ -613,10 +541,7 @@ impl FedoraParser {
 }
 
 pub(super) fn validate_sha256(value: &str, label: &str) -> Result<()> {
-    if value.len() != 64
-        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || value.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(Error::ParseError(format!(
             "{label} SHA256 must be exactly 64 lowercase hexadecimal digits"
         )));
@@ -646,10 +571,6 @@ struct PackageBuilder {
 }
 
 impl PackageBuilder {
-    fn new() -> Self {
-        Self::default()
-    }
-
     fn build(self, base_url: &str) -> Result<PackageMetadata> {
         let name = self
             .name
@@ -964,5 +885,4 @@ impl RepositoryParser for FedoraParser {
 }
 
 #[cfg(test)]
-#[path = "fedora/tests.rs"]
 mod tests;

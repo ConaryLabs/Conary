@@ -450,15 +450,15 @@ fn repository_rejects_malformed_arch_dependency() {
 fn snapshot_identity_owns_the_served_compressed_database_bytes() {
     let served = b"compressed alpm database bytes";
     assert_eq!(
-        authenticated_database_snapshot(served).size(),
+        AuthenticatedSnapshotIdentity::for_bytes(served).size(),
         Some(served.len() as u64)
     );
     assert_eq!(
-        authenticated_database_snapshot(served),
+        AuthenticatedSnapshotIdentity::for_bytes(served),
         AuthenticatedSnapshotIdentity::for_bytes(served)
     );
     assert_ne!(
-        authenticated_database_snapshot(served),
+        AuthenticatedSnapshotIdentity::for_bytes(served),
         AuthenticatedSnapshotIdentity::for_bytes(b"decoded tar bytes")
     );
 }

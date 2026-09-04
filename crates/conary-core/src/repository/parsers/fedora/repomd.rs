@@ -390,5 +390,4 @@ fn store_record(
 }
 
 #[cfg(test)]
-#[path = "repomd/tests.rs"]
 mod tests;

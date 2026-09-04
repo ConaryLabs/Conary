@@ -23,7 +23,7 @@ pub struct ProfileSyncCandidate {
 /// refresh lease without advancing any active pointer.
 pub fn complete_profile_sync_candidate(
     conn: &Connection,
-    run: &RemiSyncRun,
+    run: &ProfileSyncRun,
 ) -> Result<ProfileSyncCandidate> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
@@ -62,7 +62,7 @@ pub fn complete_profile_sync_candidate(
     Ok(candidate)
 }
 
-fn verify_registered_candidate(tx: &Transaction<'_>, run: &RemiSyncRun) -> Result<()> {
+fn verify_registered_candidate(tx: &Transaction<'_>, run: &ProfileSyncRun) -> Result<()> {
     let candidate_digest = tx.query_row(
         "SELECT candidate_profile_digest
          FROM repository_sync_runs

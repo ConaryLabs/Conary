@@ -296,11 +296,7 @@ fn validate_guest_path(value: &str) -> Result<()> {
 }
 
 fn validate_sha256(label: &str, value: &str) -> Result<()> {
-    if value.len() != 64
-        || value
-            .bytes()
-            .any(|byte| !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
-    {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(Error::ConfigError(format!(
             "package repository {label} SHA-256 must be 64 lowercase hexadecimal digits"
         )));

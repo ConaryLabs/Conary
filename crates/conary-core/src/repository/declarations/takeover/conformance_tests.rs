@@ -63,13 +63,13 @@ fn alpm_named_fixture(
             name: repository_name.to_string(),
             source_identity: source_identity.to_string(),
             repository_identity: format!("{repository_name}:x86_64"),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: format!("{repository_name}:x86_64"),
             },
-            stream: TakeoverSourceStream::Rolling {
+            stream: RepositorySourceStreamInput::Rolling {
                 identity: repository_name.to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: format!(
                 "https://mirror.example/{repository_name}/x86_64/{repository_name}"
             ),
@@ -140,13 +140,13 @@ fn apt_derivative_fixture(
             name: repository_name.to_string(),
             source_identity: source_identity.to_string(),
             repository_identity: repository_identity.clone(),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: repository_identity,
             },
-            stream: TakeoverSourceStream::Release {
+            stream: RepositorySourceStreamInput::Release {
                 identity: "stable".to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: "https://packages.example/debian".to_string(),
             content_url: None,
             parser: RepositoryParserConfig::Deb {
@@ -205,13 +205,13 @@ fn apt_legacy_global_trust_fixture() -> (
             name: "derivative-main".to_string(),
             source_identity: "derivative:stable:amd64".to_string(),
             repository_identity: "derivative:main:amd64".to_string(),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: "derivative:main:amd64".to_string(),
             },
-            stream: TakeoverSourceStream::Release {
+            stream: RepositorySourceStreamInput::Release {
                 identity: "stable".to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: "https://packages.example/debian".to_string(),
             content_url: None,
             parser: RepositoryParserConfig::Deb {
@@ -275,13 +275,13 @@ fn tumbleweed_fixture() -> (
             name: "tumbleweed-oss".to_string(),
             source_identity: "tumbleweed:rolling:x86_64".to_string(),
             repository_identity: "tumbleweed:oss:x86_64".to_string(),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: "tumbleweed:oss:x86_64".to_string(),
             },
-            stream: TakeoverSourceStream::Rolling {
+            stream: RepositorySourceStreamInput::Rolling {
                 identity: "tumbleweed".to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: "https://download.example/tumbleweed/repo/oss/".to_string(),
             content_url: None,
             parser: RepositoryParserConfig::Rpm {
@@ -527,7 +527,7 @@ fn cachyos_follow_validates_and_pin_requires_explicit_reenrollment() {
     following.update(&conn).unwrap();
 
     rollback_native_repository_takeover(&conn, root.path()).unwrap();
-    manifest.repositories[0].update = TakeoverUpdatePolicy::Pin {
+    manifest.repositories[0].update = RepositoryUpdatePolicyInput::Pin {
         snapshot_sha256: first.sha256().to_string(),
     };
     let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();
@@ -539,7 +539,7 @@ fn cachyos_follow_validates_and_pin_requires_explicit_reenrollment() {
     assert!(pinned.validate_authenticated_snapshot(&second).is_err());
 
     rollback_native_repository_takeover(&conn, root.path()).unwrap();
-    manifest.repositories[0].update = TakeoverUpdatePolicy::Pin {
+    manifest.repositories[0].update = RepositoryUpdatePolicyInput::Pin {
         snapshot_sha256: second.sha256().to_string(),
     };
     let preview = preview_native_repository_takeover(&conn, root.path(), &manifest).unwrap();

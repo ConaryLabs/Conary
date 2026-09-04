@@ -26,13 +26,13 @@ fn fixture() -> (
             name: "solus-polaris".to_string(),
             source_identity: "solus-project".to_string(),
             repository_identity: "solus-polaris-x86_64".to_string(),
-            scope: TakeoverPolicyScope::Repository {
+            scope: RepositoryPolicyScopeInput::Repository {
                 identity: "solus-polaris-x86_64".to_string(),
             },
-            stream: TakeoverSourceStream::Rolling {
+            stream: RepositorySourceStreamInput::Rolling {
                 identity: "polaris".to_string(),
             },
-            update: TakeoverUpdatePolicy::Follow,
+            update: RepositoryUpdatePolicyInput::Follow,
             metadata_url: "https://cdn.getsol.us/repo/polaris/".to_string(),
             content_url: None,
             parser: RepositoryParserConfig::Eopkg {

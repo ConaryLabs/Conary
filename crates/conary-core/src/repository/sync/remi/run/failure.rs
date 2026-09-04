@@ -20,9 +20,6 @@ pub enum ProfileSyncFailureCategory {
     Internal,
 }
 
-pub type RemiSyncFailureStage = ProfileSyncFailureStage;
-pub type RemiSyncFailureCategory = ProfileSyncFailureCategory;
-
 impl ProfileSyncFailureCategory {
     pub fn from_error(error: &Error) -> Self {
         match error {

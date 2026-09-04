@@ -990,5 +990,4 @@ impl RepositoryClient {
 }
 
 #[cfg(test)]
-#[path = "client/tests.rs"]
 mod tests;

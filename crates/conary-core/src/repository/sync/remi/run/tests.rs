@@ -18,8 +18,8 @@ fn test_repo(conn: &Connection, name: &str, profile: &str) -> Repository {
     repo
 }
 
-fn member(repository_id: i64, ordinal: i64, digest: Option<&str>) -> RemiSyncRunMember {
-    RemiSyncRunMember {
+fn member(repository_id: i64, ordinal: i64, digest: Option<&str>) -> ProfileSyncRunMember {
+    ProfileSyncRunMember {
         ordinal,
         repository_id,
         source_identity: format!("source-{ordinal}"),
@@ -70,7 +70,7 @@ fn register_candidate_fixture(conn: &Connection, profile_digest: &str, source_di
     .unwrap();
 }
 
-fn run_state(conn: &Connection, run: &RemiSyncRun) -> String {
+fn run_state(conn: &Connection, run: &ProfileSyncRun) -> String {
     conn.query_row(
         "SELECT state FROM repository_sync_runs WHERE run_id = ?1",
         [&run.run_id],
@@ -409,8 +409,8 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
     abort_profile_sync_run(
         &conn,
         &run,
-        RemiSyncFailureStage::Ingesting,
-        RemiSyncFailureCategory::Internal,
+        ProfileSyncFailureStage::Ingesting,
+        ProfileSyncFailureCategory::Internal,
         "fixture failure",
     )
     .unwrap();
@@ -419,8 +419,8 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
         abort_profile_sync_run(
             &conn,
             &run,
-            RemiSyncFailureStage::Ingesting,
-            RemiSyncFailureCategory::Internal,
+            ProfileSyncFailureStage::Ingesting,
+            ProfileSyncFailureCategory::Internal,
             "replay",
         )
         .is_ok()
@@ -433,8 +433,8 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
         abort_profile_sync_run(
             &conn,
             &forged,
-            RemiSyncFailureStage::Ingesting,
-            RemiSyncFailureCategory::Internal,
+            ProfileSyncFailureStage::Ingesting,
+            ProfileSyncFailureCategory::Internal,
             "wrong owner",
         )
         .is_err()

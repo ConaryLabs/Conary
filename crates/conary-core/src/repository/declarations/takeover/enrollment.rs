@@ -73,8 +73,8 @@ fn validate_unique_identity(
         });
     }
     let scope = match &input.scope {
-        TakeoverPolicyScope::Repository { identity } => format!("repository:{identity}"),
-        TakeoverPolicyScope::Group { identity } => format!("group:{identity}"),
+        RepositoryPolicyScopeInput::Repository { identity } => format!("repository:{identity}"),
+        RepositoryPolicyScopeInput::Group { identity } => format!("group:{identity}"),
     };
     if !identities.insert((
         input.source_identity.clone(),
