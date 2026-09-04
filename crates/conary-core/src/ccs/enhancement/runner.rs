@@ -281,15 +281,15 @@ pub fn schedule_for_enhancement(
         )
         .optional()?;
 
-    match status {
-        Some(EnhancementStatus::Complete | EnhancementStatus::InProgress) => {
-            debug!(
-                "Skipping schedule for trove_id={}: already enhanced/in progress",
-                trove_id
-            );
-            return Ok(false);
-        }
-        _ => {}
+    if matches!(
+        status,
+        Some(EnhancementStatus::Complete | EnhancementStatus::InProgress)
+    ) {
+        debug!(
+            "Skipping schedule for trove_id={}: already enhanced/in progress",
+            trove_id
+        );
+        return Ok(false);
     }
 
     // Update status to pending with priority
