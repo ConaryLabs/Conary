@@ -175,7 +175,9 @@ impl NativeResolutionSurveyCollector {
     }
 
     pub(in crate::repository::catalog::parity) fn remaining_evidence_bytes(&self) -> u64 {
-        if self.evidence_budget_exhausted {
+        if self.evidence_budget_exhausted
+            || self.diagnostic_outcomes.len() >= NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT
+        {
             0
         } else {
             self.evidence_byte_limit

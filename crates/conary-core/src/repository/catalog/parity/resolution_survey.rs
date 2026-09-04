@@ -776,6 +776,7 @@ mod tests {
                 .unwrap();
         }
 
+        assert_eq!(collector.remaining_evidence_bytes(), 0);
         let survey = collector.finish().unwrap();
         assert_eq!(
             survey.total_diagnostic_outcomes,
