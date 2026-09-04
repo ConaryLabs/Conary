@@ -31,51 +31,12 @@ pub fn remi_health() -> ResourceRef {
     ResourceRef::new("conary://remi/health")
 }
 
-pub fn remi_repository(name: &str) -> ResourceRef {
-    ResourceRef::named(
-        format!("conary://remi/repositories/{}", encode_segment(name)),
-        name,
-    )
-}
-
-pub fn remi_federation_peer(peer_id: &str) -> ResourceRef {
-    ResourceRef::named(
-        format!("conary://remi/federation/peers/{}", encode_segment(peer_id)),
-        peer_id,
-    )
-}
-
-pub fn remi_audit_summary() -> ResourceRef {
-    ResourceRef::new("conary://remi/audit/summary")
-}
-
-pub fn remi_chunk_stats() -> ResourceRef {
-    ResourceRef::new("conary://remi/chunks/stats")
-}
-
 pub fn test_suites() -> ResourceRef {
     ResourceRef::new("conary-test://suites")
 }
 
-pub fn test_suite(suite_id: &str) -> ResourceRef {
-    ResourceRef::named(
-        format!("conary-test://suites/{}", encode_segment(suite_id)),
-        suite_id,
-    )
-}
-
 pub fn test_run(run_id: u64) -> ResourceRef {
     ResourceRef::named(format!("conary-test://runs/{run_id}"), run_id.to_string())
-}
-
-pub fn test_run_artifact(run_id: u64, artifact_id: &str) -> ResourceRef {
-    ResourceRef::named(
-        format!(
-            "conary-test://runs/{run_id}/artifacts/{}",
-            encode_segment(artifact_id)
-        ),
-        artifact_id,
-    )
 }
 
 pub fn local_bootstrap_status() -> ResourceRef {
@@ -90,16 +51,6 @@ pub fn packaging_operation(operation_id: &str) -> ResourceRef {
     ResourceRef::named(
         format!(
             "conary-packaging://operations/{}",
-            encode_segment(operation_id)
-        ),
-        operation_id,
-    )
-}
-
-pub fn packaging_operation_events(operation_id: &str) -> ResourceRef {
-    ResourceRef::named(
-        format!(
-            "conary-packaging://operations/{}/events",
             encode_segment(operation_id)
         ),
         operation_id,
@@ -143,15 +94,7 @@ mod tests {
     #[test]
     fn resource_helpers_emit_stable_uris() {
         assert_eq!(remi_health().uri, "conary://remi/health");
-        assert_eq!(
-            remi_repository("fedora44").uri,
-            "conary://remi/repositories/fedora44"
-        );
         assert_eq!(test_run(42).uri, "conary-test://runs/42");
-        assert_eq!(
-            test_run_artifact(42, "logs").uri,
-            "conary-test://runs/42/artifacts/logs"
-        );
         assert_eq!(
             local_bootstrap_status().uri,
             "conary-local://bootstrap/status"
@@ -169,12 +112,8 @@ mod tests {
     #[test]
     fn resource_path_segments_are_percent_encoded() {
         assert_eq!(
-            remi_repository("fedora/44 beta").uri,
-            "conary://remi/repositories/fedora%2F44%20beta"
-        );
-        assert_eq!(
-            test_run_artifact(42, "logs/stderr").uri,
-            "conary-test://runs/42/artifacts/logs%2Fstderr"
+            packaging_project("recipe/path beta").uri,
+            "conary-packaging://projects/recipe%2Fpath%20beta"
         );
     }
 
@@ -187,10 +126,6 @@ mod tests {
         assert_eq!(
             packaging_operation("publish-1700000000000-42").uri,
             "conary-packaging://operations/publish-1700000000000-42"
-        );
-        assert_eq!(
-            packaging_operation_events("cook-1").uri,
-            "conary-packaging://operations/cook-1/events"
         );
         assert_eq!(
             packaging_project("recipe path").uri,
