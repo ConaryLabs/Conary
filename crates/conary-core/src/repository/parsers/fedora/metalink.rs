@@ -265,10 +265,7 @@ fn capture_identity_text(target: &mut Option<String>, value: String, label: &str
 }
 
 fn validate_sha256(value: &str) -> Result<()> {
-    if value.len() != 64
-        || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || value.bytes().any(|byte| byte.is_ascii_uppercase())
-    {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(Error::ParseError(
             "RPM metalink repomd.xml SHA256 must be exactly 64 lowercase hexadecimal digits"
                 .to_string(),
