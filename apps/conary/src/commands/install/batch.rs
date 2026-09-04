@@ -265,16 +265,8 @@ impl<'a> BatchInstaller<'a> {
     /// Install multiple packages atomically
     ///
     /// All packages are installed in a single transaction. If any package fails,
-    /// all changes are rolled back.
-    ///
-    /// # Arguments
-    ///
-    /// * `packages` - List of prepared packages to install. Should be in dependency
-    ///   order (dependencies first, main package last).
-    ///
-    /// # Returns
-    ///
-    /// Ok(()) on success, or an error if any package fails to install.
+    /// all changes are rolled back. Packages must be ordered with dependencies
+    /// before dependents.
     pub fn install_batch(self, packages: Vec<PreparedPackage>) -> Result<()> {
         self.install_batch_with_result(packages).map(|_| ())
     }

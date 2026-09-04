@@ -20,10 +20,6 @@ pub struct InstallProgress {
 
 impl InstallProgress {
     /// Create a new installation progress tracker
-    ///
-    /// # Arguments
-    /// * `total_packages` - Total number of packages to install
-    /// * `operation` - Description of the operation (e.g., "Installing", "Updating")
     pub fn new(total_packages: u64, operation: &str) -> Self {
         let multi = MultiProgress::new();
 

@@ -324,19 +324,6 @@ fn hermetic_build_input(
 }
 
 /// Cook a package from a recipe
-///
-/// # Arguments
-/// * `target` - Optional recipe path or directory containing recipe.toml
-/// * `recipe` - Optional explicit recipe path. Wins over target when present.
-/// * `source_profile` - Exact public source profile for foreign-package conversion.
-/// * `output_dir` - Output directory for the built package
-/// * `source_cache` - Directory for caching downloaded sources
-/// * `jobs` - Number of parallel build jobs (None = auto)
-/// * `keep_builddir` - Keep build directory after completion
-/// * `validate_only` - Only validate the recipe, don't cook
-/// * `fetch_only` - Only fetch sources, don't build
-/// * `isolated` - Use the hermetic sandboxed isolation path
-/// * `json` - Emit structured packaging JSON output
 #[allow(clippy::too_many_arguments)]
 pub async fn cmd_cook(
     target: Option<&str>,

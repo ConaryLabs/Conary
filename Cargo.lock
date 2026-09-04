@@ -1255,7 +1255,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
- "log",
  "nix",
  "rusqlite",
  "sd-notify",

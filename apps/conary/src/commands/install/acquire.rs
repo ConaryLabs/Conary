@@ -75,8 +75,6 @@ pub(super) async fn resolve_and_parse_package(
     };
 
     // Resolve package path (download if needed).
-    // Checksum verification and temp-file cleanup on failure are handled
-    // inside conary_core::repository::download (fix 1.4).
     // TODO(round2): Surface partial-download byte counts in error messages
     // so users can diagnose connection issues vs corrupt mirrors.
     let resolved = match resolve_package_path_with_policy(

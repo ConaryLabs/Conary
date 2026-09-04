@@ -90,7 +90,7 @@ impl SocketManager {
             set_socket_group(&self.config.unix_path, group)?;
         }
 
-        log::info!(
+        tracing::info!(
             "Listening on Unix socket: {:?} (mode: {:o})",
             self.config.unix_path,
             self.config.unix_mode
@@ -121,7 +121,7 @@ impl SocketManager {
         if self.config.unix_path.exists()
             && let Err(e) = std::fs::remove_file(&self.config.unix_path)
         {
-            log::warn!("Failed to remove socket file: {}", e);
+            tracing::warn!("Failed to remove socket file: {}", e);
         }
     }
 }

@@ -230,26 +230,20 @@ impl DaemonError {
 pub enum DaemonEvent {
     /// A job was accepted and placed in the operation queue.
     JobQueued {
-        /// Unique identifier for the job.
         job_id: JobId,
         /// Zero-based position in the queue (0 means next to run).
         position: usize,
     },
     /// A job left the queue and began executing.
-    JobStarted {
-        /// Unique identifier for the job.
-        job_id: JobId,
-    },
+    JobStarted { job_id: JobId },
     /// The job moved to a new named execution phase (e.g. "resolving", "downloading").
     JobPhase {
-        /// Unique identifier for the job.
         job_id: JobId,
         /// Human-readable phase name.
         phase: String,
     },
     /// Incremental progress update within the current phase.
     JobProgress {
-        /// Unique identifier for the job.
         job_id: JobId,
         /// Number of units completed so far.
         current: u64,
@@ -260,23 +254,18 @@ pub enum DaemonEvent {
     },
     /// A job finished successfully.
     JobCompleted {
-        /// Unique identifier for the job.
         job_id: JobId,
         /// Wall-clock elapsed time in milliseconds.
         duration_ms: u64,
     },
     /// A job terminated with an error.
     JobFailed {
-        /// Unique identifier for the job.
         job_id: JobId,
         /// Structured RFC 7807 error describing what went wrong.
         error: DaemonError,
     },
     /// A job was cancelled before or during execution.
-    JobCancelled {
-        /// Unique identifier for the job.
-        job_id: JobId,
-    },
+    JobCancelled { job_id: JobId },
     /// A package was successfully installed to the system.
     PackageInstalled {
         /// Package name (e.g. "nginx").
@@ -305,14 +294,12 @@ pub enum DaemonEvent {
     EnhancementStarted {
         /// Database trove ID of the package being enhanced.
         trove_id: i64,
-        /// Human-readable package name.
         package_name: String,
     },
     /// Incremental progress from the enhancement pipeline.
     EnhancementProgress {
         /// Database trove ID of the package being enhanced.
         trove_id: i64,
-        /// Human-readable package name.
         package_name: String,
         /// Number of packages processed so far in the current batch.
         current: u32,
@@ -325,14 +312,12 @@ pub enum DaemonEvent {
     EnhancementCompleted {
         /// Database trove ID of the package that was enhanced.
         trove_id: i64,
-        /// Human-readable package name.
         package_name: String,
     },
     /// Enhancement failed for a package.
     EnhancementFailed {
         /// Database trove ID of the package that failed enhancement.
         trove_id: i64,
-        /// Human-readable package name.
         package_name: String,
         /// Error description from the enhancement pipeline.
         error: String,
@@ -424,10 +409,6 @@ pub struct DaemonMetrics {
 
 impl DaemonState {
     /// Create a new daemon state
-    ///
-    /// # Arguments
-    /// * `config` - Daemon configuration
-    /// * `system_lock` - Pre-acquired system lock
     pub fn new(config: DaemonConfig, system_lock: SystemLock) -> Result<Self> {
         let (event_tx, _) = broadcast::channel(1024);
         let db_path = config.db_path.clone();
@@ -506,7 +487,7 @@ pub fn get_daemon_pid() -> Option<u32> {
 async fn job_executor_loop(state: Arc<DaemonState>) {
     use std::sync::atomic::Ordering;
 
-    log::info!("Job executor started");
+    tracing::info!("Job executor started");
 
     loop {
         // Dequeue the next job (non-blocking check)
@@ -523,7 +504,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
         let job_id = job.id.clone();
         let job_kind = job.kind;
 
-        log::info!("Executing job {} (kind: {})", job_id, job_kind.as_str());
+        tracing::info!("Executing job {} (kind: {})", job_id, job_kind.as_str());
 
         // Mark as current and update DB status to Running
         state.queue.set_current(Some(job_id.clone())).await;
@@ -608,7 +589,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                     job_id: job_id.clone(),
                     duration_ms,
                 });
-                log::info!("Job {} completed in {}ms", job_id, duration_ms);
+                tracing::info!("Job {} completed in {}ms", job_id, duration_ms);
             }
             Err(error_msg) => {
                 let daemon_error = DaemonError::internal(&error_msg);
@@ -631,7 +612,7 @@ async fn job_executor_loop(state: Arc<DaemonState>) {
                     job_id: job_id.clone(),
                     error: daemon_error,
                 });
-                log::error!("Job {} failed: {}", job_id, error_msg);
+                tracing::error!("Job {} failed: {}", job_id, error_msg);
             }
         }
 
@@ -646,9 +627,9 @@ fn log_systemd_runtime(systemd_manager: &SystemdManager) {
         return;
     }
 
-    log::info!("Running under systemd supervision");
+    tracing::info!("Running under systemd supervision");
     if systemd::is_socket_activated() {
-        log::info!(
+        tracing::info!(
             "Socket activation detected, {} FDs passed",
             systemd::listen_fds_count()
         );
@@ -670,7 +651,7 @@ async fn reenqueue_startup_jobs(state: &Arc<DaemonState>) {
     {
         Ok(Ok(queued_jobs)) => {
             if !queued_jobs.is_empty() {
-                log::info!(
+                tracing::info!(
                     "Re-enqueueing {} job(s) left over from previous daemon run",
                     queued_jobs.len()
                 );
@@ -680,10 +661,10 @@ async fn reenqueue_startup_jobs(state: &Arc<DaemonState>) {
             }
         }
         Ok(Err(e)) => {
-            log::warn!("Failed to query stuck jobs on startup: {}", e);
+            tracing::warn!("Failed to query stuck jobs on startup: {}", e);
         }
         Err(e) => {
-            log::warn!("Startup job scan task panicked: {}", e);
+            tracing::warn!("Startup job scan task panicked: {}", e);
         }
     }
 }
@@ -710,7 +691,7 @@ async fn acquire_unix_listener(
         let listener = tokio::net::UnixListener::from_std(std_listener).map_err(|e| {
             conary_core::Error::IoError(format!("Failed to adopt socket-activated listener: {e}"))
         })?;
-        log::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
+        tracing::info!("Adopted systemd socket-activated listener (FD {})", fds[0]);
         return Ok((None, listener));
     }
 
@@ -744,7 +725,7 @@ async fn serve_unix_connection(
     let io = TokioIo::new(stream);
     let service = TowerToHyperService::new(app.layer(axum::Extension(peer_creds)));
     if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-        log::warn!("Error serving connection: {:?}", err);
+        tracing::warn!("Error serving connection: {:?}", err);
     }
     active_connections.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 }
@@ -771,7 +752,7 @@ async fn accept_connections(
                 });
             }
             Ok(Err(e)) => {
-                log::error!("Failed to accept connection: {}", e);
+                tracing::error!("Failed to accept connection: {}", e);
             }
             Err(_) => {
                 systemd_manager.watchdog_tick();
@@ -779,7 +760,7 @@ async fn accept_connections(
                 if systemd_manager.is_idle_expired()
                     && active_connections.load(std::sync::atomic::Ordering::Relaxed) == 0
                 {
-                    log::info!("Idle timeout expired, shutting down");
+                    tracing::info!("Idle timeout expired, shutting down");
                     break;
                 }
             }
@@ -795,11 +776,11 @@ async fn drain_active_connections(
     loop {
         let conn_count = active_connections.load(std::sync::atomic::Ordering::Relaxed);
         if conn_count == 0 {
-            log::info!("All connections drained");
+            tracing::info!("All connections drained");
             break;
         }
         if tokio::time::Instant::now() >= drain_deadline {
-            log::warn!(
+            tracing::warn!(
                 "Drain timeout: {} connections still active, forcing shutdown",
                 conn_count
             );
@@ -813,21 +794,15 @@ async fn drain_active_connections(
 ///
 /// This is the main entry point for the daemon. It:
 /// 1. Acquires the system lock
-/// 2. Binds to Unix and optionally TCP sockets
+/// 2. Binds to the Unix socket
 /// 3. Sets up the Axum router
 /// 4. Runs the job executor loop
 /// 5. Runs until shutdown signal
-///
-/// # Arguments
-/// * `config` - Daemon configuration
-///
-/// # Returns
-/// * `Result<()>` - Ok if daemon shut down cleanly
 pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     use std::sync::atomic::AtomicU64;
     use std::time::Duration;
 
-    log::info!("Starting conaryd version {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Starting conaryd version {}", env!("CARGO_PKG_VERSION"));
 
     // Create systemd manager
     let idle_timeout = config.idle_timeout_secs.map(Duration::from_secs);
@@ -841,7 +816,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
 
     // Write our PID
     system_lock.write_pid()?;
-    log::info!("Daemon PID: {}", std::process::id());
+    tracing::info!("Daemon PID: {}", std::process::id());
 
     // Create daemon state
     let state = Arc::new(DaemonState::new(config.clone(), system_lock)?);
@@ -849,7 +824,6 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
     // Re-enqueue any jobs that were left in 'queued' state from a previous
     // daemon run (e.g. after a crash or SIGKILL).  Jobs that were 'running'
     // are reset to 'queued' first, since we cannot resume mid-execution.
-    // (Gemini fix: re-enqueue stuck jobs on startup)
     reenqueue_startup_jobs(&state).await;
 
     // Build router
@@ -861,9 +835,9 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
 
     // Notify systemd we're ready
     systemd_manager.notify_ready(Some("conaryd ready for connections"));
-    log::info!("Notified systemd: READY");
+    tracing::info!("Notified systemd: READY");
 
-    log::info!("Daemon ready, accepting connections");
+    tracing::info!("Daemon ready, accepting connections");
 
     // Track active connections for idle timeout
     let active_connections = Arc::new(AtomicU64::new(0));
@@ -892,13 +866,13 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
         ) => {}
         // Shutdown signal
         _ = shutdown => {
-            log::info!("Received shutdown signal");
+            tracing::info!("Received shutdown signal");
         }
     }
 
     // Notify systemd we're stopping
     systemd_manager.notify_stopping();
-    log::info!("Daemon shutting down");
+    tracing::info!("Daemon shutting down");
 
     // Graceful drain: wait for in-flight connections to finish (max 10s)
     drain_active_connections(&active_connections, Duration::from_secs(10)).await;
