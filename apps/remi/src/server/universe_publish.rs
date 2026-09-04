@@ -155,6 +155,8 @@ struct UniverseInputs {
     base_sequence: u64,
     base_promotion_evidence_sha256: Option<String>,
     base_conversion_crawl_sha256: Option<String>,
+    base_profile_authority: Vec<(String, String)>,
+    base_canonical_map_sha256: Option<String>,
     active_manifest: Option<RemiUniverseManifestV2>,
     profiles: Vec<ProfileRevisionV2>,
     profile_physical_attestations: BTreeMap<String, RemiCatalogPhysicalAttestation>,
@@ -257,23 +259,23 @@ fn publish_current_universe_from_roots(
     if inputs.base_manifest_sha256.is_none() {
         return Ok(UniversePublicationOutcome::Unavailable);
     }
-    if let (Some(active), Some(manifest_sha256)) =
-        (&inputs.active_manifest, &inputs.base_manifest_sha256)
-    {
-        if !same_authority(active, &inputs.profiles, &canonical_map_sha256) {
+    if let Some(manifest_sha256) = &inputs.base_manifest_sha256 {
+        if !same_stored_authority(&inputs, &canonical_map_sha256)? {
             bail!("evidence-free universe publication cannot change active profile authority");
         }
-        verify_published_bundle(
-            catalog_dir,
-            active,
-            manifest_sha256,
-            &inputs.profile_physical_attestations,
-        )?;
-        if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
-            return Ok(UniversePublicationOutcome::Unchanged {
-                manifest_sha256: manifest_sha256.clone(),
-                sequence: inputs.base_sequence,
-            });
+        if let Some(active) = &inputs.active_manifest {
+            verify_published_bundle(
+                catalog_dir,
+                active,
+                manifest_sha256,
+                &inputs.profile_physical_attestations,
+            )?;
+            if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
+                return Ok(UniversePublicationOutcome::Unchanged {
+                    manifest_sha256: manifest_sha256.clone(),
+                    sequence: inputs.base_sequence,
+                });
+            }
         }
     }
 
@@ -318,7 +320,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         .query_row(
             "SELECT active.manifest_sha256, active.sequence,
                     revision.promotion_evidence_sha256,
-                    revision.conversion_crawl_sha256, revision.manifest_json
+                    revision.conversion_crawl_sha256,
+                    revision.canonical_map_sha256, revision.manifest_json
              FROM remi_active_universe_revision active
              JOIN remi_universe_revisions revision
                ON revision.manifest_sha256 = active.manifest_sha256
@@ -331,6 +334,7 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
@@ -340,10 +344,18 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_sequence,
         base_promotion_evidence_sha256,
         base_conversion_crawl_sha256,
+        base_canonical_map_sha256,
         active_manifest,
         obsolete_profile_schema,
     ) = match active {
-        Some((sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)) => {
+        Some((
+            sha256,
+            sequence,
+            promotion_evidence,
+            conversion_crawl,
+            canonical_map_sha256,
+            manifest_json,
+        )) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
             let (manifest, obsolete_profile_schema) = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
@@ -360,11 +372,29 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
                 sequence,
                 Some(promotion_evidence),
                 Some(conversion_crawl),
+                Some(canonical_map_sha256),
                 manifest,
                 obsolete_profile_schema,
             )
         }
-        None => (None, 0, None, None, None, false),
+        None => (None, 0, None, None, None, None, false),
+    };
+
+    let base_profile_authority = match &base_manifest_sha256 {
+        Some(manifest_sha256) => {
+            let mut statement = conn.prepare(
+                "SELECT source_profile, profile_revision_sha256
+                 FROM remi_universe_profile_revisions
+                 WHERE manifest_sha256 = ?1
+                 ORDER BY ordinal",
+            )?;
+            statement
+                .query_map([manifest_sha256], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+        None => Vec::new(),
     };
 
     if obsolete_profile_schema {
@@ -373,6 +403,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
             base_sequence,
             base_promotion_evidence_sha256,
             base_conversion_crawl_sha256,
+            base_profile_authority,
+            base_canonical_map_sha256,
             active_manifest,
             profiles: Vec::new(),
             profile_physical_attestations: BTreeMap::new(),
@@ -430,6 +462,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_sequence,
         base_promotion_evidence_sha256,
         base_conversion_crawl_sha256,
+        base_profile_authority,
+        base_canonical_map_sha256,
         active_manifest,
         profiles,
         profile_physical_attestations,
@@ -462,18 +496,16 @@ fn registered_profile_pairs<'a>(
         .collect()
 }
 
-fn same_authority(
-    active: &RemiUniverseManifestV2,
-    profiles: &[ProfileRevisionV2],
-    canonical_map_sha256: &str,
-) -> bool {
-    active.canonical_map.sha256 == canonical_map_sha256
-        && active.profiles.len() == profiles.len()
-        && active
-            .profiles
-            .iter()
-            .zip(profiles)
-            .all(|(left, right)| left.revision == *right)
+fn same_stored_authority(inputs: &UniverseInputs, canonical_map_sha256: &str) -> Result<bool> {
+    let current_profiles = inputs
+        .profiles
+        .iter()
+        .map(|profile| Ok((profile.profile.clone(), profile.manifest_sha256()?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        inputs.base_canonical_map_sha256.as_deref() == Some(canonical_map_sha256)
+            && inputs.base_profile_authority == current_profiles,
+    )
 }
 
 fn active_bundle_is_fresh(
@@ -816,6 +848,61 @@ mod tests {
             .expect("load replacement universe"),
             crate::server::public_universe::PublicUniverseLoadOutcome::Current(_)
         ));
+    }
+
+    #[test]
+    fn obsolete_universe_replacement_requires_unchanged_evidenced_authority() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-obsolete-evidence-v1",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        let obsolete_sha256 = fixture
+            .catalogs
+            .replace_active_universe_with_obsolete_schema();
+        fixture.catalogs.activate(
+            "fedora-44",
+            2,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.4",
+                "1.fc44",
+                Some("x86_64"),
+                101,
+                "fedora-obsolete-evidence-v2",
+            )],
+        );
+
+        let error = fixture
+            .publish()
+            .expect_err("obsolete schema must not bypass promotion evidence");
+        assert!(
+            error.to_string().contains(
+                "evidence-free universe publication cannot change active profile authority"
+            ),
+            "{error:#}"
+        );
+        let conn = fixture.catalogs.connection();
+        assert_eq!(
+            conn.query_row(
+                "SELECT manifest_sha256 FROM remi_active_universe_revision WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            obsolete_sha256
+        );
     }
 
     #[tokio::test]
