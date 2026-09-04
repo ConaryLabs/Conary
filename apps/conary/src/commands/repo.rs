@@ -569,7 +569,7 @@ fn exact_parser_config(
 }
 
 /// List repositories
-pub async fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
+pub fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
     info!("Listing repositories");
     let conn = open_db(db_path)?;
     let repos = if all {
@@ -607,7 +607,7 @@ pub async fn cmd_repo_list(db_path: &str, all: bool) -> Result<()> {
 }
 
 /// Remove a repository
-pub async fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
     info!("Removing repository: {}", name);
     let conn = open_db(db_path)?;
     conary_core::repository::remove_repository(&conn, name)?;
@@ -616,12 +616,12 @@ pub async fn cmd_repo_remove(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Enable a repository
-pub async fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_repo_enable(name: &str, db_path: &str) -> Result<()> {
     set_repo_enabled(name, db_path, true)
 }
 
 /// Disable a repository
-pub async fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_repo_disable(name: &str, db_path: &str) -> Result<()> {
     set_repo_enabled(name, db_path, false)
 }
 
@@ -714,7 +714,7 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
 }
 
 /// Search for packages
-pub async fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
+pub fn cmd_search(pattern: &str, db_path: &str) -> Result<()> {
     info!("Searching for packages matching: {}", pattern);
     let conn = open_db(db_path)?;
     let packages = conary_core::repository::search_packages(&conn, pattern)?;

@@ -32,7 +32,7 @@ fn find_collection_id_core(conn: &Connection, name: &str) -> conary_core::Result
 }
 
 /// Create a new collection
-pub async fn cmd_collection_create(
+pub fn cmd_collection_create(
     name: &str,
     description: Option<&str>,
     members: &[String],
@@ -83,7 +83,7 @@ pub async fn cmd_collection_create(
 }
 
 /// List all collections
-pub async fn cmd_collection_list(db_path: &str) -> Result<()> {
+pub fn cmd_collection_list(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find all troves with type 'collection'
@@ -121,7 +121,7 @@ pub async fn cmd_collection_list(db_path: &str) -> Result<()> {
 }
 
 /// Show details of a collection
-pub async fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, name)?;
@@ -165,7 +165,7 @@ pub async fn cmd_collection_show(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Add members to a collection
-pub async fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
+pub fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Adding members to collection: {}", name);
     let mut conn = open_db(db_path)?;
 
@@ -191,11 +191,7 @@ pub async fn cmd_collection_add(name: &str, members: &[String], db_path: &str) -
 }
 
 /// Remove members from a collection
-pub async fn cmd_collection_remove_member(
-    name: &str,
-    members: &[String],
-    db_path: &str,
-) -> Result<()> {
+pub fn cmd_collection_remove_member(name: &str, members: &[String], db_path: &str) -> Result<()> {
     info!("Removing members from collection: {}", name);
     let mut conn = open_db(db_path)?;
 
@@ -223,7 +219,7 @@ pub async fn cmd_collection_remove_member(
 }
 
 /// Delete a collection
-pub async fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_collection_delete(name: &str, db_path: &str) -> Result<()> {
     info!("Deleting collection: {}", name);
     let mut conn = open_db(db_path)?;
 

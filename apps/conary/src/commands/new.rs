@@ -13,7 +13,7 @@ pub(crate) struct NewOutcome {
     pub created_path: PathBuf,
 }
 
-pub async fn cmd_new(name: &str, output: Option<&str>, force: bool) -> Result<()> {
+pub fn cmd_new(name: &str, output: Option<&str>, force: bool) -> Result<()> {
     let outcome = prepare_new(name, output.map(Path::new), force)?;
     println!("Created recipe: {}", outcome.created_path.display());
     Ok(())

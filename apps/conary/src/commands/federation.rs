@@ -8,7 +8,7 @@ use tracing::info;
 use url::Url;
 
 /// Show federation status
-pub async fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
+pub fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Get peer count by tier
@@ -136,11 +136,7 @@ pub async fn cmd_federation_status(db_path: &str, verbose: bool) -> Result<()> {
 }
 
 /// List federation peers
-pub async fn cmd_federation_peers(
-    db_path: &str,
-    tier: Option<&str>,
-    enabled_only: bool,
-) -> Result<()> {
+pub fn cmd_federation_peers(db_path: &str, tier: Option<&str>, enabled_only: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Build WHERE clause from filters
@@ -230,7 +226,7 @@ pub async fn cmd_federation_peers(
 }
 
 /// Add a peer
-pub async fn cmd_federation_add_peer(
+pub fn cmd_federation_add_peer(
     url: &str,
     db_path: &str,
     tier: &str,
@@ -264,7 +260,7 @@ pub async fn cmd_federation_add_peer(
 }
 
 /// Remove a peer
-pub async fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
+pub fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Try to match by URL or ID
@@ -284,7 +280,7 @@ pub async fn cmd_federation_remove_peer(peer: &str, db_path: &str) -> Result<()>
 }
 
 /// Show federation statistics
-pub async fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
+pub fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let mut stmt = conn.prepare(
@@ -364,7 +360,7 @@ pub async fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
 }
 
 /// Enable or disable a peer
-pub async fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Result<()> {
+pub fn cmd_federation_enable_peer(peer: &str, db_path: &str, enable: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let enabled_val: i32 = if enable { 1 } else { 0 };
@@ -450,7 +446,7 @@ pub async fn cmd_federation_test(db_path: &str, peer: Option<&str>, timeout: u64
 }
 
 /// Scan for peers on the local network using mDNS
-pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
+pub fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: bool) -> Result<()> {
     use conary_core::federation_discovery::MdnsDiscovery;
     use std::time::Duration;
 

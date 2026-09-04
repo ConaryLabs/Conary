@@ -113,7 +113,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::unused_async
       - name: Test ordinary Conary hook fence
         run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose
       - name: Run workspace tests

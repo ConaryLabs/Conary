@@ -277,7 +277,7 @@ async fn assert_additive_shared_directory_rollback(
     }
     drop(conn);
 
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
     for trove_id in added_ids {

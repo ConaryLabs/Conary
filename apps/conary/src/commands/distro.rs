@@ -7,7 +7,7 @@ use conary_core::db::models::{Repository, SystemAffinity};
 use conary_core::repository::distro::source_feeds;
 use rusqlite::Connection;
 
-pub async fn cmd_distro_info(db_path: &str) -> Result<()> {
+pub fn cmd_distro_info(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     print!("{}", render_distro_info(&conn)?);
     Ok(())
@@ -29,7 +29,7 @@ pub fn render_distro_info(conn: &Connection) -> Result<String> {
     Ok(output)
 }
 
-pub async fn cmd_distro_list(db_path: &str) -> Result<()> {
+pub fn cmd_distro_list(db_path: &str) -> Result<()> {
     match conary_core::db::open(db_path) {
         Ok(conn) => print!("{}", render_distro_list(&conn)?),
         Err(conary_core::Error::DatabaseNotFound(_)) => {

@@ -25,7 +25,7 @@ struct AutoremovePlan {
 ///
 /// Finds packages that were installed as dependencies of other packages,
 /// but are no longer required by any installed package.
-pub async fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -> Result<()> {
+pub fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxMode) -> Result<()> {
     info!("Finding orphaned packages...");
 
     let conn = open_db(db_path)?;
@@ -103,9 +103,7 @@ pub async fn cmd_autoremove(db_path: &str, dry_run: bool, sandbox_mode: SandboxM
                 trove.architecture.clone(),
                 sandbox_mode,
                 false,
-            )
-            .await
-            {
+            ) {
                 Ok(()) => {
                     round_removed += 1;
                 }
@@ -379,7 +377,6 @@ mod tests {
             false,
             SandboxMode::Always,
         )
-        .await
         .unwrap();
 
         let conn = conary_core::db::open(&db_path).unwrap();

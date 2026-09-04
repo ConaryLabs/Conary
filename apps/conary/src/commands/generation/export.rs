@@ -9,7 +9,7 @@ use conary_core::image::size::ImageSize;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-pub async fn cmd_generation_export(
+pub fn cmd_generation_export(
     generation: Option<i64>,
     path: Option<&str>,
     format: &str,
@@ -280,7 +280,6 @@ mod tests {
             "/tmp/unused.iso",
             None,
         )
-        .await
         .unwrap_err();
 
         assert!(!err.to_string().contains("reserved"));
@@ -301,7 +300,6 @@ mod tests {
             output_path.as_ref(),
             Some("1"),
         )
-        .await
         .unwrap_err();
 
         assert!(err.to_string().contains("requested image size 1 bytes"));

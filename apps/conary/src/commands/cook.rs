@@ -325,7 +325,7 @@ fn hermetic_build_input(
 
 /// Cook a package from a recipe
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_cook(
+pub fn cmd_cook(
     target: Option<&str>,
     recipe: Option<&str>,
     source_profile: Option<&str>,
@@ -355,11 +355,10 @@ pub async fn cmd_cook(
         signing_key_path,
         &mut output,
     )
-    .await
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_cook_with_output(
+fn cmd_cook_with_output(
     target: Option<&str>,
     recipe: Option<&str>,
     source_profile: Option<&str>,

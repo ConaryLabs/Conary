@@ -64,7 +64,7 @@ fn validate_generation_activation_artifact(
 ///
 /// Prints each generation's number, creation date, package count, kernel version,
 /// and whether it is the currently active generation.
-pub async fn cmd_generation_list() -> Result<()> {
+pub fn cmd_generation_list() -> Result<()> {
     let runtime_root = default_runtime_root();
     let dir = runtime_root.generations_dir();
 
@@ -122,7 +122,7 @@ pub async fn cmd_generation_list() -> Result<()> {
 }
 
 /// Print detailed information about a specific generation.
-pub async fn cmd_generation_info(gen_number: i64) -> Result<()> {
+pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
     let runtime_root = default_runtime_root();
     let gen_dir = runtime_root.generation_path(gen_number);
 

@@ -11,7 +11,7 @@ use conary_core::ccs::enhancement::{
 
 /// Run the `conary ccs enhance` command
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_ccs_enhance(
+pub fn cmd_ccs_enhance(
     db_path: &str,
     trove_id: Option<i64>,
     all_pending: bool,

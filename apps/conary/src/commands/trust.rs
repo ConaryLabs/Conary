@@ -22,7 +22,7 @@ fn get_repo_with_id(conn: &Connection, repo_name: &str) -> Result<(Repository, i
 }
 
 /// Generate a new Ed25519 key pair for a TUF role
-pub async fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
+pub fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
     // Validate role name
     let _: Role = role.parse().map_err(|e| anyhow::anyhow!("{}", e))?;
 
@@ -45,7 +45,7 @@ pub async fn cmd_trust_key_gen(role: &str, output: &str) -> Result<()> {
 }
 
 /// Bootstrap TUF for a repository with initial root metadata
-pub async fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -70,7 +70,7 @@ pub async fn cmd_trust_init(repo_name: &str, root_path: &str, db_path: &str) -> 
 }
 
 /// Enable TUF verification for a repository
-pub async fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
+pub fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (_repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 
@@ -101,7 +101,7 @@ pub async fn cmd_trust_enable(repo_name: &str, tuf_url: Option<&str>, db_path: &
 }
 
 /// Show TUF metadata status for a repository
-pub async fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trust_status(repo_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let (repo, repo_id) = get_repo_with_id(&conn, repo_name)?;
 

@@ -8,7 +8,7 @@ use conary_core::db::models::{Trigger, TriggerDependency};
 use tracing::info;
 
 /// List all triggers
-pub async fn cmd_trigger_list(db_path: &str, show_disabled: bool) -> Result<()> {
+pub fn cmd_trigger_list(db_path: &str, show_disabled: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let triggers = if show_disabled {
@@ -46,7 +46,7 @@ pub async fn cmd_trigger_list(db_path: &str, show_disabled: bool) -> Result<()> 
 }
 
 /// Show details of a specific trigger
-pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -77,12 +77,12 @@ pub async fn cmd_trigger_show(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Enable a trigger
-pub async fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trigger_enable(name: &str, db_path: &str) -> Result<()> {
     set_trigger_enabled(name, db_path, true)
 }
 
 /// Disable a trigger
-pub async fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trigger_disable(name: &str, db_path: &str) -> Result<()> {
     set_trigger_enabled(name, db_path, false)
 }
 
@@ -115,7 +115,7 @@ fn set_trigger_enabled(name: &str, db_path: &str, enable: bool) -> Result<()> {
 }
 
 /// Add a new custom trigger
-pub async fn cmd_trigger_add(
+pub fn cmd_trigger_add(
     name: &str,
     pattern: &str,
     handler: &str,
@@ -152,7 +152,7 @@ pub async fn cmd_trigger_add(
 }
 
 /// Remove a custom trigger
-pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let trigger = Trigger::find_by_name(&conn, name)?
@@ -172,7 +172,7 @@ pub async fn cmd_trigger_remove(name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Run pending triggers for a changeset (useful for manual re-runs)
-pub async fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
+pub fn cmd_trigger_run(changeset_id: Option<i64>, db_path: &str, root: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let cs_id = if let Some(id) = changeset_id {

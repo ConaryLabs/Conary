@@ -65,7 +65,7 @@ pub async fn cmd_registry_update(db_path: &str) -> Result<()> {
     )
 }
 
-pub async fn cmd_registry_stats(db_path: &str) -> Result<()> {
+pub fn cmd_registry_stats(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let canonical_count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM resolved_canonical_packages",
@@ -120,7 +120,7 @@ mod tests {
         conary_core::db::init(db_str).unwrap();
 
         // Stats should succeed on an empty database
-        let result = cmd_registry_stats(db_str).await;
+        let result = cmd_registry_stats(db_str);
         assert!(result.is_ok());
     }
 

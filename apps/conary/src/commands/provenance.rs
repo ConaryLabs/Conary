@@ -83,7 +83,7 @@ const BUNDLED_FULCIO_CA_CERTS_BASE64: &[&str] = &[
 ];
 
 /// Show provenance information for a package
-pub async fn cmd_provenance_show(
+pub fn cmd_provenance_show(
     db_path: &str,
     package: &str,
     section: &str,
@@ -224,7 +224,7 @@ pub async fn cmd_provenance_verify(
 }
 
 /// Compare provenance between two package versions
-pub async fn cmd_provenance_diff(
+pub fn cmd_provenance_diff(
     db_path: &str,
     package1: &str,
     package2: &str,
@@ -304,7 +304,7 @@ pub async fn cmd_provenance_diff(
 }
 
 /// Find packages built with a specific dependency
-pub async fn cmd_provenance_find_by_dep(
+pub fn cmd_provenance_find_by_dep(
     db_path: &str,
     dep_name: &str,
     version: Option<&str>,
@@ -356,7 +356,7 @@ pub async fn cmd_provenance_find_by_dep(
 }
 
 /// Export provenance as SBOM
-pub async fn cmd_provenance_export(
+pub fn cmd_provenance_export(
     db_path: &str,
     package: &str,
     format: &str,
@@ -491,7 +491,7 @@ pub async fn cmd_provenance_register(
 }
 
 /// Audit packages for missing provenance
-pub async fn cmd_provenance_audit(
+pub fn cmd_provenance_audit(
     db_path: &str,
     missing: Option<&str>,
     include_converted: bool,

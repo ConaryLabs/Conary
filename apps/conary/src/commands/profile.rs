@@ -115,7 +115,7 @@ fn validate_seed_hash(value: &str) -> Result<()> {
 /// Loads the manifest, resolves the seed reference, computes the transitive
 /// recipe closure, orders it, computes concrete derivation IDs, and writes the
 /// resulting build profile.
-pub async fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Result<()> {
+pub fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Result<()> {
     if !manifest.exists() {
         anyhow::bail!("Manifest not found: {}", manifest.display());
     }
@@ -162,7 +162,7 @@ pub async fn cmd_profile_generate(manifest: &Path, output: Option<&Path>) -> Res
 ///
 /// Loads the profile, recomputes its hash for verification, and prints a
 /// human-readable summary including seed, stages, and derivation counts.
-pub async fn cmd_profile_show(path: &Path) -> Result<()> {
+pub fn cmd_profile_show(path: &Path) -> Result<()> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read profile: {}", path.display()))?;
 
@@ -218,7 +218,7 @@ pub async fn cmd_profile_show(path: &Path) -> Result<()> {
 ///
 /// Loads both profiles, computes their diff, and prints added, removed, and
 /// changed packages.
-pub async fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
+pub fn cmd_profile_diff(old_path: &Path, new_path: &Path) -> Result<()> {
     let old_content = std::fs::read_to_string(old_path)
         .with_context(|| format!("Failed to read old profile: {}", old_path.display()))?;
     let new_content = std::fs::read_to_string(new_path)
@@ -410,9 +410,7 @@ include = ["hello"]
         let manifest = write_manifest(temp.path(), &seed_dir);
         let output = temp.path().join("profile.toml");
 
-        cmd_profile_generate(&manifest, Some(&output))
-            .await
-            .unwrap();
+        cmd_profile_generate(&manifest, Some(&output)).unwrap();
 
         let profile = BuildProfile::from_toml(&fs::read_to_string(&output).unwrap()).unwrap();
         assert_eq!(profile.stages.len(), 1);
@@ -429,9 +427,7 @@ include = ["hello"]
         let manifest = write_manifest(temp.path(), &seed_dir);
         let output = temp.path().join("profile.toml");
 
-        cmd_profile_generate(&manifest, Some(&output))
-            .await
-            .unwrap();
+        cmd_profile_generate(&manifest, Some(&output)).unwrap();
 
         let profile = BuildProfile::from_toml(&fs::read_to_string(&output).unwrap()).unwrap();
         assert_eq!(
@@ -449,9 +445,7 @@ include = ["hello"]
         let manifest = write_manifest(temp.path(), &seed_dir);
         let output = temp.path().join("profile.toml");
 
-        cmd_profile_generate(&manifest, Some(&output))
-            .await
-            .unwrap();
+        cmd_profile_generate(&manifest, Some(&output)).unwrap();
 
         let profile = BuildProfile::from_toml(&fs::read_to_string(&output).unwrap()).unwrap();
         assert_eq!(profile.stages[0].build_env, profile.seed.id);
@@ -465,9 +459,7 @@ include = ["hello"]
         let manifest = write_manifest(temp.path(), &seed_dir);
         let output = temp.path().join("profile.toml");
 
-        let error = cmd_profile_generate(&manifest, Some(&output))
-            .await
-            .unwrap_err();
+        let error = cmd_profile_generate(&manifest, Some(&output)).unwrap_err();
 
         assert!(error.to_string().contains("recipe"));
     }

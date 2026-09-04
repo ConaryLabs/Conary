@@ -119,11 +119,7 @@ impl PackagingMcpServer {
         &self,
         Parameters(input): Parameters<PublishApplyInput>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self
-            .service
-            .apply_publish(input)
-            .await
-            .map_err(map_internal)?;
+        let result = self.service.apply_publish(input).map_err(map_internal)?;
         contract_tool_result(&result)
     }
 }

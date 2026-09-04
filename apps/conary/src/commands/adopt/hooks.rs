@@ -93,7 +93,7 @@ fn hook_paths(pkg_mgr: SystemPackageManager) -> Option<HookPaths> {
 /// calls `conary system adopt --refresh --quiet --from-sync-hook` after package transactions.
 ///
 /// When `remove` is true, removes the previously installed hooks.
-pub async fn cmd_sync_hook_install(
+pub fn cmd_sync_hook_install(
     remove: bool,
     requested_manager: Option<SystemPackageManager>,
 ) -> Result<()> {

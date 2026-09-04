@@ -82,7 +82,6 @@ async fn ccs_install_records_payload_without_direct_live_root_write() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert!(
@@ -181,7 +180,6 @@ async fn ccs_install_strips_special_permission_bits_from_db_metadata() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -258,7 +256,6 @@ async fn ccs_install_persists_manifest_provides() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -353,7 +350,6 @@ async fn ccs_install_persists_typed_provide_when_name_collides() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -407,7 +403,6 @@ async fn ccs_install_registers_metadata_only_package_without_files() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -505,7 +500,6 @@ async fn ccs_install_does_not_infer_ldconfig_trigger_from_library_path() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();

@@ -48,9 +48,7 @@ pub(super) async fn apply_package_changes(
                     arch.cloned(),
                     SandboxMode::Always,
                     false,
-                )
-                .await
-                {
+                ) {
                     Ok(()) => {
                         println!("  Removed {}", package);
                         applied += 1;

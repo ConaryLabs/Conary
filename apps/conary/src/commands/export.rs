@@ -45,11 +45,7 @@ fn oci_arch() -> &'static str {
 /// currently active generation.  The `objects_dir` points to the CAS
 /// store requested by the CLI, but the loaded generation artifact is
 /// authoritative and may redirect the export to its persisted CAS base.
-pub async fn export_oci(
-    generation: Option<i64>,
-    objects_dir: &Path,
-    output_dir: &Path,
-) -> Result<()> {
+pub fn export_oci(generation: Option<i64>, objects_dir: &Path, output_dir: &Path) -> Result<()> {
     let artifact = load_oci_generation_artifact(generation)?;
 
     export_oci_artifact(&artifact, objects_dir, output_dir)

@@ -215,7 +215,7 @@ jobs:
           components: clippy
           compiler-cache: reader
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings -D clippy::unused_async
       - name: Retain clippy compiler-cache evidence
         if: ${{ always() }}
         uses: ./.github/actions/summarize-rust-cache

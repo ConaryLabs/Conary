@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Export CCS packages to container image format.
-pub async fn cmd_ccs_export(
+pub fn cmd_ccs_export(
     packages: &[String],
     output: &str,
     format: &str,

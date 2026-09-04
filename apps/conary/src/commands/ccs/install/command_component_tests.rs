@@ -103,7 +103,6 @@ async fn ccs_install_respects_manifest_component_selection() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert!(!install_root.join("usr/bin/chosen-custom").exists());
@@ -236,7 +235,6 @@ async fn ccs_install_runs_package_hook_for_devel_only_component_selection() {
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     assert!(

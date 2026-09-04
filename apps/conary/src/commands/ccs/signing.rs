@@ -34,7 +34,7 @@ fn require_current_authority_manifest(manifest_bytes: Option<Vec<u8>>) -> Result
 }
 
 /// Generate an Ed25519 signing key pair
-pub async fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -> Result<()> {
+pub fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -> Result<()> {
     use conary_core::ccs::SigningKeyPair;
 
     let private_path = Path::new(output).with_extension("private");
@@ -90,7 +90,7 @@ pub async fn cmd_ccs_keygen(output: &str, key_id: Option<String>, force: bool) -
 }
 
 /// Sign a CCS package with an Ed25519 key
-pub async fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>) -> Result<()> {
+pub fn cmd_ccs_sign(package: &str, key_path: &str, output: Option<String>) -> Result<()> {
     use conary_core::ccs::signing::SigningKeyPair;
     use flate2::Compression;
     use flate2::read::MultiGzDecoder;
@@ -298,7 +298,6 @@ mod tests {
             private_key.to_str().unwrap(),
             Some(output.to_string_lossy().into_owned()),
         )
-        .await
         .unwrap();
 
         let verified = conary_core::ccs::verify::verify_package(

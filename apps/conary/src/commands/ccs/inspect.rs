@@ -9,7 +9,7 @@ use conary_core::ccs::{TrustPolicy, UntrustedPackageInspection, inspector, verif
 use std::path::Path;
 
 /// Inspect a CCS package
-pub async fn cmd_ccs_inspect(
+pub fn cmd_ccs_inspect(
     package: &str,
     show_files: bool,
     show_hooks: bool,
@@ -53,7 +53,7 @@ pub async fn cmd_ccs_inspect(
 }
 
 /// Verify a CCS package signature and contents
-pub async fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> {
+pub fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> {
     let path = Path::new(package);
 
     if !path.exists() {

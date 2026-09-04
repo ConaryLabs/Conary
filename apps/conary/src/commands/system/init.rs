@@ -8,7 +8,7 @@ use rusqlite::OptionalExtension;
 const MAX_INIT_SYMLINK_DEPTH: usize = 40;
 
 /// Initialize the Conary database and add default repositories
-pub async fn cmd_init(db_path: &str) -> Result<()> {
+pub fn cmd_init(db_path: &str) -> Result<()> {
     info!("Initializing Conary database at: {}", db_path);
     let db_path_ref = Path::new(db_path);
     let runtime_root = ConaryRuntimeRoot::from_db_path(db_path_ref.to_path_buf());
@@ -17,10 +17,10 @@ pub async fn cmd_init(db_path: &str) -> Result<()> {
         .map_err(|err| init_failure_context(db_path_ref, &runtime_root, err))?;
     crate::ui::status("Initialized", &format!("database at {db_path}"));
 
-    configure_current_database(db_path).await
+    configure_current_database(db_path)
 }
 
-pub(super) async fn configure_current_database(db_path: &str) -> Result<()> {
+pub(super) fn configure_current_database(db_path: &str) -> Result<()> {
     let mut conn = open_db(db_path)?;
     info!("Adding default repositories...");
     let host_capabilities = conary_core::ccs::HostCapabilityInventory::discover()

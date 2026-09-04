@@ -69,7 +69,7 @@ mod cyclonedx {
 }
 
 /// Generate SBOM from a derivation profile or single derivation.
-pub async fn cmd_derivation_sbom(
+pub fn cmd_derivation_sbom(
     profile_path: Option<&str>,
     derivation_id: Option<&str>,
     output_path: Option<&str>,

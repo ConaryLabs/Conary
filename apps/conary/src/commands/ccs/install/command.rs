@@ -35,7 +35,7 @@ pub(super) fn check_ccs_install_upgrade_status(
 
 /// Install a CCS package
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_ccs_install(
+pub fn cmd_ccs_install(
     package: &str,
     db_path: &str,
     root: &str,

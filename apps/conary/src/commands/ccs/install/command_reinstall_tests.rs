@@ -49,7 +49,6 @@ async fn ccs_install_reinstall_dry_run_does_not_mutate_db() {
         true,
         true,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -235,7 +234,6 @@ async fn ccs_noarch_replacement_uses_transaction_trove_for_dependent_validation(
         true,
         true,
     )
-    .await
     .expect_err("dropping the exact noarch provider must fail dependent validation");
     assert!(
         error
@@ -298,7 +296,6 @@ async fn default_authored_package_upgrades_with_explicit_architecture_authority(
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -332,7 +329,6 @@ async fn default_authored_package_upgrades_with_explicit_architecture_authority(
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();

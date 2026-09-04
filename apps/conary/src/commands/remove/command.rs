@@ -12,7 +12,7 @@ use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_in
 
 /// Remove an installed package
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_remove(
+pub fn cmd_remove(
     package_name: &str,
     db_path: &str,
     version: Option<String>,
@@ -170,7 +170,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
@@ -230,7 +229,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap_err()
         .to_string();
 
@@ -287,7 +285,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap_err();
         let error_chain = format!("{err:#}");
 
@@ -350,7 +347,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&payload).unwrap(), "bash");

@@ -79,7 +79,7 @@ pub(crate) async fn cmd_publish_with_output(
     if let Some(target) = options.target.clone() {
         publish_artifact_form(options, &target, writer).await
     } else {
-        publish_project_form(options, writer).await
+        publish_project_form(options, writer)
     }
 }
 
@@ -135,9 +135,9 @@ fn publish_gate_failure_output(
     PackagingCommandOutput::failed(operation_id, "conary publish", vec![diagnostic])
 }
 
-async fn publish_project_form(options: PublishOptions, writer: &mut impl Write) -> Result<()> {
+fn publish_project_form(options: PublishOptions, writer: &mut impl Write) -> Result<()> {
     let operation_id = publish_operation_id();
-    match run_project_form_publish(&options, &operation_id, writer).await {
+    match run_project_form_publish(&options, &operation_id, writer) {
         Ok(report) => {
             if options.json {
                 super::diagnostics::write_packaging_output(&report, true, writer)?;
@@ -160,7 +160,7 @@ async fn publish_project_form(options: PublishOptions, writer: &mut impl Write) 
     }
 }
 
-async fn run_project_form_publish(
+fn run_project_form_publish(
     options: &PublishOptions,
     operation_id: &str,
     writer: &mut impl Write,
@@ -461,7 +461,6 @@ mod tests {
             rotate_root_key: false,
             operation_id: "publish-test".to_string(),
         })
-        .await
         .unwrap();
 
         assert_eq!(output.operation_id, "publish-test");

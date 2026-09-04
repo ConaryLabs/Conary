@@ -139,7 +139,6 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 sandbox.into(),
                 purge,
             )
-            .await
         }
 
         Some(Commands::Update {
@@ -203,7 +202,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             .await
         }
 
-        Some(Commands::Search { pattern, db }) => commands::cmd_search(&pattern, &db.db_path).await,
+        Some(Commands::Search { pattern, db }) => commands::cmd_search(&pattern, &db.db_path),
 
         Some(Commands::List {
             pattern,
@@ -222,7 +221,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                         "Installed package selectors --version/--arch cannot be used with --pinned"
                     );
                 }
-                commands::cmd_list_pinned(&db.db_path).await
+                commands::cmd_list_pinned(&db.db_path)
             } else {
                 let options = commands::QueryOptions {
                     info,
@@ -232,7 +231,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                     version,
                     architecture,
                 };
-                commands::cmd_query(pattern.as_deref(), &db.db_path, options).await
+                commands::cmd_query(pattern.as_deref(), &db.db_path, options)
             }
         }
 
@@ -248,7 +247,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 dry_run,
             )?;
-            commands::cmd_autoremove(&common.db.db_path, dry_run, sandbox.into()).await
+            commands::cmd_autoremove(&common.db.db_path, dry_run, sandbox.into())
         }
 
         Some(Commands::Pin {
@@ -259,7 +258,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         }) => {
             let selector =
                 commands::InstalledPackageSelector::new(package_name, version, architecture);
-            commands::cmd_pin(selector, &db.db_path).await
+            commands::cmd_pin(selector, &db.db_path)
         }
 
         Some(Commands::Unpin {
@@ -270,7 +269,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         }) => {
             let selector =
                 commands::InstalledPackageSelector::new(package_name, version, architecture);
-            commands::cmd_unpin(selector, &db.db_path).await
+            commands::cmd_unpin(selector, &db.db_path)
         }
 
         Some(Commands::Cook {
@@ -318,8 +317,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                     json,
                     signing_key_path: key.as_ref().map(std::path::PathBuf::from),
                     command: record_command,
-                })
-                .await;
+                });
             }
 
             commands::cmd_cook(
@@ -336,14 +334,13 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 json,
                 key.as_deref().map(Path::new),
             )
-            .await
         }
 
         Some(Commands::New {
             name,
             output,
             force,
-        }) => commands::cmd_new(&name, output.as_deref(), force).await,
+        }) => commands::cmd_new(&name, output.as_deref(), force),
 
         Some(Commands::Try {
             target,
@@ -370,16 +367,13 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             TryDispatchAction::Package {
                 package,
                 trust_policy_path,
-            } => {
-                commands::cmd_try_package(
-                    &db.db_path,
-                    Path::new(&package),
-                    &trust_policy_path,
-                    activate,
-                    &run,
-                )
-                .await
-            }
+            } => commands::cmd_try_package(
+                &db.db_path,
+                Path::new(&package),
+                &trust_policy_path,
+                activate,
+                &run,
+            ),
             TryDispatchAction::Watch(watch) => {
                 commands::cmd_try_watch(
                     &db.db_path,
@@ -391,9 +385,9 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
                 )
                 .await
             }
-            TryDispatchAction::Status => commands::cmd_try_status(&db.db_path).await,
-            TryDispatchAction::Rollback => commands::cmd_try_rollback(&db.db_path).await,
-            TryDispatchAction::Keep => commands::cmd_try_keep(&db.db_path).await,
+            TryDispatchAction::Status => commands::cmd_try_status(&db.db_path),
+            TryDispatchAction::Rollback => commands::cmd_try_rollback(&db.db_path),
+            TryDispatchAction::Keep => commands::cmd_try_keep(&db.db_path),
         },
 
         Some(Commands::Publish {
@@ -424,7 +418,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         }
 
         Some(Commands::RecipeAudit { recipe, all, trace }) => {
-            commands::cmd_recipe_audit(recipe.as_deref(), all, trace).await
+            commands::cmd_recipe_audit(recipe.as_deref(), all, trace)
         }
 
         Some(Commands::Mcp(cli::McpCommands::Packaging)) => commands::cmd_mcp_packaging().await,
@@ -444,27 +438,27 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         // =====================================================================
         // Config Commands
         // =====================================================================
-        Some(Commands::Config(config_cmd)) => dispatch_config_command(config_cmd).await,
+        Some(Commands::Config(config_cmd)) => dispatch_config_command(config_cmd),
 
         // =====================================================================
         // Query Commands
         // =====================================================================
-        Some(Commands::Query(query_cmd)) => dispatch_query_command(query_cmd).await,
+        Some(Commands::Query(query_cmd)) => dispatch_query_command(query_cmd),
 
         // =====================================================================
         // Collection Commands
         // =====================================================================
-        Some(Commands::Collection(coll_cmd)) => dispatch_collection_command(coll_cmd).await,
+        Some(Commands::Collection(coll_cmd)) => dispatch_collection_command(coll_cmd),
 
         // =====================================================================
         // CCS Commands
         // =====================================================================
-        Some(Commands::Ccs(ccs_cmd)) => dispatch_ccs_command(ccs_cmd).await,
+        Some(Commands::Ccs(ccs_cmd)) => dispatch_ccs_command(ccs_cmd),
 
         // =====================================================================
         // Derive Commands
         // =====================================================================
-        Some(Commands::Derive(derive_cmd)) => dispatch_derive_command(derive_cmd).await,
+        Some(Commands::Derive(derive_cmd)) => dispatch_derive_command(derive_cmd),
 
         // =====================================================================
         // Model Commands
@@ -486,7 +480,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         // =====================================================================
         // Capability Commands
         // =====================================================================
-        Some(cli::Commands::Capability(cmd)) => dispatch_capability_command(cmd).await,
+        Some(cli::Commands::Capability(cmd)) => dispatch_capability_command(cmd),
 
         // =====================================================================
         // Federation Commands
@@ -501,17 +495,17 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         // =====================================================================
         // Distro Commands
         // =====================================================================
-        Some(Commands::Distro(distro_cmd)) => dispatch_distro_command(distro_cmd).await,
+        Some(Commands::Distro(distro_cmd)) => dispatch_distro_command(distro_cmd),
 
         // =====================================================================
         // Canonical Commands
         // =====================================================================
-        Some(Commands::Canonical(can_cmd)) => dispatch_canonical_command(can_cmd).await,
+        Some(Commands::Canonical(can_cmd)) => dispatch_canonical_command(can_cmd),
 
         // =====================================================================
         // Groups Commands
         // =====================================================================
-        Some(Commands::Groups(grp_cmd)) => dispatch_groups_command(grp_cmd).await,
+        Some(Commands::Groups(grp_cmd)) => dispatch_groups_command(grp_cmd),
 
         // =====================================================================
         // Registry Commands
@@ -525,14 +519,12 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             generation,
             output,
             objects_dir,
-        }) => commands::export_oci(generation, Path::new(&objects_dir), Path::new(&output)).await,
+        }) => commands::export_oci(generation, Path::new(&objects_dir), Path::new(&output)),
 
         // =====================================================================
         // Derivation Engine
         // =====================================================================
-        Some(Commands::Derivation(derivation_cmd)) => {
-            dispatch_derivation_command(derivation_cmd).await
-        }
+        Some(Commands::Derivation(derivation_cmd)) => dispatch_derivation_command(derivation_cmd),
 
         Some(Commands::Profile(profile_cmd)) => dispatch_profile_command(profile_cmd).await,
 
@@ -568,7 +560,7 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
         // Derivation Verification
         // =====================================================================
         Some(Commands::VerifyDerivation(verify_cmd)) => {
-            dispatch_verify_derivation_command(verify_cmd).await
+            dispatch_verify_derivation_command(verify_cmd)
         }
 
         Some(Commands::Sbom {
@@ -576,15 +568,12 @@ pub(super) async fn dispatch_command(command: Option<Commands>) -> Result<()> {
             derivation,
             output,
             db,
-        }) => {
-            commands::cmd_derivation_sbom(
-                profile.as_deref(),
-                derivation.as_deref(),
-                output.as_deref(),
-                &db.db_path,
-            )
-            .await
-        }
+        }) => commands::cmd_derivation_sbom(
+            profile.as_deref(),
+            derivation.as_deref(),
+            output.as_deref(),
+            &db.db_path,
+        ),
 
         None => {
             println!("Conary Package Manager v{}", env!("CARGO_PKG_VERSION"));

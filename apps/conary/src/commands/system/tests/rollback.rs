@@ -333,7 +333,7 @@ async fn additive_rollback_restores_unaffected_native_runtime_projection() {
     .unwrap();
     drop(conn);
 
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
     let restored = InstalledNativeLifecycleBundle::find_by_trove(&conn, peer_id)
@@ -386,7 +386,7 @@ async fn additive_rollback_restores_unaffected_config_runtime_projection() {
     .unwrap();
     drop(conn);
 
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
     let restored =
@@ -434,7 +434,7 @@ async fn additive_rollback_restores_unaffected_derived_runtime_projection() {
     .unwrap();
     drop(conn);
 
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
     let restored: (String, String) = conn
@@ -472,7 +472,6 @@ async fn rollback_without_v7_authority_fails_closed_and_remains_retryable() {
 
     for _ in 0..2 {
         let error = cmd_rollback(changeset_id, &db_path_str)
-            .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("no exact v7 rollback authority"), "{error}");
@@ -527,7 +526,6 @@ async fn rollback_with_retired_metadata_schema_fails_closed_and_remains_retryabl
 
     for _ in 0..2 {
         let error = cmd_rollback(changeset_id, &db_path_str)
-            .await
             .unwrap_err()
             .to_string();
         assert!(
@@ -604,7 +602,6 @@ async fn rollback_snapshot_restores_exact_prior_typed_rpm_authority() {
     drop(conn);
 
     cmd_rollback(changeset_id, &db_path_str)
-        .await
         .expect("snapshot rollback must restore exact prior typed RPM authority");
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
@@ -718,7 +715,6 @@ async fn rollback_publishes_exact_pre_upgrade_parent_directory_authority() {
     drop(conn);
 
     cmd_rollback(changeset_id, &db_path_str)
-        .await
         .expect("rollback must publish the exact pre-upgrade selected root");
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
@@ -818,7 +814,6 @@ async fn rollback_update_without_active_generation_fails_closed() {
     drop(conn);
 
     let err = cmd_rollback(update_changeset_id, &db_path_str)
-        .await
         .unwrap_err()
         .to_string();
 

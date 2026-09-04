@@ -13,9 +13,7 @@ pub(super) async fn dispatch_provenance_command(cmd: cli::ProvenanceCommands) ->
             section,
             recursive,
             format,
-        } => {
-            commands::cmd_provenance_show(&db.db_path, &package, &section, recursive, &format).await
-        }
+        } => commands::cmd_provenance_show(&db.db_path, &package, &section, recursive, &format),
         cli::ProvenanceCommands::Verify {
             package,
             db,
@@ -26,37 +24,31 @@ pub(super) async fn dispatch_provenance_command(cmd: cli::ProvenanceCommands) ->
             package2,
             db,
             format,
-        } => commands::cmd_provenance_diff(&db.db_path, &package1, &package2, &format).await,
+        } => commands::cmd_provenance_diff(&db.db_path, &package1, &package2, &format),
         cli::ProvenanceCommands::FindByDep {
             dep_name,
             version,
             dna,
             db,
-        } => {
-            commands::cmd_provenance_find_by_dep(
-                &db.db_path,
-                &dep_name,
-                version.as_deref(),
-                dna.as_deref(),
-            )
-            .await
-        }
+        } => commands::cmd_provenance_find_by_dep(
+            &db.db_path,
+            &dep_name,
+            version.as_deref(),
+            dna.as_deref(),
+        ),
         cli::ProvenanceCommands::Export {
             package,
             db,
             format,
             output,
             recursive,
-        } => {
-            commands::cmd_provenance_export(
-                &db.db_path,
-                &package,
-                &format,
-                output.as_deref(),
-                recursive,
-            )
-            .await
-        }
+        } => commands::cmd_provenance_export(
+            &db.db_path,
+            &package,
+            &format,
+            output.as_deref(),
+            recursive,
+        ),
         cli::ProvenanceCommands::Register {
             package,
             db,
@@ -77,8 +69,6 @@ pub(super) async fn dispatch_provenance_command(cmd: cli::ProvenanceCommands) ->
             db,
             missing,
             include_converted,
-        } => {
-            commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted).await
-        }
+        } => commands::cmd_provenance_audit(&db.db_path, missing.as_deref(), include_converted),
     }
 }

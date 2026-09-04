@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use tracing::info;
 
 /// Show dependencies for a package
-pub async fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
@@ -45,7 +45,7 @@ pub async fn cmd_depends(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show reverse dependencies
-pub async fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
     info!("Showing reverse dependencies for package: {}", package_name);
     let conn = open_db(db_path)?;
 
@@ -79,7 +79,7 @@ pub async fn cmd_rdepends(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Show what packages would break if a package is removed
-pub async fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
     info!(
         "Checking what would break if '{}' is removed...",
         package_name
@@ -140,7 +140,7 @@ pub async fn cmd_whatbreaks(package_name: &str, db_path: &str) -> Result<()> {
 /// - A virtual provide (e.g., perl(DBI))
 /// - A file path (e.g., /usr/bin/python3)
 /// - A typed capability (e.g., soname(libssl.so.3))
-pub async fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
+pub fn cmd_whatprovides(capability: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let providers = installed_providers_for_capability(&conn, capability)?;

@@ -165,7 +165,7 @@ fn restore_snapshots_to_live_root(
 }
 
 /// Verify installed files
-pub async fn cmd_verify(
+pub fn cmd_verify(
     package: Option<String>,
     db_path: &str,
     _root: &str,

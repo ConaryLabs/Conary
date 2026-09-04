@@ -353,7 +353,7 @@ impl PackagingAgentService {
         })))
     }
 
-    pub(crate) async fn apply_publish(&self, input: PublishApplyInput) -> Result<ApplyResult> {
+    pub(crate) fn apply_publish(&self, input: PublishApplyInput) -> Result<ApplyResult> {
         let operation = "conary.packaging.publish.apply";
         let stored = match self
             .publish_plans
@@ -523,9 +523,7 @@ impl PackagingAgentService {
             rotate_publish_key: false,
             rotate_root_key: false,
             operation_id: operation_id.clone(),
-        })
-        .await
-        {
+        }) {
             Ok(output) => output,
             Err(error) => PackagingCommandOutput::failed(
                 operation_id,

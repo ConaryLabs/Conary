@@ -80,7 +80,7 @@ pub(crate) struct TryStartOutcome {
     pub try_generation_id: i64,
 }
 
-pub(crate) async fn cmd_try_package(
+pub(crate) fn cmd_try_package(
     db_path: &str,
     package_path: &Path,
     trust_policy_path: &Path,
@@ -121,7 +121,7 @@ pub(crate) async fn cmd_try_package(
     Ok(())
 }
 
-pub(crate) async fn cmd_try_status(db_path: &str) -> Result<()> {
+pub(crate) fn cmd_try_status(db_path: &str) -> Result<()> {
     let live_conn = conary_core::db::open(db_path)?;
     match TrySession::find_active_or_orphaned(&live_conn)? {
         Some(session) => {
@@ -148,13 +148,13 @@ pub(crate) async fn cmd_try_status(db_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn cmd_try_rollback(db_path: &str) -> Result<()> {
+pub(crate) fn cmd_try_rollback(db_path: &str) -> Result<()> {
     rollback_active_try_session(db_path)?;
     println!("Try session rolled back");
     Ok(())
 }
 
-pub(crate) async fn cmd_try_keep(db_path: &str) -> Result<()> {
+pub(crate) fn cmd_try_keep(db_path: &str) -> Result<()> {
     session::keep_active_try_session(db_path)?;
     println!("Try session kept");
     Ok(())

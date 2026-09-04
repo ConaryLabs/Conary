@@ -13,89 +13,82 @@ pub(super) async fn dispatch_bootstrap_command(
             work_dir,
             target,
             jobs,
-        } => commands::cmd_bootstrap_init(&work_dir, &target, jobs).await,
+        } => commands::cmd_bootstrap_init(&work_dir, &target, jobs),
 
-        cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose).await,
+        cli::BootstrapCommands::Check { verbose } => commands::cmd_bootstrap_check(verbose),
 
         cli::BootstrapCommands::Image {
             work_dir,
             output,
             format,
             size,
-        } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size).await,
+        } => commands::cmd_bootstrap_image(&work_dir, &output, &format, &size),
 
         cli::BootstrapCommands::Status { work_dir, verbose } => {
-            commands::cmd_bootstrap_status(&work_dir, verbose).await
+            commands::cmd_bootstrap_status(&work_dir, verbose)
         }
 
         cli::BootstrapCommands::Resume { work_dir, verbose } => {
-            commands::cmd_bootstrap_resume(&work_dir, verbose).await
+            commands::cmd_bootstrap_resume(&work_dir, verbose)
         }
 
         cli::BootstrapCommands::DryRun {
             work_dir,
             recipe_dir,
             verbose,
-        } => commands::cmd_bootstrap_dry_run(&work_dir, &recipe_dir, verbose).await,
+        } => commands::cmd_bootstrap_dry_run(&work_dir, &recipe_dir, verbose),
 
         cli::BootstrapCommands::Clean {
             work_dir,
             stage,
             sources,
-        } => commands::cmd_bootstrap_clean(&work_dir, stage, sources).await,
+        } => commands::cmd_bootstrap_clean(&work_dir, stage, sources),
 
         cli::BootstrapCommands::CrossTools {
             work_dir,
             lfs_root,
             jobs,
             verbose,
-        } => {
-            commands::cmd_bootstrap_cross_tools(&work_dir, jobs, verbose, lfs_root.as_deref()).await
-        }
+        } => commands::cmd_bootstrap_cross_tools(&work_dir, jobs, verbose, lfs_root.as_deref()),
 
         cli::BootstrapCommands::TempTools {
             work_dir,
             lfs_root,
             jobs,
             verbose,
-        } => {
-            commands::cmd_bootstrap_temp_tools(&work_dir, jobs, verbose, lfs_root.as_deref()).await
-        }
+        } => commands::cmd_bootstrap_temp_tools(&work_dir, jobs, verbose, lfs_root.as_deref()),
 
         cli::BootstrapCommands::System {
             work_dir,
             lfs_root,
             jobs,
             verbose,
-        } => commands::cmd_bootstrap_system(&work_dir, jobs, verbose, lfs_root.as_deref()).await,
+        } => commands::cmd_bootstrap_system(&work_dir, jobs, verbose, lfs_root.as_deref()),
 
         cli::BootstrapCommands::Config {
             work_dir,
             lfs_root,
             verbose,
-        } => commands::cmd_bootstrap_config(&work_dir, verbose, lfs_root.as_deref()).await,
+        } => commands::cmd_bootstrap_config(&work_dir, verbose, lfs_root.as_deref()),
 
         cli::BootstrapCommands::Tier2 {
             work_dir,
             lfs_root,
             jobs,
             verbose,
-        } => commands::cmd_bootstrap_tier2(&work_dir, jobs, verbose, lfs_root.as_deref()).await,
+        } => commands::cmd_bootstrap_tier2(&work_dir, jobs, verbose, lfs_root.as_deref()),
 
         cli::BootstrapCommands::GuestProfile {
             work_dir,
             public_key,
             verbose,
             lfs_root,
-        } => {
-            commands::cmd_bootstrap_guest_profile(
-                &work_dir,
-                &public_key,
-                verbose,
-                lfs_root.as_deref(),
-            )
-            .await
-        }
+        } => commands::cmd_bootstrap_guest_profile(
+            &work_dir,
+            &public_key,
+            verbose,
+            lfs_root.as_deref(),
+        ),
 
         cli::BootstrapCommands::Seed {
             from,
@@ -110,13 +103,12 @@ pub(super) async fn dispatch_bootstrap_command(
                     &output,
                     distro.as_deref(),
                     distro_version.as_deref(),
-                )
-                .await?;
+                )?;
             } else {
                 let from_path = from.ok_or_else(|| {
                     anyhow::anyhow!("--from is required when not using --from-adopted")
                 })?;
-                commands::cmd_bootstrap_seed(&from_path, &output, &target).await?;
+                commands::cmd_bootstrap_seed(&from_path, &output, &target)?;
             }
             Ok(())
         }
@@ -127,19 +119,16 @@ pub(super) async fn dispatch_bootstrap_command(
             seed_a,
             seed_b,
             diff,
-        } => {
-            commands::cmd_bootstrap_verify_convergence(
-                &run_a,
-                &run_b,
-                seed_a.as_deref(),
-                seed_b.as_deref(),
-                diff,
-            )
-            .await
-        }
+        } => commands::cmd_bootstrap_verify_convergence(
+            &run_a,
+            &run_b,
+            seed_a.as_deref(),
+            seed_b.as_deref(),
+            diff,
+        ),
 
         cli::BootstrapCommands::DiffSeeds { path_a, path_b } => {
-            commands::cmd_bootstrap_diff_seeds(&path_a, &path_b).await
+            commands::cmd_bootstrap_diff_seeds(&path_a, &path_b)
         }
 
         cli::BootstrapCommands::Run {

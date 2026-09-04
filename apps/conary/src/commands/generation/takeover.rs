@@ -154,7 +154,7 @@ fn classify_takeover_inventory(
 ///    from the system PM database (files stay on disk, Conary owns them).
 /// 3. **Generation** -- Everything in Owned, then build an EROFS generation,
 ///    write a boot entry, and stop ready to activate.
-pub async fn cmd_system_takeover(
+pub fn cmd_system_takeover(
     db_path: &str,
     level: TakeoverLevel,
     yes: bool,
@@ -332,9 +332,7 @@ pub async fn cmd_system_takeover(
             None,
             false,
             Some(pm),
-        )
-        .await
-        {
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 record.mark_failed(format!("CAS adoption phase failed: {error}"));

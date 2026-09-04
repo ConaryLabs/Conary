@@ -38,7 +38,7 @@ async fn rollback_commit_survives_publication_failure_and_retry_publishes_exact_
     let failure = crate::commands::composefs_ops::test_forced_generation_rebuild_failure_guard(
         "forced rollback publication failure",
     );
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
     drop(failure);
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
@@ -164,7 +164,7 @@ async fn rollback_generation_excludes_forward_activation_request() {
     insert_test_trove(&conn, changeset_id, "activation-fixture", "1.0.0", &[]);
     drop(conn);
 
-    cmd_rollback(changeset_id, &db_path_str).await.unwrap();
+    cmd_rollback(changeset_id, &db_path_str).unwrap();
 
     let conn = conary_core::db::open(&db_path_str).unwrap();
     let runtime_root =

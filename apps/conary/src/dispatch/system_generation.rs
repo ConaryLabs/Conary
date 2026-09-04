@@ -9,13 +9,9 @@ use crate::cli;
 use crate::commands;
 use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
-pub(super) async fn dispatch_system_generation_command(
-    gen_cmd: cli::GenerationCommands,
-) -> Result<()> {
+pub(super) fn dispatch_system_generation_command(gen_cmd: cli::GenerationCommands) -> Result<()> {
     match gen_cmd {
-        cli::GenerationCommands::List => {
-            commands::generation::commands::cmd_generation_list().await
-        }
+        cli::GenerationCommands::List => commands::generation::commands::cmd_generation_list(),
         cli::GenerationCommands::Build { summary, yes, db } => {
             require_live_mutation(
                 MutationIntent::from_apply_intent(yes),
@@ -87,16 +83,13 @@ pub(super) async fn dispatch_system_generation_command(
             format,
             output,
             size,
-        } => {
-            commands::generation::export::cmd_generation_export(
-                generation,
-                path.as_deref(),
-                &format,
-                &output,
-                size.as_deref(),
-            )
-            .await
-        }
+        } => commands::generation::export::cmd_generation_export(
+            generation,
+            path.as_deref(),
+            &format,
+            &output,
+            size.as_deref(),
+        ),
         cli::GenerationCommands::Switch {
             number,
             reboot,
@@ -126,10 +119,10 @@ pub(super) async fn dispatch_system_generation_command(
                 LiveMutationClass::AlwaysLive,
                 false,
             )?;
-            commands::generation::gc::cmd_generation_gc(keep, &db.db_path).await
+            commands::generation::gc::cmd_generation_gc(keep, &db.db_path)
         }
         cli::GenerationCommands::Info { number } => {
-            commands::generation::commands::cmd_generation_info(number).await
+            commands::generation::commands::cmd_generation_info(number)
         }
         cli::GenerationCommands::Recover { yes, db } => {
             require_live_mutation(

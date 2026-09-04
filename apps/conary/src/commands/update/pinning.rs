@@ -8,7 +8,7 @@ use conary_core::db::models::Trove;
 use tracing::info;
 
 /// Pin a package to prevent updates and removal
-pub async fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
+pub fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
     info!("Pinning package: {}", selector.name);
     let conn = open_db(db_path)?;
     let resolved = resolve_installed_package(&conn, &selector)?;
@@ -31,7 +31,7 @@ pub async fn cmd_pin(selector: InstalledPackageSelector, db_path: &str) -> Resul
 }
 
 /// Unpin a package to allow updates and removal
-pub async fn cmd_unpin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
+pub fn cmd_unpin(selector: InstalledPackageSelector, db_path: &str) -> Result<()> {
     info!("Unpinning package: {}", selector.name);
     let conn = open_db(db_path)?;
     let resolved = resolve_installed_package(&conn, &selector)?;
@@ -54,7 +54,7 @@ pub async fn cmd_unpin(selector: InstalledPackageSelector, db_path: &str) -> Res
 }
 
 /// List all pinned packages
-pub async fn cmd_list_pinned(db_path: &str) -> Result<()> {
+pub fn cmd_list_pinned(db_path: &str) -> Result<()> {
     info!("Listing pinned packages");
 
     let conn = open_db(db_path)?;

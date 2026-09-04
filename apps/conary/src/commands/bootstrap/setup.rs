@@ -13,7 +13,7 @@ use super::phases::{
 };
 
 /// Initialize bootstrap environment
-pub async fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
+pub fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize>) -> Result<()> {
     println!("Initializing bootstrap environment...");
     println!("  Work directory: {}", work_dir);
 
@@ -42,7 +42,7 @@ pub async fn cmd_bootstrap_init(work_dir: &str, target: &str, jobs: Option<usize
     Ok(())
 }
 /// Check prerequisites for bootstrap
-pub async fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
     println!("Checking bootstrap prerequisites...\n");
 
     let prereqs = Prerequisites::check()?;
@@ -94,7 +94,7 @@ pub async fn cmd_bootstrap_check(verbose: bool) -> Result<()> {
     Ok(())
 }
 /// Show bootstrap status
-pub async fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     let work_path = PathBuf::from(work_dir);
 
     if !work_path.exists() {
@@ -130,7 +130,7 @@ pub async fn cmd_bootstrap_status(work_dir: &str, verbose: bool) -> Result<()> {
     Ok(())
 }
 /// Resume bootstrap from last checkpoint
-pub async fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming bootstrap...");
 
     let mut bootstrap = Bootstrap::new(work_dir)?;
@@ -143,20 +143,18 @@ pub async fn cmd_bootstrap_resume(work_dir: &str, verbose: bool) -> Result<()> {
     println!("Resuming from: {}", current);
 
     match current {
-        BootstrapStage::CrossTools => {
-            cmd_bootstrap_cross_tools(work_dir, None, verbose, None).await
-        }
-        BootstrapStage::TempTools => cmd_bootstrap_temp_tools(work_dir, None, verbose, None).await,
-        BootstrapStage::FinalSystem => cmd_bootstrap_system(work_dir, None, verbose, None).await,
-        BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None).await,
+        BootstrapStage::CrossTools => cmd_bootstrap_cross_tools(work_dir, None, verbose, None),
+        BootstrapStage::TempTools => cmd_bootstrap_temp_tools(work_dir, None, verbose, None),
+        BootstrapStage::FinalSystem => cmd_bootstrap_system(work_dir, None, verbose, None),
+        BootstrapStage::SystemConfig => cmd_bootstrap_config(work_dir, verbose, None),
         BootstrapStage::BootableImage => {
-            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G").await
+            cmd_bootstrap_image(work_dir, "conaryos-base.qcow2", "qcow2", "4G")
         }
-        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, None).await,
+        BootstrapStage::Tier2 => cmd_bootstrap_tier2(work_dir, None, verbose, None),
     }
 }
 /// Validate the full pipeline without building
-pub async fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) -> Result<()> {
+pub fn cmd_bootstrap_dry_run(work_dir: &str, recipe_dir: &str, verbose: bool) -> Result<()> {
     let work_path = PathBuf::from(work_dir);
     let recipe_path = PathBuf::from(recipe_dir);
     let config = BootstrapConfig::new().with_verbose(verbose);

@@ -184,9 +184,7 @@ pub(super) async fn resolve_and_parse_package(
             format,
             db_path,
             effective_source_profile(repository_provenance.as_ref(), requested_source_profile),
-        )
-        .await?
-        {
+        )? {
             ConversionResult::Converted { conversion } => {
                 let conversion = *conversion;
                 let ccs_path = conversion

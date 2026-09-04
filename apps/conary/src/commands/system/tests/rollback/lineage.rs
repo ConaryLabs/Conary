@@ -26,8 +26,8 @@ async fn sequential_rollback_ignores_applied_compensation_rows() {
     );
     drop(conn);
 
-    cmd_rollback(second, &db_path).await.unwrap();
-    cmd_rollback(first, &db_path).await.unwrap();
+    cmd_rollback(second, &db_path).unwrap();
+    cmd_rollback(first, &db_path).unwrap();
 
     let conn = conary_core::db::open(&db_path).unwrap();
     for changeset_id in [first, second] {
@@ -71,7 +71,6 @@ async fn precommit_failure_leaves_forward_mutation_retryable() {
     drop(conn);
 
     let error = cmd_rollback_with_forced_precommit_failure(forward, &db_path)
-        .await
         .unwrap_err()
         .to_string();
     assert!(
@@ -103,7 +102,7 @@ async fn precommit_failure_leaves_forward_mutation_retryable() {
     );
     drop(conn);
 
-    cmd_rollback(forward, &db_path).await.unwrap();
+    cmd_rollback(forward, &db_path).unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
     assert_eq!(
         Changeset::find_by_id(&conn, forward)
@@ -183,7 +182,6 @@ async fn crash_before_sqlite_commit_leaves_no_orphan_snapshot_authority() {
     drop(conn);
 
     cmd_rollback(forward, &db_path)
-        .await
         .expect("retry must replace the candidate left at the reused debt ID");
     let conn = conary_core::db::open(&db_path).unwrap();
     let target = Changeset::find_by_id(&conn, forward).unwrap().unwrap();

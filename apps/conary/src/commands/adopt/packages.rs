@@ -291,7 +291,7 @@ impl PackageAdoptionPlan {
 }
 
 /// Adopt or preview specific native packages.
-pub async fn cmd_adopt(
+pub fn cmd_adopt(
     packages: &[String],
     db_path: &str,
     full: bool,
