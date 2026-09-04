@@ -332,7 +332,6 @@ async fn publish_apply_rejects_missing_plan_without_confirmation() {
             fingerprint: "sha256:missing".to_string(),
             confirmation: "publish-missing".to_string(),
         })
-        .await
         .unwrap();
 
     assert_eq!(result.envelope.status, OperationStatus::Failed);
@@ -386,7 +385,6 @@ async fn publish_apply_rejects_changed_artifact_bytes_before_publish() {
             fingerprint: confirmation.fingerprint.unwrap(),
             confirmation: confirmation.plan_id,
         })
-        .await
         .unwrap();
 
     assert_eq!(apply.envelope.status, OperationStatus::Failed);
@@ -414,7 +412,6 @@ async fn publish_apply_rejects_changed_destination_trust_state() {
             fingerprint: confirmation.fingerprint.unwrap(),
             confirmation: confirmation.plan_id,
         })
-        .await
         .unwrap();
 
     assert_eq!(apply.envelope.status, OperationStatus::Failed);
@@ -441,7 +438,6 @@ async fn publish_apply_projects_gate_failure_and_writes_redacted_record() {
             fingerprint: confirmation.fingerprint.unwrap(),
             confirmation: confirmation.plan_id,
         })
-        .await
         .unwrap();
 
     assert_eq!(apply.envelope.status, OperationStatus::Failed);

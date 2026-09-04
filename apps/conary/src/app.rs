@@ -27,8 +27,12 @@ pub fn report_error(err: &anyhow::Error) {
         crate::ui::error(&test_hook_error.to_string());
         return;
     }
-    for line in render_error_lines(err) {
-        eprintln!("{line}");
+    for (index, line) in render_error_lines(err).into_iter().enumerate() {
+        if index == 0 {
+            crate::ui::error(&line);
+        } else {
+            eprintln!("{line}");
+        }
     }
 }
 
@@ -40,30 +44,30 @@ fn render_error_lines(err: &anyhow::Error) -> Vec<String> {
                     == conary_core::runtime_root::ConaryRuntimeRoot::default().db_path() =>
             {
                 vec![
-                    "Error: Database not initialized.".to_string(),
+                    "Database not initialized.".to_string(),
                     "Run 'sudo conary system init' to set up the system database and all built-in source feeds."
                         .to_string(),
                 ]
             }
             conary_core::Error::DatabaseNotFound(path) => vec![
-                format!("Error: Custom database not initialized at {path:?}."),
+                format!("Custom database not initialized at {path:?}."),
                 "Run 'conary system init --db-path <PATH>' with the same custom path.".to_string(),
             ],
-            conary_core::Error::NotFound(detail) => vec![format!("Error: {detail}")],
+            conary_core::Error::NotFound(detail) => vec![detail.to_string()],
             conary_core::Error::ConflictError(detail) => vec![
-                format!("Error: Conflict -- {detail}"),
+                format!("Conflict -- {detail}"),
                 "Try 'conary remove' first or use '--force' if available.".to_string(),
             ],
             conary_core::Error::PathTraversal(detail) => vec![
-                format!("Error: Path safety violation -- {detail}"),
+                format!("Path safety violation -- {detail}"),
                 "This may indicate a malicious or corrupt package.".to_string(),
             ],
-            other => vec![format!("Error: {other}")],
+            other => vec![other.to_string()],
         }
     } else {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| format!("{err:#}"))) {
-            Ok(msg) => vec![format!("Error: {msg}")],
-            Err(_) => vec![format!("Error: {err}")],
+            Ok(msg) => vec![msg],
+            Err(_) => vec![err.to_string()],
         }
     }
 }
@@ -81,7 +85,7 @@ mod tests {
         assert_eq!(
             render_error_lines(&err),
             vec![
-                "Error: Custom database not initialized at \"/tmp/conary.db\".".to_string(),
+                "Custom database not initialized at \"/tmp/conary.db\".".to_string(),
                 "Run 'conary system init --db-path <PATH>' with the same custom path.".to_string(),
             ]
         );
@@ -96,7 +100,7 @@ mod tests {
         assert_eq!(
             render_error_lines(&err),
             vec![
-                "Error: Database not initialized.".to_string(),
+                "Database not initialized.".to_string(),
                 "Run 'sudo conary system init' to set up the system database and all built-in source feeds."
                     .to_string(),
             ]
@@ -112,7 +116,7 @@ mod tests {
         assert_eq!(
             render_error_lines(&err),
             vec![
-                "Error: Conflict -- package already installed".to_string(),
+                "Conflict -- package already installed".to_string(),
                 "Try 'conary remove' first or use '--force' if available.".to_string(),
             ]
         );
@@ -121,10 +125,7 @@ mod tests {
     #[test]
     fn test_render_error_lines_for_generic_anyhow_error() {
         let err = anyhow::anyhow!("plain failure");
-        assert_eq!(
-            render_error_lines(&err),
-            vec!["Error: plain failure".to_string()]
-        );
+        assert_eq!(render_error_lines(&err), vec!["plain failure".to_string()]);
     }
 
     #[test]
@@ -136,7 +137,7 @@ mod tests {
         assert_eq!(
             render_error_lines(&err),
             vec![
-                "Error: Path safety violation -- ../etc/passwd".to_string(),
+                "Path safety violation -- ../etc/passwd".to_string(),
                 "This may indicate a malicious or corrupt package.".to_string(),
             ]
         );

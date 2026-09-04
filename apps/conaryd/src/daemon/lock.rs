@@ -35,8 +35,7 @@ use std::path::{Path, PathBuf};
 /// The lock is held using `flock(LOCK_EX)` for the daemon's entire lifetime.
 pub struct SystemLock {
     /// The lock file handle (kept open to maintain lock)
-    #[allow(dead_code)]
-    file: File,
+    _file: File,
     /// Path to the lock file
     path: PathBuf,
 }
@@ -56,8 +55,8 @@ impl SystemLock {
             conary_core::Error::IoError(format!("Failed to acquire system lock: {}", e))
         })?;
 
-        log::info!("Acquired system lock at {:?}", path);
-        Ok(Self { file, path })
+        tracing::info!("Acquired system lock at {:?}", path);
+        Ok(Self { _file: file, path })
     }
 
     /// Try to acquire an exclusive lock without blocking
@@ -71,11 +70,11 @@ impl SystemLock {
 
         match file.try_lock_exclusive() {
             Ok(()) => {
-                log::info!("Acquired system lock at {:?}", path);
-                Ok(Some(Self { file, path }))
+                tracing::info!("Acquired system lock at {:?}", path);
+                Ok(Some(Self { _file: file, path }))
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                log::debug!("System lock already held at {:?}", path);
+                tracing::debug!("System lock already held at {:?}", path);
                 Ok(None)
             }
             Err(e) => Err(conary_core::Error::IoError(format!(
@@ -168,7 +167,7 @@ impl Drop for SystemLock {
         self.remove_pid();
 
         // Lock is automatically released when file is closed
-        log::info!("Released system lock at {:?}", self.path);
+        tracing::info!("Released system lock at {:?}", self.path);
     }
 }
 

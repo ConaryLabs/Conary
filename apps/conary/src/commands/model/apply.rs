@@ -167,7 +167,6 @@ pub async fn cmd_model_apply(opts: ApplyOptions<'_>) -> Result<()> {
         println!();
         if let Err(e) =
             crate::commands::cmd_autoremove(db_path, false, crate::commands::SandboxMode::Always)
-                .await
         {
             errors.push(format!("Autoremove: {}", e));
         }

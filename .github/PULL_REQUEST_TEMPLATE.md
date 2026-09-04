@@ -39,7 +39,7 @@ What problem does this solve, and what should be true after merge?
 
 ```text
 - cargo fmt --check
-- cargo clippy --workspace --all-targets -- -D warnings
+- cargo clippy --workspace --all-targets -- -D warnings -D clippy::unused_async
 - cargo test -p conary
 ```
 

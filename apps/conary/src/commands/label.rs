@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use tracing::info;
 
 /// List all labels
-pub async fn cmd_label_list(db_path: &str, verbose: bool) -> Result<()> {
+pub fn cmd_label_list(db_path: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let labels = conary_core::db::models::LabelEntry::list_all(&conn)?;
@@ -53,7 +53,7 @@ pub async fn cmd_label_list(db_path: &str, verbose: bool) -> Result<()> {
 }
 
 /// Add a new label
-pub async fn cmd_label_add(
+pub fn cmd_label_add(
     label_str: &str,
     description: Option<&str>,
     parent: Option<&str>,
@@ -109,7 +109,7 @@ pub async fn cmd_label_add(
 }
 
 /// Remove a label
-pub async fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<()> {
+pub fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find the label
@@ -147,14 +147,14 @@ pub async fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Re
 
     println!("Removed label: {}", label_str);
     if pkg_count > 0 {
-        println!("  Warning: {} package(s) no longer have a label", pkg_count);
+        crate::ui::warn(&format!("{pkg_count} package(s) no longer have a label"));
     }
 
     Ok(())
 }
 
 /// Show or modify the label path
-pub async fn cmd_label_path(
+pub fn cmd_label_path(
     db_path: &str,
     add: Option<&str>,
     remove: Option<&str>,
@@ -212,7 +212,7 @@ pub async fn cmd_label_path(
 }
 
 /// Show label for a package
-pub async fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let troves = conary_core::db::models::Trove::find_by_name(&conn, package_name)?;
@@ -241,7 +241,7 @@ pub async fn cmd_label_show(package_name: &str, db_path: &str) -> Result<()> {
 }
 
 /// Set the label for a package
-pub async fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Result<()> {
+pub fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find the package
@@ -279,7 +279,7 @@ pub async fn cmd_label_set(package_name: &str, label_str: &str, db_path: &str) -
 }
 
 /// Find packages by label
-pub async fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
+pub fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find the label
@@ -317,7 +317,7 @@ pub async fn cmd_label_query(label_str: &str, db_path: &str) -> Result<()> {
 }
 
 /// Link a label to a repository for federation
-pub async fn cmd_label_link(
+pub fn cmd_label_link(
     label_str: &str,
     repository: Option<&str>,
     unlink: bool,
@@ -365,7 +365,7 @@ pub async fn cmd_label_link(
 }
 
 /// Set up delegation from one label to another
-pub async fn cmd_label_delegate(
+pub fn cmd_label_delegate(
     label_str: &str,
     target: Option<&str>,
     undelegate: bool,

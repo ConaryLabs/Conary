@@ -15,16 +15,13 @@ pub(super) async fn dispatch_automation_command(auto_cmd: cli::AutomationCommand
             db,
             format,
             verbose,
-        } => commands::cmd_automation_status(&db.db_path, &format, verbose).await,
+        } => commands::cmd_automation_status(&db.db_path, &format, verbose),
 
         cli::AutomationCommands::Check {
             common,
             categories,
             quiet,
-        } => {
-            commands::cmd_automation_check(&common.db.db_path, &common.root, categories, quiet)
-                .await
-        }
+        } => commands::cmd_automation_check(&common.db.db_path, &common.root, categories, quiet),
 
         cli::AutomationCommands::Apply {
             common,
@@ -57,22 +54,19 @@ pub(super) async fn dispatch_automation_command(auto_cmd: cli::AutomationCommand
             interval,
             enable_ai,
             disable_ai,
-        } => {
-            commands::cmd_automation_configure(
-                &db.db_path,
-                show,
-                mode,
-                enable,
-                disable,
-                interval,
-                enable_ai,
-                disable_ai,
-            )
-            .await
-        }
+        } => commands::cmd_automation_configure(
+            &db.db_path,
+            show,
+            mode,
+            enable,
+            disable,
+            interval,
+            enable_ai,
+            disable_ai,
+        ),
 
         cli::AutomationCommands::Daemon { common, pidfile } => {
-            commands::cmd_automation_daemon(&common.db.db_path, &common.root, &pidfile).await
+            commands::cmd_automation_daemon(&common.db.db_path, &common.root, &pidfile)
         }
 
         cli::AutomationCommands::History {
@@ -81,6 +75,6 @@ pub(super) async fn dispatch_automation_command(auto_cmd: cli::AutomationCommand
             category,
             status,
             since,
-        } => commands::cmd_automation_history(&db.db_path, limit, category, status, since).await,
+        } => commands::cmd_automation_history(&db.db_path, limit, category, status, since),
     }
 }

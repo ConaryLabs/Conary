@@ -23,7 +23,7 @@ pub struct CcsBuildOptions {
 }
 
 /// Build a CCS package from a manifest
-pub async fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
+pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
     let path = Path::new(&options.path);
 
     if options.local_dev && options.key.is_some() {

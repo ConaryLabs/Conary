@@ -94,11 +94,11 @@ pub(crate) async fn try_cmd_repo_add_static(opts: &RepoAddOptions) -> Result<boo
         );
     }
 
-    persist_static_repository(opts, &normalized_base, &root_bytes).await?;
+    persist_static_repository(opts, &normalized_base, &root_bytes)?;
     Ok(true)
 }
 
-pub async fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let mut repo = Repository::find_by_name(&conn, name)?
         .ok_or_else(|| anyhow!("Repository '{}' not found", name))?;
@@ -131,7 +131,7 @@ pub async fn cmd_repo_reset_trust(name: &str, db_path: &str) -> Result<()> {
     Ok(())
 }
 
-async fn persist_static_repository(
+fn persist_static_repository(
     opts: &RepoAddOptions,
     normalized_base: &str,
     root_bytes: &[u8],

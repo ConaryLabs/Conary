@@ -485,17 +485,15 @@ fn batch_install_and_update_replace_repository_authority_atomically() {
     );
     drop(conn);
 
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(crate::commands::remove::cmd_remove(
-            "browser-repository-release",
-            &db_path_string,
-            None,
-            Some("x86_64".to_string()),
-            SandboxMode::Always,
-            false,
-        ))
-        .unwrap();
+    crate::commands::remove::cmd_remove(
+        "browser-repository-release",
+        &db_path_string,
+        None,
+        Some("x86_64".to_string()),
+        SandboxMode::Always,
+        false,
+    )
+    .unwrap();
     let conn = conary_core::db::open(&db_path).unwrap();
     assert!(
         conary_core::db::models::Repository::find_by_name(&conn, "browser")

@@ -1,7 +1,7 @@
 // apps/conary/tests/packaging_m3c.rs
 #![cfg(feature = "test-hooks")]
 
-mod common;
+pub mod common;
 
 use std::fs;
 use std::io::Read;

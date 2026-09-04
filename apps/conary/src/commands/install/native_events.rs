@@ -1,6 +1,7 @@
 // apps/conary/src/commands/install/native_events.rs
 
 //! Install-side execution of exact native package-manager transaction events.
+//! Package identity construction is owned by `native_events/identity.rs`.
 
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::NativeLifecycleBundle;
@@ -34,6 +35,7 @@ mod debian_runtime;
 mod execution;
 #[path = "native_events/graph_execution.rs"]
 mod graph_execution;
+mod identity;
 #[path = "native_events/preflight.rs"]
 mod preflight;
 #[path = "native_events/runtime.rs"]
@@ -41,6 +43,8 @@ mod runtime;
 #[path = "native_events/transaction_state.rs"]
 mod transaction_state;
 
+pub(super) use identity::deb_identity_for_trove;
+use identity::owner_identity;
 use preflight::NativePathProjection;
 use transaction_state::{
     declared_capabilities_excluding, declared_path_capabilities_for_trove,

@@ -14,7 +14,6 @@ const PREFIX: &str = "CONARY_TEST_";
 #[cfg(any(feature = "test-hooks", test))]
 // The disabled-feature unit-test build retains the complete name inventory so
 // test helpers can share constants, even though only a subset has writers.
-#[cfg_attr(all(test, not(feature = "test-hooks")), allow(dead_code))]
 pub(crate) mod names {
     pub(crate) const BOOT_ID: &str = "CONARY_TEST_BOOT_ID";
     pub(crate) const DB: &str = "CONARY_TEST_DB";
@@ -49,6 +48,39 @@ pub(crate) mod names {
     pub(crate) const TRY_WATCH_PAUSE_DURING_COOK: &str = "CONARY_TEST_TRY_WATCH_PAUSE_DURING_COOK";
     pub(crate) const TRY_WATCH_READY_FILE: &str = "CONARY_TEST_TRY_WATCH_READY_FILE";
 }
+
+#[cfg(test)]
+const TEST_HOOK_NAMES: &[&str] = &[
+    names::BOOT_ID,
+    names::DB,
+    names::FAIL_GENERATION_REBUILD,
+    names::FAIL_NATIVE_LIFECYCLE,
+    names::HOLD_DURING_REMOVE_MS,
+    names::HOLD_DURING_ROLLBACK_MS,
+    names::KEY,
+    names::KEYLESS,
+    names::NATIVE_HANDOFF_FAIL_AFTER,
+    names::PACKAGE,
+    names::PROC_CMDLINE_PATH,
+    names::SKIP_GENERATION_MOUNT,
+    names::TRY_KEEP_FAIL_AFTER_BACKUP,
+    names::TRY_LAUNCHER,
+    names::TRY_MOUNTINFO_PATH,
+    names::TRY_REFRESH_FAIL_NAMESPACE_COMMIT_CLEANUP,
+    names::TRY_REFRESH_FAIL_NAMESPACE_SWITCH,
+    names::TRY_REMOVE_DIR_FAIL,
+    names::TRY_RESTORE_DB_FAIL,
+    names::TRY_SYNC_PARENT_LOG,
+    names::TRY_UMOUNT_FAIL,
+    names::TRY_UMOUNT_LOG,
+    names::TRY_WATCH_COOK_STARTED_FILE,
+    names::TRY_WATCH_EXIT_AFTER_READY,
+    names::TRY_WATCH_EXIT_AFTER_REFRESHES,
+    names::TRY_WATCH_FAILURE_FILE,
+    names::TRY_WATCH_MARKER_FAIL,
+    names::TRY_WATCH_PAUSE_DURING_COOK,
+    names::TRY_WATCH_READY_FILE,
+];
 
 #[derive(Debug, Error)]
 #[error("test-hook environment variables are disabled in this Conary build; unset: {variables}")]
@@ -404,7 +436,9 @@ mod tests {
 
     #[test]
     fn recognizes_prefixed_environment_names() {
-        assert!(key_name_is_test_hook(OsStr::new(names::BOOT_ID)));
+        for name in TEST_HOOK_NAMES {
+            assert!(key_name_is_test_hook(OsStr::new(name)), "{name}");
+        }
         assert!(!key_name_is_test_hook(OsStr::new("CONARY_DB")));
     }
 }

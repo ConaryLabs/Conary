@@ -17,7 +17,7 @@ use conary_core::ccs::manifest::CcsManifest;
 use conary_core::container::{ContainerConfig, Sandbox};
 
 /// Show declared capabilities for a package
-pub async fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
+pub fn cmd_capability_show(db_path: &str, package: &str, format: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -129,7 +129,7 @@ fn display_capabilities(caps: &CapabilityDeclaration, package: &str, format: &st
 }
 
 /// Validate capability syntax in a ccs.toml manifest
-pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
+pub fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
     let manifest_path = Path::new(path);
 
     if !manifest_path.exists() {
@@ -204,7 +204,7 @@ pub async fn cmd_capability_validate(path: &str, verbose: bool) -> Result<()> {
 }
 
 /// List packages by capability status
-pub async fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> Result<()> {
+pub fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let packages = list_packages_with_capabilities(&conn, missing_only)?;
@@ -278,7 +278,7 @@ pub async fn cmd_capability_list(db_path: &str, missing_only: bool, format: &str
 ///
 /// In audit mode, the enforcement is logged but not blocking. This lets users
 /// see what restrictions would be applied before enabling enforce mode.
-pub async fn cmd_capability_audit(db_path: &str, package: &str) -> Result<()> {
+pub fn cmd_capability_audit(db_path: &str, package: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let capabilities = load_capabilities_by_name(&conn, package)?;
@@ -403,7 +403,7 @@ pub async fn cmd_capability_audit(db_path: &str, package: &str) -> Result<()> {
 ///
 /// `audit` applies seccomp's non-blocking log action. Landlock rules are
 /// reported but not applied because Landlock has no non-blocking audit mode.
-pub async fn cmd_capability_run(
+pub fn cmd_capability_run(
     db_path: &str,
     package: &str,
     command: &[String],

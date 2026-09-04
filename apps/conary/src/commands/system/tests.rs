@@ -54,7 +54,7 @@ async fn init_retired_schema_refusal_names_exact_rebuild_command_without_mutatin
     .unwrap();
     drop(conn);
 
-    let error = cmd_init(db_path_str).await.unwrap_err().to_string();
+    let error = cmd_init(db_path_str).unwrap_err().to_string();
 
     assert!(
         error.contains("conary system rebuild-db --discard-state --yes"),
@@ -84,7 +84,7 @@ async fn rebuild_database_resolves_retired_schema_and_seeds_current_authority() 
     .unwrap();
     drop(conn);
 
-    cmd_rebuild_database(db_path_str).await.unwrap();
+    cmd_rebuild_database(db_path_str).unwrap();
 
     assert_eq!(
         conary_core::db::schema::inspect(&db_path).unwrap(),
@@ -111,7 +111,7 @@ async fn init_seeds_every_builtin_remi_feed_without_incomplete_native_enrollment
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
     let host_capabilities =
@@ -198,7 +198,7 @@ async fn init_removes_only_the_exact_retired_canonical_remi_seed() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
     let conn = conary_core::db::open(db_path_str).unwrap();
     let parser_json = conary_core::repository::RepositoryParserConfig::Json
         .to_json()
@@ -216,7 +216,7 @@ async fn init_removes_only_the_exact_retired_canonical_remi_seed() {
     .unwrap();
     drop(conn);
 
-    configure_current_database(db_path_str).await.unwrap();
+    configure_current_database(db_path_str).unwrap();
     let conn = conary_core::db::open(db_path_str).unwrap();
     assert!(
         Repository::find_by_name(&conn, "remi-solus")
@@ -231,7 +231,7 @@ async fn init_preserves_a_user_managed_repository_with_a_candidate_profile_name(
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
     let conn = conary_core::db::open(db_path_str).unwrap();
     conn.execute(
         "INSERT INTO repositories (name, url)
@@ -241,7 +241,7 @@ async fn init_preserves_a_user_managed_repository_with_a_candidate_profile_name(
     .unwrap();
     drop(conn);
 
-    configure_current_database(db_path_str).await.unwrap();
+    configure_current_database(db_path_str).unwrap();
     let conn = conary_core::db::open(db_path_str).unwrap();
     assert_eq!(
         Repository::find_by_name(&conn, "remi-solus")
@@ -258,7 +258,7 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
     {
         let conn = conary_core::db::open(db_path_str).unwrap();
         let mut ubuntu = Repository::find_by_name(&conn, "remi-ubuntu-26.04")
@@ -329,7 +329,7 @@ async fn init_repairs_one_source_contract_without_resetting_other_feeds() {
         .unwrap();
     }
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
     let remi = Repository::find_by_name(&conn, "remi-fedora-44")
@@ -387,7 +387,7 @@ async fn init_rerun_preserves_operator_repository_choices() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
     {
         let conn = conary_core::db::open(db_path_str).unwrap();
 
@@ -412,7 +412,7 @@ async fn init_rerun_preserves_operator_repository_choices() {
         .unwrap();
     }
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
     let remi = Repository::find_by_name(&conn, "remi-arch")
@@ -432,7 +432,7 @@ async fn init_repeat_preserves_canonical_authority_timestamps() {
     let db_path = temp_dir.path().join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
     let before = {
         let conn = conary_core::db::open(db_path_str).unwrap();
         conn.prepare(
@@ -455,7 +455,7 @@ async fn init_repeat_preserves_canonical_authority_timestamps() {
         .unwrap()
     };
 
-    cmd_init(db_path_str).await.unwrap();
+    cmd_init(db_path_str).unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
     let after = conn
@@ -538,7 +538,7 @@ async fn init_error_names_unusable_database_parent() {
     let db_path = parent_file.join("conary.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    let err = cmd_init(db_path_str).await.unwrap_err().to_string();
+    let err = cmd_init(db_path_str).unwrap_err().to_string();
 
     assert!(err.contains(&parent_file.display().to_string()));
     assert!(err.contains("safe next step"));

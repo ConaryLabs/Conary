@@ -574,9 +574,9 @@ fn exact_bool(value: i64, context: &str) -> rusqlite::Result<bool> {
     }
 }
 
-fn require_text(context: &str, value: &str) -> Result<()> {
+pub(super) fn require_text(context: &str, value: &str) -> Result<()> {
     if value.is_empty() {
-        bail!("rollback system authority has empty {context}");
+        bail!("rollback authority has empty {context}");
     }
     Ok(())
 }

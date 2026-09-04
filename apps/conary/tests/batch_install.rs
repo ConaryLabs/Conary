@@ -8,7 +8,7 @@
 //! 3. Rollback works correctly when installation fails
 //! 4. All packages share a single changeset
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 use conary_core::db::models::{Changeset, ChangesetStatus, FileEntry, Trove, TroveType};

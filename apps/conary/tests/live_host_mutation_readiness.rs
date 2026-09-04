@@ -1,6 +1,6 @@
 // apps/conary/tests/live_host_mutation_readiness.rs
 
-mod common;
+pub mod common;
 
 use std::process::Command;
 

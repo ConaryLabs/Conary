@@ -32,7 +32,7 @@ struct GenerationGcPlan {
     live_cas_hashes: HashSet<String>,
 }
 
-pub async fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
+pub fn cmd_generation_gc(keep: usize, db_path: &str) -> Result<()> {
     let runtime_root = runtime_root_for_generation_db_path(db_path);
     let mut engine = TransactionEngine::new(TransactionConfig::from_paths(
         runtime_root.root().to_path_buf(),

@@ -2,7 +2,7 @@
 
 //! Query operation tests: package queries, dependency lookups, provides, changesets.
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 use conary_core::repository::versioning::VersionScheme;

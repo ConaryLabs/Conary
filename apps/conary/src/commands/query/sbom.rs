@@ -70,7 +70,7 @@ mod cyclonedx {
 }
 
 /// Generate SBOM for a package or all packages
-pub async fn cmd_sbom(
+pub fn cmd_sbom(
     package_name: &str,
     db_path: &str,
     format: &str,

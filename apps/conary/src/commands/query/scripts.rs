@@ -111,14 +111,11 @@ struct ReservedMetadataSummary {
     residual_lifecycle: bool,
 }
 
-pub async fn cmd_scripts(package_path: &str) -> Result<()> {
-    cmd_scripts_with_options(package_path, ScriptQueryOptions::default()).await
+pub fn cmd_scripts(package_path: &str) -> Result<()> {
+    cmd_scripts_with_options(package_path, ScriptQueryOptions::default())
 }
 
-pub async fn cmd_scripts_with_options(
-    package_path: &str,
-    options: ScriptQueryOptions,
-) -> Result<()> {
+pub fn cmd_scripts_with_options(package_path: &str, options: ScriptQueryOptions) -> Result<()> {
     if !looks_like_package_file(package_path)
         && let Some(db_path) = options.db_path.as_deref()
     {

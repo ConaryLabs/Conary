@@ -1,6 +1,6 @@
 // apps/conary/tests/output_vocabulary_guard.rs
 //! Fails if guarded status-vocabulary literals are emitted outside the `ui`
-//! module. This is a line-level lint: it matches the exact listed words only.
+//! module. This is a line-level lint over Rust string literals.
 
 use std::fs;
 use std::path::Path;
@@ -19,6 +19,16 @@ const FORBIDDEN: &[&str] = &[
     "[OFF]",
     "[MISSING]",
     "[PENDING]",
+];
+
+const ALLOWED_INTERPOLATED_DATA: &[&str] = &[
+    "[{}{}]",
+    "[{}] Running scheduled automation check...",
+    "[{}] {} - {} ({})",
+    "[{}] env={} ({} derivations)",
+    "[{}] {} - {} ({:?}){}{}",
+    "[{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
+    "[{}/{}] Storing files in CAS: {} {}",
 ];
 
 fn string_literals(line: &str) -> Vec<String> {
@@ -50,6 +60,21 @@ fn string_literals(line: &str) -> Vec<String> {
     literals
 }
 
+fn forbidden_literal(literal: &str) -> bool {
+    let upper = literal.to_uppercase();
+    let interpolated_tag = literal.find("[{").is_some_and(|tag_start| {
+        let tag = &literal[tag_start..];
+        let has_trailing_content = tag.find(']').is_none_or(|end| end + 1 < tag.len());
+        literal[..tag_start].trim().is_empty()
+            && (tag_start == 0 || has_trailing_content)
+            && !ALLOWED_INTERPOLATED_DATA.contains(&literal.trim())
+    });
+    FORBIDDEN.iter().any(|token| upper.contains(token))
+        || interpolated_tag
+        || upper.trim_start().starts_with("WARNING:")
+        || upper.trim_start().starts_with("ERROR:")
+}
+
 fn scan(dir: &Path, violations: &mut Vec<String>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -61,17 +86,27 @@ fn scan(dir: &Path, violations: &mut Vec<String>) {
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             let text = fs::read_to_string(&path).unwrap();
             for (idx, line) in text.lines().enumerate() {
-                let hit = string_literals(line).into_iter().any(|literal| {
-                    let upper = literal.to_uppercase();
-                    FORBIDDEN.iter().any(|token| upper.contains(token))
-                        || literal.starts_with("Warning:")
-                });
+                if line.trim_start().starts_with("assert") {
+                    continue;
+                }
+                let hit = string_literals(line)
+                    .into_iter()
+                    .any(|literal| forbidden_literal(&literal));
                 if hit {
                     violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                 }
             }
         }
     }
+}
+
+#[test]
+fn dynamic_tags_and_case_insensitive_error_prefixes_are_forbidden() {
+    assert!(forbidden_literal("[{status}] message"));
+    assert!(forbidden_literal("  [{status}] message"));
+    assert!(forbidden_literal("Warning: message"));
+    assert!(forbidden_literal("  ERROR: message"));
+    assert!(!forbidden_literal(" [{architecture}]"));
 }
 
 #[test]

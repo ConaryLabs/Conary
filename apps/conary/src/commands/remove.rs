@@ -19,6 +19,4 @@ pub(crate) use ccs_hook::{
 pub use command::cmd_remove;
 pub(crate) use payload_ownership::PackagePayloadOwnership;
 pub(crate) use transaction::{commit_remove_db, prepare_remove_for_state_restore, snapshot_trove};
-#[allow(unused_imports)]
-pub(crate) use types::RemoveInnerResult;
 pub(crate) use types::RemoveLifecycleOptions;

@@ -8,20 +8,18 @@ use crate::commands;
 // The CLI enum lives in `cli/verify.rs`, while this dispatch file keeps the
 // user-visible root command name (`verify-derivation`) to avoid colliding with
 // trust/signature verification helpers.
-pub(super) async fn dispatch_verify_derivation_command(
-    verify_cmd: cli::VerifyCommands,
-) -> Result<()> {
+pub(super) fn dispatch_verify_derivation_command(verify_cmd: cli::VerifyCommands) -> Result<()> {
     match verify_cmd {
         cli::VerifyCommands::Chain {
             profile,
             verbose,
             json,
             db,
-        } => commands::verify::cmd_verify_chain(&profile, verbose, json, &db.db_path).await,
+        } => commands::verify::cmd_verify_chain(&profile, verbose, json, &db.db_path),
         cli::VerifyCommands::Diverse {
             profile_a,
             profile_b,
             db,
-        } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b, &db.db_path).await,
+        } => commands::verify::cmd_verify_diverse(&profile_a, &profile_b, &db.db_path),
     }
 }

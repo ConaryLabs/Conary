@@ -63,7 +63,6 @@ async fn local_conversion_key_is_distinct_from_persisted_native_repository_autho
         db_path_str,
         Some("fedora-44"),
     )
-    .await
     .unwrap();
     let ConversionResult::Converted { conversion } = converted else {
         panic!("native conversion unexpectedly skipped");
@@ -150,7 +149,6 @@ async fn converted_local_artifact_persists_explicit_source_identity_without_repo
         db_path_str,
         Some("fedora-44"),
     )
-    .await
     .unwrap();
     let ConversionResult::Converted { conversion } = converted else {
         panic!("native conversion unexpectedly skipped");

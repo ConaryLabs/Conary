@@ -249,7 +249,7 @@ pub async fn cmd_cache_populate(
 }
 
 /// Show cache statistics and substituter peer health.
-pub async fn cmd_cache_status(db_path: &str) -> Result<()> {
+pub fn cmd_cache_status(db_path: &str) -> Result<()> {
     // CAS directory info
     let cas_dir = conary_core::db::paths::objects_dir(db_path);
     if cas_dir.exists() {
@@ -422,7 +422,7 @@ include = ["hello"]
         manifest
     }
 
-    async fn generate_profile_fixture(
+    fn generate_profile_fixture(
         project_root: &Path,
         profile_dir: &Path,
     ) -> (PathBuf, PathBuf, Vec<u8>) {
@@ -440,9 +440,7 @@ include = ["hello"]
 
         fs::create_dir_all(profile_dir).unwrap();
         let profile_path = profile_dir.join("profile.toml");
-        cmd_profile_generate(&manifest, Some(&profile_path))
-            .await
-            .unwrap();
+        cmd_profile_generate(&manifest, Some(&profile_path)).unwrap();
 
         (profile_path, archive_path, contents)
     }
@@ -451,7 +449,7 @@ include = ["hello"]
     async fn test_cache_populate_sources_only_downloads_recipe_archives() {
         let temp = tempfile::tempdir().unwrap();
         let (profile_path, archive_path, contents) =
-            generate_profile_fixture(temp.path(), temp.path()).await;
+            generate_profile_fixture(temp.path(), temp.path());
         let db_path = temp.path().join("conary.db");
 
         cmd_cache_populate(
@@ -474,7 +472,7 @@ include = ["hello"]
     async fn test_cache_populate_full_downloads_sources_after_outputs() {
         let temp = tempfile::tempdir().unwrap();
         let (profile_path, archive_path, contents) =
-            generate_profile_fixture(temp.path(), temp.path()).await;
+            generate_profile_fixture(temp.path(), temp.path());
         let db_path = temp.path().join("conary.db");
         conary_core::db::init(db_path.to_str().unwrap()).unwrap();
 
@@ -501,7 +499,7 @@ include = ["hello"]
         let profile_dir = temp.path().join("consumer");
         fs::create_dir_all(&project_root).unwrap();
         let (profile_path, archive_path, contents) =
-            generate_profile_fixture(&project_root, &profile_dir).await;
+            generate_profile_fixture(&project_root, &profile_dir);
         let db_path = temp.path().join("conary.db");
 
         cmd_cache_populate(

@@ -115,23 +115,17 @@ pub(super) async fn dispatch_repo_command(repo_cmd: cli::RepoCommands) -> Result
             .await
         }
 
-        cli::RepoCommands::List { db, all } => commands::cmd_repo_list(&db.db_path, all).await,
+        cli::RepoCommands::List { db, all } => commands::cmd_repo_list(&db.db_path, all),
 
-        cli::RepoCommands::Remove { name, db } => {
-            commands::cmd_repo_remove(&name, &db.db_path).await
-        }
+        cli::RepoCommands::Remove { name, db } => commands::cmd_repo_remove(&name, &db.db_path),
 
         cli::RepoCommands::ResetTrust { name, db } => {
-            commands::cmd_repo_reset_trust(&name, &db.db_path).await
+            commands::cmd_repo_reset_trust(&name, &db.db_path)
         }
 
-        cli::RepoCommands::Enable { name, db } => {
-            commands::cmd_repo_enable(&name, &db.db_path).await
-        }
+        cli::RepoCommands::Enable { name, db } => commands::cmd_repo_enable(&name, &db.db_path),
 
-        cli::RepoCommands::Disable { name, db } => {
-            commands::cmd_repo_disable(&name, &db.db_path).await
-        }
+        cli::RepoCommands::Disable { name, db } => commands::cmd_repo_disable(&name, &db.db_path),
 
         cli::RepoCommands::Sync { name, db, force } => {
             commands::cmd_repo_sync(name, &db.db_path, force).await

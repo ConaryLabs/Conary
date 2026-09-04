@@ -390,7 +390,6 @@ async fn try_convert_to_ccs_does_not_guess_capability_policy() {
         db_path_str,
         None,
     )
-    .await
     .expect("conversion without declared capabilities must not require policy approval");
     let ConversionResult::Converted { conversion } = result else {
         panic!("conversion unexpectedly skipped");

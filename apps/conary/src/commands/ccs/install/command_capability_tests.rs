@@ -98,7 +98,6 @@ async fn ccs_install_persists_capability_declarations() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -187,7 +186,6 @@ async fn ccs_install_rejects_scriptlet_capabilities_without_enforcement_before_m
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     let message = err.to_string();

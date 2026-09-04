@@ -1,8 +1,6 @@
 // apps/conary/src/commands/packaging_mcp/projection.rs
 //! Projection from M3a packaging output into agent operation envelopes.
 
-#![allow(dead_code)] // Consumed by the publish plan/apply slice after read tools land.
-
 use conary_agent_contract::{
     AgentError, AgentErrorKind, EvidenceItem, EvidenceKind, EvidenceRedaction, OperationEnvelope,
     OperationStatus, ResourceRef, RiskLevel,
@@ -12,26 +10,16 @@ use conary_core::diagnostics::{
     PackagingDiagnosticCode, PackagingSeverity,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentProjectionMode {
-    Inspect,
-    Plan,
-    Apply,
-    Explain,
-}
-
 pub(crate) fn project_packaging_output(
     operation: &str,
     output: &PackagingCommandOutput,
     risk: RiskLevel,
-    mode: AgentProjectionMode,
     subject: Option<ResourceRef>,
 ) -> OperationEnvelope {
     let output = super::super::diagnostics::redacted_packaging_output(output);
-    let status = match (output.status, mode) {
-        (PackagingCommandStatus::Succeeded, AgentProjectionMode::Plan) => OperationStatus::Planned,
-        (PackagingCommandStatus::Succeeded, _) => OperationStatus::Ok,
-        (PackagingCommandStatus::Failed, _) => OperationStatus::Failed,
+    let status = match output.status {
+        PackagingCommandStatus::Succeeded => OperationStatus::Ok,
+        PackagingCommandStatus::Failed => OperationStatus::Failed,
     };
     let summary = output
         .summary
@@ -183,7 +171,6 @@ mod tests {
             "conary.packaging.publish.apply",
             &output,
             RiskLevel::High,
-            AgentProjectionMode::Apply,
             None,
         );
 
@@ -198,21 +185,6 @@ mod tests {
                 .iter()
                 .any(|item| item.kind == EvidenceKind::Log)
         );
-    }
-
-    #[test]
-    fn succeeded_plan_projects_planned_status() {
-        let output = PackagingCommandOutput::succeeded("plan-1", "conary publish");
-        let envelope = project_packaging_output(
-            "conary.packaging.publish.plan",
-            &output,
-            RiskLevel::High,
-            AgentProjectionMode::Plan,
-            None,
-        );
-
-        assert_eq!(envelope.status, OperationStatus::Planned);
-        assert!(envelope.error.is_none());
     }
 
     #[test]
@@ -239,7 +211,6 @@ mod tests {
             "conary.packaging.publish.apply",
             &output,
             RiskLevel::High,
-            AgentProjectionMode::Apply,
             None,
         );
         let rendered = serde_json::to_string(&envelope).unwrap();

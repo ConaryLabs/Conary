@@ -1,6 +1,6 @@
 // apps/conary/tests/live_host_mutation_safety.rs
 
-mod common;
+pub mod common;
 
 use std::fs;
 use std::path::{Path, PathBuf};

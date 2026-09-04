@@ -171,25 +171,34 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
 
         // 8. Execute pipeline
         println!("\nStarting derivation pipeline...\n");
-        let profile = pipeline
-            .execute(&seed, &recipes, &build_steps, &conn, |event| match event {
+        let profile =
+            pipeline.execute(&seed, &recipes, &build_steps, &conn, |event| match event {
                 PipelineEvent::StageStarted {
                     name,
                     package_count,
                 } => {
-                    println!("[{name}] Stage started ({package_count} packages)");
+                    crate::ui::row(
+                        crate::ui::Status::Info,
+                        &[&format!("Stage {name} started ({package_count} packages)")],
+                    );
                 }
                 PipelineEvent::PackageBuilding { name, stage } => {
-                    println!("[{stage}] Building {name}...");
+                    crate::ui::row(
+                        crate::ui::Status::Info,
+                        &[&format!("Stage {stage}: building {name}...")],
+                    );
                 }
                 PipelineEvent::PackageCached { name } => {
-                    println!("  [cached] {name}");
+                    crate::ui::row(crate::ui::Status::Ok, &[&format!("cached {name}")]);
                 }
                 PipelineEvent::PackageBuilt {
                     name,
                     duration_secs,
                 } => {
-                    println!("  [built] {name} in {duration_secs}s");
+                    crate::ui::row(
+                        crate::ui::Status::Ok,
+                        &[&format!("built {name} in {duration_secs}s")],
+                    );
                 }
                 PipelineEvent::PackageFailed { name, error } => {
                     let message = format!("{name}: {error}");
@@ -200,13 +209,22 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                     peer,
                     objects_fetched,
                 } => {
-                    println!("  [substituted] {name} from {peer} ({objects_fetched} objects)");
+                    crate::ui::row(
+                        crate::ui::Status::Ok,
+                        &[&format!(
+                            "substituted {name} from {peer} ({objects_fetched} objects)"
+                        )],
+                    );
                 }
                 PipelineEvent::BuildLogWritten { package, path } => {
-                    println!("  [log] {package}: {}", path.display());
+                    crate::ui::row(
+                        crate::ui::Status::Info,
+                        &[&format!("log {package}: {}", path.display())],
+                    );
                 }
                 PipelineEvent::StageCompleted { name } => {
-                    println!("[{name}] Stage completed\n");
+                    crate::ui::row(crate::ui::Status::Ok, &[&format!("Stage {name} completed")]);
+                    println!();
                 }
                 PipelineEvent::PipelineCompleted {
                     total_packages,
@@ -220,8 +238,7 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
                         ),
                     );
                 }
-            })
-            .await?;
+            })?;
 
         // 9. Write generation output
         let gen_dir = output_dir.join("generations").join("1");

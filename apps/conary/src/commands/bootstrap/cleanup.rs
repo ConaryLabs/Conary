@@ -5,11 +5,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 /// Clean bootstrap work directory
-pub async fn cmd_bootstrap_clean(
-    work_dir: &str,
-    stage: Option<String>,
-    sources: bool,
-) -> Result<()> {
+pub fn cmd_bootstrap_clean(work_dir: &str, stage: Option<String>, sources: bool) -> Result<()> {
     println!("Cleaning bootstrap work directory...");
     println!("  Work directory: {}", work_dir);
 

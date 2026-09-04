@@ -304,7 +304,7 @@ impl Pipeline {
     ///
     /// Returns [`PipelineError`] on missing recipes, executor failures,
     /// install failures, composition errors, or I/O errors.
-    pub async fn execute<F>(
+    pub fn execute<F>(
         &self,
         seed: &Seed,
         recipes: &HashMap<String, Recipe>,

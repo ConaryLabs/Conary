@@ -387,7 +387,7 @@ pub struct CcsArtifactInstallOptions<'a> {
 /// Returns `ConversionResult::Converted` if conversion succeeded and installation
 /// should proceed via the CCS installer, or `ConversionResult::Skipped` if
 /// conversion was skipped (e.g., already converted).
-pub async fn try_convert_to_ccs(
+pub fn try_convert_to_ccs(
     pkg: &dyn PackageFormat,
     package_path: &Path,
     format: PackageFormatType,

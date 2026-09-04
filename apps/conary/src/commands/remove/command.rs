@@ -12,7 +12,7 @@ use crate::commands::{InstalledPackageSelector, SandboxMode, open_db, resolve_in
 
 /// Remove an installed package
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_remove(
+pub fn cmd_remove(
     package_name: &str,
     db_path: &str,
     version: Option<String>,
@@ -62,10 +62,9 @@ pub async fn cmd_remove(
     let breaking = conary_core::resolver::solve_removal(&conn, &[package_name.to_string()])?;
 
     if !breaking.is_empty() {
-        println!(
-            "WARNING: Removing '{}' would break the following packages:",
-            package_name
-        );
+        crate::ui::warn(&format!(
+            "Removing '{package_name}' would break the following packages:"
+        ));
         for pkg in &breaking {
             println!("  {}", pkg);
         }
@@ -84,11 +83,9 @@ pub async fn cmd_remove(
     let lifecycle_options =
         RemoveLifecycleOptions::new(sandbox_mode).with_purge_config_files(purge);
     if trove.install_source.is_adopted() && purge {
-        println!(
-            "WARNING: --purge specified for adopted package '{}'. \
-             Files will be deleted from disk.",
-            package_name
-        );
+        crate::ui::warn(&format!(
+            "--purge specified for adopted package '{package_name}'. Files will be deleted from disk."
+        ));
     }
 
     let graph_result = super::native_graph::execute_installed_trove_remove_graph(
@@ -173,7 +170,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&payload).unwrap(), "fixture");
@@ -233,7 +229,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap_err()
         .to_string();
 
@@ -290,7 +285,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap_err();
         let error_chain = format!("{err:#}");
 
@@ -353,7 +347,6 @@ mod tests {
             SandboxMode::Always,
             false,
         )
-        .await
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&payload).unwrap(), "bash");

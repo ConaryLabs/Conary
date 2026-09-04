@@ -11,19 +11,17 @@ use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
 pub(super) async fn dispatch_system_state_command(state_cmd: cli::StateCommands) -> Result<()> {
     match state_cmd {
-        cli::StateCommands::List { db, limit } => {
-            commands::cmd_state_list(&db.db_path, limit).await
-        }
+        cli::StateCommands::List { db, limit } => commands::cmd_state_list(&db.db_path, limit),
 
         cli::StateCommands::Show { state_number, db } => {
-            commands::cmd_state_show(&db.db_path, state_number).await
+            commands::cmd_state_show(&db.db_path, state_number)
         }
 
         cli::StateCommands::Diff {
             from_state,
             to_state,
             db,
-        } => commands::cmd_state_diff(&db.db_path, from_state, to_state).await,
+        } => commands::cmd_state_diff(&db.db_path, from_state, to_state),
 
         cli::StateCommands::Revert {
             state_number,
@@ -41,14 +39,14 @@ pub(super) async fn dispatch_system_state_command(state_cmd: cli::StateCommands)
         }
 
         cli::StateCommands::Prune { keep, db, dry_run } => {
-            commands::cmd_state_prune(&db.db_path, keep, dry_run).await
+            commands::cmd_state_prune(&db.db_path, keep, dry_run)
         }
 
         cli::StateCommands::Create {
             summary,
             description,
             db,
-        } => commands::cmd_state_create(&db.db_path, &summary, description.as_deref()).await,
+        } => commands::cmd_state_create(&db.db_path, &summary, description.as_deref()),
 
         cli::StateCommands::Rollback {
             changeset_id,
@@ -61,7 +59,7 @@ pub(super) async fn dispatch_system_state_command(state_cmd: cli::StateCommands)
                 LiveMutationClass::CurrentlyLiveEvenWithRootArguments,
                 false,
             )?;
-            commands::cmd_rollback(changeset_id, &common.db.db_path).await
+            commands::cmd_rollback(changeset_id, &common.db.db_path)
         }
     }
 }

@@ -104,8 +104,6 @@ pub struct UpdateOptions {
 /// HTTP response from daemon
 struct HttpResponse {
     status_code: u16,
-    #[allow(dead_code)] // Parsed but not yet consumed; reserved for content-type checks
-    headers: Vec<(String, String)>,
     body: String,
 }
 
@@ -436,29 +434,16 @@ impl DaemonClient {
             .and_then(|s| s.parse().ok())
             .unwrap_or(500);
 
-        // Parse headers
-        let mut headers = Vec::new();
-
         for line in &mut lines {
             if line.is_empty() {
                 break;
-            }
-
-            if let Some((key, value)) = line.split_once(':') {
-                let key = key.trim().to_lowercase();
-                let value = value.trim().to_string();
-                headers.push((key, value));
             }
         }
 
         // Get body (everything after headers)
         let body: String = lines.collect::<Vec<_>>().join("\n");
 
-        Ok(HttpResponse {
-            status_code,
-            headers,
-            body,
-        })
+        Ok(HttpResponse { status_code, body })
     }
 
     /// Parse successful response body

@@ -1,4 +1,4 @@
-// apps/conary/src/commands/ccs/install/command_payload_tests.rs
+// apps/conary/src/commands/ccs/install/command_payload_tests/tests.rs
 
 use std::collections::HashMap;
 
@@ -64,7 +64,6 @@ async fn ccs_install_dry_run_keeps_permanent_cas_absent() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert!(
@@ -144,7 +143,6 @@ async fn ccs_install_rejects_child_write_beneath_package_symlink() {
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     assert!(
@@ -239,7 +237,6 @@ async fn ccs_install_rejects_child_before_package_symlink() {
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     assert!(
@@ -337,7 +334,6 @@ async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert!(
@@ -448,7 +444,6 @@ async fn ccs_install_resolves_safe_existing_lib64_ancestor_inside_root() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -540,7 +535,6 @@ async fn ccs_install_allows_identical_existing_symlink_destination() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert_eq!(
@@ -631,7 +625,6 @@ async fn generation_install_records_replacement_without_mutating_current_leaf_sy
         true,
         false,
     )
-    .await
     .unwrap();
 
     assert_eq!(
@@ -736,7 +729,6 @@ async fn ccs_install_coalesces_identical_usrmerge_duplicate_files() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -849,7 +841,6 @@ async fn ccs_install_rejects_conflicting_usrmerge_duplicate_files() {
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     assert!(

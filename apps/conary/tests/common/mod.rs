@@ -15,7 +15,6 @@ use conary_core::repository::requirement::parse_native_requirement;
 use conary_core::repository::versioning::VersionScheme;
 use tempfile::TempDir;
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct DatabaseSnapshot {
     schema: Vec<(String, String, Option<String>)>,
@@ -59,7 +58,6 @@ fn resolved_test_node(mut node: PayloadNode) -> ResolvedPayloadNode {
 /// SQLite may update file-level bookkeeping while opening a database. Comparing
 /// the logical contents avoids mistaking that bookkeeping for a row or schema
 /// mutation while still covering every table.
-#[allow(dead_code)]
 pub fn database_snapshot(db_path: &str) -> DatabaseSnapshot {
     use rusqlite::types::ValueRef;
 
@@ -142,7 +140,6 @@ pub fn database_snapshot(db_path: &str) -> DatabaseSnapshot {
 /// Create an empty test database with schema initialized.
 ///
 /// Returns (TempDir, db_path, Connection) - keep the TempDir alive to prevent cleanup.
-#[allow(dead_code)]
 pub fn create_test_db() -> (TempDir, String, rusqlite::Connection) {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir
@@ -160,7 +157,6 @@ pub fn create_test_db() -> (TempDir, String, rusqlite::Connection) {
 /// Create a test database with nginx and openssl packages.
 ///
 /// Returns (TempDir, db_path) - keep the TempDir alive to prevent cleanup.
-#[allow(dead_code)]
 pub fn setup_command_test_db() -> (TempDir, String) {
     let temp_dir = tempfile::tempdir().unwrap();
     let db_path = temp_dir
@@ -297,7 +293,6 @@ pub fn setup_command_test_db() -> (TempDir, String) {
     (temp_dir, db_path)
 }
 
-#[allow(dead_code)]
 fn stage_test_boot_assets(root: &std::path::Path) {
     let kernel_version = "test-kernel";
     let boot_root = root.join("boot");

@@ -165,7 +165,7 @@ fn restore_snapshots_to_live_root(
 }
 
 /// Verify installed files
-pub async fn cmd_verify(
+pub fn cmd_verify(
     package: Option<String>,
     db_path: &str,
     _root: &str,
@@ -347,7 +347,7 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
             }
             Err(e) => {
                 failed_count += 1;
-                println!("ERROR: {} - {}", pkg_name, e);
+                crate::ui::row(crate::ui::Status::Fail, &[&format!("{pkg_name} - {e}")]);
             }
         }
     }

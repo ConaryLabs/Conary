@@ -12,7 +12,7 @@ pub(super) async fn publish_artifact_form(
     let operation_id = publish_operation_id();
     match PublishDestination::parse(target)? {
         PublishDestination::StaticLocal(destination) => {
-            publish_static_artifact_form(options, target, destination, writer, operation_id).await
+            publish_static_artifact_form(options, target, destination, writer, operation_id)
         }
         PublishDestination::RemiRelease(_) if options.json => {
             let message = "Remi publish JSON output is not supported in M3a";
@@ -35,7 +35,7 @@ pub(super) async fn publish_artifact_form(
     }
 }
 
-async fn publish_static_artifact_form(
+fn publish_static_artifact_form(
     options: PublishOptions,
     target: &str,
     destination: RepoLocation,
@@ -54,7 +54,7 @@ async fn publish_static_artifact_form(
         rotate_root_key: options.rotate_root_key,
         operation_id,
     };
-    let output = publish_static_artifact_form_service(input).await?;
+    let output = publish_static_artifact_form_service(input)?;
 
     if output.status == PackagingCommandStatus::Failed {
         super::super::diagnostics::write_packaging_output(&output, json, writer)?;
@@ -78,7 +78,7 @@ async fn publish_static_artifact_form(
     Ok(())
 }
 
-pub(crate) async fn publish_static_artifact_form_service(
+pub(crate) fn publish_static_artifact_form_service(
     input: StaticArtifactPublishServiceInput,
 ) -> Result<PackagingCommandOutput> {
     let artifact_path = input.artifact_path;

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use crate::commands::format_bytes;
 
 /// Show adoption status
-pub async fn cmd_adopt_status(
+pub fn cmd_adopt_status(
     db_path: &str,
     requested_manager: Option<SystemPackageManager>,
 ) -> Result<()> {

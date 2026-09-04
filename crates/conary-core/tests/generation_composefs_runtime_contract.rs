@@ -301,8 +301,6 @@ fn runtime_generation_paths_are_routed_through_runtime_root_contract() {
         .expect("failed to read commands/composefs_ops.rs");
     let generation_commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
         .expect("failed to read commands/generation/commands.rs");
-    let generation_switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
-        .expect("failed to read commands/generation/switch.rs");
 
     assert!(
         transaction_rs.contains("ConaryRuntimeRoot"),
@@ -315,10 +313,6 @@ fn runtime_generation_paths_are_routed_through_runtime_root_contract() {
     assert!(
         generation_commands_rs.contains("ConaryRuntimeRoot"),
         "generation commands must use ConaryRuntimeRoot for current, generation, and GC paths"
-    );
-    assert!(
-        generation_switch_rs.contains("ConaryRuntimeRoot"),
-        "generation switch orchestration must use ConaryRuntimeRoot for CAS, mount, and current paths"
     );
     assert!(
         !generation_commands_rs.contains("GENERATION_DB_CANDIDATES"),
@@ -351,22 +345,9 @@ fn publication_state_seed_reuses_verified_cas_without_deep_payload_reads() {
 }
 
 #[test]
-fn generation_switch_does_not_force_verity_when_metadata_says_it_is_unavailable() {
-    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
-        .expect("failed to read commands/generation/switch.rs");
-
-    assert!(
-        !switch_rs.contains("verity: true,"),
-        "generation switching must respect persisted fs-verity readiness instead of unconditionally retrying root.erofs with verity"
-    );
-}
-
-#[test]
 fn generation_activation_validates_artifacts_before_pointer_updates() {
     let commands_rs = fs::read_to_string(app_source("commands/generation/commands.rs"))
         .expect("failed to read commands/generation/commands.rs");
-    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
-        .expect("failed to read commands/generation/switch.rs");
     let builder_rs = fs::read_to_string(app_source("commands/generation/builder.rs"))
         .expect("failed to read commands/generation/builder.rs");
 
@@ -416,37 +397,8 @@ fn generation_activation_validates_artifacts_before_pointer_updates() {
     );
 
     assert!(
-        switch_rs.contains("load_generation_artifact_with_verified_cas(&gen_dir)"),
-        "debug live switch must also validate the local artifact contract before mounting"
-    );
-    assert!(
         builder_rs.contains("GenerationActivation::Inactive"),
         "manual generation build must prepare an inactive generation; activation belongs to generation switch"
-    );
-}
-
-#[test]
-fn generation_switch_does_not_retry_requested_verity_as_plain_composefs() {
-    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
-        .expect("failed to read commands/generation/switch.rs");
-
-    let requested_verity_branch = switch_rs
-        .split("let mount_outcome = if requested_verity {")
-        .nth(1)
-        .and_then(|rest| rest.split("} else {").next())
-        .expect("failed to find requested-verity mount branch");
-
-    assert!(
-        !requested_verity_branch.contains(".or_else("),
-        "requested fs-verity mounts must fail closed instead of retrying as plain composefs"
-    );
-    assert!(
-        !requested_verity_branch.contains("retrying without"),
-        "requested fs-verity mounts must not log or perform a downgrade retry"
-    );
-    assert!(
-        switch_rs.contains("} else {\n        mount_generation(&opts_plain)"),
-        "plain composefs remains valid only when persisted metadata says fs-verity is unavailable"
     );
 }
 
@@ -591,25 +543,6 @@ fn release_generation_commands_do_not_expose_live_switch_as_normal_activation() 
     assert!(
         !cli_rs.contains("Switch to a specific generation"),
         "generation switch CLI help must not preserve live activation wording"
-    );
-}
-
-#[test]
-fn generation_switch_fails_hard_on_etc_overlay_failures() {
-    let switch_rs = fs::read_to_string(app_source("commands/generation/switch.rs"))
-        .expect("failed to read commands/generation/switch.rs");
-
-    assert!(
-        switch_rs.contains("Failed to mount /etc overlay for live debug switch"),
-        "debug live switch must fail hard on /etc overlay mount failures"
-    );
-    assert!(
-        switch_rs.contains("let _ = unmount_generation(&staging);"),
-        "debug live switch must clean up the PathBuf staging mount when /etc overlay setup fails"
-    );
-    assert!(
-        !switch_rs.contains("eprintln!(\"Warning: Failed to mount /etc overlay: {e};"),
-        "debug live switch must not treat /etc overlay failures as warning-only"
     );
 }
 

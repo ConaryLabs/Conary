@@ -10,7 +10,7 @@ use conary_core::ccs::CcsManifest;
 use std::path::Path;
 
 /// Initialize a new CCS manifest in the given directory
-pub async fn cmd_ccs_init(
+pub fn cmd_ccs_init(
     path: &str,
     name: Option<String>,
     version: &str,
@@ -233,7 +233,6 @@ license = "MIT"
             false,
             None,
         )
-        .await
         .unwrap();
 
         let content = std::fs::read_to_string(temp.path().join("ccs.toml")).unwrap();
@@ -261,7 +260,6 @@ license = "MIT"
             false,
             Some(super::super::CcsInitTemplate::ConfigNoreplace),
         )
-        .await
         .unwrap();
 
         assert!(temp.path().join("etc/conary-example/config.toml").exists());
@@ -278,7 +276,6 @@ license = "MIT"
             false,
             Some(super::super::CcsInitTemplate::Service),
         )
-        .await
         .unwrap();
 
         assert!(temp.path().join("usr/bin/conary-example").exists());

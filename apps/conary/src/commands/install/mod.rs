@@ -42,14 +42,11 @@ pub use ownership_mode::OwnershipMode;
 pub(crate) use package_set::{PackageSetRequest, install_package_set, validate_package_set};
 pub(crate) use payload_identity::resolve_native_payload_nodes;
 
-#[allow(unused_imports)]
 pub(crate) use ccs_transaction::{
-    CcsTransactionInstallOptions, CcsTransactionInstallResult, check_ccs_upgrade_status,
-    install_ccs_package_transactionally, install_ccs_package_transactionally_in_selected_root,
-    install_semantics_for_ccs_manifest,
+    CcsTransactionInstallOptions, check_ccs_upgrade_status, install_ccs_package_transactionally,
+    install_ccs_package_transactionally_in_selected_root, install_semantics_for_ccs_manifest,
 };
 
-#[allow(unused_imports)]
 pub(crate) use native_lifecycle::NativeLifecycleInstallState;
 pub use options::InstallOptions;
 pub(crate) use options::{

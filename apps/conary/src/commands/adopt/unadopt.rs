@@ -37,7 +37,7 @@ struct UnadoptPlan {
     skipped_conary_owned: Vec<String>,
 }
 
-pub async fn cmd_unadopt(options: UnadoptOptions, db_path: &str) -> Result<UnadoptSummary> {
+pub fn cmd_unadopt(options: UnadoptOptions, db_path: &str) -> Result<UnadoptSummary> {
     cmd_unadopt_with_hook_remover(options, db_path, remove_detected_sync_hooks)
 }
 

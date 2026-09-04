@@ -17,10 +17,13 @@ mod command_component_tests;
 #[cfg(test)]
 mod command_hook_tests;
 #[cfg(test)]
+#[path = "install/command_metadata_tests/tests.rs"]
 mod command_metadata_tests;
 #[cfg(test)]
+#[path = "install/command_payload_tests/tests.rs"]
 mod command_payload_tests;
 #[cfg(test)]
+#[path = "install/command_reinstall_tests/tests.rs"]
 mod command_reinstall_tests;
 #[cfg(test)]
 mod test_support;

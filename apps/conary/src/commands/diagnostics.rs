@@ -1,7 +1,5 @@
 // apps/conary/src/commands/diagnostics.rs
 
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::io::Write;
 
 use anyhow::Result;
@@ -13,6 +11,7 @@ use conary_core::diagnostics::{
     PackagingDiagnostic, PackagingEvent, PackagingEventKind, PackagingPhase, PackagingSeverity,
 };
 
+#[cfg(test)]
 pub(crate) fn render_packaging_json(output: &PackagingCommandOutput) -> Result<String> {
     Ok(serde_json::to_string_pretty(&redacted_packaging_output(
         output,
@@ -42,7 +41,6 @@ pub(crate) fn render_diagnostics_human(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub(crate) fn write_packaging_output(
     output: &PackagingCommandOutput,
     json: bool,
@@ -99,31 +97,6 @@ pub(crate) fn publish_gate_code_to_diagnostic_code(
             conary_core::diagnostics::PackagingDiagnosticCode::PublishGateFailed
         }
     }
-}
-
-pub(crate) fn ccs_v3_diagnostic_to_packaging(
-    diagnostic: &conary_core::ccs::v3::V3Diagnostic,
-) -> conary_core::diagnostics::PackagingDiagnostic {
-    use conary_core::ccs::v3::V3DiagnosticCode;
-    use conary_core::diagnostics::{
-        PackagingDiagnostic, PackagingDiagnosticCode, PackagingPhase, PackagingSuggestion,
-    };
-
-    let code = match diagnostic.code {
-        V3DiagnosticCode::UnsupportedFormatVersion => {
-            PackagingDiagnosticCode::CcsFormatVersionRejected
-        }
-        _ => PackagingDiagnosticCode::CcsV3ValidationFailed,
-    };
-    let mut rendered = PackagingDiagnostic::error(
-        PackagingPhase::RecipeValidation,
-        code,
-        diagnostic.message.clone(),
-    );
-    rendered
-        .suggestions
-        .push(PackagingSuggestion::new(diagnostic.suggestion.clone()));
-    rendered
 }
 
 pub(crate) fn redacted_packaging_output(output: &PackagingCommandOutput) -> PackagingCommandOutput {
@@ -446,21 +419,5 @@ mod tests {
                 PackagingDiagnosticCode::PublishGateFailed
             );
         }
-    }
-
-    #[test]
-    fn ccs_v3_diagnostics_map_to_packaging_diagnostics() {
-        let diagnostic = conary_core::ccs::v3::V3Diagnostic::error(
-            conary_core::ccs::v3::V3DiagnosticCode::UnsupportedFormatVersion,
-            "unsupported package format",
-            Some("format_version".to_string()),
-            "rebuild as v3",
-        );
-        let rendered = ccs_v3_diagnostic_to_packaging(&diagnostic);
-        assert_eq!(
-            rendered.code,
-            conary_core::diagnostics::PackagingDiagnosticCode::CcsFormatVersionRejected
-        );
-        assert_eq!(rendered.suggestions[0].message, "rebuild as v3");
     }
 }

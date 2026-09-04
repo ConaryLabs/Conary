@@ -64,7 +64,7 @@ fn validate_generation_activation_artifact(
 ///
 /// Prints each generation's number, creation date, package count, kernel version,
 /// and whether it is the currently active generation.
-pub async fn cmd_generation_list() -> Result<()> {
+pub fn cmd_generation_list() -> Result<()> {
     let runtime_root = default_runtime_root();
     let dir = runtime_root.generations_dir();
 
@@ -122,7 +122,7 @@ pub async fn cmd_generation_list() -> Result<()> {
 }
 
 /// Print detailed information about a specific generation.
-pub async fn cmd_generation_info(gen_number: i64) -> Result<()> {
+pub fn cmd_generation_info(gen_number: i64) -> Result<()> {
     let runtime_root = default_runtime_root();
     let gen_dir = runtime_root.generation_path(gen_number);
 
@@ -365,12 +365,11 @@ fn collect_side_effect_package_warnings(
 fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
     match collect_side_effect_package_warnings(from_generation, to_generation) {
         Ok(packages) if !packages.is_empty() => {
-            eprintln!(
-                "WARNING: Generation switch {} -> {} removed package versions without running removal scriptlets.",
-                from_generation, to_generation
-            );
-            eprintln!(
-                "WARNING: Persistent side effects are not automatically undone during rollback."
+            crate::ui::warn(&format!(
+                "Generation switch {from_generation} -> {to_generation} removed package versions without running removal scriptlets."
+            ));
+            crate::ui::warn(
+                "Persistent side effects are not automatically undone during rollback.",
             );
             for package in packages {
                 eprintln!(
@@ -380,8 +379,8 @@ fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
                     package.reasons.join(", ")
                 );
             }
-            eprintln!(
-                "WARNING: Review those packages manually; `--undo-scriptlets` is not implemented yet."
+            crate::ui::warn(
+                "Review those packages manually; `--undo-scriptlets` is not implemented yet.",
             );
         }
         Ok(_) => {}

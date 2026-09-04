@@ -11,7 +11,7 @@ use conary_core::ccs::enhancement::{
 
 /// Run the `conary ccs enhance` command
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_ccs_enhance(
+pub fn cmd_ccs_enhance(
     db_path: &str,
     trove_id: Option<i64>,
     all_pending: bool,
@@ -34,7 +34,7 @@ pub async fn cmd_ccs_enhance(
     };
 
     if enhancement_types.is_empty() && types.is_some() {
-        eprintln!("Error: No valid enhancement types specified.");
+        crate::ui::error("No valid enhancement types specified.");
         eprintln!("Valid type: provenance");
         return Ok(());
     }

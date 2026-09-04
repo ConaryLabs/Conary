@@ -5,7 +5,6 @@
 //! Provides:
 //! - Peer credential extraction (SO_PEERCRED)
 //! - Permission checking (root, daemon identity, and configured socket group)
-//! - Audit logging
 //!
 //! # Security Model
 //!
@@ -254,138 +253,6 @@ impl AuthChecker {
     }
 }
 
-/// Audit log entry
-#[derive(Debug, Clone)]
-pub struct AuditEntry {
-    /// Timestamp
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    /// Peer credentials
-    pub credentials: PeerCredentials,
-    /// Action attempted
-    pub action: Action,
-    /// Whether the action was allowed
-    pub allowed: bool,
-    /// Additional details
-    pub details: Option<String>,
-}
-
-impl AuditEntry {
-    /// Create a new audit entry
-    pub fn new(credentials: PeerCredentials, action: Action, allowed: bool) -> Self {
-        Self {
-            timestamp: chrono::Utc::now(),
-            credentials,
-            action,
-            allowed,
-            details: None,
-        }
-    }
-
-    /// Add details to the entry
-    pub fn with_details(mut self, details: impl Into<String>) -> Self {
-        self.details = Some(details.into());
-        self
-    }
-
-    /// Format as log message
-    pub fn to_log_message(&self) -> String {
-        let allowed_str = if self.allowed { "ALLOWED" } else { "DENIED" };
-        let details_str = self.details.as_deref().unwrap_or("");
-
-        format!(
-            "[{}] {} {:?} uid={} gid={} pid={} {}",
-            self.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
-            allowed_str,
-            self.action,
-            self.credentials.uid,
-            self.credentials.gid,
-            self.credentials.pid,
-            details_str
-        )
-    }
-}
-
-/// Audit logger
-pub struct AuditLogger {
-    /// Log entries (in-memory for now)
-    entries: Vec<AuditEntry>,
-    /// Maximum number of entries to keep
-    max_entries: usize,
-}
-
-impl Default for AuditLogger {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
-            max_entries: 10000,
-        }
-    }
-}
-
-impl AuditLogger {
-    /// Create a new audit logger
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Set maximum number of entries to keep
-    pub fn with_max_entries(mut self, max: usize) -> Self {
-        self.max_entries = max;
-        self
-    }
-
-    /// Log an audit entry
-    pub fn log(&mut self, entry: AuditEntry) {
-        // Log to system logger
-        let msg = entry.to_log_message();
-        if entry.allowed {
-            log::info!("AUDIT: {}", msg);
-        } else {
-            log::warn!("AUDIT: {}", msg);
-        }
-
-        // Keep in-memory history
-        self.entries.push(entry);
-
-        // Trim if over limit
-        if self.entries.len() > self.max_entries {
-            let drain_count = self.entries.len() - self.max_entries;
-            self.entries.drain(0..drain_count);
-        }
-    }
-
-    /// Log an action check
-    pub fn log_action(
-        &mut self,
-        credentials: PeerCredentials,
-        action: Action,
-        allowed: bool,
-        details: Option<&str>,
-    ) {
-        let mut entry = AuditEntry::new(credentials, action, allowed);
-        if let Some(d) = details {
-            entry = entry.with_details(d);
-        }
-        self.log(entry);
-    }
-
-    /// Get recent audit entries
-    pub fn recent_entries(&self, count: usize) -> &[AuditEntry] {
-        let start = self.entries.len().saturating_sub(count);
-        &self.entries[start..]
-    }
-
-    /// Get all entries
-    pub fn all_entries(&self) -> &[AuditEntry] {
-        &self.entries
-    }
-
-    /// Clear all entries
-    pub fn clear(&mut self) {
-        self.entries.clear();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,44 +430,5 @@ mod tests {
 
         assert_eq!(checker.check(&user, Action::Query), Permission::Denied);
         assert_eq!(checker.check(&user, Action::Install), Permission::Denied);
-    }
-
-    #[test]
-    fn test_audit_entry() {
-        let creds = PeerCredentials {
-            pid: 1234,
-            uid: 1000,
-            gid: 1000,
-        };
-        let entry = AuditEntry::new(creds, Action::Install, true).with_details("installed nginx");
-
-        let msg = entry.to_log_message();
-        assert!(msg.contains("ALLOWED"));
-        assert!(msg.contains("Install"));
-        assert!(msg.contains("uid=1000"));
-        assert!(msg.contains("installed nginx"));
-    }
-
-    #[test]
-    fn test_audit_logger() {
-        let mut logger = AuditLogger::new().with_max_entries(5);
-
-        let creds = PeerCredentials {
-            pid: 1234,
-            uid: 0,
-            gid: 0,
-        };
-
-        // Log some entries
-        for i in 0..10 {
-            logger.log_action(creds, Action::Query, true, Some(&format!("query {}", i)));
-        }
-
-        // Should only keep last 5
-        assert_eq!(logger.all_entries().len(), 5);
-
-        // Recent entries
-        let recent = logger.recent_entries(3);
-        assert_eq!(recent.len(), 3);
     }
 }

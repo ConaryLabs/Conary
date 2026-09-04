@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::run_record::load_completed_bootstrap_run_record;
 
 /// Verify convergence between builds from two different seeds
-pub async fn cmd_bootstrap_verify_convergence(
+pub fn cmd_bootstrap_verify_convergence(
     run_a: &str,
     run_b: &str,
     seed_a: Option<&str>,
@@ -105,7 +105,7 @@ pub async fn cmd_bootstrap_verify_convergence(
 }
 
 /// Diff two seed EROFS images
-pub async fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> {
+pub fn cmd_bootstrap_diff_seeds(path_a: &str, path_b: &str) -> Result<()> {
     let report = conary_core::derivation::diff_seed_dirs(Path::new(path_a), Path::new(path_b))
         .map_err(|error| anyhow::anyhow!("Failed to diff seeds: {error}"))?;
 

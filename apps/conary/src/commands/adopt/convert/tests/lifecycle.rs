@@ -640,7 +640,6 @@ async fn published_adopted_ccs_drives_full_lifecycle_without_native_manager_runt
             true,
             false,
         )
-        .await
         .unwrap();
         let conn = conary_core::db::open(&db_path).unwrap();
         let installed = Trove::find_by_name(&conn, "exact-lifecycle").unwrap();
@@ -659,7 +658,6 @@ async fn published_adopted_ccs_drives_full_lifecycle_without_native_manager_runt
             true,
             false,
         )
-        .await
         .unwrap();
         let conn = conary_core::db::open(&db_path).unwrap();
         let installed = Trove::find_by_name(&conn, "exact-lifecycle").unwrap();
@@ -668,9 +666,7 @@ async fn published_adopted_ccs_drives_full_lifecycle_without_native_manager_runt
         let update_changeset = installed[0].installed_by_changeset_id.unwrap();
         drop(conn);
 
-        crate::commands::cmd_rollback(update_changeset, &db_path)
-            .await
-            .unwrap();
+        crate::commands::cmd_rollback(update_changeset, &db_path).unwrap();
         let conn = conary_core::db::open(&db_path).unwrap();
         let installed = Trove::find_by_name(&conn, "exact-lifecycle").unwrap();
         assert_eq!(installed.len(), 1);
@@ -691,7 +687,6 @@ async fn published_adopted_ccs_drives_full_lifecycle_without_native_manager_runt
             crate::commands::SandboxMode::Always,
             false,
         )
-        .await
         .unwrap();
         let conn = conary_core::db::open(&db_path).unwrap();
         assert!(

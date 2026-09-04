@@ -10,7 +10,6 @@ use schemars::{JsonSchema, schema_for};
 
 pub mod stateless;
 pub mod stateless_http;
-pub mod tools;
 
 /// Serialize a value to pretty JSON, mapping failures to [`McpError`].
 pub fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
@@ -18,9 +17,11 @@ pub fn to_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> 
         .map_err(|e| McpError::internal_error(format!("Serialization error: {e}"), None))
 }
 
-/// Serialize a transport-neutral Conary agent contract value to pretty JSON.
-pub fn contract_json_text<T: serde::Serialize>(value: &T) -> Result<String, McpError> {
-    to_json_text(value)
+/// Adapt a serializable contract result into MCP text content.
+pub fn contract_tool_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
+    Ok(CallToolResult::success(vec![ContentBlock::text(
+        to_json_text(value)?,
+    )]))
 }
 
 /// Return a JSON Schema value for an MCP `outputSchema`.
@@ -98,7 +99,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_json_text_serializes_contract_result() {
+    fn contract_tool_result_serializes_contract_result() {
         let result = conary_agent_contract::InspectResult::new(
             conary_agent_contract::OperationEnvelope::new(
                 "remi.health.inspect",
@@ -107,9 +108,10 @@ mod tests {
                 "Remi health inspected",
             ),
         );
-        let text = contract_json_text(&result).expect("serialize contract result");
-        assert!(text.contains("\"operation\": \"remi.health.inspect\""));
-        assert!(text.contains("\"risk\": \"read_only\""));
+        let result = contract_tool_result(&result).expect("serialize contract result");
+        let text = result.content[0].as_text().expect("text content");
+        assert!(text.text.contains("\"operation\": \"remi.health.inspect\""));
+        assert!(text.text.contains("\"risk\": \"read_only\""));
     }
 
     #[test]

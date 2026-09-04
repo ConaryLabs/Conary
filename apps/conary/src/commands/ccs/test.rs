@@ -9,7 +9,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-pub async fn cmd_ccs_test(
+pub fn cmd_ccs_test(
     package: &str,
     dry_run: bool,
     policy: Option<String>,
@@ -60,8 +60,7 @@ pub async fn cmd_ccs_test(
         crate::commands::SandboxMode::Always,
         false,
         false,
-    )
-    .await?;
+    )?;
 
     if keep_workspace {
         let kept = workspace.keep();

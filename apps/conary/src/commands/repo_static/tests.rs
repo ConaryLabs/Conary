@@ -644,7 +644,7 @@ async fn reset_trust_removes_trust_material_and_synced_package_visibility() {
     insert_synced_visibility(&conn, repo_id);
     drop(conn);
 
-    cmd_repo_reset_trust("acme", &db.db_path).await.unwrap();
+    cmd_repo_reset_trust("acme", &db.db_path).unwrap();
 
     let conn = db.conn();
     let repo = repo(&conn);
@@ -678,7 +678,7 @@ async fn reset_trust_rejects_non_static_repositories_without_changing_visibility
     insert_synced_visibility(&conn, repo_id);
     drop(conn);
 
-    let err = cmd_repo_reset_trust("acme", &db.db_path).await.unwrap_err();
+    let err = cmd_repo_reset_trust("acme", &db.db_path).unwrap_err();
 
     let conn = db.conn();
     let repo = repo(&conn);
@@ -758,7 +758,7 @@ async fn reset_then_repin_reestablishes_trust_and_reenables_sync() {
     add_static_repo(&db, &first, first.root_key_ids.clone())
         .await
         .unwrap();
-    cmd_repo_reset_trust("acme", &db.db_path).await.unwrap();
+    cmd_repo_reset_trust("acme", &db.db_path).unwrap();
 
     add_static_repo_with(
         &db,

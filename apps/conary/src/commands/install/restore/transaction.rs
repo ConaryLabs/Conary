@@ -3,7 +3,7 @@
 
 use super::super::inner;
 use super::super::native_events::{
-    NativeInstallInput, NativeRemoveInput, PreparedNativeTransaction,
+    NativeInstallInput, NativeRemoveInput, PreparedNativeTransaction, deb_identity_for_trove,
 };
 use super::super::native_graph::{
     NativeGraphPayloadMutation, drive_native_graph, finalize_owned_trove, normalize_archive_path,
@@ -21,12 +21,9 @@ use crate::commands::remove::{
 };
 use crate::commands::{SandboxMode, TroveSnapshot};
 use anyhow::{Context, Result, bail};
-use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::{NativePackageIdentity, NativeTransactionOperation};
 use conary_core::config_transaction::GenerationConfigTransaction;
-use conary_core::db::models::{
-    ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle, Trove,
-};
+use conary_core::db::models::{ActivationRequest, Changeset, ChangesetStatus, Trove};
 use conary_core::filesystem::CasStore;
 use conary_core::scriptlet::ExecutionMode;
 use std::collections::BTreeSet;
@@ -942,23 +939,6 @@ fn merge_config_transaction(
         }
     }
     Ok(())
-}
-
-fn deb_identity_for_trove(
-    conn: &rusqlite::Connection,
-    trove_id: i64,
-) -> Result<Option<NativePackageIdentity>> {
-    let Some(installed) = InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)? else {
-        return Ok(None);
-    };
-    let bundle = installed.bundle()?;
-    Ok((bundle.source_format == SourceFormat::Deb).then(|| {
-        NativePackageIdentity::new(
-            &installed.source_package,
-            &installed.source_version,
-            installed.source_arch.as_deref(),
-        )
-    }))
 }
 
 fn finalize_restore_installs(

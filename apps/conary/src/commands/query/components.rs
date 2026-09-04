@@ -8,7 +8,7 @@ use super::super::open_db;
 use anyhow::Result;
 
 /// List components of an installed package
-pub async fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
+pub fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Find the package
@@ -77,7 +77,7 @@ pub async fn cmd_list_components(package_name: &str, db_path: &str) -> Result<()
 }
 
 /// Query files in a specific component
-pub async fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
+pub fn cmd_query_component(component_spec: &str, db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Parse the component spec (e.g., "nginx:lib")
@@ -214,9 +214,7 @@ mod tests {
         .insert(&conn)
         .unwrap();
 
-        let error = cmd_list_components("broken-components", &db_path)
-            .await
-            .unwrap_err();
+        let error = cmd_list_components("broken-components", &db_path).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -238,9 +236,7 @@ mod tests {
         .insert(&conn)
         .unwrap();
 
-        let error = cmd_query_component("metadata-only:runtime", &db_path)
-            .await
-            .unwrap_err();
+        let error = cmd_query_component("metadata-only:runtime", &db_path).unwrap_err();
         assert!(
             error.to_string().contains("package declares no components"),
             "unexpected error: {error}"

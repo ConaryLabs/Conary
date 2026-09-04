@@ -4,6 +4,7 @@
 
 mod capture;
 
+use super::rollback_system_authority::require_text;
 use anyhow::{Context, Result, bail};
 use conary_core::capability::CapabilityDeclaration;
 use conary_core::ccs::manifest::FileCapability;
@@ -809,13 +810,6 @@ pub(crate) struct ProvenanceSnapshot {
     pub total_size: Option<i64>,
     pub file_count: Option<i64>,
     pub dna_hash: Option<String>,
-}
-
-fn require_text(context: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        bail!("rollback snapshot has an empty {context}");
-    }
-    Ok(())
 }
 
 fn unique_text<'a>(context: &str, values: impl IntoIterator<Item = &'a str>) -> Result<()> {

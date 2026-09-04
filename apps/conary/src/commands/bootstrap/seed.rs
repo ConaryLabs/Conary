@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 /// Package cross-tools output as a derivation seed
-pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Result<()> {
+pub fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Result<()> {
     use conary_core::derivation::compose::erofs_image_hash;
     use conary_core::derivation::seed::{SeedMetadata, SeedSource};
     use conary_core::filesystem::CasStore;
@@ -133,7 +133,7 @@ pub async fn cmd_bootstrap_seed(from: &str, output: &str, target: &str) -> Resul
 }
 
 /// Create a seed from the currently adopted system filesystem
-pub async fn cmd_bootstrap_seed_adopted(
+pub fn cmd_bootstrap_seed_adopted(
     output: &str,
     distro: Option<&str>,
     distro_version: Option<&str>,

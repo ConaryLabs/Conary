@@ -3,8 +3,7 @@
 
 use std::future::Future;
 
-use conary_mcp::tools::contract_tool_result;
-use conary_mcp::{map_internal, server_info};
+use conary_mcp::{contract_tool_result, map_internal, server_info};
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     handler::server::tool::{ToolCallContext, ToolRouter},
@@ -23,7 +22,6 @@ use super::types::{
 #[derive(Clone)]
 pub(crate) struct PackagingMcpServer {
     service: PackagingAgentService,
-    #[allow(dead_code)] // Read by rmcp's tool_router macro via generated code.
     tool_router: ToolRouter<Self>,
 }
 
@@ -121,11 +119,7 @@ impl PackagingMcpServer {
         &self,
         Parameters(input): Parameters<PublishApplyInput>,
     ) -> Result<CallToolResult, McpError> {
-        let result = self
-            .service
-            .apply_publish(input)
-            .await
-            .map_err(map_internal)?;
+        let result = self.service.apply_publish(input).map_err(map_internal)?;
         contract_tool_result(&result)
     }
 }
@@ -168,22 +162,38 @@ impl ServerHandler for PackagingMcpServer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
+    use conary_agent_contract::{RiskLevel, packaging_tools};
 
     #[test]
-    fn packaging_server_catalog_exposes_read_tools_with_contract_names() {
-        let tools = PackagingMcpServer::tool_router().list_all();
-        let names = tools
-            .iter()
-            .map(|tool| tool.name.as_ref())
-            .collect::<BTreeSet<_>>();
+    fn packaging_server_catalog_matches_contract_metadata() {
+        let mut adapter_tools = PackagingMcpServer::tool_router().list_all();
+        adapter_tools.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut contract_tools = packaging_tools();
+        contract_tools.sort_by(|left, right| left.name.cmp(&right.name));
 
-        assert!(names.contains("conary.packaging.inspect_project"));
-        assert!(names.contains("conary.packaging.diagnose_latest_failure"));
-        assert!(names.contains("conary.packaging.operation_records.list"));
-        assert!(names.contains("conary.packaging.operation_records.read"));
-        assert!(names.contains("conary.packaging.publish.plan"));
-        assert!(names.contains("conary.packaging.publish.apply"));
+        assert_eq!(adapter_tools.len(), contract_tools.len());
+        for (adapter, contract) in adapter_tools.iter().zip(&contract_tools) {
+            assert_eq!(adapter.name.as_ref(), contract.name);
+            assert_eq!(
+                adapter.description.as_deref(),
+                Some(contract.description.as_str())
+            );
+            let adapter_risk = if adapter
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.read_only_hint)
+                == Some(true)
+            {
+                RiskLevel::ReadOnly
+            } else {
+                RiskLevel::High
+            };
+            assert_eq!(
+                adapter_risk, contract.risk,
+                "risk drift for {}",
+                contract.name
+            );
+        }
     }
 
     #[tokio::test]

@@ -303,7 +303,6 @@ async fn cook_directory_with_recipe_toml_uses_explicit_recipe_provenance() {
         false,
         Some(signing_key.as_path()),
     )
-    .await
     .unwrap();
 
     let provenance =
@@ -335,7 +334,6 @@ async fn cook_build_requires_explicit_signing_authority() {
         None,
         &mut output,
     )
-    .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("requires --key <private-key>"));
     assert!(!output_dir.join("local-1.0.0-1.ccs").exists());
@@ -364,7 +362,6 @@ async fn explicit_custom_recipe_validates_without_building() {
         None,
         &mut output,
     )
-    .await
     .unwrap();
     let output = String::from_utf8(output).unwrap();
     assert!(output.contains("Reading recipe:"));
@@ -394,7 +391,6 @@ async fn cook_validate_only_json_has_schema_version_and_summary() {
         None,
         &mut output,
     )
-    .await
     .unwrap();
     let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(value["schema_version"], 1);
@@ -426,7 +422,6 @@ async fn cook_isolated_fails_closed_without_hermetic_config() {
         Some(signing_key.as_path()),
         &mut output,
     )
-    .await
     .unwrap_err();
     assert!(format!("{error:#}").contains("hermetic config"));
     assert!(!output_dir.join("local-1.0.0-1.ccs").exists());

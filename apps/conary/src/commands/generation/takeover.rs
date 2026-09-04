@@ -154,7 +154,7 @@ fn classify_takeover_inventory(
 ///    from the system PM database (files stay on disk, Conary owns them).
 /// 3. **Generation** -- Everything in Owned, then build an EROFS generation,
 ///    write a boot entry, and stop ready to activate.
-pub async fn cmd_system_takeover(
+pub fn cmd_system_takeover(
     db_path: &str,
     level: TakeoverLevel,
     yes: bool,
@@ -309,7 +309,10 @@ pub async fn cmd_system_takeover(
     // Phase 1: CAS (always runs)
     // =========================================================================
     println!();
-    println!("[Phase 1] CAS-backing all packages ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 1: CAS-backing all packages ..."],
+    );
     record.start_phase(TakeoverPhase::Cas);
     record.save(db_path)?;
 
@@ -329,9 +332,7 @@ pub async fn cmd_system_takeover(
             None,
             false,
             Some(pm),
-        )
-        .await
-        {
+        ) {
             Ok(outcome) => outcome,
             Err(error) => {
                 record.mark_failed(format!("CAS adoption phase failed: {error}"));
@@ -402,7 +403,10 @@ pub async fn cmd_system_takeover(
     // Phase 2: Owned (remove from system PM)
     // =========================================================================
     println!();
-    println!("[Phase 2] Taking ownership (removing from system PM) ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 2: Taking ownership (removing from system PM) ..."],
+    );
     record.start_phase(TakeoverPhase::Owned);
     record.save(db_path)?;
 
@@ -459,7 +463,10 @@ pub async fn cmd_system_takeover(
     // Phase 3: Generation (build + boot entry + ready to activate)
     // =========================================================================
     println!();
-    println!("[Phase 3] Building generation ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 3: Building generation ..."],
+    );
     record.start_phase(TakeoverPhase::Generation);
     record.save(db_path)?;
 

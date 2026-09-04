@@ -25,12 +25,12 @@ struct CommittedRollback {
 }
 
 /// Roll back one effective forward mutation.
-pub async fn cmd_rollback(changeset_id: i64, db_path: &str) -> Result<()> {
+pub fn cmd_rollback(changeset_id: i64, db_path: &str) -> Result<()> {
     rollback_changeset(changeset_id, db_path, || Ok(()))
 }
 
 #[cfg(test)]
-pub(super) async fn cmd_rollback_with_forced_precommit_failure(
+pub(super) fn cmd_rollback_with_forced_precommit_failure(
     changeset_id: i64,
     db_path: &str,
 ) -> Result<()> {

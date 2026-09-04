@@ -5,7 +5,7 @@ use anyhow::Result;
 use conary_core::model::{capture_current_state, snapshot_to_model};
 
 /// Create a model file from current system state
-pub async fn cmd_model_snapshot(
+pub fn cmd_model_snapshot(
     output_path: &str,
     db_path: &str,
     description: Option<&str>,
@@ -72,7 +72,6 @@ mod tests {
             &db_path,
             Some("snapshot test"),
         )
-        .await
         .unwrap();
 
         let content = std::fs::read_to_string(&output_path).unwrap();

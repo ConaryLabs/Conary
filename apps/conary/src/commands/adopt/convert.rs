@@ -24,6 +24,7 @@ use tempfile::{NamedTempFile, TempDir};
 
 use super::super::generation::selected_root::LockedRuntimeRoot;
 use super::super::install::{convert_native_package_to_ccs, resolve_native_payload_nodes};
+use super::super::live_root::sync_directory;
 use super::super::{InstalledPackageSelector, detect_package_format, open_db};
 
 #[derive(Debug, thiserror::Error)]
@@ -959,11 +960,6 @@ fn validated_conversion_record(
 fn file_sha256(path: &Path) -> Result<String> {
     let mut file = File::open(path)?;
     Ok(conary_core::hash::hash_reader(conary_core::hash::HashAlgorithm::Sha256, &mut file)?.value)
-}
-
-fn sync_directory(path: &Path) -> Result<()> {
-    File::open(path)?.sync_all()?;
-    Ok(())
 }
 
 #[cfg(test)]

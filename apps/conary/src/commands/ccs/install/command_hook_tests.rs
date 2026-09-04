@@ -81,7 +81,6 @@ async fn ccs_install_persists_pre_remove_hook() {
         true,
         false,
     )
-    .await
     .unwrap();
 
     let conn = conary_core::db::open(db_path_str).unwrap();
@@ -169,7 +168,6 @@ async fn ccs_install_rolls_back_after_post_install_error() {
         true,
         false,
     )
-    .await
     .unwrap_err();
     assert!(
         format!("{error:#}").contains("post-install hooks failed"),
@@ -264,7 +262,6 @@ async fn ccs_install_discards_pre_hook_directories_when_post_hook_fails() {
         true,
         false,
     )
-    .await
     .unwrap_err();
 
     assert!(

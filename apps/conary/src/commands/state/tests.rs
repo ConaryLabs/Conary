@@ -802,9 +802,7 @@ async fn test_state_restore_changeset_rolls_back_via_revert_metadata_wrapper() {
         .unwrap();
     drop(conn);
 
-    crate::commands::cmd_rollback(restore_changeset_id, &db_path)
-        .await
-        .unwrap();
+    crate::commands::cmd_rollback(restore_changeset_id, &db_path).unwrap();
 
     let conn = crate::commands::open_db(&db_path).unwrap();
     assert!(

@@ -13,7 +13,7 @@ use crate::commands::{
 use anyhow::Result;
 
 /// Query installed packages
-pub async fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) -> Result<()> {
+pub fn cmd_query(pattern: Option<&str>, db_path: &str, options: QueryOptions) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Path query mode: find package containing a file

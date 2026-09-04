@@ -163,7 +163,7 @@ impl NativeHandoffPackageRecord {
     }
 }
 
-pub async fn cmd_native_handoff(
+pub fn cmd_native_handoff(
     options: NativeHandoffOptions,
     db_path: &str,
 ) -> Result<NativeHandoffSummary> {

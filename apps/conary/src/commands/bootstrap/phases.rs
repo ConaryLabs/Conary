@@ -6,7 +6,7 @@ use anyhow::Result;
 use conary_core::bootstrap::{Bootstrap, BootstrapConfig};
 
 /// Build Phase 1: Cross-toolchain (LFS Chapter 5)
-pub async fn cmd_bootstrap_cross_tools(
+pub fn cmd_bootstrap_cross_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -43,7 +43,7 @@ pub async fn cmd_bootstrap_cross_tools(
     Ok(())
 }
 /// Build Phase 2: Temporary tools (LFS Chapters 6-7)
-pub async fn cmd_bootstrap_temp_tools(
+pub fn cmd_bootstrap_temp_tools(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -77,7 +77,7 @@ pub async fn cmd_bootstrap_temp_tools(
     Ok(())
 }
 /// Build Phase 3: Final system (LFS Chapter 8)
-pub async fn cmd_bootstrap_system(
+pub fn cmd_bootstrap_system(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,
@@ -111,11 +111,7 @@ pub async fn cmd_bootstrap_system(
     Ok(())
 }
 /// Run Phase 4: System configuration (LFS Chapter 9)
-pub async fn cmd_bootstrap_config(
-    work_dir: &str,
-    verbose: bool,
-    lfs_root: Option<&str>,
-) -> Result<()> {
+pub fn cmd_bootstrap_config(work_dir: &str, verbose: bool, lfs_root: Option<&str>) -> Result<()> {
     println!("Running Phase 4: System Configuration (LFS Ch9)...");
     println!("  Work directory: {}", work_dir);
 
@@ -141,7 +137,7 @@ pub async fn cmd_bootstrap_config(
     Ok(())
 }
 /// Apply the self-host guest profile to the built sysroot.
-pub async fn cmd_bootstrap_guest_profile(
+pub fn cmd_bootstrap_guest_profile(
     work_dir: &str,
     public_key: &str,
     verbose: bool,
@@ -168,7 +164,7 @@ pub async fn cmd_bootstrap_guest_profile(
     Ok(())
 }
 /// Build Phase 6: Tier-2 packages (BLFS + Conary self-hosting)
-pub async fn cmd_bootstrap_tier2(
+pub fn cmd_bootstrap_tier2(
     work_dir: &str,
     jobs: Option<usize>,
     verbose: bool,

@@ -31,7 +31,7 @@ use runner::RecordCommandRequest;
 use trace::{TraceBackend, TraceDrain, TraceScope, TraceSession};
 use workspace::RecordWorkspace;
 
-pub(crate) async fn cmd_cook_record(request: RecordCliRequest) -> Result<()> {
+pub(crate) fn cmd_cook_record(request: RecordCliRequest) -> Result<()> {
     validate_record_request(&request)?;
     let operation_id = new_record_operation_id();
     let mut early_diagnostics = Vec::new();

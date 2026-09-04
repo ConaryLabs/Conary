@@ -7,21 +7,18 @@ use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 
-#[allow(dead_code)]
 #[path = "src/commands/ccs/init_template.rs"]
 mod ccs_init_template;
-#[allow(dead_code)]
 #[path = "src/commands/install/ownership_mode.rs"]
 mod ownership_mode;
 
-mod commands {
+pub mod commands {
     pub use super::ccs_init_template::CcsInitTemplate;
     pub use super::ownership_mode::OwnershipMode;
 }
 
-#[allow(dead_code, unused_imports)]
 #[path = "src/cli/mod.rs"]
-mod cli;
+pub mod cli;
 
 fn trim_roff_line_endings(rendered: Vec<u8>) -> Vec<u8> {
     let mut normalized = Vec::with_capacity(rendered.len());

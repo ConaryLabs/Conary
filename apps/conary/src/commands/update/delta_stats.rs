@@ -8,7 +8,7 @@ use conary_core::db::models::DeltaStats;
 use tracing::info;
 
 /// Show delta update statistics
-pub async fn cmd_delta_stats(db_path: &str) -> Result<()> {
+pub fn cmd_delta_stats(db_path: &str) -> Result<()> {
     info!("Showing delta update statistics");
 
     let conn = open_db(db_path)?;

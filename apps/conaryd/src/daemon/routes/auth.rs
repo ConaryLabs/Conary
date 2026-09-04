@@ -55,8 +55,7 @@ pub(super) fn require_auth(
             }
         }
         None => {
-            // No peer credentials (TCP connection) - deny mutating actions
-            tracing::warn!(action = ?action, "Mutating request denied: no peer credentials (TCP connection)");
+            tracing::warn!(action = ?action, "Mutating request denied: no Unix peer credentials");
             Err(ApiError(Box::new(DaemonError::forbidden(
                 "Mutating operations require a Unix socket connection with peer credentials",
             ))))

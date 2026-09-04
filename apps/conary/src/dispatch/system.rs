@@ -19,7 +19,7 @@ use crate::live_host_safety::{LiveMutationClass, MutationIntent};
 
 pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Result<()> {
     match sys_cmd {
-        cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path).await,
+        cli::SystemCommands::Init { db } => commands::cmd_init(&db.db_path),
 
         cli::SystemCommands::RebuildDatabase {
             db,
@@ -32,7 +32,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 LiveMutationClass::LiveConaryState,
                 false,
             )?;
-            commands::cmd_rebuild_database(&db.db_path).await
+            commands::cmd_rebuild_database(&db.db_path)
         }
 
         cli::SystemCommands::RepositoryTakeover {
@@ -65,13 +65,13 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             Ok(())
         }
 
-        cli::SystemCommands::History { db } => commands::cmd_history(&db.db_path).await,
+        cli::SystemCommands::History { db } => commands::cmd_history(&db.db_path),
 
         cli::SystemCommands::Verify {
             package,
             common,
             rpm,
-        } => commands::cmd_verify(package, &common.db.db_path, &common.root, rpm).await,
+        } => commands::cmd_verify(package, &common.db.db_path, &common.root, rpm),
 
         cli::SystemCommands::Restore {
             package,
@@ -87,7 +87,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 dry_run,
             )?;
             if package == "all" {
-                commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run).await
+                commands::cmd_restore_all(&common.db.db_path, &common.root, dry_run)
             } else {
                 commands::cmd_restore(
                     &package,
@@ -98,7 +98,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                     force,
                     dry_run,
                 )
-                .await
                 .map(|_| ())
             }
         }
@@ -125,7 +124,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
         } => {
             let package_manager = package_manager.map(Into::into);
             if sync_hook {
-                commands::cmd_sync_hook_install(remove_hook, package_manager).await
+                commands::cmd_sync_hook_install(remove_hook, package_manager)
             } else if convert {
                 commands::cmd_adopt_convert(
                     &packages,
@@ -136,10 +135,9 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 )
                 .await
             } else if status {
-                commands::cmd_adopt_status(&db.db_path, package_manager).await
+                commands::cmd_adopt_status(&db.db_path, package_manager)
             } else if refresh {
                 commands::cmd_adopt_refresh(&db.db_path, full, dry_run, quiet, package_manager)
-                    .await
             } else if system {
                 let outcome = commands::cmd_adopt_system(
                     &db.db_path,
@@ -149,8 +147,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                     exclude.as_deref(),
                     explicit_only,
                     package_manager,
-                )
-                .await?;
+                )?;
                 if outcome.is_complete() {
                     Ok(())
                 } else {
@@ -160,7 +157,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                     )
                 }
             } else {
-                commands::cmd_adopt(&packages, &db.db_path, full, dry_run, package_manager).await
+                commands::cmd_adopt(&packages, &db.db_path, full, dry_run, package_manager)
             }
         }
 
@@ -187,7 +184,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 },
                 &db.db_path,
             )
-            .await
             .map(|_| ())
         }
 
@@ -213,7 +209,6 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 },
                 &db.db_path,
             )
-            .await
             .map(|_| ())
         }
 
@@ -222,7 +217,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
             db,
             format,
             output,
-        } => commands::cmd_sbom(&package_name, &db.db_path, &format, output.as_deref()).await,
+        } => commands::cmd_sbom(&package_name, &db.db_path, &format, output.as_deref()),
 
         cli::SystemCommands::DbBackup { command } => match command {
             cli::DbBackupCommands::List { db } => commands::cmd_db_backup_list(&db.db_path),
@@ -254,9 +249,7 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
 
         cli::SystemCommands::State(state_cmd) => dispatch_system_state_command(state_cmd).await,
 
-        cli::SystemCommands::Generation(gen_cmd) => {
-            dispatch_system_generation_command(gen_cmd).await
-        }
+        cli::SystemCommands::Generation(gen_cmd) => dispatch_system_generation_command(gen_cmd),
 
         cli::SystemCommands::Takeover {
             up_to,
@@ -278,19 +271,16 @@ pub(super) async fn dispatch_system_command(sys_cmd: cli::SystemCommands) -> Res
                 dry_run,
                 package_manager.map(Into::into),
             )
-            .await
         }
 
-        cli::SystemCommands::Trigger(trigger_cmd) => {
-            dispatch_system_trigger_command(trigger_cmd).await
-        }
+        cli::SystemCommands::Trigger(trigger_cmd) => dispatch_system_trigger_command(trigger_cmd),
 
         cli::SystemCommands::Redirect(redirect_cmd) => {
-            dispatch_system_redirect_command(redirect_cmd).await
+            dispatch_system_redirect_command(redirect_cmd)
         }
 
         cli::SystemCommands::UpdateChannel { action } => {
-            dispatch_system_update_channel_command(action).await
+            dispatch_system_update_channel_command(action)
         }
     }
 }

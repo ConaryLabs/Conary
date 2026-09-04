@@ -23,7 +23,7 @@ use conary_core::repository::static_repo::publish_context::{
 use super::super::publish::{
     PublishDestination, StaticArtifactPublishServiceInput, publish_static_artifact_form_service,
 };
-use super::projection::{AgentProjectionMode, project_packaging_output};
+use super::projection::project_packaging_output;
 use super::publish_plan::{PublishPlanMaterial, PublishPlanRegistry, stage_artifact_private};
 use super::records;
 use super::types::{
@@ -353,7 +353,7 @@ impl PackagingAgentService {
         })))
     }
 
-    pub(crate) async fn apply_publish(&self, input: PublishApplyInput) -> Result<ApplyResult> {
+    pub(crate) fn apply_publish(&self, input: PublishApplyInput) -> Result<ApplyResult> {
         let operation = "conary.packaging.publish.apply";
         let stored = match self
             .publish_plans
@@ -523,9 +523,7 @@ impl PackagingAgentService {
             rotate_publish_key: false,
             rotate_root_key: false,
             operation_id: operation_id.clone(),
-        })
-        .await
-        {
+        }) {
             Ok(output) => output,
             Err(error) => PackagingCommandOutput::failed(
                 operation_id,
@@ -548,7 +546,6 @@ impl PackagingAgentService {
             operation,
             &output,
             RiskLevel::High,
-            AgentProjectionMode::Apply,
             Some(resource::packaging_artifact(&material.artifact_sha256)),
         );
         envelope

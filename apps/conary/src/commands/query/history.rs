@@ -104,7 +104,7 @@ fn format_lifecycle_event_line(event: &conary_core::db::models::LifecycleEvent) 
 }
 
 /// Show changeset history
-pub async fn cmd_history(db_path: &str) -> Result<()> {
+pub fn cmd_history(db_path: &str) -> Result<()> {
     let conn = open_db(db_path)?;
     let changesets = conary_core::db::models::Changeset::list_all(&conn)?;
     let publications = conary_core::db::models::GenerationPublication::pending_recoverable(&conn)?;

@@ -130,33 +130,27 @@ async fn execute_planned_op(op: &PlannedOp, db_path: &str, root: &str) -> Result
             package,
             version,
             architecture,
-        } => {
-            super::cmd_remove(
-                package,
-                db_path,
-                version.clone(),
-                architecture.clone(),
-                super::SandboxMode::Always,
-                false,
-            )
-            .await
-        }
+        } => super::cmd_remove(
+            package,
+            db_path,
+            version.clone(),
+            architecture.clone(),
+            super::SandboxMode::Always,
+            false,
+        ),
         PlannedOp::Restore {
             package,
             version,
             architecture,
-        } => {
-            super::cmd_restore(
-                package,
-                db_path,
-                root,
-                version.clone(),
-                architecture.clone(),
-                false,
-                false,
-            )
-            .await
-        }
+        } => super::cmd_restore(
+            package,
+            db_path,
+            root,
+            version.clone(),
+            architecture.clone(),
+            false,
+            false,
+        ),
     }
 }
 
@@ -230,7 +224,14 @@ async fn execute_actions(
         insert_history_row(conn, action, status, error_message.as_deref())?;
 
         match error_message {
-            Some(message) => println!("  [{}] {}", status.to_uppercase(), message),
+            Some(message) => {
+                let row_status = if status == "partial" {
+                    crate::ui::Status::Warn
+                } else {
+                    crate::ui::Status::Fail
+                };
+                crate::ui::row(row_status, &[&message]);
+            }
             None => crate::ui::row(crate::ui::Status::Ok, &[&action.summary]),
         }
     }
@@ -407,7 +408,7 @@ fn build_status_json(summary: &AutomationSummary, config: &AutomationConfig) -> 
 }
 
 /// Show automation status
-pub async fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
+pub fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -> Result<()> {
     let conn = open_db(db_path)?;
 
     // Load model to get automation config
@@ -489,7 +490,7 @@ pub async fn cmd_automation_status(db_path: &str, format: &str, verbose: bool) -
 }
 
 /// Check for automation actions
-pub async fn cmd_automation_check(
+pub fn cmd_automation_check(
     db_path: &str,
     _root: &str,
     categories: Option<Vec<String>>,
@@ -528,7 +529,10 @@ pub async fn cmd_automation_check(
     println!();
 
     if !results.security.is_empty() && show_category(&AutomationCategory::Security) {
-        println!("[SECURITY] {} security update(s)", results.security.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} security update(s)", results.security.len())],
+        );
         for action in &results.security {
             println!("  - {}", action.summary);
         }
@@ -536,7 +540,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.updates.is_empty() && show_category(&AutomationCategory::Updates) {
-        println!("[UPDATES] {} package update(s)", results.updates.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} package update(s)", results.updates.len())],
+        );
         for action in &results.updates {
             println!("  - {}", action.summary);
         }
@@ -544,9 +551,12 @@ pub async fn cmd_automation_check(
     }
 
     if !results.major_upgrades.is_empty() && show_category(&AutomationCategory::MajorUpgrades) {
-        println!(
-            "[MAJOR UPGRADES] {} major upgrade(s)",
-            results.major_upgrades.len()
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!(
+                "{} major upgrade(s)",
+                results.major_upgrades.len()
+            )],
         );
         for action in &results.major_upgrades {
             println!("  - {}", action.summary);
@@ -555,7 +565,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.orphans.is_empty() && show_category(&AutomationCategory::Orphans) {
-        println!("[ORPHANS] {} orphaned package(s)", results.orphans.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} orphaned package(s)", results.orphans.len())],
+        );
         for action in &results.orphans {
             println!("  - {}", action.summary);
         }
@@ -563,7 +576,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.integrity.is_empty() && show_category(&AutomationCategory::Repair) {
-        println!("[INTEGRITY] {} issue(s)", results.integrity.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} integrity issue(s)", results.integrity.len())],
+        );
         for action in &results.integrity {
             println!("  - {}", action.summary);
         }
@@ -719,7 +735,7 @@ pub async fn cmd_automation_apply(
 
 /// Configure automation settings
 #[allow(clippy::too_many_arguments)]
-pub async fn cmd_automation_configure(
+pub fn cmd_automation_configure(
     _db_path: &str,
     show: bool,
     mode: Option<String>,
@@ -823,7 +839,7 @@ pub async fn cmd_automation_configure(
 }
 
 /// Run automation daemon
-pub async fn cmd_automation_daemon(db_path: &str, _root: &str, pidfile: &str) -> Result<()> {
+pub fn cmd_automation_daemon(db_path: &str, _root: &str, pidfile: &str) -> Result<()> {
     let _conn = open_db(db_path)?;
 
     let config = if model_exists(None) {
@@ -878,7 +894,7 @@ pub async fn cmd_automation_daemon(db_path: &str, _root: &str, pidfile: &str) ->
                     }
                 }
                 Err(e) => {
-                    println!("  Error: {}", e);
+                    crate::ui::row(crate::ui::Status::Fail, &[&e.to_string()]);
                 }
             }
 
@@ -893,7 +909,7 @@ pub async fn cmd_automation_daemon(db_path: &str, _root: &str, pidfile: &str) ->
 }
 
 /// Show automation history recorded by `conary automation apply`.
-pub async fn cmd_automation_history(
+pub fn cmd_automation_history(
     db_path: &str,
     limit: usize,
     category: Option<String>,
@@ -926,7 +942,7 @@ pub async fn cmd_automation_history(
             row.applied_at, row.status, row.category, packages
         );
         if let Some(error) = row.error_message {
-            println!("  error: {}", error);
+            crate::ui::row(crate::ui::Status::Fail, &[&error]);
         }
     }
 

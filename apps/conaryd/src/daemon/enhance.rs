@@ -88,14 +88,6 @@ pub struct EnhancedPackageResult {
 /// This function is called by the daemon's job executor when an Enhance job
 /// is dequeued. It processes pending packages in priority order, emitting
 /// events for progress tracking.
-///
-/// # Arguments
-/// * `state` - Daemon state for database access and event emission
-/// * `spec` - Job specification
-/// * `cancel_token` - Token for checking cancellation
-///
-/// # Returns
-/// * `EnhanceJobResult` with details of what was enhanced
 pub async fn execute_enhance_job(
     state: Arc<DaemonState>,
     spec: EnhanceJobSpec,

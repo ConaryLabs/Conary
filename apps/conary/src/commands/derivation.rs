@@ -127,7 +127,7 @@ where
 /// Loads the recipe, opens the derivation index DB, mounts the supplied
 /// environment image read-only as a sysroot, and executes the real
 /// `DerivationExecutor` pipeline.
-pub async fn cmd_derivation_build(
+pub fn cmd_derivation_build(
     recipe: &Path,
     env: &Path,
     cas_dir: &Path,
@@ -177,7 +177,7 @@ pub async fn cmd_derivation_build(
 ///
 /// Computes the content-addressed derivation ID from the recipe inputs and
 /// the provided build environment hash, then prints it.
-pub async fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
+pub fn cmd_derivation_show(recipe: &Path, env_hash: &str) -> Result<()> {
     let parsed = parse_recipe_file(recipe)
         .with_context(|| format!("Failed to parse recipe: {}", recipe.display()))?;
 

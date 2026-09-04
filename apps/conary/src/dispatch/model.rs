@@ -59,7 +59,7 @@ pub(super) async fn dispatch_model_command(model_cmd: cli::ModelCommands) -> Res
             output,
             db,
             description,
-        } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()).await,
+        } => commands::cmd_model_snapshot(&output, &db.db_path, description.as_deref()),
 
         cli::ModelCommands::Lock { model, output, db } => {
             commands::cmd_model_lock(&model, output.as_deref(), &db.db_path).await

@@ -3,7 +3,7 @@
 
 //! Package install, remove, and rollback workflow tests.
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 use tempfile::NamedTempFile;

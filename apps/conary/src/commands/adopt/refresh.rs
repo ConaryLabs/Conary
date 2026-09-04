@@ -125,7 +125,7 @@ impl RefreshFailureInjection {
 ///
 /// A single changeset covers all updates, and a state snapshot is created
 /// for rollback safety.
-pub async fn cmd_adopt_refresh(
+pub fn cmd_adopt_refresh(
     db_path: &str,
     _full: bool,
     dry_run: bool,

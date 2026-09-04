@@ -8,12 +8,7 @@ use conary_core::bootstrap::{
 };
 
 /// Generate bootable image
-pub async fn cmd_bootstrap_image(
-    work_dir: &str,
-    output: &str,
-    format: &str,
-    size: &str,
-) -> Result<()> {
+pub fn cmd_bootstrap_image(work_dir: &str, output: &str, format: &str, size: &str) -> Result<()> {
     println!("Generating bootable image...");
     println!("  Work directory: {}", work_dir);
     println!("  Output: {}", output);

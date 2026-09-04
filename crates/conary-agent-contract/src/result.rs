@@ -186,8 +186,6 @@ result_type!(InspectResult);
 result_type!(PlanResult);
 result_type!(VerifyResult);
 result_type!(ApplyResult);
-result_type!(ExplainResult);
-result_type!(RecoverResult);
 
 #[cfg(test)]
 mod tests {
