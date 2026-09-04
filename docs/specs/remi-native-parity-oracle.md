@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 62
+revision: 63
 status: active
 ---
 
@@ -772,8 +772,15 @@ dependency, obsoletion result, or prepared transaction that omits the exact
 root becomes `conflicting_closure`; missing dependencies become `unresolved`
 only when no conflict class exists. When preparation exposes missing first, the
 producer follows required dependencies with libalpm's database-precedence
-satisfier selection and runs libalpm's typed conflict check over that reachable
-package set before accepting `unresolved`. Ambiguous identities, unbound requirements,
+satisfier selection and runs libalpm's typed conflict check over each eligible
+reachable package set before accepting `unresolved`. The probe reuses
+`alpm_find_dbs_satisfier`, which shares native transaction preparation's
+`resolvedep` implementation: a satisfying literal is selected in registered
+database order, without admitting shadowed literals as alternatives. Only when
+native selection offers virtual-provider alternatives does the probe branch,
+using exactly the packages from libalpm's `SelectProvider` question. A conflict
+dominates only if every such eligible branch is conflict-blocked; matching and
+precedence are not reimplemented in the oracle. Ambiguous identities, unbound requirements,
 and unexpected native error classes fail the complete crawl. The public Arch profile's three
 authenticated database inputs are all `/os/x86_64`; their package rows are
 `x86_64` or architecture-independent `any` under the pinned lane.

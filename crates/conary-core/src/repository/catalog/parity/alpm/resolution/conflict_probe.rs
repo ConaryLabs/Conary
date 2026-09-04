@@ -2,16 +2,18 @@
 
 //! Path-sensitive libalpm conflict probing for missing-first transactions.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::rc::Rc;
 
 use alpm::{Alpm, Package};
 
 use super::evidence::alpm_conflict_explanation;
 use crate::repository::catalog::parity::NativeResolutionSurveyNativeExplanationV1;
 
-/// Re-probe an unsatisfied transaction without committing to libalpm's first
-/// satisfier. A conflict dominates only when every provider path for the
-/// root-reachable closure is blocked by a native conflict.
+/// Re-probe an unsatisfied transaction using libalpm's eligible provider set.
+/// A conflict dominates only when every native-selectable provider path for
+/// the root-reachable closure is blocked by a native conflict.
 pub(super) fn unavoidable_reachable_conflict_explanation(
     alpm: &Alpm,
     root: &Package,
@@ -73,51 +75,40 @@ pub(super) fn unavoidable_reachable_conflict_explanation(
 }
 
 fn alpm_satisfiers<'a>(alpm: &'a Alpm, dependency: &alpm::Dep) -> Vec<&'a Package> {
+    // `alpm_find_dbs_satisfier` uses the same `resolvedep` routine as native
+    // transaction preparation: first select a satisfying literal in database
+    // order; only without one does it offer virtual-provider alternatives.
+    // Observe those alternatives instead of recreating native eligibility,
+    // version matching, or database precedence here. Keep the default answer.
+    let alternatives = Rc::new(RefCell::new(BTreeSet::new()));
+    let previous_callback = alpm.take_raw_question_cb();
+    alpm.set_question_cb(Rc::clone(&alternatives), |question, alternatives| {
+        if let alpm::Question::SelectProvider(question) = question.question() {
+            alternatives.borrow_mut().extend(
+                question
+                    .providers()
+                    .iter()
+                    .map(|package| std::ptr::from_ref(package).cast::<()>() as usize),
+            );
+        }
+    });
+    let selected = alpm.syncdbs().find_satisfier(dependency.to_string());
+    alpm.set_raw_question_cb(previous_callback);
+    let alternatives = alternatives.borrow();
+    if alternatives.is_empty() {
+        return selected.into_iter().collect();
+    }
+
+    // Callback package borrows cannot escape the callback. Rebind their exact
+    // identities to the same immutable handle's package cache without unsafe
+    // lifetime extension or another satisfier-selection implementation.
     let mut providers = Vec::new();
     for database in alpm.syncdbs().iter() {
         for package in database.pkgs().iter() {
-            if alpm_package_satisfies(package, dependency) {
+            if alternatives.contains(&(std::ptr::from_ref(package).cast::<()>() as usize)) {
                 providers.push(package);
             }
         }
     }
     providers
-}
-
-/// Exact typed equivalent of pinned libalpm's `_alpm_depcmp`: literal package
-/// versions and versioned provides use libalpm's own version comparator.
-fn alpm_package_satisfies(package: &Package, dependency: &alpm::Dep) -> bool {
-    if package.name() == dependency.name() && alpm_version_satisfies(package.version(), dependency)
-    {
-        return true;
-    }
-    package.provides().iter().any(|provided| {
-        if provided.name() != dependency.name() {
-            return false;
-        }
-        if dependency.depmod() == alpm::DepMod::Any {
-            return true;
-        }
-        provided.depmod() == alpm::DepMod::Eq
-            && provided
-                .version()
-                .is_some_and(|version| alpm_version_satisfies(version, dependency))
-    })
-}
-
-fn alpm_version_satisfies(version: &alpm::Ver, dependency: &alpm::Dep) -> bool {
-    use std::cmp::Ordering;
-
-    let Some(required) = dependency.version() else {
-        return dependency.depmod() == alpm::DepMod::Any;
-    };
-    let comparison = version.vercmp(required);
-    match dependency.depmod() {
-        alpm::DepMod::Any => true,
-        alpm::DepMod::Eq => comparison == Ordering::Equal,
-        alpm::DepMod::Ge => comparison != Ordering::Less,
-        alpm::DepMod::Le => comparison != Ordering::Greater,
-        alpm::DepMod::Gt => comparison == Ordering::Greater,
-        alpm::DepMod::Lt => comparison == Ordering::Less,
-    }
 }
