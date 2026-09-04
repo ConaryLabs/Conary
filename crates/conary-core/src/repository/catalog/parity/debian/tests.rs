@@ -1424,6 +1424,60 @@ fn transitive_missing_and_mixed_conflict_follow_precedence() {
 }
 
 #[test]
+fn ignorable_or_avoidable_conflicts_do_not_override_missing_requirements() {
+    let directory = tempfile::tempdir().unwrap();
+    let package_text = [
+        resolution_stanza(
+            "self-conflict-root",
+            "1",
+            "amd64",
+            'a',
+            "Depends: virtual-self-conflict, absent-self-target\n",
+        ),
+        resolution_stanza(
+            "self-conflict-provider",
+            "1",
+            "amd64",
+            'b',
+            "Provides: virtual-self-conflict\nConflicts: virtual-self-conflict\n",
+        ),
+        resolution_stanza(
+            "alternative-root",
+            "1",
+            "amd64",
+            'c',
+            "Depends: a-conflicting-provider | z-usable-provider, absent-alternative-target\n",
+        ),
+        resolution_stanza(
+            "a-conflicting-provider",
+            "1",
+            "amd64",
+            'd',
+            "Conflicts: alternative-root\n",
+        ),
+        resolution_stanza("z-usable-provider", "1", "amd64", 'e', ""),
+    ]
+    .concat();
+    let source = write_resolution_packages(directory.path(), "ubuntu-main", &package_text);
+    let staged = directory.path().join("member-0_Packages.zst");
+    fs::copy(source, &staged).unwrap();
+    let mut apt = AptResolution::open(&[staged], "amd64").unwrap();
+
+    for (root, missing_text) in [
+        ("self-conflict-root", "absent-self-target"),
+        ("alternative-root", "absent-alternative-target"),
+    ] {
+        let AptResolutionOutcome::Unresolved(missing) = apt.resolve(root, "1", "amd64").unwrap()
+        else {
+            panic!("{root} must retain its independent missing requirement");
+        };
+        assert_eq!(missing.len(), 1);
+        assert_eq!(missing[0].requiring.name, root);
+        assert_eq!(missing[0].native_text, missing_text);
+    }
+}
+
+#[test]
 fn resolution_producer_types_conflicts_and_rejects_incompatible_roots() {
     let directory = tempfile::tempdir().unwrap();
     let conflict_packages = [

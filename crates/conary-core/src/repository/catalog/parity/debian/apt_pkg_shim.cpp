@@ -720,7 +720,8 @@ bool version_has_negative_relation_to_selected(ResolutionHandle &handle,
                 continue;
             }
             pkgCache::VerIterator selected = state.InstVerIter(*handle.cache);
-            if (!selected.end() && group_targets_version(handle, start, end, selected)) {
+            if (!selected.end() && selected != version &&
+                group_targets_version(handle, start, end, selected)) {
                 return true;
             }
         }
@@ -731,6 +732,9 @@ bool version_has_negative_relation_to_selected(ResolutionHandle &handle,
 bool version_has_negative_relation_to_version(ResolutionHandle &handle,
                                               pkgCache::VerIterator const &source,
                                               pkgCache::VerIterator const &target) {
+    if (source == target) {
+        return false;
+    }
     for (pkgCache::DepIterator cursor = source.DependsList(); !cursor.end();) {
         pkgCache::DepIterator start;
         pkgCache::DepIterator end;
@@ -928,6 +932,9 @@ bool required_target_probe_has_conflict(ResolutionHandle &handle,
         if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
             continue;
         }
+        bool has_satisfying_candidate = false;
+        bool has_installable_candidate = false;
+        bool has_conflicting_candidate = false;
         for (pkgCache::DepIterator atom = start;; ++atom) {
             std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
             for (std::size_t index = 0; targets[index] != nullptr; ++index) {
@@ -935,19 +942,26 @@ bool required_target_probe_has_conflict(ResolutionHandle &handle,
                 if (handle.policy->GetPriority(target) <= 0) {
                     continue;
                 }
+                has_satisfying_candidate = true;
                 bool installable = false;
                 bool conflicting = false;
                 if (!target_is_installable_with_root(
                         handle, root, target, installable, conflicting)) {
                     return false;
                 }
-                if (conflicting) {
-                    return true;
+                has_installable_candidate = has_installable_candidate || installable;
+                has_conflicting_candidate = has_conflicting_candidate || conflicting;
+                if (has_installable_candidate) {
+                    break;
                 }
             }
-            if (atom == end) {
+            if (has_installable_candidate || atom == end) {
                 break;
             }
+        }
+        if (has_satisfying_candidate && !has_installable_candidate &&
+            has_conflicting_candidate) {
+            return true;
         }
     }
     return false;
