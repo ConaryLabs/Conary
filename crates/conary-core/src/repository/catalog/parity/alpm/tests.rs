@@ -769,7 +769,7 @@ fn resolution_producer_excludes_non_native_roots_and_types_conflicting_closure()
 fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("core-survey.db");
-    let checksums = ['a', 'b', 'c', 'd'].map(digest);
+    let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
     let mut conflict = PackageFixture::new("conflict-root", &checksums[0]);
     conflict.depends = &["blocker"];
     conflict.conflicts = &["blocker"];
@@ -777,11 +777,18 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     let mut unresolved = PackageFixture::new("unresolved-root", &checksums[2]);
     unresolved.depends = &["missing-survey-provider"];
     let healthy = PackageFixture::new("healthy-after-failures", &checksums[3]);
-    write_database(&database, &[conflict, blocker, unresolved, healthy]);
+    let mut mixed = PackageFixture::new("mixed-root", &checksums[4]);
+    mixed.depends = &["mixed-blocker", "missing-beside-conflict"];
+    mixed.conflicts = &["mixed-blocker"];
+    let mixed_blocker = PackageFixture::new("mixed-blocker", &checksums[5]);
+    write_database(
+        &database,
+        &[conflict, blocker, unresolved, healthy, mixed, mixed_blocker],
+    );
     let databases = vec![database];
     let snapshots = vec![source_snapshot("arch-core-x86_64", &databases[0])];
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 4;
+    profile.counts.packages = 6;
     profile.counts.source_evidence = 1;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
@@ -795,25 +802,27 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     )
     .unwrap();
 
-    assert_eq!(survey.counts.roots_walked, 4);
-    assert_eq!(survey.counts.resolved_roots, 2);
+    assert_eq!(survey.counts.roots_walked, 6);
+    assert_eq!(survey.counts.resolved_roots, 3);
     assert_eq!(survey.counts.unresolved_roots, 1);
-    assert_eq!(survey.counts.not_installable_roots, 1);
+    assert_eq!(survey.counts.not_installable_roots, 2);
     assert_eq!(survey.counts.failed_roots, 0);
     assert!(survey.failures.is_empty());
-    assert_eq!(survey.diagnostic_outcomes.len(), 1);
-    assert!(matches!(
-        survey.diagnostic_outcomes[0].outcome,
-        NativeResolutionOutcomeV1::NotInstallable {
-            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
-        }
-    ));
-    assert!(matches!(
-        &survey.diagnostic_outcomes[0].native_explanation,
-        NativeResolutionSurveyNativeExplanationV1::Alpm {
-            result: NativeResolutionSurveyAlpmResultV1::Conflicts { conflicts }
-        } if !conflicts.is_empty()
-    ));
+    assert_eq!(survey.diagnostic_outcomes.len(), 2);
+    for outcome in &survey.diagnostic_outcomes {
+        assert!(matches!(
+            outcome.outcome,
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+            }
+        ));
+        assert!(matches!(
+            &outcome.native_explanation,
+            NativeResolutionSurveyNativeExplanationV1::Alpm {
+                result: NativeResolutionSurveyAlpmResultV1::Conflicts { conflicts }
+            } if !conflicts.is_empty()
+        ));
+    }
     assert!(!directory.path().join("manifest.json").exists());
     assert!(!directory.path().join("roots.jsonl").exists());
 
@@ -825,7 +834,7 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
         &directory.path().join("strict-resolution"),
     )
     .unwrap();
-    assert_eq!(strict.artifact.counts.not_installable_roots, 1);
+    assert_eq!(strict.artifact.counts.not_installable_roots, 2);
 }
 
 #[test]

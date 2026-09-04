@@ -721,6 +721,53 @@ fn resolve_initialized_transaction(
             ))
         }
         Preparation::Unsatisfied(missing) => {
+            let root_package = locate_exact_root(alpm, profile, inputs, root).map_err(|error| {
+                NativeRootResolutionError::new(
+                    error,
+                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                    alpm_unavailable("exact_root_unavailable_to_conflict_reprobe"),
+                )
+            })?;
+            let mut reachable = vec![root_package];
+            loop {
+                let missing = alpm.check_deps(
+                    std::iter::empty::<&alpm::Pkg>(),
+                    std::iter::empty::<&alpm::Pkg>(),
+                    reachable.iter().map(|package| package.as_ref()),
+                    false,
+                );
+                let mut added = false;
+                for dependency in missing.iter() {
+                    let Some(provider) = alpm
+                        .syncdbs()
+                        .find_satisfier(dependency.depend().to_string())
+                    else {
+                        continue;
+                    };
+                    if !reachable
+                        .iter()
+                        .any(|candidate| std::ptr::eq(*candidate, provider))
+                    {
+                        reachable.push(provider);
+                        added = true;
+                    }
+                }
+                if !added {
+                    break;
+                }
+            }
+            let conflicts = alpm.check_conflicts(reachable.iter().map(|package| package.as_ref()));
+            if !conflicts.is_empty() {
+                return Ok(NativeRootResolutionSuccess::explained(
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    },
+                    alpm_conflict_explanation(
+                        conflicts.iter(),
+                        explanation_limits.diagnostic_outcome_bytes(),
+                    ),
+                ));
+            }
             let packages = transaction_packages(alpm, profile, inputs).map_err(|error| {
                 NativeRootResolutionError::new(
                     error,

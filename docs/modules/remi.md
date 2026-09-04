@@ -849,6 +849,9 @@ inflating the failure count. Candidate-resolution and resolution-comparison
 surveys are schema 2 because they embed the outcome vocabulary. Native and
 candidate explanations use a 32 MiB retained-evidence budget; native survey
 documents remain capped at 64 MiB end to end.
+For ALPM missing-first failures, the producer rechecks the libalpm-selected
+root-reachable package set with libalpm's typed conflict API before accepting
+an unresolved outcome.
 
 ### Initial Full-Universe Conversion Crawl
 

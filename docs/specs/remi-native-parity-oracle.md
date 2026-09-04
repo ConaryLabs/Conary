@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 58
+revision: 59
 status: active
 ---
 
@@ -419,7 +419,7 @@ solver diagnostics, rather than package semantics, authoritative.
 | --- | --- |
 | libsolv | Any `PKG_CONFLICTS` (`0x105`), `PKG_SAME_NAME` (`0x106`), `PKG_OBSOLETES` (`0x107`), or implicit-obsoletes (`0x108`) rule in any failed problem; also a successful transaction that omits the exact root. Architecture-only `INFARCH` remains outside this class. |
 | apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
-| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, or a prepared transaction that omits the exact root. |
+| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or a native `check_conflicts` result over libalpm-selected packages reached from the exact root when preparation reports missing dependencies first. |
 | Conary/Resolvo | Any `ConflictEdge::Conflict` or `ConflictNode::Excluded` in the exact-root graph. When a minimized graph exposes missing first, the producer re-solves with those exact persisted missing groups discharged until it exposes a root-reachable conflict or proves the remainder conflict-free. |
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
@@ -764,7 +764,10 @@ and canonical required-group digests. A non-native exact root becomes the
 typed architecture-excluded outcome before transaction setup. A conflicting
 dependency, obsoletion result, or prepared transaction that omits the exact
 root becomes `conflicting_closure`; missing dependencies become `unresolved`
-only when no conflict class exists. Ambiguous identities, unbound requirements,
+only when no conflict class exists. When preparation exposes missing first, the
+producer follows required dependencies with libalpm's database-precedence
+satisfier selection and runs libalpm's typed conflict check over that reachable
+package set before accepting `unresolved`. Ambiguous identities, unbound requirements,
 and unexpected native error classes fail the complete crawl. The public Arch profile's three
 authenticated database inputs are all `/os/x86_64`; their package rows are
 `x86_64` or architecture-independent `any` under the pinned lane.
