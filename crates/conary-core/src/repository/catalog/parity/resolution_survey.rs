@@ -90,6 +90,12 @@ impl NativeResolutionSurveyV1 {
             ));
         }
         self.counts.validate()?;
+        if self.evidence_byte_limit != NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT {
+            return Err(Error::ConfigError(format!(
+                "native resolution survey evidence byte limit {} is unsupported; expected {}",
+                self.evidence_byte_limit, NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT
+            )));
+        }
         if self.failure_record_limit != NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT as u64 {
             return Err(Error::ConfigError(format!(
                 "native resolution survey failure record limit {} is unsupported; expected {}",
@@ -870,7 +876,29 @@ mod tests {
     }
 
     #[test]
-    fn survey_withholds_explanations_after_canonical_byte_budget_is_exhausted() {
+    fn survey_rejects_noncanonical_evidence_limit_before_writing() {
+        let mut survey = collector(NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT)
+            .finish()
+            .unwrap();
+        survey.evidence_byte_limit /= 2;
+        let error = survey.validate().unwrap_err();
+        assert!(matches!(error, Error::ConfigError(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("evidence byte limit 16777216 is unsupported; expected 33554432")
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("survey.json");
+        assert!(matches!(
+            write_native_resolution_survey(&output, &survey),
+            Err(Error::ConfigError(_))
+        ));
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn collector_withholds_explanations_after_canonical_byte_budget_is_exhausted() {
         let explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
             result: NativeResolutionSurveyRpmResultV1::Problems {
                 problems: Vec::new(),
@@ -899,29 +927,29 @@ mod tests {
                 .unwrap();
         }
 
-        let survey = collector.finish().unwrap();
-        assert_eq!(survey.retained_failures, 3);
-        assert_eq!(survey.evidence_byte_limit, explanation_bytes);
-        assert_eq!(survey.retained_evidence_bytes, explanation_bytes);
-        assert_eq!(survey.retained_explanations, 1);
-        assert_eq!(survey.withheld_explanations, 2);
-        assert!(survey.truncated_evidence);
+        // Exercise retention with a tiny internal budget, but never publish
+        // that test budget as a valid hard-cut survey contract.
+        assert_eq!(collector.failures.len(), 3);
+        assert_eq!(collector.retained_evidence_bytes, explanation_bytes);
+        assert_eq!(collector.retained_explanations, 1);
+        assert_eq!(collector.withheld_explanations, 2);
+        assert!(collector.evidence_budget_exhausted);
         assert!(matches!(
-            survey.failures[0].native_explanation,
+            collector.failures[0].native_explanation,
             NativeResolutionSurveyNativeExplanationV1::Rpm { .. }
         ));
-        assert!(survey.failures[1..].iter().all(|failure| matches!(
+        assert!(collector.failures[1..].iter().all(|failure| matches!(
             failure.native_explanation,
             NativeResolutionSurveyNativeExplanationV1::Withheld {
                 reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted
             }
         )));
-        survey.validate().unwrap();
+        assert!(matches!(collector.finish(), Err(Error::ConfigError(_))));
     }
 
     #[test]
     fn survey_counts_explanation_withheld_during_native_projection() {
-        let mut collector = collector(1);
+        let mut collector = collector(NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT);
         collector
             .failure(
                 &root(),

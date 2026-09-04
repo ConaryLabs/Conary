@@ -95,7 +95,7 @@ else:
         }
         survey = {
             "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 1, "resolved_roots": 0, "roots_walked": 1, "unresolved_roots": 0},
-            "evidence_byte_limit": 33554432,
+            "evidence_byte_limit": int(os.environ["FAKE_EVIDENCE_BYTE_LIMIT"]),
             "failure_record_limit": 5000,
             "diagnostic_outcome_record_limit": 5000,
             "diagnostic_outcomes": [diagnostic_outcome],
@@ -224,6 +224,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         architecture: str = "x86_64",
         producer_commit: str = PRODUCER_COMMIT,
         strict_failure: bool = False,
+        evidence_byte_limit: int = 33554432,
     ) -> subprocess.CompletedProcess[str]:
         ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
         package = self.root / f"conary-{ecosystem}-oracle"
@@ -254,7 +255,11 @@ class NativeOracleLaneTests(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
-            env={**os.environ, "FAKE_STRICT_FAIL": "1" if strict_failure else "0"},
+            env={
+                **os.environ,
+                "FAKE_STRICT_FAIL": "1" if strict_failure else "0",
+                "FAKE_EVIDENCE_BYTE_LIMIT": str(evidence_byte_limit),
+            },
         )
 
     def test_produces_exact_package_and_resolution_evidence(self) -> None:
@@ -363,6 +368,12 @@ class NativeOracleLaneTests(unittest.TestCase):
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertFalse((self.root / "output-fedora-44" / "evidence.json").exists())
+
+    def test_rejects_noncanonical_survey_evidence_limit(self) -> None:
+        result = self.run_lane(evidence_byte_limit=16777216)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native resolution survey evidence counts drifted", result.stderr)
+        self.assertFalse((self.root / "survey-fedora-44" / "manifest.json").exists())
 
     def test_rejects_malformed_producer_commit(self) -> None:
         result = self.run_lane(producer_commit="main")
