@@ -90,6 +90,15 @@ impl NativeResolutionSurveyV1 {
             ));
         }
         self.counts.validate()?;
+        if self.diagnostic_outcome_record_limit
+            != NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT as u64
+        {
+            return Err(Error::ConfigError(format!(
+                "native resolution survey diagnostic outcome record limit {} is unsupported; expected {}",
+                self.diagnostic_outcome_record_limit,
+                NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT
+            )));
+        }
         if self.total_failures != self.counts.failed_roots
             || self.retained_failures != self.failures.len() as u64
             || self.retained_failures > self.total_failures
@@ -827,6 +836,15 @@ mod tests {
             survey.failures[0].native_explanation,
             NativeResolutionSurveyNativeExplanationV1::Rpm { .. }
         ));
+
+        let mut drifted_limit = survey.clone();
+        drifted_limit.diagnostic_outcome_record_limit += 1;
+        let error = drifted_limit.validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("diagnostic outcome record limit 5001 is unsupported")
+        );
     }
 
     #[test]
