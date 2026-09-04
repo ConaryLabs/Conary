@@ -379,8 +379,7 @@ pub fn get_pending_by_priority(conn: &Connection, limit: usize) -> EnhancementRe
             rusqlite::params![limit as i64, EnhancementStatus::Pending.to_db_str()],
             |row| row.get(0),
         )?
-        .filter_map(|r| r.ok())
-        .collect();
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(trove_ids)
 }

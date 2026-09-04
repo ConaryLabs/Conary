@@ -160,8 +160,7 @@ impl ConvertedPackageInfo {
                     enhancement_version: row.get(6)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(packages)
     }
@@ -189,8 +188,7 @@ impl ConvertedPackageInfo {
                     enhancement_version: row.get(6)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(packages)
     }
@@ -260,5 +258,25 @@ mod tests {
         assert_eq!(stats.total, 0);
         assert_eq!(stats.pending, 0);
         assert_eq!(stats.complete, 0);
+    }
+    #[test]
+    fn status_counts_reject_unknown_persisted_values() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE converted_packages (enhancement_status TEXT);
+            INSERT INTO converted_packages VALUES ('obsolete');",
+        )
+        .unwrap();
+        let error = ConvertedPackageInfo::count_by_status(&conn).unwrap_err();
+        let EnhancementError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) =
+            error
+        else {
+            panic!("expected typed persisted error: {error:?}");
+        };
+        assert!(
+            source
+                .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+                .is_some()
+        );
     }
 }
