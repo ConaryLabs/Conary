@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/failure_policy/tests.rs
+// crates/conary-core/src/scriptlet/failure_policy/tests.rs
 
 use super::*;
 use crate::ccs::native_lifecycle::{RpmTriggerAction as PersistedRpmTriggerAction, RpmTriggerKind};

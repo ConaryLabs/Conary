@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/remi/run/tests.rs
+// crates/conary-core/src/repository/sync/remi/run/tests.rs
 
 use super::*;
 use crate::db::models::Repository;

@@ -1,14 +1,16 @@
 // crates/conary-xtask/src/line_cap.rs
 
-use proc_macro2::{Span, TokenStream, TokenTree};
+use proc_macro2::Span;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use syn::parse::Parser;
+use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ForeignItem, ImplItem, Item, Meta, TraitItem};
+use syn::{Attribute, ForeignItem, ImplItem, Item, Meta, Token, TraitItem};
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
@@ -66,14 +68,29 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
         let relative = path
             .strip_prefix(&root)
             .map_err(|error| format!("cannot relativize {}: {error}", path.display()))?;
-        let relative = path_text(relative);
-        let metrics = match analyze_file(&path) {
+        let relative_path = relative;
+        let relative = path_text(relative_path);
+        let source = match fs::read_to_string(&path) {
+            Ok(source) => source,
+            Err(error) => {
+                errors.push(format!("cannot read {relative}: {error}"));
+                continue;
+            }
+        };
+        if let Err(error) = validate_path_comment(&source, relative_path) {
+            errors.push(error);
+        }
+        let metrics = match analyze_source(&source) {
             Ok(metrics) => metrics,
             Err(error) => {
                 errors.push(format!("failed to parse {relative}: {error}"));
                 continue;
             }
         };
+
+        if excluded_test_file(relative_path) {
+            continue;
+        }
 
         if options.report {
             println!(
@@ -88,7 +105,11 @@ pub(crate) fn run(args: impl Iterator<Item = String>) -> Result<(), String> {
             continue;
         }
 
-        if allowlist.contains_key(&relative) {
+        if let Some(issue) = allowlist.get(&relative) {
+            println!(
+                "ALLOWLISTED: {relative} production={} inline_test={} issue={issue}",
+                metrics.production_lines, metrics.inline_test_lines
+            );
             used_allowlist_entries.insert(relative);
             continue;
         }
@@ -186,9 +207,10 @@ fn read_allowlist(path: &Path) -> Result<BTreeMap<String, String>, String> {
 }
 
 fn valid_issue(value: &str) -> bool {
-    value.strip_prefix('#').is_some_and(|number| {
-        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-    })
+    value
+        .strip_prefix('#')
+        .and_then(|number| number.parse::<u64>().ok())
+        .is_some_and(|number| number > 0)
 }
 
 fn rust_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -199,7 +221,7 @@ fn rust_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
             continue;
         }
         found_source_root = true;
-        collect_rust_files(&source_root, root, &mut files)?;
+        collect_rust_files(&source_root, &mut files)?;
     }
     if !found_source_root {
         return Err(format!(
@@ -211,11 +233,7 @@ fn rust_source_files(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(files)
 }
 
-fn collect_rust_files(
-    directory: &Path,
-    root: &Path,
-    files: &mut Vec<PathBuf>,
-) -> Result<(), String> {
+fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let entries = fs::read_dir(directory)
         .map_err(|error| format!("cannot read {}: {error}", directory.display()))?;
     for entry in entries {
@@ -226,31 +244,43 @@ fn collect_rust_files(
             .map_err(|error| format!("cannot inspect {}: {error}", path.display()))?;
         if file_type.is_dir() {
             if entry.file_name() != OsStr::new("target") {
-                collect_rust_files(&path, root, files)?;
+                collect_rust_files(&path, files)?;
             }
-        } else if file_type.is_file()
-            && path.extension() == Some(OsStr::new("rs"))
-            && !excluded_test_file(&path, root)?
-        {
+        } else if file_type.is_file() && path.extension() == Some(OsStr::new("rs")) {
             files.push(path);
         }
     }
     Ok(())
 }
 
-fn excluded_test_file(path: &Path, root: &Path) -> Result<bool, String> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|error| format!("cannot relativize {}: {error}", path.display()))?;
-    Ok(relative.file_name() == Some(OsStr::new("tests.rs"))
+fn excluded_test_file(relative: &Path) -> bool {
+    relative.file_name() == Some(OsStr::new("tests.rs"))
         || relative
             .components()
-            .any(|component| component == Component::Normal(OsStr::new("tests"))))
+            .any(|component| component == Component::Normal(OsStr::new("tests")))
 }
 
-fn analyze_file(path: &Path) -> Result<FileMetrics, String> {
-    let source = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    analyze_source(&source).map_err(|error| error.to_string())
+fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
+    let Some(first_line) = source.lines().next() else {
+        return Ok(());
+    };
+    let Some(comment) = first_line.strip_prefix("// ") else {
+        return Ok(());
+    };
+    if !(comment.starts_with("apps/") || comment.starts_with("crates/"))
+        || !comment.ends_with(".rs")
+    {
+        return Ok(());
+    }
+
+    let expected = path_text(relative);
+    if comment == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "{expected} has mismatched path comment: expected `// {expected}`, found `{first_line}`"
+        ))
+    }
 }
 
 fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
@@ -274,7 +304,7 @@ struct TestSpanVisitor {
 
 impl TestSpanVisitor {
     fn record(&mut self, attributes: &[Attribute], span: Span) -> bool {
-        if !attributes.iter().any(cfg_mentions_test) {
+        if !attributes.iter().any(cfg_is_test_only) {
             return false;
         }
         let start = attributes
@@ -375,20 +405,51 @@ fn foreign_item_attributes(item: &ForeignItem) -> &[Attribute] {
     }
 }
 
-fn cfg_mentions_test(attribute: &Attribute) -> bool {
-    attribute.path().is_ident("cfg")
-        && match &attribute.meta {
-            Meta::List(meta) => token_stream_mentions_test(&meta.tokens),
-            _ => false,
-        }
+fn cfg_is_test_only(attribute: &Attribute) -> bool {
+    let Meta::List(cfg) = &attribute.meta else {
+        return false;
+    };
+    if !cfg.path.is_ident("cfg") {
+        return false;
+    }
+    let Ok(predicate) = syn::parse2::<Meta>(cfg.tokens.clone()) else {
+        return false;
+    };
+    evaluate_cfg(&predicate, true) && !evaluate_cfg(&predicate, false)
 }
 
-fn token_stream_mentions_test(tokens: &TokenStream) -> bool {
-    tokens.clone().into_iter().any(|token| match token {
-        TokenTree::Ident(identifier) => identifier == "test",
-        TokenTree::Group(group) => token_stream_mentions_test(&group.stream()),
-        _ => false,
-    })
+fn evaluate_cfg(predicate: &Meta, test: bool) -> bool {
+    match predicate {
+        Meta::Path(path) => {
+            if path.is_ident("test") {
+                test
+            } else {
+                true
+            }
+        }
+        Meta::NameValue(_) => true,
+        Meta::List(list) if list.path.is_ident("all") => parse_cfg_children(list)
+            .is_some_and(|children| children.iter().all(|child| evaluate_cfg(child, test))),
+        Meta::List(list) if list.path.is_ident("any") => parse_cfg_children(list)
+            .is_some_and(|children| children.iter().any(|child| evaluate_cfg(child, test))),
+        Meta::List(list) if list.path.is_ident("not") => {
+            let Some(children) = parse_cfg_children(list) else {
+                return true;
+            };
+            if children.len() == 1 {
+                !evaluate_cfg(&children[0], test)
+            } else {
+                true
+            }
+        }
+        Meta::List(_) => true,
+    }
+}
+
+fn parse_cfg_children(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> {
+    Punctuated::<Meta, Token![,]>::parse_terminated
+        .parse2(list.tokens.clone())
+        .ok()
 }
 
 fn union_spans(mut spans: Vec<LineSpan>) -> Vec<LineSpan> {
@@ -453,6 +514,30 @@ const FIXTURE: &str = "value";
     }
 
     #[test]
+    fn evaluates_cfg_test_polarity() {
+        let source = r#"#[cfg(not(test))]
+fn production_when_not_testing() {}
+#[cfg(any(test, feature = "fixture"))]
+fn production_with_feature() {}
+#[cfg(all(test, feature = "fixture"))]
+fn test_only() {}
+#[cfg(not(not(test)))]
+fn nested_test_only() {}
+#[cfg(any(not(test), all(test, feature = "fixture")))]
+fn nested_production() {}
+"#;
+
+        assert_eq!(
+            analyze_source(source).unwrap(),
+            FileMetrics {
+                total_lines: 10,
+                production_lines: 6,
+                inline_test_lines: 4,
+            }
+        );
+    }
+
+    #[test]
     fn counts_associated_items_without_double_counting_a_test_impl() {
         let source = r#"struct Example;
 impl Example {
@@ -475,5 +560,17 @@ impl Example {
                 inline_test_lines: 7,
             }
         );
+    }
+
+    #[test]
+    fn validates_repo_relative_path_comments() {
+        let path = Path::new("crates/example/src/tests.rs");
+        assert!(validate_path_comment("// crates/example/src/tests.rs\n", path).is_ok());
+        assert!(
+            validate_path_comment("// crates/wrong/src/tests.rs\n", path)
+                .unwrap_err()
+                .contains("expected `// crates/example/src/tests.rs`")
+        );
+        assert!(validate_path_comment("// ordinary comment\n", path).is_ok());
     }
 }

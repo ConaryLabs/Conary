@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/payload/tests.rs
+// crates/conary-core/src/packages/arch/payload/tests.rs
 
 use super::*;
 use crate::packages::{ExtractedFile, PackagePayload};

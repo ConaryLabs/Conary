@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/debian/tests.rs
+// crates/conary-core/src/repository/parsers/debian/tests.rs
 
 use super::*;
 use crate::repository::RepositoryTrustPolicy;

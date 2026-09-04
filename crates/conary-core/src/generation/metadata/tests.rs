@@ -1,4 +1,4 @@
-// conary-core/src/generation/metadata/tests.rs
+// crates/conary-core/src/generation/metadata/tests.rs
 
 use super::*;
 use crate::ccs::signing::SigningKeyPair;

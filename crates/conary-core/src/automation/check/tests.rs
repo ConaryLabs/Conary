@@ -1,4 +1,4 @@
-// conary-core/src/automation/check/tests.rs
+// crates/conary-core/src/automation/check/tests.rs
 
 use super::*;
 

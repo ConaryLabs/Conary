@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/stream/tests.rs
+// crates/conary-core/src/packages/rpm/payload/stream/tests.rs
 
 use super::super::header::DeclaredDigest;
 use super::*;

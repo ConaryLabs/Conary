@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/tests.rs
+// crates/conary-core/src/packages/rpm/payload/tests.rs
 
 use super::digest::{ComputedFileDigest, ComputedRegularContent};
 use super::header::DeclaredDigest;

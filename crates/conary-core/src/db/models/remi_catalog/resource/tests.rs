@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remi_catalog/resource/tests.rs
+// crates/conary-core/src/db/models/remi_catalog/resource/tests.rs
 
 use super::*;
 use crate::db::schema::ensure_current;

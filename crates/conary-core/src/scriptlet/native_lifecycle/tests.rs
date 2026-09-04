@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/native_lifecycle/tests.rs
+// crates/conary-core/src/scriptlet/native_lifecycle/tests.rs
 
 use super::super::{
     ExecutionMode, PackageFormat, SandboxMode, ScriptletExecutor, ScriptletOutcome,

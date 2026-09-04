@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/tests.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/tests.rs
 
 use super::execute_embedded_lua;
 use crate::ccs::native_lifecycle::{

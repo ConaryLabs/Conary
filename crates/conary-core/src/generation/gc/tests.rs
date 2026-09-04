@@ -1,4 +1,4 @@
-// conary-core/src/generation/gc/tests.rs
+// crates/conary-core/src/generation/gc/tests.rs
 
 use super::*;
 use crate::db::models::{

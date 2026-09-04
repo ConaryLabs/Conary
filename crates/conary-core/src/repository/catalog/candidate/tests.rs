@@ -1,4 +1,4 @@
-// conary-core/src/repository/catalog/candidate/tests.rs
+// crates/conary-core/src/repository/catalog/candidate/tests.rs
 
 use super::*;
 use crate::repository::catalog::{

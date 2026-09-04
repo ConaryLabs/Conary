@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/capabilities/tests.rs
+// crates/conary-core/src/ccs/hooks/capabilities/tests.rs
 
 use super::*;
 use crate::ccs::manifest::{Service, ServiceAction};

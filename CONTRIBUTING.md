@@ -217,13 +217,14 @@ them focused: name the current responsibility, the module or helper that should
 own it, and the focused verification command that proves behavior is preserved
 or intentionally changed.
 
-`scripts/check-line-cap.sh` measures all lines outside inline `#[cfg(test)]`
-modules, ignores sibling and package-level test files, caps that non-test
-portion at 1,000 lines, and caps the total inline test-item spans in each file
-at 300 lines. Every checked-in exception names the issue that owns its
-decomposition. Add behavior to an over-cap file only through the ownership-based
-reorganization named by that issue. Thin registration, dispatch, and re-export
-wiring may remain in the large hub only through an issue-linked exception.
+`scripts/check-line-cap.sh` measures all lines outside items whose `cfg`
+predicate is test-only, ignores sibling and package-level test files, caps that
+non-test portion at 1,000 lines, and caps the total inline test-item spans in
+each file at 300 lines. Every checked-in exception names the open issue that
+owns its decomposition. Add behavior to an over-cap file only through the
+ownership-based reorganization named by that issue. Thin registration,
+dispatch, and re-export wiring may remain in the large hub only through an
+issue-linked exception.
 
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a

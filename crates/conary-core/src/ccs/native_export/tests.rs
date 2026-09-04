@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/tests.rs
+// crates/conary-core/src/ccs/native_export/tests.rs
 
 use super::*;
 use crate::packages::PackageFormat;

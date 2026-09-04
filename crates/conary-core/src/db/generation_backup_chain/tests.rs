@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_backup_chain/tests.rs
+// crates/conary-core/src/db/generation_backup_chain/tests.rs
 
 use super::*;
 use crate::db::generation_delta::{

@@ -1,4 +1,4 @@
-// conary-core/src/flavor/tests.rs
+// crates/conary-core/src/flavor/tests.rs
 
 use super::*;
 

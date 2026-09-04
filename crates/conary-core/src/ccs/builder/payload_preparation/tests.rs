@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/payload_preparation/tests.rs
+// crates/conary-core/src/ccs/builder/payload_preparation/tests.rs
 
 use super::*;
 use crate::packages::payload::ReopenablePayload;

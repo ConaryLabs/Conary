@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/sync/tests.rs
+// crates/conary-core/src/repository/static_repo/sync/tests.rs
 
 use super::fetch_static_sync_snapshot;
 use crate::ccs::signing::SigningKeyPair;

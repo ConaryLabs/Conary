@@ -1,4 +1,4 @@
-// conary-core/src/ccs/chunking/tests.rs
+// crates/conary-core/src/ccs/chunking/tests.rs
 
 use super::*;
 use tempfile::TempDir;

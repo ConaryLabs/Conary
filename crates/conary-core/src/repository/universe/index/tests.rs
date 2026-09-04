@@ -1,4 +1,4 @@
-// conary-core/src/repository/universe/index/tests.rs
+// crates/conary-core/src/repository/universe/index/tests.rs
 
 use super::*;
 use crate::canonical::{CanonicalMapEntry, CanonicalMapSnapshot};

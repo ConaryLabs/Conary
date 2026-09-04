@@ -1,4 +1,4 @@
-// conary-core/src/transaction/tests.rs
+// crates/conary-core/src/transaction/tests.rs
 
 use super::*;
 use crate::generation::artifact::{

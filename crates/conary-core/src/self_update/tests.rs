@@ -1,4 +1,4 @@
-// conary-core/src/self_update/tests.rs
+// crates/conary-core/src/self_update/tests.rs
 
 use super::*;
 use gzp::ZWriter;

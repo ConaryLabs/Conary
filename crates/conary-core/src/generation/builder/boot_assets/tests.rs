@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/boot_assets/tests.rs
+// crates/conary-core/src/generation/builder/boot_assets/tests.rs
 
 use super::super::initramfs::{
     CONARY_DRACUT_MODULE_SETUP, RUNTIME_DRACUT_ADD_MODULES, RUNTIME_DRACUT_OMIT_MODULES,

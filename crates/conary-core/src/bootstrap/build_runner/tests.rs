@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/build_runner/tests.rs
+// crates/conary-core/src/bootstrap/build_runner/tests.rs
 
 use super::*;
 use crate::recipe::parse_recipe;

@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/verified_batch/tests.rs
+// crates/conary-core/src/filesystem/cas/verified_batch/tests.rs
 
 use super::*;
 use std::io::Cursor;

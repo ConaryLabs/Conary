@@ -58,12 +58,37 @@ cat <<'EOF' > "$fixture_root/crates/fixture/src/all_test_predicate.rs"
 #[cfg(all(test, feature = "fixture"))]
 const FIXTURE: &str = "fixture";
 EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/not_test_predicate.rs"
+#[cfg(not(test))]
+fn production_when_not_testing() {}
+EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/any_test_predicate.rs"
+#[cfg(any(test, feature = "fixture"))]
+fn production_with_feature() {}
+EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/correct_path_header.rs"
+// crates/fixture/src/correct_path_header.rs
+fn production() {}
+EOF
 
 "$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
 report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
 grep -q $'block_comment_attribute.rs\ttotal=6\tproduction=0\tinline_test=6' <<<"$report"
 grep -q $'doc_comment_attribute.rs\ttotal=3\tproduction=0\tinline_test=3' <<<"$report"
 grep -q $'all_test_predicate.rs\ttotal=2\tproduction=0\tinline_test=2' <<<"$report"
+grep -q $'not_test_predicate.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$report"
+grep -q $'any_test_predicate.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$report"
+
+cat <<'EOF' > "$fixture_root/crates/fixture/src/wrong_path_header.rs"
+// crates/wrong/src/wrong_path_header.rs
+fn production() {}
+EOF
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/path-header.out" 2>&1; then
+    echo "ERROR: mismatched Rust path header unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq "expected \`// crates/fixture/src/wrong_path_header.rs\`" "$fixture_root/path-header.out"
+rm "$fixture_root/crates/fixture/src/wrong_path_header.rs"
 
 {
 awk 'BEGIN { for (i = 1; i <= 400; i++) print "// fixture line " i }'
@@ -96,8 +121,16 @@ if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/ov
 fi
 grep -q 'over_cap.rs has 1001 non-test lines' "$fixture_root/over.out"
 
-echo 'crates/fixture/src/over_cap.rs #846' > "$allowlist"
-"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+echo 'crates/fixture/src/over_cap.rs #0' > "$allowlist"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/nonpositive-issue.out" 2>&1; then
+    echo "ERROR: non-positive allowlist issue unexpectedly passed" >&2
+    exit 1
+fi
+grep -q "invalid allowlist entry" "$fixture_root/nonpositive-issue.out"
+
+echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
+allowlisted_out="$("$checker" --root "$fixture_root" --allowlist "$allowlist")"
+grep -q 'ALLOWLISTED: crates/fixture/src/over_cap.rs .* issue=#123' <<<"$allowlisted_out"
 
 rm "$fixture_root/crates/fixture/src/over_cap.rs"
 if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/stale.out" 2>&1; then
@@ -121,7 +154,7 @@ if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/in
 fi
 grep -q 'oversized_inline_tests.rs has 301 inline test lines' "$fixture_root/inline-size.out"
 
-echo 'crates/fixture/src/oversized_inline_tests.rs #846' > "$allowlist"
+echo 'crates/fixture/src/oversized_inline_tests.rs #123' > "$allowlist"
 "$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
 rm "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
 

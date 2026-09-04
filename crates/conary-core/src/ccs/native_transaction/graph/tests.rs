@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/graph/tests.rs
+// crates/conary-core/src/ccs/native_transaction/graph/tests.rs
 
 use super::*;
 use crate::ccs::native_transaction::NativeTransactionOperation;

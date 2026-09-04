@@ -1,4 +1,4 @@
-// conary-core/src/ccs/package/tests.rs
+// crates/conary-core/src/ccs/package/tests.rs
 
 use super::*;
 use crate::ccs::VerifiedCcsArchive;

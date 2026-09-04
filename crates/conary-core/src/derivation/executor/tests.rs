@@ -1,4 +1,4 @@
-// conary-core/src/derivation/executor/tests.rs
+// crates/conary-core/src/derivation/executor/tests.rs
 
 use super::*;
 use crate::db::schema::ensure_current;

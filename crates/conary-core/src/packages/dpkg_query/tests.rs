@@ -1,4 +1,4 @@
-// conary-core/src/packages/dpkg_query/tests.rs
+// crates/conary-core/src/packages/dpkg_query/tests.rs
 
 use super::*;
 

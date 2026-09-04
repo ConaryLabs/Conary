@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/projection_cache/tests.rs
+// crates/conary-core/src/repository/sync/projection_cache/tests.rs
 
 use super::*;
 use crate::repository::catalog::{

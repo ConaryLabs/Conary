@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_snapshot/tests.rs
+// crates/conary-core/src/db/generation_snapshot/tests.rs
 
 use super::*;
 

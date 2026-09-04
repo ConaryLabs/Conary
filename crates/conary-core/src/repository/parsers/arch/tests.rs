@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/arch/tests.rs
+// crates/conary-core/src/repository/parsers/arch/tests.rs
 
 use super::*;
 use crate::repository::dependency_model::RepositoryCapabilityKind;

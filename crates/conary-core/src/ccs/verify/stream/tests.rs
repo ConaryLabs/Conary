@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify/stream/tests.rs
+// crates/conary-core/src/ccs/verify/stream/tests.rs
 
 use super::*;
 use crate::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;

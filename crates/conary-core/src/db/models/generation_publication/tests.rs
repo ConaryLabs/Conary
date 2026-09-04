@@ -1,4 +1,4 @@
-// conary-core/src/db/models/generation_publication/tests.rs
+// crates/conary-core/src/db/models/generation_publication/tests.rs
 
 use super::*;
 use crate::payload::{PayloadNode, ResolvedPayloadNode};

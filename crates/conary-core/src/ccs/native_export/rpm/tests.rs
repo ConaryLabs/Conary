@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/rpm/tests.rs
+// crates/conary-core/src/ccs/native_export/rpm/tests.rs
 
 use super::*;
 use crate::ccs::builder::FileEntry;

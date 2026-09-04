@@ -1,4 +1,4 @@
-// conary-core/src/ccs/archive_emitter/tests.rs
+// crates/conary-core/src/ccs/archive_emitter/tests.rs
 
 use super::*;
 use std::io::Cursor;

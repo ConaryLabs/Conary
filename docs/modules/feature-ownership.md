@@ -1216,9 +1216,9 @@ agree.
 
 **Slug:** maintainability
 
-**Capability:** enforce measurable Rust source-size and unit-test placement
-limits across the workspace while keeping every temporary exception tied to an
-owned decomposition issue.
+**Capability:** enforce measurable Rust source-size, unit-test placement, and
+source-path header truth across the workspace while keeping every temporary
+exception tied to an owned decomposition issue.
 
 **Start here:** `crates/conary-xtask/src/line_cap.rs`;
 `crates/conary-xtask/Cargo.toml`; `scripts/check-line-cap.sh`;
@@ -1240,12 +1240,14 @@ contributor guidance, and feature ownership routing.
 **Docs to update:** `AGENTS.md`; `CONTRIBUTING.md`;
 `docs/modules/feature-ownership.md`.
 
-**Safety notes:** the cap parses Rust syntax, counts every line outside items
-whose `cfg` predicate mentions `test`, and rejects files with more than 300
-total inline test-item lines. Files named `tests.rs` and Rust files below a
-`tests/` directory are excluded. Every allowlist entry carries the issue that
-owns the remaining production or test-placement decomposition; stale entries
-fail the gate.
+**Safety notes:** the cap parses Rust syntax and treats an item as test-only
+when its `cfg` predicate is true with `test` set and false with `test` unset,
+holding other atoms true in both evaluations. Files with more than 300 total
+test-item lines fail. Files named `tests.rs` and Rust files below a `tests/`
+directory are excluded. Every allowlist entry carries the open issue that owns
+the remaining production or test-placement decomposition; stale entries fail
+the gate. Canonical first-line Rust path comments must match their
+repository-relative file paths.
 
 ## Developer Build Environment
 

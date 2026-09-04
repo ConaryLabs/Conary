@@ -1,4 +1,4 @@
-// conary-core/src/derivation/recipe_hash/tests.rs
+// crates/conary-core/src/derivation/recipe_hash/tests.rs
 
 use super::*;
 

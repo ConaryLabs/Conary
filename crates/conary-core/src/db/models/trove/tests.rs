@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trove/tests.rs
+// crates/conary-core/src/db/models/trove/tests.rs
 
 use super::*;
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/remi_catalog/tests.rs
+// crates/conary-core/src/db/models/remi_catalog/tests.rs
 
 use super::*;
 use crate::db::models::{

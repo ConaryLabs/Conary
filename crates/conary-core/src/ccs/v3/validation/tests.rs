@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation/tests.rs
+// crates/conary-core/src/ccs/v3/validation/tests.rs
 
 use super::*;
 use crate::ccs::v3::diagnostics::V3DiagnosticCode;

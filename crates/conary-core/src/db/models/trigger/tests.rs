@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trigger/tests.rs
+// crates/conary-core/src/db/models/trigger/tests.rs
 
 use super::super::persisted_value::PersistedValueCorruption;
 use super::super::trigger_engine::TriggerEngine;

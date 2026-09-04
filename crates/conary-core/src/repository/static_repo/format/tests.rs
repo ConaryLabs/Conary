@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/format/tests.rs
+// crates/conary-core/src/repository/static_repo/format/tests.rs
 
 use super::{PackageKeysFile, RepoIdentity, SCHEMA_VERSION, StaticIndex};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};

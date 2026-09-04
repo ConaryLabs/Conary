@@ -1,4 +1,4 @@
-// conary-core/src/model/remote/tests.rs
+// crates/conary-core/src/model/remote/tests.rs
 
 use super::*;
 use crate::db::testing::create_test_db;

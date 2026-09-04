@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/final_system/tests.rs
+// crates/conary-core/src/bootstrap/final_system/tests.rs
 
 use super::*;
 use crate::bootstrap::stages::StageManager;

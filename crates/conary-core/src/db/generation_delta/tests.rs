@@ -1,4 +1,4 @@
-// conary-core/src/db/generation_delta/tests.rs
+// crates/conary-core/src/db/generation_delta/tests.rs
 
 use super::*;
 use rusqlite::session::ConflictAction;
