@@ -448,7 +448,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
 
-    async fn test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
+    fn test_state(root: &tempfile::TempDir) -> Arc<RwLock<ServerState>> {
         let config = ServerConfig {
             db_path: root.path().join("remi.db"),
             chunk_dir: root.path().join("chunks"),
@@ -531,7 +531,7 @@ mod tests {
         )
         .unwrap();
 
-        let state = test_state(&temp).await;
+        let state = test_state(&temp);
         let response = get_version_info(AxumState(state), AxumPath("1.2.3".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -552,7 +552,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         fs::create_dir_all(temp.path().join("self-update")).unwrap();
 
-        let state = test_state(&temp).await;
+        let state = test_state(&temp);
         let response = get_version_info(AxumState(state), AxumPath("9.9.9".to_string())).await;
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
