@@ -769,7 +769,7 @@ fn resolution_producer_excludes_non_native_roots_and_types_conflicting_closure()
 fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("core-survey.db");
-    let checksums = ['a', 'b', 'c', 'd', 'e', 'f'].map(digest);
+    let checksums = ['a', 'b', 'c', 'd', 'e', 'f', '1', '2', '3'].map(digest);
     let mut conflict = PackageFixture::new("conflict-root", &checksums[0]);
     conflict.depends = &["blocker"];
     conflict.conflicts = &["blocker"];
@@ -781,14 +781,31 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     mixed.depends = &["mixed-blocker", "missing-beside-conflict"];
     mixed.conflicts = &["mixed-blocker"];
     let mixed_blocker = PackageFixture::new("mixed-blocker", &checksums[5]);
+    let mut avoidable = PackageFixture::new("avoidable-root", &checksums[6]);
+    avoidable.depends = &["survey-choice>=2", "missing-beside-avoidable"];
+    let mut rejected_provider = PackageFixture::new("rejected-provider", &checksums[7]);
+    rejected_provider.provides = &["survey-choice=2"];
+    rejected_provider.conflicts = &["avoidable-root"];
+    let mut usable_provider = PackageFixture::new("usable-provider", &checksums[8]);
+    usable_provider.provides = &["survey-choice=3"];
     write_database(
         &database,
-        &[conflict, blocker, unresolved, healthy, mixed, mixed_blocker],
+        &[
+            conflict,
+            blocker,
+            unresolved,
+            healthy,
+            mixed,
+            mixed_blocker,
+            avoidable,
+            rejected_provider,
+            usable_provider,
+        ],
     );
     let databases = vec![database];
     let snapshots = vec![source_snapshot("arch-core-x86_64", &databases[0])];
     let mut profile = profile(&snapshots);
-    profile.counts.packages = 6;
+    profile.counts.packages = 9;
     profile.counts.source_evidence = 1;
     let package_output = directory.path().join("package-oracle");
     produce_alpm_parity_oracle(&profile, &inputs(&snapshots, &databases), &package_output).unwrap();
@@ -802,9 +819,9 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     )
     .unwrap();
 
-    assert_eq!(survey.counts.roots_walked, 6);
-    assert_eq!(survey.counts.resolved_roots, 3);
-    assert_eq!(survey.counts.unresolved_roots, 1);
+    assert_eq!(survey.counts.roots_walked, 9);
+    assert_eq!(survey.counts.resolved_roots, 5);
+    assert_eq!(survey.counts.unresolved_roots, 2);
     assert_eq!(survey.counts.not_installable_roots, 2);
     assert_eq!(survey.counts.failed_roots, 0);
     assert!(survey.failures.is_empty());
@@ -835,6 +852,35 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     )
     .unwrap();
     assert_eq!(strict.artifact.counts.not_installable_roots, 2);
+    let package_reader = verify_native_parity_oracle_bundle(&package_output, &profile).unwrap();
+    let mut avoidable_key = None;
+    package_reader
+        .for_each_package(|package| {
+            if package.name == "avoidable-root" {
+                avoidable_key = Some(package.package_key_sha256);
+            }
+            Ok(())
+        })
+        .unwrap();
+    let resolution_reader = verify_native_resolution_oracle_bundle(
+        directory.path().join("strict-resolution"),
+        &profile,
+        &package_reader,
+    )
+    .unwrap();
+    let mut avoidable_outcome = None;
+    resolution_reader
+        .for_each_root(|root| {
+            if Some(root.root_package_key_sha256.as_str()) == avoidable_key.as_deref() {
+                avoidable_outcome = Some(root.outcome);
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert!(matches!(
+        avoidable_outcome,
+        Some(NativeResolutionOutcomeV1::Unresolved { .. })
+    ));
 }
 
 #[test]
