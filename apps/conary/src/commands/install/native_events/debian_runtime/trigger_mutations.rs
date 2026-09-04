@@ -2,7 +2,7 @@
 
 //! Strict round-trip of dpkg helper mutations into Conary-owned state.
 
-use super::super::{NativeBundleOwner, PreparedNativeTransaction};
+use super::super::{NativeBundleOwner, PreparedNativeTransaction, owner_identity};
 use super::DebianAdminSnapshot;
 use crate::commands::install::config_files;
 use anyhow::{Context, Result, bail};
@@ -200,14 +200,6 @@ fn projected_identity(
         [] => bail!("dpkg deferred trigger awaiter '{selector}' is not projected"),
         _ => bail!("dpkg deferred trigger awaiter '{selector}' is ambiguous"),
     }
-}
-
-fn owner_identity(owner: &NativeBundleOwner) -> NativePackageIdentity {
-    NativePackageIdentity::new(
-        &owner.package_name,
-        &owner.package_version,
-        owner.bundle.source_arch.as_deref(),
-    )
 }
 
 fn parse_deferred_activations(input: &str) -> Result<Vec<DeferredActivation>> {

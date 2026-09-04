@@ -147,12 +147,6 @@ pub(crate) fn capture_install(
                 original_sha256: None,
                 artifact: None,
             }),
-            (Some(declaration), Some(_)) if declaration.remove_on_upgrade() => {
-                bail!(
-                    "Debian remove-on-upgrade conffile {} must be absent from the incoming payload",
-                    declaration.path()
-                );
-            }
             (declaration, Some(file)) => {
                 if !is_config_artifact_kind(&file.node.source.kind) {
                     bail!(
@@ -170,15 +164,7 @@ pub(crate) fn capture_install(
                     artifact: Some(artifact),
                 })
             }
-            (Some(declaration), None) if declaration.remove_on_upgrade() => {
-                if source != ConfigSource::Deb || declaration.ghost() {
-                    bail!(
-                        "remove-on-upgrade declaration {} is only valid for a Debian conffile",
-                        declaration.path()
-                    );
-                }
-                None
-            }
+            (Some(declaration), None) if declaration.remove_on_upgrade() => None,
             (Some(declaration), None)
                 if declaration.payload() == ConfigPayloadAssociation::Absent =>
             {
@@ -543,9 +529,9 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
                 ConfigInstallDecision::Install => {
                     mutations.push(OverlayMutation::Remove(entry.path.clone()));
                 }
-                ConfigInstallDecision::Keep => preserve_primary(entry, new, &mut mutations),
+                ConfigInstallDecision::Keep => preserve_primary(entry, &mut mutations),
                 ConfigInstallDecision::InstallAlternative(suffix) => {
-                    preserve_primary(entry, new, &mut mutations);
+                    preserve_primary(entry, &mut mutations);
                     mutations.push(overlay_write(
                         format!("{}{}", entry.path, suffix.as_str()),
                         new.clone(),
@@ -690,17 +676,10 @@ fn plan_entry(entry: &ConfigPathTransaction) -> Result<Vec<OverlayMutation>> {
     Ok(mutations)
 }
 
-fn preserve_primary(
-    entry: &ConfigPathTransaction,
-    new: &ConfigArtifact,
-    mutations: &mut Vec<OverlayMutation>,
-) {
+fn preserve_primary(entry: &ConfigPathTransaction, mutations: &mut Vec<OverlayMutation>) {
     match &entry.current {
         Some(current) => mutations.push(overlay_write(entry.path.clone(), current.clone())),
-        None => {
-            let _ = new;
-            mutations.push(OverlayMutation::Whiteout(entry.path.clone()));
-        }
+        None => mutations.push(OverlayMutation::Whiteout(entry.path.clone())),
     }
 }
 

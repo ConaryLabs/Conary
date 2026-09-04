@@ -47,3 +47,46 @@ pub struct RepoAddOptions {
     pub pin_snapshot_sha256: Option<String>,
     pub security_advisory_support: SecurityAdvisorySupport,
 }
+
+impl Default for RepoAddOptions {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            url: String::new(),
+            package_format: None,
+            distribution: None,
+            component: None,
+            architecture: None,
+            database: None,
+            db_path: String::new(),
+            content_url: None,
+            priority: 50,
+            disabled: false,
+            debian_release_keys: Vec::new(),
+            rpm_metadata_keys: Vec::new(),
+            rpm_metalink: None,
+            rpm_package_keys: Vec::new(),
+            arch_keyring: None,
+            arch_keyring_format: None,
+            arch_master_keys: Vec::new(),
+            arch_packager_key_threshold: None,
+            arch_database_signature: None,
+            fingerprints: Vec::new(),
+            yes: false,
+            replace: false,
+            default_strategy: None,
+            remi_endpoint: None,
+            remi_metadata_root: None,
+            ccs_package_keys: Vec::new(),
+            source_profile: None,
+            source_id: None,
+            repository_id: None,
+            stream_kind: None,
+            stream_id: None,
+            policy_group: None,
+            follow: false,
+            pin_snapshot_sha256: None,
+            security_advisory_support: SecurityAdvisorySupport::Unknown,
+        }
+    }
+}

@@ -2,6 +2,7 @@
 
 //! Exact rollback authority for normalized runtime fields owned by installed rows.
 
+use super::require_text;
 use crate::commands::installed_authority_snapshot::StableTroveIdentitySnapshot;
 use anyhow::{Result, bail};
 use conary_core::ccs::native_transaction::{DebPackageState, NativePackageIdentity};
@@ -285,13 +286,6 @@ fn query_rows<T>(
         .prepare(sql)?
         .query_map([], map)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-fn require_text(context: &str, value: &str) -> Result<()> {
-    if value.is_empty() {
-        bail!("rollback system authority has empty {context}");
-    }
-    Ok(())
 }
 
 fn require_canonical_sha256(context: &str, value: &str) -> Result<()> {

@@ -5,16 +5,15 @@
 use super::{InstallTransactionResult, TransactionContext};
 use crate::commands::generation::selected_root::SelectedRootSession;
 use crate::commands::install::inner;
-use crate::commands::install::native_events::PreparedNativeTransaction;
+use crate::commands::install::native_events::{PreparedNativeTransaction, deb_identity_for_trove};
 use crate::commands::install::native_graph::{
     NativeGraphPayloadMutation, drive_native_graph, finalize_owned_trove, normalize_archive_path,
 };
 use crate::commands::install::{ExtractionResult, InstallProgress};
 use anyhow::{Context, Result, bail};
-use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
 use conary_core::db::models::{ActivationRequest, NewActivationRequest};
-use conary_core::db::models::{Changeset, ChangesetStatus, InstalledNativeLifecycleBundle};
+use conary_core::db::models::{Changeset, ChangesetStatus};
 use conary_core::packages::PackageFormat;
 use conary_core::scriptlet::ExecutionMode;
 use conary_core::transaction::validate_package_relation_transitions;
@@ -463,21 +462,4 @@ impl NativeGraphPayloadMutation for SelectedRootPayload<'_, '_> {
     ) -> Result<()> {
         bail!("install transaction graph unexpectedly purges config for change {change_index}")
     }
-}
-
-fn deb_identity_for_trove(
-    conn: &rusqlite::Connection,
-    trove_id: i64,
-) -> Result<Option<NativePackageIdentity>> {
-    let Some(installed) = InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)? else {
-        return Ok(None);
-    };
-    let bundle = installed.bundle()?;
-    Ok((bundle.source_format == SourceFormat::Deb).then(|| {
-        NativePackageIdentity::new(
-            &installed.source_package,
-            &installed.source_version,
-            installed.source_arch.as_deref(),
-        )
-    }))
 }

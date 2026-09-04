@@ -82,15 +82,14 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
         None
     };
 
-    if opts.package_format.is_none()
-        && (opts.source_id.is_some()
-            || opts.repository_id.is_some()
-            || opts.stream_kind.is_some()
-            || opts.stream_id.is_some()
-            || opts.policy_group.is_some()
-            || opts.follow
-            || opts.pin_snapshot_sha256.is_some())
-    {
+    let has_native_policy_options = opts.source_id.is_some()
+        || opts.repository_id.is_some()
+        || opts.stream_kind.is_some()
+        || opts.stream_id.is_some()
+        || opts.policy_group.is_some()
+        || opts.follow
+        || opts.pin_snapshot_sha256.is_some();
+    if opts.package_format.is_none() && has_native_policy_options {
         anyhow::bail!(
             "native source policy options require an explicit rpm, deb, arch, or eopkg package format"
         );
@@ -136,26 +135,17 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
         }
     }
     let profile_id = supplied_profile.map(|profile| profile.id().to_string());
-    let package_authority = if opts.default_strategy.as_deref() == Some("remi") {
-        let profile_id = profile_id.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--source-profile is required for Remi repositories; use an exact public profile ID"
-            )
-        })?;
-        resolve_ccs_package_authority(
-            opts.default_strategy.as_deref(),
-            opts.remi_endpoint.as_deref(),
-            Some(profile_id),
-            &opts.ccs_package_keys,
-        )?
-    } else {
-        resolve_ccs_package_authority(
-            opts.default_strategy.as_deref(),
-            opts.remi_endpoint.as_deref(),
-            profile_id.as_deref(),
-            &opts.ccs_package_keys,
-        )?
-    };
+    if opts.default_strategy.as_deref() == Some("remi") && profile_id.is_none() {
+        return Err(anyhow::anyhow!(
+            "--source-profile is required for Remi repositories; use an exact public profile ID"
+        ));
+    }
+    let package_authority = resolve_ccs_package_authority(
+        opts.default_strategy.as_deref(),
+        opts.remi_endpoint.as_deref(),
+        profile_id.as_deref(),
+        &opts.ccs_package_keys,
+    )?;
     let parser_config = exact_parser_config(
         package_format,
         opts.distribution,
@@ -240,14 +230,7 @@ pub async fn cmd_repo_add(mut opts: RepoAddOptions) -> Result<()> {
         let policy =
             RepositorySourcePolicy::new(source_identity, scope, ecosystem, stream, update_mode)?;
         repo.set_native_source_policy(policy, repository_identity, pinned_snapshot)?;
-    } else if opts.source_id.is_some()
-        || opts.repository_id.is_some()
-        || opts.stream_kind.is_some()
-        || opts.stream_id.is_some()
-        || opts.policy_group.is_some()
-        || opts.follow
-        || opts.pin_snapshot_sha256.is_some()
-    {
+    } else if has_native_policy_options {
         anyhow::bail!("native source policy options require rpm, deb, arch, or eopkg metadata");
     }
 
@@ -690,8 +673,6 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
         let spinner = ProgressBar::new_spinner();
         spinner.set_style(spinner_style.clone());
         spinner.enable_steady_tick(Duration::from_millis(100));
-        spinner.set_message(format!("Syncing {}...", repo.name));
-
         spinner.set_message(format!("Syncing metadata for {}...", repo.name));
         let sync_result = {
             let conn = conary_core::db::open(db_path)?;
@@ -699,14 +680,7 @@ pub async fn cmd_repo_sync(name: Option<String>, db_path: &str, force: bool) -> 
             conary_core::repository::sync_repository(&conn, &mut repo_mut).await
         };
 
-        match &sync_result {
-            Ok(count) => {
-                spinner.finish_with_message(format!("{}: {} packages", repo.name, count));
-            }
-            Err(e) => {
-                spinner.finish_with_message(format!("{}: FAILED ({})", repo.name, e));
-            }
-        }
+        spinner.finish_and_clear();
 
         results.push((repo.name.clone(), sync_result));
     }
@@ -773,39 +747,11 @@ mod tests {
             name: "remi-fedora".to_string(),
             url: "https://remi.example.invalid".to_string(),
             package_format: Some(RepositoryFormat::Json),
-            distribution: None,
-            component: None,
-            architecture: None,
-            database: None,
             db_path: "/unused/conary.db".to_string(),
-            content_url: None,
-            priority: 50,
-            disabled: false,
-            debian_release_keys: Vec::new(),
-            rpm_metadata_keys: Vec::new(),
-            rpm_metalink: None,
-            rpm_package_keys: Vec::new(),
-            arch_keyring: None,
-            arch_keyring_format: None,
-            arch_master_keys: Vec::new(),
-            arch_packager_key_threshold: None,
-            arch_database_signature: None,
-            fingerprints: Vec::new(),
-            yes: false,
-            replace: false,
             default_strategy: Some("remi".to_string()),
             remi_endpoint: Some("https://remi.example.invalid".to_string()),
-            remi_metadata_root: None,
-            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora".to_string()),
-            source_id: None,
-            repository_id: None,
-            stream_kind: None,
-            stream_id: None,
-            policy_group: None,
-            follow: false,
-            pin_snapshot_sha256: None,
-            security_advisory_support: SecurityAdvisorySupport::Unknown,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -826,39 +772,10 @@ mod tests {
             name: "security-supported".to_string(),
             url: repo_dir.display().to_string(),
             package_format: Some(RepositoryFormat::Json),
-            distribution: None,
-            component: None,
-            architecture: None,
-            database: None,
             db_path: db_path_string.clone(),
-            content_url: None,
-            priority: 50,
-            disabled: false,
-            debian_release_keys: Vec::new(),
-            rpm_metadata_keys: Vec::new(),
-            rpm_metalink: None,
-            rpm_package_keys: Vec::new(),
-            arch_keyring: None,
-            arch_keyring_format: None,
-            arch_master_keys: Vec::new(),
-            arch_packager_key_threshold: None,
-            arch_database_signature: None,
-            fingerprints: Vec::new(),
-            yes: false,
-            replace: false,
-            default_strategy: None,
-            remi_endpoint: None,
-            remi_metadata_root: None,
-            ccs_package_keys: Vec::new(),
             source_profile: Some("fedora-44".to_string()),
-            source_id: None,
-            repository_id: None,
-            stream_kind: None,
-            stream_id: None,
-            policy_group: None,
-            follow: false,
-            pin_snapshot_sha256: None,
             security_advisory_support: SecurityAdvisorySupport::Supported,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -888,45 +805,24 @@ mod tests {
                 name: "widgets".to_string(),
                 url: "https://packages.example.test/widgets".to_string(),
                 package_format: Some(RepositoryFormat::Fedora),
-                distribution: None,
-                component: None,
                 architecture: Some("x86_64".to_string()),
-                database: None,
                 db_path: db_path_string.clone(),
-                content_url: None,
                 priority: 75,
-                disabled: false,
-                debian_release_keys: Vec::new(),
                 rpm_metadata_keys: vec![OpenPgpTrustRoot {
                     url: "https://keys.example.test/metadata.gpg".to_string(),
                     fingerprint: "A".repeat(40),
                 }],
-                rpm_metalink: None,
                 rpm_package_keys: vec![OpenPgpTrustRoot {
                     url: "https://keys.example.test/packages.gpg".to_string(),
                     fingerprint: "B".repeat(40),
                 }],
-                arch_keyring: None,
-                arch_keyring_format: None,
-                arch_master_keys: Vec::new(),
-                arch_packager_key_threshold: None,
-                arch_database_signature: None,
-                fingerprints: Vec::new(),
-                yes: false,
                 replace,
-                default_strategy: None,
-                remi_endpoint: None,
-                remi_metadata_root: None,
-                ccs_package_keys: Vec::new(),
-                source_profile: None,
                 source_id: Some(source_id.to_string()),
                 repository_id: Some("widgets:x86_64".to_string()),
                 stream_kind: Some("channel".to_string()),
                 stream_id: Some(stream_id.to_string()),
-                policy_group: None,
                 follow: true,
-                pin_snapshot_sha256: None,
-                security_advisory_support: SecurityAdvisorySupport::Unknown,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -958,40 +854,9 @@ mod tests {
         let error = cmd_repo_add(RepoAddOptions {
             name: "ambiguous".to_string(),
             url: "/does/not/matter".to_string(),
-            package_format: None,
-            distribution: None,
-            component: None,
-            architecture: None,
-            database: None,
             db_path: "/does/not/matter.db".to_string(),
-            content_url: None,
-            priority: 50,
-            disabled: false,
-            debian_release_keys: Vec::new(),
-            rpm_metadata_keys: Vec::new(),
-            rpm_metalink: None,
-            rpm_package_keys: Vec::new(),
-            arch_keyring: None,
-            arch_keyring_format: None,
-            arch_master_keys: Vec::new(),
-            arch_packager_key_threshold: None,
-            arch_database_signature: None,
-            fingerprints: Vec::new(),
-            yes: false,
-            replace: false,
-            default_strategy: None,
-            remi_endpoint: None,
-            remi_metadata_root: None,
-            ccs_package_keys: Vec::new(),
-            source_profile: None,
             source_id: Some("source".to_string()),
-            repository_id: None,
-            stream_kind: None,
-            stream_id: None,
-            policy_group: None,
-            follow: false,
-            pin_snapshot_sha256: None,
-            security_advisory_support: SecurityAdvisorySupport::Unknown,
+            ..Default::default()
         })
         .await
         .unwrap_err();

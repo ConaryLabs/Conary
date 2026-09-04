@@ -14,8 +14,13 @@ mod durability;
 mod path;
 pub(crate) use content::LiveRootContent;
 use content::create_live_root_leaf;
-pub(crate) use durability::DeferredOverlayDurability;
-use durability::*;
+#[cfg(test)]
+use durability::LiveRootDurabilityMetrics;
+pub(crate) use durability::{DeferredOverlayDurability, sync_directory};
+use durability::{
+    MutationDurability, create_dir_all_and_sync, create_dir_and_sync, remove_dir_all_and_sync,
+    remove_dir_and_sync, remove_file_and_sync, rename_and_sync,
+};
 pub(crate) use path::target_path;
 
 const JOURNAL_SCHEMA: &str = "conary.live-root-journal.v2";

@@ -186,7 +186,7 @@ fn sync_directory_io(path: &Path) -> io::Result<()> {
     File::open(path)?.sync_all()
 }
 
-pub(super) fn sync_directory(path: &Path) -> Result<()> {
+pub(crate) fn sync_directory(path: &Path) -> Result<()> {
     sync_directory_io(path).with_context(|| format!("Failed to sync {}", path.display()))?;
     Ok(())
 }

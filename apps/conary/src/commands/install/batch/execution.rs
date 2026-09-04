@@ -2,15 +2,14 @@
 
 //! Graph-driven batch payload execution.
 
-use super::super::native_events::PreparedNativeTransaction;
+use super::super::native_events::{PreparedNativeTransaction, deb_identity_for_trove};
 use super::{BatchDbRows, BatchInstaller, PreparedPackage, inner};
 use anyhow::{Context, Result};
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::NativePackageIdentity;
 use conary_core::config_transaction::GenerationConfigTransaction;
 use conary_core::db::models::{
-    ActivationRequest, Changeset, ChangesetStatus, InstalledNativeLifecycleBundle,
-    PackageTransactionStaging, Trove,
+    ActivationRequest, Changeset, ChangesetStatus, PackageTransactionStaging, Trove,
 };
 use conary_core::filesystem::CasStore;
 use conary_core::scriptlet::ExecutionMode;
@@ -492,21 +491,4 @@ where
             "batch install transaction graph unexpectedly purges config for change {change_index}"
         )
     }
-}
-
-fn deb_identity_for_trove(
-    conn: &rusqlite::Connection,
-    trove_id: i64,
-) -> Result<Option<NativePackageIdentity>> {
-    let Some(installed) = InstalledNativeLifecycleBundle::find_by_trove(conn, trove_id)? else {
-        return Ok(None);
-    };
-    let bundle = installed.bundle()?;
-    Ok((bundle.source_format == SourceFormat::Deb).then(|| {
-        NativePackageIdentity::new(
-            &installed.source_package,
-            &installed.source_version,
-            installed.source_arch.as_deref(),
-        )
-    }))
 }

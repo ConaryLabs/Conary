@@ -2,7 +2,7 @@
 
 //! Persisted Debian package and trigger state transitions.
 
-use super::{NativeBundleOwner, PreparedNativeTransaction};
+use super::{NativeBundleOwner, PreparedNativeTransaction, owner_identity};
 use anyhow::Result;
 use conary_core::ccs::native_lifecycle::SourceFormat;
 use conary_core::ccs::native_transaction::{
@@ -68,14 +68,6 @@ pub(super) fn transaction_package_states(
         });
     }
     Ok(states)
-}
-
-fn owner_identity(owner: &NativeBundleOwner) -> NativePackageIdentity {
-    NativePackageIdentity {
-        package_name: owner.package_name.clone(),
-        package_version: owner.package_version.clone(),
-        package_arch: owner.bundle.source_arch.clone(),
-    }
 }
 
 impl PreparedNativeTransaction {

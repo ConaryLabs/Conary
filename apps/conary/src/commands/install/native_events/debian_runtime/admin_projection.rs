@@ -2,7 +2,7 @@
 
 //! Exact dpkg administrative view projected inside the selected root.
 
-use super::super::{NativeBundleOwner, PreparedNativeTransaction};
+use super::super::{NativeBundleOwner, PreparedNativeTransaction, owner_identity};
 use super::{DPKG_ADMIN_COMPAT_DIRECTORY, DPKG_MAINTSCRIPT_ABI_VERSION};
 use crate::commands::live_root;
 use anyhow::{Context, Result, bail};
@@ -719,14 +719,6 @@ fn event_transaction_index(event: &NativeTransactionEvent) -> Option<usize> {
         NativeEventPlacement::TransactionElement { transaction_index } => Some(transaction_index),
         NativeEventPlacement::TransactionBefore | NativeEventPlacement::TransactionAfter => None,
     }
-}
-
-fn owner_identity(owner: &NativeBundleOwner) -> NativePackageIdentity {
-    NativePackageIdentity::new(
-        &owner.package_name,
-        &owner.package_version,
-        owner.bundle.source_arch.as_deref(),
-    )
 }
 
 fn owner_role(
