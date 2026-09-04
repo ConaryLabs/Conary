@@ -537,6 +537,39 @@ const FIXTURE: &str = "value";
     }
 
     #[test]
+    fn counts_standalone_and_conditionally_annotated_tests() {
+        for annotation in [
+            "test",
+            "tokio::test(flavor = \"current_thread\")",
+            "cfg_attr(test, test)",
+            "cfg_attr(all(test, feature = \"x\"), tokio::test)",
+            "cfg_attr(test, allow(dead_code), cfg_attr(feature = \"x\", test))",
+        ] {
+            let source = format!("#[{annotation}]\nasync fn example() {{}}\n");
+            assert_eq!(
+                analyze_source(&source).unwrap().inline_test_lines,
+                2,
+                "{annotation}"
+            );
+        }
+        for annotation in [
+            "cfg_attr(test, allow(dead_code))",
+            "cfg_attr(not(test), test)",
+            "cfg_attr(all(test, not(test)), test)",
+            "test_helper",
+        ] {
+            let source = format!("#[{annotation}]\nfn example() {{}}\n");
+            assert_eq!(
+                analyze_source(&source).unwrap().production_lines,
+                2,
+                "{annotation}"
+            );
+        }
+        let source = "#[cfg(test)]\nmod tests {\n    #[test]\n    fn nested() {}\n}\n#[test]\nfn standalone() {}\n";
+        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 7);
+    }
+
+    #[test]
     fn cfg_feature_named_test_is_not_the_test_predicate() {
         let source = "#[cfg(feature = \"test\")]\nfn production() {}\n";
         assert_eq!(analyze_source(source).unwrap().production_lines, 2);

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-04
-revision: 94
+revision: 95
 summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
@@ -1244,6 +1244,8 @@ contributor guidance, and feature ownership routing.
 when its combined `cfg` predicates can hold with `test` set and cannot hold
 with `test` unset under any assignment of the other atoms. Attributed fields,
 statements, and expressions participate in the same span count as items.
+Attributes whose final path segment is `test`, including conditional annotations
+enabled by `cfg_attr` in a test build, also mark inline tests.
 Files with more than 300 total test-only lines fail. Files named `tests.rs`
 and Rust files below a `tests/`
 directory are excluded. Every allowlist entry carries the open issue that owns

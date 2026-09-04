@@ -222,7 +222,9 @@ or intentionally changed.
 under any assignment of other cfg atoms. Items, fields, statements, and
 expressions all participate. It ignores sibling and package-level test files, caps that
 non-test portion at 1,000 lines, and caps the total inline test-only spans in
-each file at 300 lines. Every checked-in exception names the open issue that
+each file at 300 lines. Attributes whose final path segment is `test` also
+mark inline tests, including those enabled by `cfg_attr` in a test build.
+Every checked-in exception names the open issue that
 owns its decomposition. Add behavior to an over-cap file only through the
 ownership-based reorganization named by that issue. Thin registration,
 dispatch, and re-export wiring may remain in the large hub only through an

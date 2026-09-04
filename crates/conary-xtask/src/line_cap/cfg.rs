@@ -100,9 +100,43 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
     }
     let predicate = Predicate::All(predicates);
     let mut values = BTreeMap::from([("test".to_owned(), false)]);
-    if predicate.satisfiable(&mut values) {
-        return false;
-    }
+    let can_be_production = predicate.satisfiable(&mut values);
     values.insert("test".to_owned(), true);
-    predicate.satisfiable(&mut values)
+    if !can_be_production {
+        return predicate.satisfiable(&mut values);
+    }
+
+    // Test annotations also own inline-test lines, including annotations enabled
+    // by cfg_attr in a test build. Other conditional annotations do not qualify.
+    let annotations = attributes
+        .iter()
+        .filter_map(|attribute| test_annotation(&attribute.meta))
+        .collect();
+    Predicate::All(vec![predicate, Predicate::Any(annotations)]).satisfiable(&mut values)
+}
+
+fn test_annotation(meta: &Meta) -> Option<Predicate> {
+    if meta
+        .path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "test")
+    {
+        return Some(Predicate::All(Vec::new()));
+    }
+    let Meta::List(list) = meta else {
+        return None;
+    };
+    if !list.path.is_ident("cfg_attr") {
+        return None;
+    }
+    let mut arguments = Punctuated::<Meta, Token![,]>::parse_terminated
+        .parse2(list.tokens.clone())
+        .ok()?
+        .into_iter();
+    let condition = Predicate::parse(arguments.next()?)?;
+    let annotations = arguments
+        .filter_map(|meta| test_annotation(&meta))
+        .collect();
+    Some(Predicate::All(vec![condition, Predicate::Any(annotations)]))
 }

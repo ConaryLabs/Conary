@@ -66,6 +66,14 @@ cat <<'EOF' > "$fixture_root/crates/fixture/src/any_test_predicate.rs"
 #[cfg(any(test, feature = "fixture"))]
 fn production_with_feature() {}
 EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/standalone_tests.rs"
+#[test]
+fn standalone() {}
+#[tokio::test]
+async fn asynchronous() {}
+#[cfg_attr(test, test)]
+fn conditional() {}
+EOF
 cat <<'EOF' > "$fixture_root/crates/fixture/src/correct_path_header.rs"
 // crates/fixture/src/correct_path_header.rs
 fn production() {}
@@ -78,6 +86,7 @@ grep -q $'doc_comment_attribute.rs\ttotal=3\tproduction=0\tinline_test=3' <<<"$r
 grep -q $'all_test_predicate.rs\ttotal=2\tproduction=0\tinline_test=2' <<<"$report"
 grep -q $'not_test_predicate.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$report"
 grep -q $'any_test_predicate.rs\ttotal=2\tproduction=2\tinline_test=0' <<<"$report"
+grep -q $'standalone_tests.rs\ttotal=6\tproduction=0\tinline_test=6' <<<"$report"
 
 cat <<'EOF' > "$fixture_root/crates/fixture/src/wrong_path_header.rs"
 // crates/wrong/src/wrong_path_header.rs
@@ -179,6 +188,21 @@ if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/mu
 fi
 grep -q 'multiple_inline_tests.rs has 302 inline test lines' "$fixture_root/multiple-inline.out"
 rm "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
+
+{
+    echo '#[test]'
+    echo 'fn standalone() {}'
+    echo '#[cfg(test)]'
+    echo 'mod tests {'
+    awk 'BEGIN { for (i = 1; i <= 296; i++) print "    // test line " i }'
+    echo '}'
+} > "$fixture_root/crates/fixture/src/mixed_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/mixed-inline.out" 2>&1; then
+    echo "ERROR: standalone and cfg-gated tests were not summed" >&2
+    exit 1
+fi
+grep -q 'mixed_inline_tests.rs has 301 inline test lines' "$fixture_root/mixed-inline.out"
+rm "$fixture_root/crates/fixture/src/mixed_inline_tests.rs"
 
 : > "$allowlist"
 {
