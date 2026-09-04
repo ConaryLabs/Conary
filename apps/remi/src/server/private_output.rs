@@ -12,6 +12,17 @@ use anyhow::{Context, Result, bail, ensure};
 const PRIVATE_MODE: u32 = 0o600;
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PrivateOutputError {
+    #[error("{label} {path} is {actual_bytes} bytes and exceeds the {max_bytes}-byte limit")]
+    InputTooLarge {
+        label: String,
+        path: PathBuf,
+        actual_bytes: u64,
+        max_bytes: u64,
+    },
+}
+
 #[derive(Clone, Copy)]
 struct PublishedInode {
     device: u64,
@@ -84,23 +95,31 @@ pub(crate) fn read_regular_nofollow(path: &Path, label: &str, max_bytes: u64) ->
         "{label} {} must be a regular non-symlink file",
         path.display()
     );
-    ensure!(
-        named.len() <= max_bytes,
-        "{label} {} exceeds the {max_bytes}-byte limit",
-        path.display()
-    );
-    let mut input = OpenOptions::new()
+    reject_oversized_input(path, label, named.len(), max_bytes)?;
+    let input = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
         .open(path)
         .with_context(|| format!("open {label} {} without following links", path.display()))?;
+    read_opened_regular_nofollow(input, &named, path, label, max_bytes)
+}
+
+fn read_opened_regular_nofollow(
+    mut input: File,
+    named: &fs::Metadata,
+    path: &Path,
+    label: &str,
+    max_bytes: u64,
+) -> Result<Vec<u8>> {
     let opened = input.metadata()?;
     ensure!(
         opened.file_type().is_file() && opened.dev() == named.dev() && opened.ino() == named.ino(),
         "{label} {} changed while opening",
         path.display()
     );
-    let capacity = usize::try_from(opened.len()).context("bounded input size exceeds usize")?;
+    reject_oversized_input(path, label, opened.len(), max_bytes)?;
+    let capacity =
+        usize::try_from(opened.len().min(max_bytes)).context("bounded input size exceeds usize")?;
     let mut bytes = Vec::with_capacity(capacity);
     (&mut input)
         .take(max_bytes.saturating_add(1))
@@ -120,6 +139,24 @@ pub(crate) fn read_regular_nofollow(path: &Path, label: &str, max_bytes: u64) ->
         path.display()
     );
     Ok(bytes)
+}
+
+fn reject_oversized_input(
+    path: &Path,
+    label: &str,
+    actual_bytes: u64,
+    max_bytes: u64,
+) -> Result<()> {
+    if actual_bytes > max_bytes {
+        return Err(PrivateOutputError::InputTooLarge {
+            label: label.to_owned(),
+            path: path.to_path_buf(),
+            actual_bytes,
+            max_bytes,
+        }
+        .into());
+    }
+    Ok(())
 }
 
 pub(crate) fn publish_new_private_file(
@@ -207,5 +244,37 @@ fn rollback(path: &Path, temporary: &Path, published: Option<PublishedInode>) {
     let _ = fs::remove_file(temporary);
     if let Some(parent) = path.parent() {
         let _ = File::open(parent).and_then(|directory| directory.sync_all());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn opened_file_growth_is_rejected_before_buffer_reservation() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("promotion-evidence.json");
+        fs::write(&path, b"small").unwrap();
+        let named = fs::symlink_metadata(&path).unwrap();
+
+        let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+        writer.write_all(b"-now-too-large").unwrap();
+        writer.sync_all().unwrap();
+
+        let input = File::open(&path).unwrap();
+        let error = read_opened_regular_nofollow(input, &named, &path, "promotion evidence", 5)
+            .unwrap_err();
+        let typed = error.downcast_ref::<PrivateOutputError>().unwrap();
+        assert!(matches!(
+            typed,
+            PrivateOutputError::InputTooLarge {
+                actual_bytes: 19,
+                max_bytes: 5,
+                ..
+            }
+        ));
     }
 }
