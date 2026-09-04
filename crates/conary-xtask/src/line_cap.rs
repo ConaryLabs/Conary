@@ -283,7 +283,12 @@ fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
             end: total_lines,
         }]
     } else {
-        let mut visitor = TestSpanVisitor::default();
+        // A production-capable file still narrows every child by its own cfg
+        // attributes; children are classified under that conjunction.
+        let mut visitor = TestSpanVisitor {
+            inherited: cfg_attributes(&syntax.attrs),
+            spans: Vec::new(),
+        };
         visitor.visit_file(&syntax);
         union_spans(visitor.spans)
     };
@@ -297,12 +302,17 @@ fn analyze_source(source: &str) -> syn::Result<FileMetrics> {
 
 #[derive(Default)]
 struct TestSpanVisitor {
+    // cfg/cfg_attr attributes of every enclosing production-capable node, in
+    // order; a child exists only where this conjunction and its own attributes hold.
+    inherited: Vec<Attribute>,
     spans: Vec<LineSpan>,
 }
 
 impl TestSpanVisitor {
     fn record(&mut self, attributes: &[Attribute], span: Span) -> bool {
-        if !cfg::is_test_only(attributes) {
+        let mut effective = self.inherited.clone();
+        effective.extend(attributes.iter().cloned());
+        if !cfg::is_test_only(&effective) {
             return false;
         }
         let start = attributes
@@ -316,15 +326,35 @@ impl TestSpanVisitor {
         });
         true
     }
+
+    // Record a test-only node, or descend into a production-capable one with its
+    // cfg constraints pushed onto the inherited stack for the duration.
+    fn descend(&mut self, attributes: &[Attribute], span: Span, visit: impl FnOnce(&mut Self)) {
+        if self.record(attributes, span) {
+            return;
+        }
+        let depth = self.inherited.len();
+        self.inherited.extend(cfg_attributes(attributes));
+        visit(self);
+        self.inherited.truncate(depth);
+    }
+}
+
+fn cfg_attributes(attributes: &[Attribute]) -> Vec<Attribute> {
+    attributes
+        .iter()
+        .filter(|attribute| {
+            attribute.path().is_ident("cfg") || attribute.path().is_ident("cfg_attr")
+        })
+        .cloned()
+        .collect()
 }
 
 // Each of these typed nodes owns outer attributes and an exact syntax span.
 macro_rules! visit_attributed_nodes {
     ($($method:ident: $node:ident),* $(,)?) => {$ (
         fn $method(&mut self, node: &'ast syn::$node) {
-            if !self.record(&node.attrs, node.span()) {
-                visit::$method(self, node);
-            }
+            self.descend(&node.attrs, node.span(), |visitor| visit::$method(visitor, node));
         }
     )*};
 }
@@ -396,31 +426,27 @@ impl<'ast> Visit<'ast> for TestSpanVisitor {
     }
 
     fn visit_item(&mut self, item: &'ast Item) {
-        if self.record(item_attributes(item), item.span()) {
-            return;
-        }
-        visit::visit_item(self, item);
+        self.descend(item_attributes(item), item.span(), |visitor| {
+            visit::visit_item(visitor, item)
+        });
     }
 
     fn visit_impl_item(&mut self, item: &'ast ImplItem) {
-        if self.record(impl_item_attributes(item), item.span()) {
-            return;
-        }
-        visit::visit_impl_item(self, item);
+        self.descend(impl_item_attributes(item), item.span(), |visitor| {
+            visit::visit_impl_item(visitor, item)
+        });
     }
 
     fn visit_trait_item(&mut self, item: &'ast TraitItem) {
-        if self.record(trait_item_attributes(item), item.span()) {
-            return;
-        }
-        visit::visit_trait_item(self, item);
+        self.descend(trait_item_attributes(item), item.span(), |visitor| {
+            visit::visit_trait_item(visitor, item)
+        });
     }
 
     fn visit_foreign_item(&mut self, item: &'ast ForeignItem) {
-        if self.record(foreign_item_attributes(item), item.span()) {
-            return;
-        }
-        visit::visit_foreign_item(self, item);
+        self.descend(foreign_item_attributes(item), item.span(), |visitor| {
+            visit::visit_foreign_item(visitor, item)
+        });
     }
 }
 
@@ -724,6 +750,31 @@ impl Example {
         assert_eq!(analyze_source(source).unwrap().production_lines, 3);
         let source = "#![cfg_attr(feature = \"x\", cfg(test))]\nfn production() {}\n";
         assert_eq!(analyze_source(source).unwrap().production_lines, 2);
+    }
+
+    #[test]
+    fn enclosing_cfg_predicates_narrow_child_classification() {
+        // The module is production-capable (feature = "prod"), but its child can
+        // only exist when `test` is set, so the child is inline-test code.
+        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn test_only_child() {}\n    fn production_child() {}\n}\n";
+        assert_eq!(
+            analyze_source(source).unwrap(),
+            FileMetrics {
+                total_lines: 6,
+                production_lines: 4,
+                inline_test_lines: 2,
+            }
+        );
+        // File-level constraints propagate the same way.
+        let source = "#![cfg(any(test, feature = \"prod\"))]\n#[cfg(not(feature = \"prod\"))]\nfn test_only() {}\nfn production() {}\n";
+        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
+        // A child that widens nothing stays production under a production parent.
+        let source =
+            "#[cfg(feature = \"prod\")]\nmod prod {\n    #[cfg(unix)]\n    fn child() {}\n}\n";
+        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 0);
+        // Constraints do not leak to siblings after leaving the parent.
+        let source = "#[cfg(any(test, feature = \"prod\"))]\nmod mixed {\n    #[cfg(not(feature = \"prod\"))]\n    fn child() {}\n}\n#[cfg(not(feature = \"prod\"))]\nfn sibling() {}\n";
+        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 2);
     }
 
     #[test]

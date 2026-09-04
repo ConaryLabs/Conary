@@ -85,6 +85,14 @@ write_fixture "$fixture_root/crates/fixture/src/inner_cfg_test.rs" <<'EOF'
 fn helper() {}
 fn other() {}
 EOF
+write_fixture "$fixture_root/crates/fixture/src/enclosing_cfg.rs" <<'EOF'
+#[cfg(any(test, feature = "prod"))]
+mod mixed {
+    #[cfg(not(feature = "prod"))]
+    fn test_only_child() {}
+    fn production_child() {}
+}
+EOF
 write_fixture "$fixture_root/crates/fixture/src/cfg_attr_gating.rs" <<'EOF'
 #[cfg_attr(all(), cfg(test))]
 fn unconditional_test() {}
@@ -105,6 +113,7 @@ grep -q $'not_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$repo
 grep -q $'any_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$report"
 grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report"
 grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
+grep -q $'enclosing_cfg.rs\ttotal=7\tproduction=5\tinline_test=2' <<<"$report"
 grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
 
 for header_kind in missing legacy; do
