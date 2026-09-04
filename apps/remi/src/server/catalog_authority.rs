@@ -32,6 +32,7 @@ use super::open_runtime_db;
 mod revision_inspection;
 mod source;
 #[cfg(test)]
+#[path = "catalog_authority/tests/test_support.rs"]
 pub(crate) mod test_support;
 
 pub(crate) use revision_inspection::{ProfileRevisionInspection, SelectedProfileInspection};
