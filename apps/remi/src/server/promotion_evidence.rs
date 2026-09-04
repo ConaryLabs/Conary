@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::conversion_crawl::{ConversionCrawlProfileV4, reopen_conversion_crawl};
 use super::universe_validation::validate_canonical_candidate;
 
-pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V1: u32 = 1;
+pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V2: u32 = 2;
 
 #[derive(Debug, Clone)]
 pub struct RemiPromotionProfileEvidenceInput {
@@ -74,7 +74,7 @@ pub struct RemiPromotionEvidenceV1 {
 impl RemiPromotionEvidenceV1 {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+            self.schema_version == REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
             "unsupported Remi promotion evidence schema {}",
             self.schema_version
         );
@@ -169,7 +169,7 @@ pub fn produce_remi_promotion_evidence(
         )?);
     }
     let evidence = RemiPromotionEvidenceV1 {
-        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
         conversion_crawl_sha256,
         canonical_map: RemiPromotionCanonicalMapV1 {
             sha256: conary_core::hash::sha256(&canonical_map_bytes),
@@ -763,10 +763,21 @@ pub(crate) mod tests {
         let reopened =
             reopen_remi_promotion_evidence(&output_path).expect("reopen promotion evidence");
         assert_eq!(reopened, produced);
+        assert_eq!(produced.schema_version, REMI_PROMOTION_EVIDENCE_SCHEMA_V2);
         assert_eq!(produced.profiles.len(), 3);
         assert_eq!(
             produced.conversion_crawl_sha256,
             conary_core::hash::sha256(&fs::read(crawl_path).unwrap())
+        );
+        let mut retired = produced.clone();
+        retired.schema_version = 1;
+        let error = retired
+            .validate()
+            .expect_err("retired promotion evidence must require rebuild");
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported Remi promotion evidence schema 1")
         );
 
         let stale_crawl_path = evidence_dir.path().join("stale-crawl.json");
@@ -868,7 +879,7 @@ pub(crate) mod tests {
             },
         };
         let mut evidence = RemiPromotionEvidenceV1 {
-            schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+            schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
             conversion_crawl_sha256: "f".repeat(64),
             canonical_map: RemiPromotionCanonicalMapV1 {
                 sha256: "1".repeat(64),

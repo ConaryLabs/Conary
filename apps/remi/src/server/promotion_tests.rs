@@ -28,7 +28,7 @@ mod tests {
         write_and_reopen_conversion_crawl,
     };
     use crate::server::promotion_evidence::{
-        REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1,
+        REMI_PROMOTION_EVIDENCE_SCHEMA_V2, RemiPromotionCanonicalMapV1,
         RemiPromotionProfileEvidenceV1,
     };
     use crate::server::promotion_evidence::tests::{
@@ -201,7 +201,7 @@ mod tests {
             };
             let canonical_bytes = canonical_bytes(&canonical_map).expect("canonical map bytes");
             let evidence = RemiPromotionEvidenceV1 {
-                schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+                schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
                 conversion_crawl_sha256: conary_core::hash::sha256(
                     &fs::read(&crawl_path).expect("read crawl bytes"),
                 ),

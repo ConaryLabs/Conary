@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 59
+revision: 60
 status: active
 ---
 
@@ -449,6 +449,9 @@ reclassifying those roots as failures; older retained surveys are invalid.
 Candidate-resolution surveys move to schema 2 and resolution-comparison
 surveys move to schema 2 because both embed the expanded outcome vocabulary;
 their schema-1 artifacts are invalid and have no compatibility reader.
+The top-level Remi promotion-evidence envelope moves to schema 2 because it
+embeds resolution-comparison schema 3. Schema-1 promotion evidence is obsolete
+non-authority and must be rebuilt before promotion or activation.
 
 ### Diagnostics-only resolution survey
 

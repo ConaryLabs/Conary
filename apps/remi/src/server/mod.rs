@@ -112,7 +112,7 @@ pub use negative_cache::NegativeCache;
 pub use prewarm::{PrewarmConfig, PrewarmFailure, PrewarmResult, run_prewarm};
 pub use promotion::{RemiPromotionActivationConfig, RemiPromotionActivationOutcome};
 pub use promotion_evidence::{
-    REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceConfig,
+    REMI_PROMOTION_EVIDENCE_SCHEMA_V2, RemiPromotionCanonicalMapV1, RemiPromotionEvidenceConfig,
     RemiPromotionEvidenceV1, RemiPromotionProfileEvidenceInput, RemiPromotionProfileEvidenceV1,
     produce_remi_promotion_evidence, reopen_remi_promotion_evidence,
 };

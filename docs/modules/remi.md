@@ -852,6 +852,9 @@ documents remain capped at 64 MiB end to end.
 For ALPM missing-first failures, the producer rechecks the libalpm-selected
 root-reachable package set with libalpm's typed conflict API before accepting
 an unresolved outcome.
+The top-level Remi promotion-evidence envelope is schema 2 because it embeds
+resolution-comparison schema 3. Retained schema-1 promotion evidence is
+obsolete non-authority and must be rebuilt before activation.
 
 ### Initial Full-Universe Conversion Crawl
 
