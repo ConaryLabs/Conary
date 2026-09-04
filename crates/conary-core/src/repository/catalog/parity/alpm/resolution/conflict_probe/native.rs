@@ -1,6 +1,8 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/resolution/conflict_probe/native.rs
 
-//! One native preparation and the missing-first default-closure conflict check.
+//! One native preparation and the missing-first answer-replayed conflict check.
+
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 use alpm::{Alpm, Package, PrepareData};
 
@@ -10,7 +12,8 @@ use super::super::evidence::{
 };
 use super::{
     CheckBudget, ConflictReport, ConflictSource, Error, NativeParityPackageV1,
-    NativeRootResolutionError, ProbeResult, ResolutionExplanationLimits, exact_root, package_id,
+    NativeRootResolutionError, ProbeResult, ProjectPackages, ProviderAnswers,
+    ResolutionExplanationLimits, exact_root, install_provider_answers, package_id,
 };
 use crate::repository::catalog::parity::{
     NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyErrorReasonV1,
@@ -20,8 +23,13 @@ use crate::repository::dependency_model::RepositoryRequirementKind;
 
 pub(in crate::repository::catalog::parity::alpm::resolution) enum Preparation {
     Prepared,
-    Unsatisfied(Vec<(String, String)>),
+    Unsatisfied(MissingResult),
     Conflicting(ConflictReport),
+}
+
+pub(in crate::repository::catalog::parity::alpm::resolution) struct MissingResult {
+    pub dependencies: Vec<(String, String)>,
+    pub selected_packages: BTreeMap<String, String>,
 }
 
 pub(super) fn prepare_once(
@@ -29,6 +37,8 @@ pub(super) fn prepare_once(
     root: &NativeParityPackageV1,
     limits: ResolutionExplanationLimits,
     budget: &mut CheckBudget<'_>,
+    answers: &Rc<RefCell<ProviderAnswers>>,
+    project_packages: &ProjectPackages<'_>,
 ) -> ProbeResult<Preparation> {
     let target_architecture = alpm
         .architectures()
@@ -36,7 +46,7 @@ pub(super) fn prepare_once(
         .unwrap_or("<unset>")
         .to_string();
     budget.consume()?;
-    let preparation = match alpm.trans_prepare() {
+    let mut preparation = match alpm.trans_prepare() {
         Ok(()) => Preparation::Prepared,
         Err(error) => {
             let error_class = error.error();
@@ -77,7 +87,10 @@ pub(super) fn prepare_once(
                             ),
                         ));
                     }
-                    Preparation::Unsatisfied(missing)
+                    Preparation::Unsatisfied(MissingResult {
+                        dependencies: missing,
+                        selected_packages: BTreeMap::new(),
+                    })
                 }
                 Some(PrepareData::ConflictingDeps(conflicts)) => {
                     Preparation::Conflicting(conflict_report(
@@ -111,11 +124,26 @@ pub(super) fn prepare_once(
             }
         }
     };
-    if matches!(preparation, Preparation::Unsatisfied(_)) {
+    if let Preparation::Unsatisfied(missing) = &mut preparation {
+        missing.selected_packages = project_packages(alpm).map_err(|error| {
+            NativeRootResolutionError::new(
+                error,
+                NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
+                alpm_unavailable("native_unsatisfied_transaction_projection_failed"),
+            )
+        })?;
         // Preparation can report missing before reaching its conflict check.
-        // Walk only native-selected defaults (or the single current question
-        // answer) and ask libalpm about that one closure. Do not branch here.
-        let reachable = default_reachable(alpm, exact_root(alpm, root)?);
+        // Replay the entire active answer path through the same native provider
+        // callback as preparation. There is no alternative search in this walk.
+        let reachable = answered_reachable(alpm, exact_root(alpm, root)?, answers);
+        #[cfg(test)]
+        MISSING_CLOSURES.lock().unwrap().insert(
+            root.package_key_sha256.clone(),
+            reachable
+                .iter()
+                .map(|package| package.name().to_string())
+                .collect(),
+        );
         budget.consume()?;
         let conflicts = alpm.check_conflicts(reachable.iter().map(|package| package.as_ref()));
         if !conflicts.is_empty() {
@@ -153,7 +181,11 @@ fn conflict_report<'a>(
 /// Follow required dependencies depth-first, in native dependency-list order.
 /// Both satisfaction by already selected packages and database provider choice
 /// remain native queries. There is no alternate-set search or custom matching.
-pub(super) fn default_reachable<'a>(alpm: &'a Alpm, root: &'a Package) -> Vec<&'a Package> {
+pub(super) fn answered_reachable<'a>(
+    alpm: &'a Alpm,
+    root: &'a Package,
+    answers: &Rc<RefCell<ProviderAnswers>>,
+) -> Vec<&'a Package> {
     let mut reachable = vec![root];
     let mut pending = root
         .depends()
@@ -175,7 +207,13 @@ pub(super) fn default_reachable<'a>(alpm: &'a Alpm, root: &'a Package) -> Vec<&'
         {
             continue;
         }
-        let Some(provider) = alpm.syncdbs().find_satisfier(text) else {
+        // alpm_find_dbs_satisfier shares resolvedep with preparation. Install
+        // the same answer callback explicitly for every dependency on the path,
+        // including questions first encountered beneath an overridden provider.
+        let previous = install_provider_answers(alpm, answers);
+        let provider = alpm.syncdbs().find_satisfier(text);
+        alpm.set_raw_question_cb(previous);
+        let Some(provider) = provider else {
             continue;
         };
         // Native resolvedeps excludes package names already in its closure.
@@ -195,4 +233,15 @@ pub(super) fn default_reachable<'a>(alpm: &'a Alpm, root: &'a Package) -> Vec<&'
         pending.extend(dependencies);
     }
     reachable
+}
+
+#[cfg(test)]
+static MISSING_CLOSURES: std::sync::Mutex<BTreeMap<String, Vec<String>>> =
+    std::sync::Mutex::new(BTreeMap::new());
+
+#[cfg(test)]
+pub(in crate::repository::catalog::parity::alpm) fn native_probe_missing_closure(
+    root_key: &str,
+) -> Vec<String> {
+    MISSING_CLOSURES.lock().unwrap()[root_key].clone()
 }

@@ -3,7 +3,7 @@
 //! Bounded, one-dependency-at-a-time native provider questions.
 
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use alpm::{Alpm, Package, TransFlag};
@@ -20,6 +20,8 @@ use crate::repository::catalog::parity::{
 };
 
 pub(super) use native::Preparation;
+#[cfg(test)]
+pub(in crate::repository::catalog::parity::alpm) use native::native_probe_missing_closure;
 use native::prepare_once;
 use reachability::relevant_providers;
 
@@ -27,6 +29,7 @@ use reachability::relevant_providers;
 pub(super) const PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256;
 
 type ProbeResult<T> = std::result::Result<T, Box<NativeRootResolutionError>>;
+type ProjectPackages<'a> = dyn Fn(&Alpm) -> crate::error::Result<BTreeMap<String, String>> + 'a;
 
 pub(super) struct ConflictReport {
     source: ConflictSource,
@@ -85,12 +88,13 @@ impl QuestionFrame {
         choices: Vec<ProviderChoice>,
         conflict: &ConflictReport,
         explored_questions: BTreeSet<String>,
+        answers: &Rc<RefCell<ProviderAnswers>>,
     ) -> ProbeResult<Self> {
         // Read this failure's chosen set before a retry replaces it. Questions
         // already explored on this path stay owned by their ancestor frames.
         // Mere visibility never suppresses a question: a retry can make a
         // previously irrelevant selected provider reach a new conflict party.
-        let relevant = relevant_providers(alpm, root, &choices, conflict)?;
+        let relevant = relevant_providers(alpm, root, &choices, conflict, answers)?;
         let mut alternatives = Vec::new();
         for choice in choices {
             if !explored_questions.contains(&choice.dependency)
@@ -151,10 +155,24 @@ pub(super) fn prepare_with_conflict_probe(
     alpm: &mut Alpm,
     root: &NativeParityPackageV1,
     limits: ResolutionExplanationLimits,
+    project_packages: &ProjectPackages<'_>,
 ) -> ProbeResult<Preparation> {
     let answers = Rc::new(RefCell::new(ProviderAnswers::default()));
+    let previous_callback = install_provider_answers(alpm, &answers);
+    let mut budget = CheckBudget { root, checks: 0 };
+    let result = probe(alpm, root, limits, &answers, &mut budget, project_packages);
+    alpm.set_raw_question_cb(previous_callback);
+    result
+}
+
+/// Both native preparation and missing-first satisfier queries use this exact
+/// callback. Every active answer is replayed only among native-offered providers.
+fn install_provider_answers(
+    alpm: &Alpm,
+    answers: &Rc<RefCell<ProviderAnswers>>,
+) -> alpm::RawQuestionCb {
     let previous_callback = alpm.take_raw_question_cb();
-    alpm.set_question_cb(Rc::clone(&answers), |question, answers| {
+    alpm.set_question_cb(Rc::clone(answers), |question, answers| {
         if let alpm::Question::SelectProvider(mut question) = question.question() {
             let mut answers = answers.borrow_mut();
             let dependency = question.depend().to_string();
@@ -188,20 +206,18 @@ pub(super) fn prepare_with_conflict_probe(
             }
         }
     });
-    let mut budget = CheckBudget { root, checks: 0 };
-    let result = probe(alpm, root, limits, &answers, &mut budget);
-    alpm.set_raw_question_cb(previous_callback);
-    result
+    previous_callback
 }
 
 fn probe(
     alpm: &mut Alpm,
     root: &NativeParityPackageV1,
     limits: ResolutionExplanationLimits,
-    answers: &RefCell<ProviderAnswers>,
+    answers: &Rc<RefCell<ProviderAnswers>>,
     budget: &mut CheckBudget<'_>,
+    project_packages: &ProjectPackages<'_>,
 ) -> ProbeResult<Preparation> {
-    let baseline = prepare_once(alpm, root, limits, budget)?;
+    let baseline = prepare_once(alpm, root, limits, budget, answers, project_packages)?;
     let Preparation::Conflicting(conflict) = baseline else {
         return Ok(baseline);
     };
@@ -212,7 +228,11 @@ fn probe(
         choices,
         &conflict,
         BTreeSet::new(),
+        answers,
     )?];
+    // Native question/provider order defines the first conflict-free missing
+    // fallback across this depth-first walk. A prepared path always wins.
+    let mut missing_fallback = None;
     while let Some(frame) = stack.last_mut() {
         let Some(answer) = frame.alternatives.next() else {
             stack.pop();
@@ -230,10 +250,15 @@ fn probe(
         restart_transaction(alpm, root)?;
         // Every depth shares this budget. Exhaustion propagates as a typed
         // producer failure before any fallback closure classification.
-        let candidate = prepare_once(alpm, root, limits, budget)?;
-        let Preparation::Conflicting(current_conflict) = candidate else {
-            return Ok(candidate);
-        };
+        let current_conflict =
+            match prepare_once(alpm, root, limits, budget, answers, project_packages)? {
+                Preparation::Prepared => return Ok(Preparation::Prepared),
+                Preparation::Unsatisfied(missing) => {
+                    missing_fallback.get_or_insert(missing);
+                    continue;
+                }
+                Preparation::Conflicting(conflict) => conflict,
+            };
         // Derive suppression only after the active answers were actually
         // probed. Pending alternatives and merely visible questions are not
         // explored. Popping a frame automatically removes its path-local state
@@ -249,9 +274,10 @@ fn probe(
             choices,
             &current_conflict,
             explored_questions,
+            answers,
         )?);
     }
-    Ok(Preparation::Conflicting(conflict))
+    Ok(missing_fallback.map_or(Preparation::Conflicting(conflict), Preparation::Unsatisfied))
 }
 
 fn restart_transaction(alpm: &mut Alpm, root: &NativeParityPackageV1) -> ProbeResult<()> {

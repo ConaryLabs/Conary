@@ -3,14 +3,15 @@
 //! Reachability over native-selected packages, never alternate provider sets.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::{cell::RefCell, rc::Rc};
 
 use alpm::{Alpm, Package};
 
-use super::native::default_reachable;
+use super::native::answered_reachable;
 use super::{
     ConflictReport, ConflictSource, Error, NativeParityPackageV1,
     NativeResolutionSurveyErrorReasonV1, NativeRootResolutionError, PackageId, ProbeResult,
-    ProviderChoice, alpm_unavailable, exact_root, package_id,
+    ProviderAnswers, ProviderChoice, alpm_unavailable, exact_root, package_id,
 };
 
 pub(super) fn relevant_providers(
@@ -18,6 +19,7 @@ pub(super) fn relevant_providers(
     root: &NativeParityPackageV1,
     choices: &[ProviderChoice],
     conflict: &ConflictReport,
+    answers: &Rc<RefCell<ProviderAnswers>>,
 ) -> ProbeResult<BTreeSet<PackageId>> {
     let root = exact_root(alpm, root)?;
     let selected = alpm.trans_add();
@@ -84,12 +86,13 @@ pub(super) fn relevant_providers(
         (ConflictSource::MissingDependencies, false) => {
             // UnsatisfiedDeps failed before libalpm populated trans_add;
             // resolvedeps restores its prior package list on this early exit.
-            // Fall back to each selected provider's sync-db default closure,
-            // reusing native precedence selection, with no alternative search.
+            // Fall back to each selected provider's sync-db closure, replaying
+            // every active answer through native precedence selection. This
+            // follows the current path without searching alternatives.
             let mut relevant = BTreeSet::new();
             for choice in choices {
                 let selected = lookup_selected(alpm, &choice.selected)?;
-                if default_reachable(alpm, selected)
+                if answered_reachable(alpm, selected, answers)
                     .iter()
                     .any(|package| conflict.parties.contains(&package_id(package)))
                 {

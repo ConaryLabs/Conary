@@ -19,6 +19,8 @@ mod evidence;
 
 #[cfg(test)]
 pub(super) use conflict_probe::native_probe_checks;
+#[cfg(test)]
+pub(super) use conflict_probe::native_probe_missing_closure;
 use conflict_probe::{Preparation, prepare_with_conflict_probe};
 use evidence::{alpm_prepared_explanation, alpm_unavailable};
 #[cfg(test)]
@@ -597,7 +599,9 @@ fn resolve_initialized_transaction(
     root: &NativeParityPackageV1,
     explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
-    let preparation = prepare_with_conflict_probe(alpm, root, explanation_limits)?;
+    let preparation = prepare_with_conflict_probe(alpm, root, explanation_limits, &|alpm| {
+        transaction_packages(alpm, profile, inputs)
+    })?;
 
     match preparation {
         Preparation::Conflicting(conflict) => Ok(NativeRootResolutionSuccess::explained(
@@ -632,17 +636,9 @@ fn resolve_initialized_transaction(
             ))
         }
         Preparation::Unsatisfied(missing) => {
-            let packages = transaction_packages(alpm, profile, inputs).map_err(|error| {
-                NativeRootResolutionError::new(
-                    error,
-                    NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    alpm_unavailable(
-                        "native_unsatisfied_data_expired_before_transaction_projection_failed",
-                    ),
-                )
-            })?;
+            let packages = missing.selected_packages;
             let mut dependencies = BTreeSet::new();
-            for (requiring_name, requirement_group_sha256) in missing {
+            for (requiring_name, requirement_group_sha256) in missing.dependencies {
                 let requiring_package_key_sha256 = package_index
                     .bind_required_group(
                         &requiring_name,

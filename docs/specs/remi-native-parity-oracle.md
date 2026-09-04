@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
-last_updated: 2026-09-04
-revision: 70
+last_updated: 2026-09-05
+revision: 71
 status: active
 ---
 
@@ -803,9 +803,17 @@ provider choices depth-first. It re-prepares the exact root with the stack's
 ancestor answers and one alternative for the current question, leaving unrelated
 dependencies at their native defaults. Only providers offered by that native
 question are eligible. A candidate is accepted only after native preparation
-and, for missing-first results, the native default-closure conflict check report
-no conflict. Successful preparation produces `resolved`; a still-missing result
-keeps exactly that preparation's typed missing edges. If a retry still conflicts,
+and, for missing-first results, the native answer-replayed closure conflict check
+report no conflict. Every dependency lookup explicitly installs the same provider
+callback as preparation and replays all active answers, including nested choices;
+database precedence and eligible alternatives remain native authority.
+Successful preparation produces `resolved`. A conflict-free missing result is
+retained while remaining alternatives are checked: any prepared path wins;
+otherwise the first conflict-free missing result in depth-first native
+question/provider order becomes `unresolved`. Its original typed missing edges
+and exact selected-package bindings are saved together, so later transactions
+cannot replace or rebind that deterministic fallback. Budget exhaustion still
+fails before choosing any fallback. If a retry still conflicts,
 its own chosen set and reported parties determine relevance again. Relevant
 questions not yet explored on the current path are pushed onto the stack and
 their alternatives explored before backtracking to the previous question's next
