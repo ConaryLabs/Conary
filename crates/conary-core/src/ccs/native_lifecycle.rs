@@ -859,11 +859,7 @@ fn validate_sha256(label: &str, value: &str) -> anyhow::Result<()> {
     if algorithm != "sha256" {
         bail!("{label} must use sha256:<64 hex>");
     }
-    if digest.len() != 64
-        || !digest
-            .chars()
-            .all(|character| character.is_ascii_hexdigit())
-    {
+    if !crate::hash::is_canonical_sha256(digest) {
         bail!("{label} must use sha256:<64 hex>");
     }
     Ok(())

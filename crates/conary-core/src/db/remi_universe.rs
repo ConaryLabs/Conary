@@ -227,11 +227,7 @@ pub(crate) const fn client_index_application_id() -> i64 {
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(Error::ConfigError(format!(
             "{label} must be one lowercase SHA-256 digest"
         )));

@@ -564,11 +564,7 @@ fn validate_artifact_name(file: &str, prefix: &str) -> Result<()> {
 }
 
 fn validate_sha256(value: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !crate::hash::is_canonical_sha256(value) {
         return Err(Error::RecoveryFailed(format!(
             "invalid generation DB SHA-256 identity: {value}"
         )));
