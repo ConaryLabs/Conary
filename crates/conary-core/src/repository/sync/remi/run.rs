@@ -514,8 +514,7 @@ pub fn abort_profile_sync_run(
     }
     require_owned_run(&tx, run, &[state], now)?;
     let updated = tx.execute(
-        &format!(
-            "UPDATE repository_sync_runs
+        "UPDATE repository_sync_runs
          SET state = ?9, heartbeat_at = ?1, lease_expires_at = ?1,
              finished_at = ?1, failure_stage = ?2, failure_category = ?3,
              failure_evidence = ?4
@@ -523,10 +522,8 @@ pub fn abort_profile_sync_run(
            AND source_profile = ?6
            AND owner_instance_uuid = ?7
            AND fencing_epoch = ?8
-           AND state NOT IN ({})
+           AND state = ?10
            AND lease_expires_at > ?1",
-            ProfileSyncRunState::terminal_sql()
-        ),
         params![
             now,
             stage.as_str(),
@@ -536,7 +533,8 @@ pub fn abort_profile_sync_run(
             &run.source_profile,
             &run.owner_instance_uuid,
             run.fencing_epoch,
-            ProfileSyncRunState::Abandoned.as_str()
+            ProfileSyncRunState::Abandoned.as_str(),
+            state.as_str()
         ],
     )?;
     if updated != 1 {

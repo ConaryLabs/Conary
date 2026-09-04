@@ -504,3 +504,103 @@ fn unknown_run_state_fences_mutation_and_successor() {
     }
     assert_eq!(run_state(&conn, &run), "obsolete");
 }
+
+#[test]
+fn expired_unknown_state_preserves_evidence_and_fences_recovery() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    // The valid run sorts first, so a later unknown row must prevent even an
+    // earlier valid row from being committed as abandoned.
+    let valid = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+    let corrupt = begin_profile_sync_run_at(&conn, "ubuntu-26.04", None, OWNER_TWO, 100).unwrap();
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+        .unwrap();
+    conn.execute(
+        "UPDATE repository_sync_runs SET state = ?1, failure_evidence = ?2 WHERE run_id = ?3",
+        params!["bogus", "original fencing evidence", &corrupt.run_id],
+    )
+    .unwrap();
+    let snapshot = || {
+        conn.query_row(
+            "SELECT state, heartbeat_at, lease_expires_at, finished_at,
+                    failure_stage, failure_category, failure_evidence
+             FROM repository_sync_runs WHERE run_id = ?1",
+            [&corrupt.run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let before = snapshot();
+    let now = 100 + REMI_SYNC_LEASE_SECONDS;
+    let recovery_error = recover_expired_profile_sync_runs_at(&conn, now).unwrap_err();
+    let successor_error =
+        begin_profile_sync_run_at(&conn, &corrupt.source_profile, None, OWNER_ONE, now)
+            .unwrap_err();
+    let abandon_error = {
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).unwrap();
+        abandon_expired_run(
+            &tx,
+            &corrupt.source_profile,
+            &corrupt.run_id,
+            now,
+            corrupt.fencing_epoch,
+            "test direct recovery",
+        )
+        .unwrap_err()
+    };
+    for error in [recovery_error, successor_error, abandon_error] {
+        let Error::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = error else {
+            panic!("expected typed persisted-value error: {error:?}");
+        };
+        let invalid = source
+            .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+            .expect("unknown state must retain its typed fencing error");
+        assert_eq!(invalid.value(), "bogus");
+    }
+    assert_eq!(snapshot(), before);
+    assert_eq!(
+        run_state(&conn, &valid),
+        ProfileSyncRunState::Created.as_str()
+    );
+}
+
+#[test]
+fn recovery_abandons_every_current_nonterminal_state() {
+    for state in [
+        ProfileSyncRunState::Created,
+        ProfileSyncRunState::FetchingObjects,
+        ProfileSyncRunState::ReadyToPublish,
+    ] {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let run = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+        conn.execute(
+            "UPDATE repository_sync_runs SET state = ?1 WHERE run_id = ?2",
+            params![state.as_str(), &run.run_id],
+        )
+        .unwrap();
+        let recovered =
+            recover_expired_profile_sync_runs_at(&conn, 100 + REMI_SYNC_LEASE_SECONDS).unwrap();
+        assert_eq!(
+            recovered,
+            vec![ProfileSyncRunRecovery {
+                run_id: run.run_id.clone(),
+                source_profile: run.source_profile.clone(),
+            }]
+        );
+        assert_eq!(
+            run_state(&conn, &run),
+            ProfileSyncRunState::Abandoned.as_str()
+        );
+    }
+}

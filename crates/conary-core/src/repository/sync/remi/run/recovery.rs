@@ -16,9 +16,10 @@ pub struct ProfileSyncRunRecovery {
 /// transition and return the exact terminal runs whose private candidates have
 /// not yet been durably acknowledged as removed.
 ///
-/// The caller must hold the process-wide runtime-root lock. Lease expiry is the
-/// only run-state recovery authority; filesystem contents are never inspected
-/// to decide whether a run is stale.
+/// The caller must hold the process-wide runtime-root lock. Lease expiry
+/// determines whether a run is stale; filesystem contents never establish that
+/// authority. Every expired state is decoded before mutation. Unknown states
+/// return a typed persisted-value error and leave the entire transaction unchanged.
 pub fn recover_expired_profile_sync_runs(conn: &Connection) -> Result<Vec<ProfileSyncRunRecovery>> {
     let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
     let now = unix_seconds()?;
@@ -39,25 +40,27 @@ fn recover_expired_profile_sync_runs_in_transaction(
     now: i64,
 ) -> Result<Vec<ProfileSyncRunRecovery>> {
     let expired = {
-        let mut statement = tx.prepare(&format!(
-            "SELECT run_id, source_profile, fencing_epoch
+        let mut statement = tx.prepare(
+            "SELECT run_id, source_profile, fencing_epoch, state
              FROM repository_sync_runs
-             WHERE state NOT IN ({})
-               AND lease_expires_at <= ?1
+             WHERE lease_expires_at <= ?1
              ORDER BY source_profile, fencing_epoch",
-            ProfileSyncRunState::terminal_sql()
-        ))?;
+        )?;
         statement
             .query_map([now], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
+                    read_run_state(row, 3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
-    for (run_id, source_profile, fencing_epoch) in expired {
+    for (run_id, source_profile, fencing_epoch, state) in expired {
+        if state.is_terminal() {
+            continue;
+        }
         abandon_expired_run(
             &tx,
             &source_profile,
@@ -102,21 +105,36 @@ pub(super) fn abandon_expired_run(
     fencing_epoch: i64,
     recovery_context: &str,
 ) -> Result<()> {
+    let state = tx.query_row(
+        "SELECT state FROM repository_sync_runs WHERE run_id = ?1 AND source_profile = ?2",
+        params![run_id, source_profile],
+        |row| read_run_state(row, 0),
+    )?;
+    match state {
+        ProfileSyncRunState::Created
+        | ProfileSyncRunState::FetchingObjects
+        | ProfileSyncRunState::ReadyToPublish => {}
+        ProfileSyncRunState::Candidate
+        | ProfileSyncRunState::Published
+        | ProfileSyncRunState::Failed
+        | ProfileSyncRunState::Abandoned => {
+            return Err(Error::ConflictError(format!(
+                "profile {source_profile} sync run {run_id} is already terminal"
+            )));
+        }
+    }
     let evidence = format!(
         "durable lease for profile {source_profile} fencing epoch {fencing_epoch} expired before {recovery_context}"
     );
     let updated = tx.execute(
-        &format!(
-            "UPDATE repository_sync_runs
+        "UPDATE repository_sync_runs
          SET state = ?5, heartbeat_at = ?1, lease_expires_at = ?1,
              finished_at = ?1, failure_stage = ?6,
              failure_category = ?7, failure_evidence = ?2
          WHERE run_id = ?3
            AND source_profile = ?4
-           AND state NOT IN ({})
+           AND state = ?8
            AND lease_expires_at <= ?1",
-            ProfileSyncRunState::terminal_sql()
-        ),
         params![
             now,
             evidence,
@@ -124,7 +142,8 @@ pub(super) fn abandon_expired_run(
             source_profile,
             ProfileSyncRunState::Abandoned.as_str(),
             ProfileSyncFailureStage::Publishing.as_str(),
-            ProfileSyncFailureCategory::Fenced.as_str()
+            ProfileSyncFailureCategory::Fenced.as_str(),
+            state.as_str()
         ],
     )?;
     if updated != 1 {
