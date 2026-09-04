@@ -86,14 +86,8 @@ impl Predicate {
 
 pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
     let mut predicates = Vec::new();
-    for attribute in attributes
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("cfg"))
-    {
-        let Ok(meta) = attribute.parse_args::<Meta>() else {
-            return false;
-        };
-        let Some(predicate) = Predicate::parse(meta) else {
+    for attribute in attributes {
+        let Some(predicate) = effective_cfg(&attribute.meta) else {
             return false;
         };
         predicates.push(predicate);
@@ -113,6 +107,31 @@ pub(super) fn is_test_only(attributes: &[Attribute]) -> bool {
         .filter_map(|attribute| test_annotation(&attribute.meta))
         .collect();
     Predicate::All(vec![predicate, Predicate::Any(annotations)]).satisfiable(&mut values)
+}
+
+fn effective_cfg(meta: &Meta) -> Option<Predicate> {
+    if meta.path().is_ident("cfg") {
+        let Meta::List(list) = meta else { return None };
+        return Predicate::parse(syn::parse2(list.tokens.clone()).ok()?);
+    }
+    if meta.path().is_ident("cfg_attr") {
+        let Meta::List(list) = meta else { return None };
+        let mut arguments = Punctuated::<Meta, Token![,]>::parse_terminated
+            .parse2(list.tokens.clone())
+            .ok()?
+            .into_iter();
+        let condition = Predicate::parse(arguments.next()?)?;
+        let nested = arguments
+            .map(|meta| effective_cfg(&meta))
+            .collect::<Option<Vec<_>>>()?;
+        // When cfg_attr is inactive it imposes no restriction: condition implies
+        // all introduced cfg predicates, including recursively nested cfg_attr.
+        return Some(Predicate::Any(vec![
+            Predicate::Not(Box::new(condition)),
+            Predicate::All(nested),
+        ]));
+    }
+    Some(Predicate::All(Vec::new()))
 }
 
 fn test_annotation(meta: &Meta) -> Option<Predicate> {

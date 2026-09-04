@@ -261,20 +261,9 @@ fn excluded_test_file(relative: &Path) -> bool {
 }
 
 fn validate_path_comment(source: &str, relative: &Path) -> Result<(), String> {
-    let Some(first_line) = source.lines().next() else {
-        return Ok(());
-    };
-    let Some(comment) = first_line.strip_prefix("// ") else {
-        return Ok(());
-    };
-    if !(comment.starts_with("apps/") || comment.starts_with("crates/"))
-        || !comment.ends_with(".rs")
-    {
-        return Ok(());
-    }
-
+    let first_line = source.lines().next().unwrap_or_default();
     let expected = path_text(relative);
-    if comment == expected {
+    if first_line == format!("// {expected}") {
         Ok(())
     } else {
         Err(format!(
@@ -576,6 +565,28 @@ const FIXTURE: &str = "value";
     }
 
     #[test]
+    fn cfg_attr_gating_preserves_the_inactive_production_branch() {
+        for (attribute, test_only) in [
+            ("cfg_attr(all(), cfg(test))", true),
+            ("cfg_attr(feature = \"x\", cfg(test))", false),
+            (
+                "cfg_attr(all(), cfg_attr(feature = \"x\", cfg(test)))",
+                false,
+            ),
+            ("cfg_attr(all(), cfg_attr(all(), cfg(test)))", true),
+            ("cfg_attr(any(), cfg(test))", false),
+            ("cfg_attr(all(), allow(dead_code), cfg(test))", true),
+        ] {
+            let source = format!("#[{attribute}]\nfn example() {{}}\n");
+            assert_eq!(
+                analyze_source(&source).unwrap().inline_test_lines,
+                if test_only { 2 } else { 0 },
+                "{attribute}"
+            );
+        }
+    }
+
+    #[test]
     fn evaluates_cfg_test_polarity() {
         let source = r#"#[cfg(not(test))]
 fn production_when_not_testing() {}
@@ -691,6 +702,13 @@ impl Example {
                 .unwrap_err()
                 .contains("expected `// crates/example/src/tests.rs`")
         );
-        assert!(validate_path_comment("// ordinary comment\n", path).is_ok());
+        for source in [
+            "",
+            "fn example() {}\n",
+            "// ordinary comment\n",
+            "// example/src/tests.rs\n",
+        ] {
+            assert!(validate_path_comment(source, path).is_err());
+        }
     }
 }
