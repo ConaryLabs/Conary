@@ -49,8 +49,8 @@ pub(crate) mod names {
     pub(crate) const TRY_WATCH_READY_FILE: &str = "CONARY_TEST_TRY_WATCH_READY_FILE";
 }
 
-#[cfg(all(test, not(feature = "test-hooks")))]
-const _: &[&str] = &[
+#[cfg(test)]
+const TEST_HOOK_NAMES: &[&str] = &[
     names::BOOT_ID,
     names::DB,
     names::FAIL_GENERATION_REBUILD,
@@ -436,7 +436,9 @@ mod tests {
 
     #[test]
     fn recognizes_prefixed_environment_names() {
-        assert!(key_name_is_test_hook(OsStr::new(names::BOOT_ID)));
+        for name in TEST_HOOK_NAMES {
+            assert!(key_name_is_test_hook(OsStr::new(name)), "{name}");
+        }
         assert!(!key_name_is_test_hook(OsStr::new("CONARY_DB")));
     }
 }
