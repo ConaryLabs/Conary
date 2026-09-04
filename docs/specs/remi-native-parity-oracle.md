@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 64
+revision: 65
 status: active
 ---
 
@@ -778,7 +778,9 @@ by already selected packages is also a native query. A satisfying literal is
 selected in registered database order; shadowed literals are never alternatives.
 
 Provider alternatives are considered only for dependencies whose selected
-provider is a party on either side of the reported conflict. In native
+provider is a party on either side of the reported conflict. Parties are bound
+by their native source database, name, and version, since libalpm copies package
+objects into conflict records. In native
 `ALPM_QUESTION_SELECT_PROVIDER` question order, the producer re-prepares the
 exact root with one alternative answer for one such dependency, leaving every
 other dependency at its native default. Only providers offered by that native

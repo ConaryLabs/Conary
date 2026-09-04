@@ -27,24 +27,37 @@ pub(super) const PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256;
 type ProbeResult<T> = std::result::Result<T, Box<NativeRootResolutionError>>;
 
 pub(super) struct ConflictReport {
-    parties: BTreeSet<usize>,
+    parties: BTreeSet<PackageId>,
     pub(super) explanation: NativeResolutionSurveyNativeExplanationV1,
 }
 
-fn package_id(package: &Package) -> usize {
-    std::ptr::from_ref(package).cast::<()>() as usize
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct PackageId {
+    database: Option<String>,
+    name: String,
+    version: String,
+}
+
+fn package_id(package: &Package) -> PackageId {
+    // conflict_new/_alpm_conflict_dup copy package objects. Their source
+    // database and exact native identity survive; their addresses do not.
+    PackageId {
+        database: package.db().map(|database| database.name().to_string()),
+        name: package.name().to_string(),
+        version: package.version().to_string(),
+    }
 }
 
 #[derive(Clone)]
 struct ProviderChoice {
     dependency: String,
-    selected: usize,
-    providers: Vec<usize>,
+    selected: PackageId,
+    providers: Vec<PackageId>,
 }
 
 #[derive(Default)]
 struct ProviderAnswers {
-    override_choice: Option<(String, usize)>,
+    override_choice: Option<(String, PackageId)>,
     choices: Vec<ProviderChoice>,
 }
 
@@ -108,7 +121,7 @@ pub(super) fn prepare_with_conflict_probe(
                     .set_index(i32::try_from(index).expect("native provider index exceeds i32"));
             }
             if let Ok(index) = usize::try_from(question.index())
-                && let Some(&selected) = providers.get(index)
+                && let Some(selected) = providers.get(index).cloned()
                 && !answers
                     .choices
                     .iter()
