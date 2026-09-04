@@ -160,7 +160,7 @@ struct RawRequest {
     id: i64,
     changeset_id: i64,
     sequence: i64,
-    source_kind: String,
+    source_kind: ActivationRequestSourceKind,
     source_package: String,
     source_version: String,
     source_entry: String,
@@ -175,7 +175,10 @@ impl RawRequest {
             id: row.get(offset)?,
             changeset_id: row.get(offset + 1)?,
             sequence: row.get(offset + 2)?,
-            source_kind: row.get(offset + 3)?,
+            source_kind: ActivationRequestSourceKind::try_from(
+                row.get::<_, String>(offset + 3)?.as_str(),
+            )
+            .map_err(|error| persisted_enum_error(offset + 3, error))?,
             source_package: row.get(offset + 4)?,
             source_version: row.get(offset + 5)?,
             source_entry: row.get(offset + 6)?,
@@ -194,8 +197,7 @@ impl RawRequest {
             });
         }
         let invocation: RuntimeActivationInvocation = serde_json::from_str(&self.invocation_json)?;
-        let source_kind = ActivationRequestSourceKind::try_from(self.source_kind.as_str())
-            .map_err(|error| persisted_enum_error(0, error))?;
+        let source_kind = self.source_kind;
         NewActivationRequest {
             source_kind,
             source_package: self.source_package.clone(),
@@ -222,7 +224,7 @@ impl RawRequest {
 #[derive(Debug)]
 struct RawIntent {
     generation_number: i64,
-    status: String,
+    status: GenerationActivationIntentStatus,
     attempt_count: i64,
     last_error: Option<String>,
     started_at: Option<String>,
@@ -235,7 +237,8 @@ impl RawIntent {
     fn from_row(row: &Row<'_>) -> rusqlite::Result<Self> {
         Ok(Self {
             generation_number: row.get(0)?,
-            status: row.get(1)?,
+            status: GenerationActivationIntentStatus::try_from(row.get::<_, String>(1)?.as_str())
+                .map_err(|error| persisted_enum_error(1, error))?,
             attempt_count: row.get(2)?,
             last_error: row.get(3)?,
             started_at: row.get(4)?,
@@ -249,8 +252,7 @@ impl RawIntent {
         Ok(GenerationActivationIntent {
             generation_number: self.generation_number,
             request: self.request.decode()?,
-            status: GenerationActivationIntentStatus::try_from(self.status.as_str())
-                .map_err(|error| persisted_enum_error(1, error))?,
+            status: self.status,
             attempt_count: self.attempt_count,
             last_error: self.last_error,
             started_at: self.started_at,
@@ -678,6 +680,13 @@ impl TryFrom<&str> for GenerationActivationIntentStatus {
     }
 }
 
+fn persisted_enum_error(
+    column: usize,
+    error: crate::db::models::InvalidPersistedValue,
+) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -964,11 +973,4 @@ mod tests {
         let error = request.validate().unwrap_err().to_string();
         assert!(error.contains("does not match invocation provider 'openrc'"));
     }
-}
-
-fn persisted_enum_error(
-    column: usize,
-    error: crate::db::models::InvalidPersistedValue,
-) -> rusqlite::Error {
-    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Text, Box::new(error))
 }
