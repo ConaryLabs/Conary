@@ -18,7 +18,7 @@ pub async fn cmd_model_check(
     let (_model, _conn, diff) = load_model_and_diff(model_path, db_path, offline, false).await?;
 
     if diff.is_empty() {
-        println!("OK: System matches model");
+        crate::ui::row(crate::ui::Status::Ok, &["System matches model"]);
         return Ok(());
     }
 

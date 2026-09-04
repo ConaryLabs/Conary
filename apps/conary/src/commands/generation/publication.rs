@@ -49,9 +49,10 @@ pub(crate) fn warn_if_publication_pending(changeset_id: i64, outcome: &Publicati
         retry,
         "Package mutation committed, but generation publication is pending"
     );
-    eprintln!(
-        "WARNING: package mutation committed, but generation publication is pending for changeset {changeset_id}.\nRun: {retry}"
-    );
+    crate::ui::warn(&format!(
+        "Package mutation committed, but generation publication is pending for changeset {changeset_id}."
+    ));
+    eprintln!("Run: {retry}");
 }
 
 /// Persist exact selected-root publication authority in the caller's

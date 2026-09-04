@@ -309,7 +309,10 @@ pub async fn cmd_system_takeover(
     // Phase 1: CAS (always runs)
     // =========================================================================
     println!();
-    println!("[Phase 1] CAS-backing all packages ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 1: CAS-backing all packages ..."],
+    );
     record.start_phase(TakeoverPhase::Cas);
     record.save(db_path)?;
 
@@ -402,7 +405,10 @@ pub async fn cmd_system_takeover(
     // Phase 2: Owned (remove from system PM)
     // =========================================================================
     println!();
-    println!("[Phase 2] Taking ownership (removing from system PM) ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 2: Taking ownership (removing from system PM) ..."],
+    );
     record.start_phase(TakeoverPhase::Owned);
     record.save(db_path)?;
 
@@ -459,7 +465,10 @@ pub async fn cmd_system_takeover(
     // Phase 3: Generation (build + boot entry + ready to activate)
     // =========================================================================
     println!();
-    println!("[Phase 3] Building generation ...");
+    crate::ui::row(
+        crate::ui::Status::Info,
+        &["Phase 3: Building generation ..."],
+    );
     record.start_phase(TakeoverPhase::Generation);
     record.save(db_path)?;
 

@@ -121,10 +121,10 @@ pub(crate) fn begin_try_session(request: TryStartRequest<'_>) -> Result<TryStart
     copied_session.set_try_generation(&copied_conn, built.generation_number)?;
 
     if request.activate {
-        eprintln!(
-            "WARNING: activated try publishes generation {} as the host-global current generation; use `conary try rollback` if validation fails.",
+        crate::ui::warn(&format!(
+            "Activated try publishes generation {} as the host-global current generation; use `conary try rollback` if validation fails.",
             built.generation_number
-        );
+        ));
         crate::commands::composefs_ops::publish_generation_link(
             request.db_path,
             built.generation_number,

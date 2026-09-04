@@ -1,6 +1,6 @@
 // apps/conary/tests/output_vocabulary_guard.rs
 //! Fails if guarded status-vocabulary literals are emitted outside the `ui`
-//! module. This is a line-level lint: it matches the exact listed words only.
+//! module. This is a line-level lint over Rust string literals.
 
 use std::fs;
 use std::path::Path;
@@ -19,6 +19,16 @@ const FORBIDDEN: &[&str] = &[
     "[OFF]",
     "[MISSING]",
     "[PENDING]",
+];
+
+const ALLOWED_INTERPOLATED_DATA: &[&str] = &[
+    "[{}{}]",
+    "[{}] Running scheduled automation check...",
+    "[{}] {} - {} ({})",
+    "[{}] env={} ({} derivations)",
+    "[{}] {} - {} ({:?}){}{}",
+    "[{id}] changeset={changeset} status={} phase={} generation={} state={} retry=\"{}\"",
+    "[{}/{}] Storing files in CAS: {} {}",
 ];
 
 fn string_literals(line: &str) -> Vec<String> {
@@ -61,10 +71,18 @@ fn scan(dir: &Path, violations: &mut Vec<String>) {
         } else if path.extension().is_some_and(|ext| ext == "rs") {
             let text = fs::read_to_string(&path).unwrap();
             for (idx, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("assert") {
+                    continue;
+                }
                 let hit = string_literals(line).into_iter().any(|literal| {
                     let upper = literal.to_uppercase();
+                    let interpolated_tag = (literal.starts_with("[{")
+                        || (literal.starts_with("  [{") && literal.contains("] ")))
+                        && !ALLOWED_INTERPOLATED_DATA.contains(&literal.trim());
                     FORBIDDEN.iter().any(|token| upper.contains(token))
-                        || literal.starts_with("Warning:")
+                        || interpolated_tag
+                        || upper.starts_with("WARNING:")
+                        || upper.starts_with("ERROR:")
                 });
                 if hit {
                     violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));

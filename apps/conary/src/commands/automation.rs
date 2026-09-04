@@ -230,7 +230,14 @@ async fn execute_actions(
         insert_history_row(conn, action, status, error_message.as_deref())?;
 
         match error_message {
-            Some(message) => println!("  [{}] {}", status.to_uppercase(), message),
+            Some(message) => {
+                let row_status = if status == "partial" {
+                    crate::ui::Status::Warn
+                } else {
+                    crate::ui::Status::Fail
+                };
+                crate::ui::row(row_status, &[&message]);
+            }
             None => crate::ui::row(crate::ui::Status::Ok, &[&action.summary]),
         }
     }
@@ -528,7 +535,10 @@ pub async fn cmd_automation_check(
     println!();
 
     if !results.security.is_empty() && show_category(&AutomationCategory::Security) {
-        println!("[SECURITY] {} security update(s)", results.security.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} security update(s)", results.security.len())],
+        );
         for action in &results.security {
             println!("  - {}", action.summary);
         }
@@ -536,7 +546,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.updates.is_empty() && show_category(&AutomationCategory::Updates) {
-        println!("[UPDATES] {} package update(s)", results.updates.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} package update(s)", results.updates.len())],
+        );
         for action in &results.updates {
             println!("  - {}", action.summary);
         }
@@ -544,9 +557,12 @@ pub async fn cmd_automation_check(
     }
 
     if !results.major_upgrades.is_empty() && show_category(&AutomationCategory::MajorUpgrades) {
-        println!(
-            "[MAJOR UPGRADES] {} major upgrade(s)",
-            results.major_upgrades.len()
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!(
+                "{} major upgrade(s)",
+                results.major_upgrades.len()
+            )],
         );
         for action in &results.major_upgrades {
             println!("  - {}", action.summary);
@@ -555,7 +571,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.orphans.is_empty() && show_category(&AutomationCategory::Orphans) {
-        println!("[ORPHANS] {} orphaned package(s)", results.orphans.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} orphaned package(s)", results.orphans.len())],
+        );
         for action in &results.orphans {
             println!("  - {}", action.summary);
         }
@@ -563,7 +582,10 @@ pub async fn cmd_automation_check(
     }
 
     if !results.integrity.is_empty() && show_category(&AutomationCategory::Repair) {
-        println!("[INTEGRITY] {} issue(s)", results.integrity.len());
+        crate::ui::row(
+            crate::ui::Status::Info,
+            &[&format!("{} integrity issue(s)", results.integrity.len())],
+        );
         for action in &results.integrity {
             println!("  - {}", action.summary);
         }

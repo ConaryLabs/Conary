@@ -274,7 +274,10 @@ pub async fn cmd_provenance_diff(
                     for (tag, label, old, new) in diffs {
                         if old != new {
                             found_difference = true;
-                            println!("[{}] {} changed", tag, label);
+                            crate::ui::row(
+                                crate::ui::Status::Info,
+                                &[&format!("{tag}: {label} changed")],
+                            );
                             println!("  - {}", old.as_deref().unwrap_or("none"));
                             println!("  + {}", new.as_deref().unwrap_or("none"));
                         }

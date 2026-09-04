@@ -255,7 +255,9 @@ pub(super) fn finalize_install(
             changeset_id = tx_result.changeset_id,
             "Package mutation completed, but state snapshot was deferred: {}", error
         );
-        eprintln!("WARNING: package mutation completed, but state snapshot was deferred: {error}");
+        crate::ui::warn(&format!(
+            "Package mutation completed, but state snapshot was deferred: {error}"
+        ));
     }
     Ok(())
 }

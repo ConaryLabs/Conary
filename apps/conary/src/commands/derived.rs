@@ -132,9 +132,9 @@ pub async fn cmd_derive_show(name: &str, db_path: &str) -> Result<()> {
         println!("\nFile Overrides ({}):", overrides.len());
         for ov in &overrides {
             if ov.is_removal() {
-                println!("  [REMOVE] {}", ov.target_path);
+                crate::ui::row(crate::ui::Status::Info, &["remove", &ov.target_path]);
             } else {
-                println!("  [REPLACE] {}", ov.target_path);
+                crate::ui::row(crate::ui::Status::Info, &["replace", &ov.target_path]);
                 if let Some(perms) = ov.permissions {
                     println!("    Permissions: {:o}", perms);
                 }

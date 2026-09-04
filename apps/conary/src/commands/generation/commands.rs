@@ -365,12 +365,11 @@ fn collect_side_effect_package_warnings(
 fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
     match collect_side_effect_package_warnings(from_generation, to_generation) {
         Ok(packages) if !packages.is_empty() => {
-            eprintln!(
-                "WARNING: Generation switch {} -> {} removed package versions without running removal scriptlets.",
-                from_generation, to_generation
-            );
-            eprintln!(
-                "WARNING: Persistent side effects are not automatically undone during rollback."
+            crate::ui::warn(&format!(
+                "Generation switch {from_generation} -> {to_generation} removed package versions without running removal scriptlets."
+            ));
+            crate::ui::warn(
+                "Persistent side effects are not automatically undone during rollback.",
             );
             for package in packages {
                 eprintln!(
@@ -380,8 +379,8 @@ fn warn_removed_side_effect_packages(from_generation: i64, to_generation: i64) {
                     package.reasons.join(", ")
                 );
             }
-            eprintln!(
-                "WARNING: Review those packages manually; `--undo-scriptlets` is not implemented yet."
+            crate::ui::warn(
+                "Review those packages manually; `--undo-scriptlets` is not implemented yet.",
             );
         }
         Ok(_) => {}

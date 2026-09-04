@@ -173,12 +173,12 @@ fn resolve_redirects(conn: &rusqlite::Connection, package: &str, version: Option
             if result.was_redirected {
                 // Print redirect messages to user
                 for msg in &result.messages {
-                    eprintln!("Note: {}", msg);
+                    crate::ui::note(msg);
                 }
-                eprintln!(
-                    "Note: '{}' has been redirected to '{}'",
-                    package, result.resolved
-                );
+                crate::ui::note(&format!(
+                    "'{package}' has been redirected to '{}'",
+                    result.resolved
+                ));
                 info!(
                     "Package '{}' redirected to '{}' (chain: {})",
                     package,

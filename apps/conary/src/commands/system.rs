@@ -347,7 +347,7 @@ fn verify_against_rpm(conn: &rusqlite::Connection, package: Option<String>) -> R
             }
             Err(e) => {
                 failed_count += 1;
-                println!("ERROR: {} - {}", pkg_name, e);
+                crate::ui::row(crate::ui::Status::Fail, &[&format!("{pkg_name} - {e}")]);
             }
         }
     }
