@@ -71,7 +71,7 @@ fn selected_root_with_materialization(
     root
 }
 
-async fn assert_additive_shared_directory_rollback(
+fn assert_additive_shared_directory_rollback(
     fixture: &str,
     symlink_anchor: bool,
     apply_through_symlink: bool,
@@ -320,8 +320,7 @@ async fn additive_install_shared_directory_rollback_is_exact() {
         false,
         false,
         &[("single-shared-directory-added", 0o700)],
-    )
-    .await;
+    );
 }
 
 #[tokio::test]
@@ -335,8 +334,7 @@ async fn additive_batch_shared_directory_capture_is_unioned_once_and_rollback_is
             ("batch-shared-directory-b", 0o700),
             ("batch-shared-directory-c", 0o775),
         ],
-    )
-    .await;
+    );
 }
 
 #[tokio::test]
@@ -347,8 +345,7 @@ async fn additive_deb_payload_claim_rollback_preserves_verified_symlink_material
         true,
         false,
         &[("deb-symlink-directory-added", 0o755)],
-    )
-    .await;
+    );
 }
 
 #[tokio::test]
@@ -359,6 +356,5 @@ async fn additive_rpm_apply_through_symlink_rollback_restores_exact_target_metad
         true,
         true,
         &[("rpm-symlink-directory-added", 0o700)],
-    )
-    .await;
+    );
 }

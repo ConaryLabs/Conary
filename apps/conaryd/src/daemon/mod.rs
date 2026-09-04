@@ -669,7 +669,7 @@ async fn reenqueue_startup_jobs(state: &Arc<DaemonState>) {
     }
 }
 
-async fn acquire_unix_listener(
+fn acquire_unix_listener(
     config: &DaemonConfig,
 ) -> Result<(Option<socket::SocketManager>, tokio::net::UnixListener)> {
     if systemd::is_socket_activated() {
@@ -702,7 +702,7 @@ async fn acquire_unix_listener(
     };
 
     let mut mgr = socket::SocketManager::new(socket_config);
-    mgr.bind().await?;
+    mgr.bind()?;
 
     let listener = mgr.take_unix_listener().ok_or_else(|| {
         conary_core::Error::IoError(
@@ -831,7 +831,7 @@ pub async fn run_daemon(config: DaemonConfig) -> Result<()> {
 
     // Acquire a Unix listener -- either from systemd socket activation or
     // by binding a fresh socket ourselves.
-    let (_socket_manager, unix_listener) = acquire_unix_listener(&config).await?;
+    let (_socket_manager, unix_listener) = acquire_unix_listener(&config)?;
 
     // Notify systemd we're ready
     systemd_manager.notify_ready(Some("conaryd ready for connections"));

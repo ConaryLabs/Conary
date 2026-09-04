@@ -57,7 +57,7 @@ impl SocketManager {
     }
 
     /// Bind to configured sockets
-    pub async fn bind(&mut self) -> Result<()> {
+    pub fn bind(&mut self) -> Result<()> {
         // Clean up existing socket file
         if self.config.unix_path.exists() {
             std::fs::remove_file(&self.config.unix_path)?;
@@ -263,7 +263,7 @@ mod tests {
         };
 
         let mut manager = SocketManager::new(config);
-        manager.bind().await.unwrap();
+        manager.bind().unwrap();
 
         assert!(socket_path.exists());
         assert!(manager.unix_listener().is_some());
@@ -283,7 +283,7 @@ mod tests {
 
         {
             let mut manager = SocketManager::new(config);
-            manager.bind().await.unwrap();
+            manager.bind().unwrap();
             assert!(socket_path.exists());
         } // manager dropped here
 
