@@ -147,7 +147,7 @@ pub fn cmd_label_remove(label_str: &str, db_path: &str, force: bool) -> Result<(
 
     println!("Removed label: {}", label_str);
     if pkg_count > 0 {
-        println!("  Warning: {} package(s) no longer have a label", pkg_count);
+        crate::ui::warn(&format!("{pkg_count} package(s) no longer have a label"));
     }
 
     Ok(())

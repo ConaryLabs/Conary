@@ -894,7 +894,7 @@ pub fn cmd_automation_daemon(db_path: &str, _root: &str, pidfile: &str) -> Resul
                     }
                 }
                 Err(e) => {
-                    println!("  Error: {}", e);
+                    crate::ui::row(crate::ui::Status::Fail, &[&e.to_string()]);
                 }
             }
 
@@ -942,7 +942,7 @@ pub fn cmd_automation_history(
             row.applied_at, row.status, row.category, packages
         );
         if let Some(error) = row.error_message {
-            println!("  error: {}", error);
+            crate::ui::row(crate::ui::Status::Fail, &[&error]);
         }
     }
 

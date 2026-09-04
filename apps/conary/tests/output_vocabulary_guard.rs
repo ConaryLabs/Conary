@@ -60,6 +60,18 @@ fn string_literals(line: &str) -> Vec<String> {
     literals
 }
 
+fn forbidden_literal(literal: &str) -> bool {
+    let upper = literal.to_uppercase();
+    let interpolated_tag = literal.find("[{").is_some_and(|tag_start| {
+        literal[..tag_start].trim().is_empty()
+            && !ALLOWED_INTERPOLATED_DATA.contains(&literal.trim())
+    });
+    FORBIDDEN.iter().any(|token| upper.contains(token))
+        || interpolated_tag
+        || upper.trim_start().starts_with("WARNING:")
+        || upper.trim_start().starts_with("ERROR:")
+}
+
 fn scan(dir: &Path, violations: &mut Vec<String>) {
     for entry in fs::read_dir(dir).unwrap() {
         let path = entry.unwrap().path();
@@ -74,22 +86,24 @@ fn scan(dir: &Path, violations: &mut Vec<String>) {
                 if line.trim_start().starts_with("assert") {
                     continue;
                 }
-                let hit = string_literals(line).into_iter().any(|literal| {
-                    let upper = literal.to_uppercase();
-                    let interpolated_tag = (literal.starts_with("[{")
-                        || (literal.starts_with("  [{") && literal.contains("] ")))
-                        && !ALLOWED_INTERPOLATED_DATA.contains(&literal.trim());
-                    FORBIDDEN.iter().any(|token| upper.contains(token))
-                        || interpolated_tag
-                        || upper.starts_with("WARNING:")
-                        || upper.starts_with("ERROR:")
-                });
+                let hit = string_literals(line)
+                    .into_iter()
+                    .any(|literal| forbidden_literal(&literal));
                 if hit {
                     violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
                 }
             }
         }
     }
+}
+
+#[test]
+fn dynamic_tags_and_case_insensitive_error_prefixes_are_forbidden() {
+    assert!(forbidden_literal("[{status}] message"));
+    assert!(forbidden_literal("  [{status}] message"));
+    assert!(forbidden_literal("Warning: message"));
+    assert!(forbidden_literal("  ERROR: message"));
+    assert!(!forbidden_literal(" [{architecture}]"));
 }
 
 #[test]

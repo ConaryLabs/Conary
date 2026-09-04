@@ -57,7 +57,7 @@ pub fn cmd_derive_list(db_path: &str, verbose: bool) -> Result<()> {
                 println!("    Overrides: {}", overrides.len());
             }
             if let Some(msg) = &pkg.error_message {
-                println!("    Error: {}", msg);
+                crate::ui::row(crate::ui::Status::Fail, &[msg]);
             }
         } else {
             println!("  {} {} <- {}", pkg.name, status_str, pkg.parent_name);
