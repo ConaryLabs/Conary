@@ -29,6 +29,8 @@ pub(super) fn build_provider_for_install_ignoring_groups<'conn>(
     >,
 ) -> Result<ConaryProvider<'conn>> {
     let mut provider = ConaryProvider::new_with_policy(conn, policy.clone())?;
+    #[cfg(test)]
+    super::hidden_conflict::loaded_provider();
     provider.ignore_requirement_groups(ignored);
     provider.set_root_request_names(requests.iter().map(|(name, _)| name.clone()));
     provider.load_installed_packages()?;

@@ -1,6 +1,8 @@
 // crates/conary-core/src/resolver/sat/tests.rs
 
 use super::*;
+#[path = "tests/hidden_conflict_budget.rs"]
+mod hidden_conflict_budget;
 use crate::db;
 use crate::db::models::{
     Changeset, ChangesetStatus, InstalledRequirementGroup, Repository, RepositoryPackage,
@@ -418,13 +420,18 @@ fn exact_conflict_fixture(include_missing: bool) -> SatExactResolution {
         );
     }
 
-    solve_exact_repository_package_with_policy(
+    let result = solve_exact_repository_package_with_policy(
         &conn,
         root,
         "x86_64",
         &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
     )
-    .unwrap()
+    .unwrap();
+    if include_missing {
+        assert_eq!(hidden_conflict::counts(), (1, 2));
+        println!("mixed missing/conflict: 1 re-solve, 2 total provider loads");
+    }
+    result
 }
 
 #[test]

@@ -861,6 +861,43 @@ mod tests {
     }
 
     #[test]
+    fn hidden_conflict_budget_is_a_counted_failure_never_an_outcome() {
+        let mut collector = collector(CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT);
+        collector
+            .root(
+                &root(0),
+                Err(Box::new(ConaryRootResolutionError {
+                    error: Error::HiddenConflictProbeBudgetExceeded {
+                        root: "package-00000".to_string(),
+                        resolves: 64,
+                        elapsed: std::time::Duration::from_millis(1234),
+                    },
+                    reason: ConaryResolutionSurveyErrorReasonV1::SolverFailed,
+                    explanation: None,
+                })),
+            )
+            .unwrap();
+        let survey = collector.finish().unwrap();
+        assert_eq!(survey.counts.failed_roots, 1);
+        assert_eq!(survey.total_failures, 1);
+        assert!(survey.outcomes.is_empty());
+        assert_eq!(
+            survey.counts.error_kinds[0].kind.error_variant,
+            NativeResolutionSurveyErrorVariantV1::Budget
+        );
+        assert_eq!(survey.counts.error_kinds[0].count, 1);
+        assert!(
+            survey.failures[0]
+                .error_message
+                .contains("64 re-solves; elapsed=1.234s")
+        );
+        let bytes = serde_json::to_vec(&survey).unwrap();
+        let reopened: ConaryResolutionSurveyV1 = serde_json::from_slice(&bytes).unwrap();
+        reopened.validate().unwrap();
+        assert_eq!(reopened, survey);
+    }
+
+    #[test]
     fn collector_withholds_every_later_explanation_after_byte_budget() {
         let explanation = empty_graph();
         let explanation_bytes = canonical_value_size_with_limit(&explanation, u64::MAX)

@@ -104,6 +104,60 @@ impl Interner for ConaryProvider<'_> {
 
 // --- DependencyProvider implementation ---
 
+impl ConaryProvider<'_> {
+    pub(super) fn sort_solvables(&self, solvables: &mut [SolvableId]) {
+        // Determine the "primary" name: the first solvable's name is assumed to
+        // be the exact-name match. Canonical equivalents have different names and
+        // should sort after exact-name candidates.
+        let primary_name = solvables
+            .first()
+            .map(|s| self.solvables[s.to_index()].name.as_str());
+
+        solvables.sort_by(|a, b| {
+            let pkg_a = &self.solvables[a.to_index()];
+            let pkg_b = &self.solvables[b.to_index()];
+
+            // Exact-name candidates sort before canonical fallbacks
+            if let Some(primary) = primary_name {
+                let a_exact = pkg_a.name == primary;
+                let b_exact = pkg_b.name == primary;
+                if a_exact != b_exact {
+                    return b_exact.cmp(&a_exact);
+                }
+            }
+
+            // Higher repository priority is preferred
+            if pkg_a.repository_priority != pkg_b.repository_priority {
+                return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
+            }
+
+            if pkg_a.version_scheme == pkg_b.version_scheme {
+                let version_cmp = crate::repository::versioning::compare_package_identities(
+                    pkg_b.version_scheme,
+                    &pkg_b.version,
+                    pkg_b.package_release.as_deref(),
+                    pkg_a.version_scheme,
+                    &pkg_a.version,
+                    pkg_a.package_release.as_deref(),
+                )
+                .expect(
+                    "resolver package versions and releases are validated before candidate sorting",
+                );
+                if version_cmp != std::cmp::Ordering::Equal {
+                    return version_cmp;
+                }
+            }
+
+            let a_installed = pkg_a.installed_trove_id.is_some();
+            let b_installed = pkg_b.installed_trove_id.is_some();
+            b_installed
+                .cmp(&a_installed)
+                .then_with(|| pkg_a.name.cmp(&pkg_b.name))
+                .then_with(|| pkg_a.repository_name.cmp(&pkg_b.repository_name))
+        });
+    }
+}
+
 impl DependencyProvider for ConaryProvider<'_> {
     async fn filter_candidates(
         &self,
@@ -213,55 +267,13 @@ impl DependencyProvider for ConaryProvider<'_> {
     }
 
     async fn sort_candidates(&self, _solver: &SolverCache<Self>, solvables: &mut [SolvableId]) {
-        // Determine the "primary" name: the first solvable's name is assumed to
-        // be the exact-name match. Canonical equivalents have different names and
-        // should sort after exact-name candidates.
-        let primary_name = solvables
-            .first()
-            .map(|s| self.solvables[s.to_index()].name.as_str());
+        self.sort_solvables(solvables);
+    }
 
-        solvables.sort_by(|a, b| {
-            let pkg_a = &self.solvables[a.to_index()];
-            let pkg_b = &self.solvables[b.to_index()];
-
-            // Exact-name candidates sort before canonical fallbacks
-            if let Some(primary) = primary_name {
-                let a_exact = pkg_a.name == primary;
-                let b_exact = pkg_b.name == primary;
-                if a_exact != b_exact {
-                    return b_exact.cmp(&a_exact);
-                }
-            }
-
-            // Higher repository priority is preferred
-            if pkg_a.repository_priority != pkg_b.repository_priority {
-                return pkg_b.repository_priority.cmp(&pkg_a.repository_priority);
-            }
-
-            if pkg_a.version_scheme == pkg_b.version_scheme {
-                let version_cmp = crate::repository::versioning::compare_package_identities(
-                    pkg_b.version_scheme,
-                    &pkg_b.version,
-                    pkg_b.package_release.as_deref(),
-                    pkg_a.version_scheme,
-                    &pkg_a.version,
-                    pkg_a.package_release.as_deref(),
-                )
-                .expect(
-                    "resolver package versions and releases are validated before candidate sorting",
-                );
-                if version_cmp != std::cmp::Ordering::Equal {
-                    return version_cmp;
-                }
-            }
-
-            let a_installed = pkg_a.installed_trove_id.is_some();
-            let b_installed = pkg_b.installed_trove_id.is_some();
-            b_installed
-                .cmp(&a_installed)
-                .then_with(|| pkg_a.name.cmp(&pkg_b.name))
-                .then_with(|| pkg_a.repository_name.cmp(&pkg_b.repository_name))
-        });
+    fn should_cancel_with_value(&self) -> Option<Box<dyn std::any::Any>> {
+        self.probe_deadline
+            .filter(|deadline| std::time::Instant::now() >= *deadline)
+            .map(|_| Box::new(()) as Box<dyn std::any::Any>)
     }
 
     async fn get_dependencies(&self, solvable: SolvableId) -> Dependencies {

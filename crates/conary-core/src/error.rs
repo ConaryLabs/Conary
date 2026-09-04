@@ -132,6 +132,16 @@ pub enum Error {
     #[error("Native provider search budget exceeded for root '{root}' after {checks} checks")]
     ProviderSearchBudgetExceeded { root: String, checks: u32 },
 
+    /// Exact-root missing-first probing exhausted its shared evaluation/time budget.
+    #[error(
+        "Hidden conflict probe budget exceeded for root '{root}' after {resolves} re-solves; elapsed={elapsed:?}"
+    )]
+    HiddenConflictProbeBudgetExceeded {
+        root: String,
+        resolves: u32,
+        elapsed: std::time::Duration,
+    },
+
     /// Operator-supplied architecture disagrees with the selected profile authority.
     #[error("Architecture mismatch for profile '{profile}': expected '{expected}', got '{actual}'")]
     ProfileArchitectureMismatch {

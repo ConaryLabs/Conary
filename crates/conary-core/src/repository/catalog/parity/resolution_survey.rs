@@ -411,6 +411,9 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::ChecksumMismatch { .. } => Self::ChecksumMismatch,
             Error::ParseError(_) => Self::ParseError,
             Error::Budget(_) => Self::Budget,
+            // The existing survey budget class retains the concrete root,
+            // re-solve count, and elapsed duration in its failure diagnostic.
+            Error::HiddenConflictProbeBudgetExceeded { .. } => Self::Budget,
             Error::CatalogScratchCapacity(_) => Self::CatalogScratchCapacity,
             Error::DeltaError(_) => Self::DeltaError,
             Error::GpgVerificationFailed(_) => Self::GpgVerificationFailed,

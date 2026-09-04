@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 72
+revision: 73
 status: active
 ---
 
@@ -423,7 +423,7 @@ solver diagnostics, rather than package semantics, authoritative.
 | libsolv | Any `PKG_CONFLICTS` (`0x105`), `PKG_SAME_NAME` (`0x106`), `PKG_OBSOLETES` (`0x107`), or implicit-obsoletes (`0x108`) rule in any failed problem; also a successful transaction that omits the exact root. Architecture-only `INFARCH` remains outside this class. |
 | apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
 | libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or native `check_conflicts` results that block every libalpm-authorized provider path reached from the exact root when preparation reports missing dependencies first. A conflict on a rejected provider alternative is not part of the required closure. |
-| Conary/Resolvo | A `ConflictEdge::Conflict` or `ConflictNode::Excluded` that remains on every viable exact-root provider path. When a minimized graph exposes missing first, the producer re-solves with those exact persisted missing groups discharged until it exposes an unavoidable root-reachable conflict or proves an alternative path conflict-free. |
+| Conary/Resolvo | A `ConflictEdge::Conflict` or `ConflictNode::Excluded` that remains on every viable exact-root provider path. Missing-first probing discharges exact persisted groups under one per-root budget: at most 64 re-solves and 30 seconds on a monotonic clock, including the probe's initial provider load. Loaded facts are reused across fresh SAT caches; limits never reset per iteration. Exhaustion is `HiddenConflictProbeBudgetExceeded { root, resolves, elapsed }` before classification, never an outcome. |
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,
@@ -1027,7 +1027,16 @@ back to the exact persisted required or pre-required group; diagnostic text is
 never parsed. Conflict or excluded nodes are checked first and map to
 `conflicting_closure`. For a minimized missing-first graph, the bounded typed
 probe described above discharges only its exact persisted missing groups and
-re-solves to enforce conflict dominance. A missing mapping, an untyped
+re-solves to enforce conflict dominance. `resolver/sat/hidden_conflict.rs` owns
+the shared attempt/deadline budget, checked before rebuilding a SAT cache and
+before accepting a result; Resolvo's cancellation callback observes the same
+deadline during solving. The provider is loaded once for the probe (in addition
+to the original exact-root load), and only compiled positive requirements are
+discharged between attempts. A conflict-free completion retains all discovered
+typed missing groups. Surveys retain exhaustion as a `budget` / `solver_failed`
+failure with the root, re-solve count, and elapsed duration in its diagnostic,
+using the existing failure contract; strict production propagates the concrete
+typed error. No persisted schema changes. A missing mapping, an untyped
 unsatisfiable result, or any selected identity outside the catalog remains a
 hard crawl failure.
 
