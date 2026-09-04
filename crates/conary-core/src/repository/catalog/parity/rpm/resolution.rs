@@ -39,9 +39,10 @@ use crate::repository::catalog::parity::{
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
-    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest, write_native_resolution_survey,
+    NativeResolutionSurveyRpmResultV1, NativeResolutionSurveyV1, NativeUnresolvedDependencyV1,
+    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
+    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+    write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
@@ -325,8 +326,9 @@ fn walk_resolution_roots(
                 error,
                 NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
                 NativeResolutionSurveyNativeExplanationV1::Rpm {
-                    problems: Vec::new(),
-                    resolved_packages: Vec::new(),
+                    result: NativeResolutionSurveyRpmResultV1::Problems {
+                        problems: Vec::new(),
+                    },
                 },
             )),
         },
@@ -545,8 +547,9 @@ fn resolve_exact_root(
             )),
             NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
             NativeResolutionSurveyNativeExplanationV1::Rpm {
-                problems: Vec::new(),
-                resolved_packages: Vec::new(),
+                result: NativeResolutionSurveyRpmResultV1::Problems {
+                    problems: Vec::new(),
+                },
             },
         )
     })?;
@@ -565,8 +568,9 @@ fn resolve_exact_root(
                 error,
                 NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
                 NativeResolutionSurveyNativeExplanationV1::Rpm {
-                    problems: Vec::new(),
-                    resolved_packages: Vec::new(),
+                    result: NativeResolutionSurveyRpmResultV1::Problems {
+                        problems: Vec::new(),
+                    },
                 },
             ));
         }
@@ -576,8 +580,9 @@ fn resolve_exact_root(
             error,
             NativeResolutionSurveyErrorReasonV1::NativeSolverFailed,
             NativeResolutionSurveyNativeExplanationV1::Rpm {
-                problems: Vec::new(),
-                resolved_packages: Vec::new(),
+                result: NativeResolutionSurveyRpmResultV1::Problems {
+                    problems: Vec::new(),
+                },
             },
         )
     })?;
@@ -591,8 +596,9 @@ fn resolve_exact_root(
                     )),
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                     NativeResolutionSurveyNativeExplanationV1::Rpm {
-                        problems: Vec::new(),
-                        resolved_packages: Vec::new(),
+                        result: NativeResolutionSurveyRpmResultV1::Problems {
+                            problems: Vec::new(),
+                        },
                     },
                 ));
             }
@@ -606,8 +612,9 @@ fn resolve_exact_root(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
                         NativeResolutionSurveyNativeExplanationV1::Rpm {
-                            problems: Vec::new(),
-                            resolved_packages: Vec::new(),
+                            result: NativeResolutionSurveyRpmResultV1::Problems {
+                                problems: Vec::new(),
+                            },
                         },
                     )
                 })?;

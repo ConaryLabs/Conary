@@ -460,14 +460,24 @@ pub enum NativeResolutionSurveyNativeExplanationV1 {
         reason: NativeResolutionSurveyEvidenceWithheldReasonV1,
     },
     Rpm {
-        problems: Vec<NativeResolutionSurveyRpmProblemV1>,
-        resolved_packages: Vec<NativeResolutionSurveyRpmPackageV1>,
+        result: NativeResolutionSurveyRpmResultV1,
     },
     Debian {
         result: NativeResolutionSurveyDebianResultV1,
     },
     Alpm {
         result: NativeResolutionSurveyAlpmResultV1,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum NativeResolutionSurveyRpmResultV1 {
+    Problems {
+        problems: Vec<NativeResolutionSurveyRpmProblemV1>,
+    },
+    Resolved {
+        packages: Vec<NativeResolutionSurveyRpmPackageV1>,
     },
 }
 
@@ -943,8 +953,9 @@ mod tests {
                         Error::ConfigError("diagnostic failure".to_string()),
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                         NativeResolutionSurveyNativeExplanationV1::Rpm {
-                            problems: Vec::new(),
-                            resolved_packages: Vec::new(),
+                            result: NativeResolutionSurveyRpmResultV1::Problems {
+                                problems: Vec::new(),
+                            },
                         },
                     ),
                 )
@@ -993,8 +1004,9 @@ mod tests {
     #[test]
     fn survey_withholds_explanations_after_canonical_byte_budget_is_exhausted() {
         let explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
-            problems: Vec::new(),
-            resolved_packages: Vec::new(),
+            result: NativeResolutionSurveyRpmResultV1::Problems {
+                problems: Vec::new(),
+            },
         };
         let explanation_bytes = canonical_value_size_with_limit(&explanation, u64::MAX)
             .unwrap()

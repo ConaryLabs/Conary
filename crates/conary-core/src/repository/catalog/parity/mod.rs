@@ -132,8 +132,8 @@ pub use resolution_survey::{
     NativeResolutionSurveyErrorVariantV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
     NativeResolutionSurveyFailureV1, NativeResolutionSurveyNativeExplanationV1,
     NativeResolutionSurveyRootOutcomeV1, NativeResolutionSurveyRpmPackageV1,
-    NativeResolutionSurveyRpmProblemV1, NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1,
-    write_native_resolution_survey,
+    NativeResolutionSurveyRpmProblemV1, NativeResolutionSurveyRpmResultV1,
+    NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1, write_native_resolution_survey,
 };
 
 #[cfg(test)]

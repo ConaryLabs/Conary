@@ -13,7 +13,7 @@ use crate::repository::catalog::parity::resolution_survey::NativeExplanationBudg
 use crate::repository::catalog::parity::{
     NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
     NativeResolutionSurveyRpmPackageV1, NativeResolutionSurveyRpmProblemV1,
-    NativeResolutionSurveyRpmRuleV1,
+    NativeResolutionSurveyRpmResultV1, NativeResolutionSurveyRpmRuleV1,
 };
 
 use super::super::SolvPool;
@@ -27,14 +27,18 @@ pub(super) fn rpm_explanation(
 ) -> NativeResolutionSurveyNativeExplanationV1 {
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
-        problems: Vec::new(),
-        resolved_packages: Vec::new(),
+        result: NativeResolutionSurveyRpmResultV1::Problems {
+            problems: Vec::new(),
+        },
     };
     let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
     else {
         return withheld();
     };
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems, .. } = &mut explanation else {
+    let NativeResolutionSurveyNativeExplanationV1::Rpm {
+        result: NativeResolutionSurveyRpmResultV1::Problems { problems },
+    } = &mut explanation
+    else {
         unreachable!("new RPM explanation has the wrong ecosystem")
     };
     if !append_problems(pool, package_index, problems, source_problems, &mut budget) {
@@ -51,15 +55,19 @@ pub(super) fn rpm_resolved_explanation(
 ) -> NativeResolutionSurveyNativeExplanationV1 {
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
-        problems: Vec::new(),
-        resolved_packages: Vec::new(),
+        result: NativeResolutionSurveyRpmResultV1::Resolved {
+            packages: Vec::new(),
+        },
     };
     let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
     else {
         return withheld();
     };
     let NativeResolutionSurveyNativeExplanationV1::Rpm {
-        resolved_packages, ..
+        result:
+            NativeResolutionSurveyRpmResultV1::Resolved {
+                packages: resolved_packages,
+            },
     } = &mut explanation
     else {
         unreachable!("new RPM explanation has the wrong ecosystem")
@@ -279,7 +287,7 @@ mod tests {
 
         let full = rpm_explanation(&pool, &package_index, &problems, u64::MAX);
         let NativeResolutionSurveyNativeExplanationV1::Rpm {
-            problems: retained, ..
+            result: NativeResolutionSurveyRpmResultV1::Problems { problems: retained },
         } = full
         else {
             panic!("unbounded RPM explanation must retain native problems")
@@ -298,6 +306,21 @@ mod tests {
             NativeResolutionSurveyNativeExplanationV1::Withheld {
                 reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted
             }
+        ));
+    }
+
+    #[test]
+    fn rpm_resolved_explanation_types_an_empty_displacement_transaction() {
+        let pool = SolvPool::create().unwrap();
+        let package_index = PackageResolutionIndexReader {
+            connection: Connection::open_in_memory().unwrap(),
+        };
+
+        assert!(matches!(
+            rpm_resolved_explanation(&pool, &package_index, &[], u64::MAX),
+            NativeResolutionSurveyNativeExplanationV1::Rpm {
+                result: NativeResolutionSurveyRpmResultV1::Resolved { packages }
+            } if packages.is_empty()
         ));
     }
 }

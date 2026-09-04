@@ -479,8 +479,9 @@ exhausted.
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
 from/to package key plus name-EVR-architecture, dependency ID, and dependency
-text. A resolved transaction that displaces its exact root instead preserves
-the complete native transaction package list. Native-only provider admission removed the strict-priority multilib
+text. A resolved transaction that displaces its exact root instead preserves a
+typed `resolved` result and the complete native transaction package list,
+including an empty list. Native-only provider admission removed the strict-priority multilib
 problem shape, so there is no residual solve without strict priority.
 Conflict-class rules become ordinary `conflicting_closure` outcomes while
 architecture-only `INFARCH` remains outside that class. Any native field that

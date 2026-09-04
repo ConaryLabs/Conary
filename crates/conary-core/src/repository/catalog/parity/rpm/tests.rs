@@ -14,9 +14,9 @@ use crate::repository::catalog::parity::{
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
     NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
-    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    NativeResolutionSurveyRpmResultV1, NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3,
+    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1,
+    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{
@@ -1916,8 +1916,9 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
             reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
         }
     ));
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems, .. } =
-        &survey.diagnostic_outcomes[0].native_explanation
+    let NativeResolutionSurveyNativeExplanationV1::Rpm {
+        result: NativeResolutionSurveyRpmResultV1::Problems { problems },
+    } = &survey.diagnostic_outcomes[0].native_explanation
     else {
         panic!("RPM conflict outcome must retain libsolv problem evidence");
     };
