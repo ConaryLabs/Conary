@@ -269,7 +269,6 @@ pub struct ImageBuilder {
     work_dir: PathBuf,
 
     /// Bootstrap configuration
-    #[allow(dead_code)]
     // Only target_arch accessed currently; full config retained for future build steps
     config: BootstrapConfig,
 
@@ -291,13 +290,6 @@ pub struct ImageBuilder {
     /// Build log
     log: String,
 }
-
-/// Busybox source for building static binary if host doesn't have one.
-///
-/// Currently unused -- the method prefers the host's static busybox and errors
-/// if one is not found. A future enhancement could download and build from source.
-#[allow(dead_code)]
-const BUSYBOX_SOURCE_URL: &str = "https://busybox.net/downloads/busybox-1.37.0.tar.bz2";
 
 impl ImageBuilder {
     /// ESP partition size (512MB)

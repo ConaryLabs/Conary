@@ -20,7 +20,6 @@ use super::build_runner::PackageBuildRunner;
 use super::chroot_env::{ChrootEnv, ensure_bootstrap_identity_files};
 use super::config::BootstrapConfig;
 use super::stages::{BootstrapStage, StageManager};
-use super::toolchain::Toolchain;
 use crate::recipe::parser::parse_recipe_file;
 
 /// Complete build order for the final system and boot kernel.
@@ -151,20 +150,10 @@ pub enum FinalSystemError {
 /// Builds all Phase 3 final-system packages inside the chroot, tracking
 /// progress so builds can be resumed after failure.
 pub struct FinalSystemBuilder {
-    /// Working directory for build artifacts.
-    // TODO(bootstrap): used when build artifacts are written to a staging area
-    // separate from the chroot root (e.g. for incremental/resumable builds).
-    #[allow(dead_code)]
-    work_dir: PathBuf,
     /// Root of the LFS filesystem (chroot root).
     lfs_root: PathBuf,
     /// Bootstrap configuration.
     config: BootstrapConfig,
-    /// Toolchain available inside the chroot.
-    // TODO(bootstrap): used when chroot builds switch to toolchain-aware
-    // environment setup via build_helpers::setup_build_env.
-    #[allow(dead_code)]
-    toolchain: Toolchain,
     /// Shared build runner for source fetching and verification.
     runner: PackageBuildRunner,
     /// Packages that have been successfully built.
@@ -179,7 +168,6 @@ impl FinalSystemBuilder {
     /// * `work_dir` - scratch space for downloads and build trees
     /// * `lfs_root` - root of the LFS partition (chroot root)
     /// * `config` - bootstrap configuration
-    /// * `toolchain` - toolchain available inside the chroot
     ///
     /// # Errors
     ///
@@ -189,7 +177,6 @@ impl FinalSystemBuilder {
         work_dir: &Path,
         lfs_root: &Path,
         config: BootstrapConfig,
-        toolchain: Toolchain,
     ) -> Result<Self, FinalSystemError> {
         let usr_bin = lfs_root.join("usr").join("bin");
         if !usr_bin.exists() {
@@ -205,10 +192,8 @@ impl FinalSystemBuilder {
         let runner = PackageBuildRunner::new(&sources_dir);
 
         Ok(Self {
-            work_dir: work_dir.to_path_buf(),
             lfs_root: lfs_root.to_path_buf(),
             config,
-            toolchain,
             runner,
             completed: Vec::new(),
         })

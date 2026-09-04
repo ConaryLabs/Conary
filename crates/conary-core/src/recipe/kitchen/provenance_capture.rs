@@ -12,7 +12,6 @@ use crate::recipe::hermetic::HermeticBuildEvidence;
 use chrono::{DateTime, Utc};
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
 
 /// Accumulates provenance data during a recipe build
 #[derive(Debug, Default)]
@@ -64,9 +63,6 @@ pub struct CapturedPatch {
     pub source: String,
     /// Hash of the patch content
     pub hash: String,
-    /// Strip level used when applying (-p N)
-    #[allow(dead_code)] // Set during capture; will be used for patch reproducibility checks
-    pub strip_level: u32,
     /// Author if known
     pub author: Option<String>,
     /// Reason for the patch (from recipe)
@@ -88,18 +84,6 @@ impl ProvenanceCapture {
     /// Create a new provenance capture instance
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Initialize with recipe file hash (streams the file instead of reading all into memory)
-    #[allow(dead_code)] // Public API for recipe builders to set provenance hash
-    pub fn with_recipe_hash(mut self, recipe_path: &Path) -> Self {
-        if let Ok(file) = fs::File::open(recipe_path) {
-            let mut reader = std::io::BufReader::new(file);
-            if let Ok(h) = hash::hash_reader(hash::HashAlgorithm::Sha256, &mut reader) {
-                self.recipe_hash = Some(format!("sha256:{}", h.value));
-            }
-        }
-        self
     }
 
     /// Record the start of the build (sets build timestamp)
@@ -130,18 +114,11 @@ impl ProvenanceCapture {
         // Additional sources could be tracked in a separate field if needed
     }
 
-    /// Record a git commit if building from git
-    #[allow(dead_code)] // TODO: call from git-source recipe builds
-    pub fn record_git_commit(&mut self, commit: &str) {
-        self.git_commit = Some(commit.to_string());
-    }
-
     /// Record a patch being applied
     pub fn record_patch(
         &mut self,
         source: &str,
         content: &[u8],
-        strip_level: u32,
         author: Option<&str>,
         reason: Option<&str>,
     ) {
@@ -149,16 +126,9 @@ impl ProvenanceCapture {
         self.patches.push(CapturedPatch {
             source: source.to_string(),
             hash: format!("sha256:{h}"),
-            strip_level,
             author: author.map(|s| s.to_string()),
             reason: reason.map(|s| s.to_string()),
         });
-    }
-
-    /// Record build dependencies
-    #[allow(dead_code)] // Bulk setter; see add_build_dep() for incremental use
-    pub fn record_build_deps(&mut self, deps: Vec<CapturedDep>) {
-        self.build_deps = deps;
     }
 
     /// Add a build dependency
@@ -333,8 +303,6 @@ mod tests {
         BuilderEnvironmentKind, DependencyLock, HERMETIC_EVIDENCE_SCHEMA, HermeticBuildEvidence,
         RecipeIdentity, ReproducibilityRecord, SourceIdentity,
     };
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_provenance_capture_new() {
@@ -363,7 +331,6 @@ mod tests {
         capture.record_patch(
             "fix-build.patch",
             b"--- a/foo\n+++ b/foo\n",
-            1,
             Some("maintainer@example.com"),
             Some("Fix build on modern compilers"),
         );
@@ -479,17 +446,6 @@ mod tests {
 
         assert_eq!(provenance.hardening_level.as_deref(), Some("hermetic"));
         assert_eq!(provenance.hermetic_evidence, Some(evidence));
-    }
-
-    #[test]
-    fn test_with_recipe_hash() {
-        let mut file = NamedTempFile::new().unwrap();
-        writeln!(file, "[package]\nname = \"test\"\nversion = \"1.0\"").unwrap();
-
-        let capture = ProvenanceCapture::new().with_recipe_hash(file.path());
-
-        assert!(capture.recipe_hash.is_some());
-        assert!(capture.recipe_hash.as_ref().unwrap().starts_with("sha256:"));
     }
 
     #[test]

@@ -428,7 +428,6 @@ impl<'a> Cook<'a> {
             self.provenance.record_patch(
                 &patch_file,
                 &patch_content,
-                patch_info.strip,
                 None, // Author not typically in recipe
                 None, // Description not in current recipe format
             );
