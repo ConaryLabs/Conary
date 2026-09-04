@@ -162,17 +162,15 @@ fn exact_root_has_hidden_conflict(
             }
             Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
                 let graph = conflict.graph(&solver);
-                if conflict_graph_has_conflict_class(&graph) {
-                    return Ok(true);
-                }
+                let has_conflict_class = conflict_graph_has_conflict_class(&graph);
                 let Some(unresolved) = graph.unresolved_node else {
-                    return Ok(false);
+                    return Ok(has_conflict_class);
                 };
                 let mut discovered = BTreeSet::new();
                 for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
                     let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight()
                     else {
-                        return Ok(true);
+                        return Ok(has_conflict_class);
                     };
                     let resolvo::conflict::ConflictNode::Solvable(requiring) =
                         graph.graph[edge.source()]
@@ -188,7 +186,7 @@ fn exact_root_has_hidden_conflict(
                 let previous = ignored.len();
                 ignored.extend(discovered);
                 if ignored.len() == previous {
-                    return Ok(false);
+                    return Ok(has_conflict_class);
                 }
             }
             Err(UnsolvableOrCancelled::Cancelled(_)) => {
@@ -343,10 +341,11 @@ fn solve_exact_repository_package_with_policy_inner(
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
             let graph = conflict.graph(&solver);
             let projected = (|| {
-                if conflict_graph_has_conflict_class(&graph) {
-                    return Ok(SatExactResolution::ConflictingClosure);
-                }
+                let has_conflict_class = conflict_graph_has_conflict_class(&graph);
                 let Some(unresolved) = graph.unresolved_node else {
+                    if has_conflict_class {
+                        return Ok(SatExactResolution::ConflictingClosure);
+                    }
                     return Err(Error::ConflictError(format!(
                         "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
                         conflict.display_user_friendly(&solver)
@@ -356,6 +355,9 @@ fn solve_exact_repository_package_with_policy_inner(
                 for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
                     let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight()
                     else {
+                        if has_conflict_class {
+                            return Ok(SatExactResolution::ConflictingClosure);
+                        }
                         return Err(Error::InternalError(
                             "resolver unresolved sink has a non-requirement edge".to_string(),
                         ));
@@ -378,6 +380,9 @@ fn solve_exact_repository_package_with_policy_inner(
                     }
                 }
                 if dependencies.is_empty() {
+                    if has_conflict_class {
+                        return Ok(SatExactResolution::ConflictingClosure);
+                    }
                     return Err(Error::ConflictError(format!(
                         "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
                     )));

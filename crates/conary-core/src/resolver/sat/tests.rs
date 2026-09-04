@@ -444,6 +444,54 @@ fn exact_repository_root_conflict_dominates_missing_dependency() {
 }
 
 #[test]
+fn exact_repository_root_ignores_conflict_in_usable_alternative_group() {
+    let (_dir, conn) = setup_test_db();
+    let mut repository = Repository::new(
+        "fedora-44".to_string(),
+        "https://example.invalid/fedora".to_string(),
+    );
+    repository.source_profile = Some("fedora-44".to_string());
+    let repository_id = repository.insert(&conn).unwrap();
+    let root = insert_rpm_repo_package(&conn, repository_id, "alternative-root", "1-1");
+    let conflicting = insert_rpm_repo_package(&conn, repository_id, "alternative-root", "2-1");
+    insert_virtual_provide(&conn, conflicting, "conflicting-choice", VersionScheme::Rpm);
+    let compatible = insert_rpm_repo_package(&conn, repository_id, "compatible-choice", "1-1");
+    insert_virtual_provide(&conn, compatible, "compatible-choice", VersionScheme::Rpm);
+    let missing = insert_repo_requirement_group(
+        &conn,
+        compatible,
+        "missing-beyond-compatible-choice",
+        None,
+        Some("missing-beyond-compatible-choice"),
+    );
+    insert_requirement_expression(
+        &conn,
+        root,
+        &RepositoryRequirementExpression::Or(vec![
+            requirement_atom("compatible-choice"),
+            requirement_atom("conflicting-choice"),
+        ]),
+    );
+
+    let result = solve_exact_repository_package_with_policy(
+        &conn,
+        root,
+        "x86_64",
+        &ResolutionPolicy::new().with_primary_source_identity("fedora-44"),
+    )
+    .unwrap();
+    assert_eq!(
+        result,
+        SatExactResolution::Unresolved {
+            dependencies: vec![SatUnresolvedDependency {
+                repository_package_id: compatible,
+                repository_requirement_group_id: missing,
+            }],
+        }
+    );
+}
+
+#[test]
 fn adopted_malformed_self_provides_return_conflict_without_diagnostic_panic() {
     let (_dir, conn) = setup_test_db();
     let mut repository = Repository::new(
@@ -1302,7 +1350,7 @@ fn insert_requirement_expression(
     conn: &Connection,
     package_id: i64,
     expression: &RepositoryRequirementExpression,
-) {
+) -> i64 {
     let mut group = RepositoryRequirementGroup::new(
         package_id,
         "depends".to_string(),
@@ -1313,7 +1361,7 @@ fn insert_requirement_expression(
         },
         serde_json::to_string(expression).unwrap(),
     );
-    group.insert(conn).unwrap();
+    group.insert(conn).unwrap()
 }
 
 fn insert_virtual_provide(
