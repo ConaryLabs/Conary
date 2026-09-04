@@ -2,7 +2,7 @@
 //! Derivation-aware SBOM generation (CycloneDX).
 
 use anyhow::Result;
-use conary_core::derivation::index::{self, DerivationIndex};
+use conary_core::derivation::index::DerivationIndex;
 use conary_core::derivation::profile::BuildProfile;
 
 /// CycloneDX 1.5 SBOM types (mirrors query/sbom.rs structure).
