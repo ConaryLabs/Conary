@@ -31,6 +31,7 @@ COPY conary* /tmp/install/
 # Install: exact staged DEB package or raw binary
 RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.deb ]; then \
         apt-get update && apt-get install -y /tmp/install/conary-release.deb && rm -rf /var/lib/apt/lists/*; \
+        install -D -m 755 /tmp/install/conary /usr/libexec/conary-test/conary-test-hooks; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \

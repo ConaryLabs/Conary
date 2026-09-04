@@ -47,3 +47,6 @@ uuid.workspace = true
 [[bin]]
 name = "conaryd"
 path = "src/bin/conaryd.rs"
+
+[dev-dependencies]
+conary = { path = "../conary", features = ["test-hooks"] }

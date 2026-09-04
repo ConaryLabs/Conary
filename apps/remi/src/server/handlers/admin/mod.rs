@@ -5,6 +5,7 @@ mod artifacts;
 mod audit;
 mod chunk_gc;
 mod events;
+#[cfg(feature = "dormant-federation")]
 mod federation;
 mod r2_durability;
 mod refresh;
@@ -16,6 +17,7 @@ pub use artifacts::*;
 pub use audit::*;
 pub use chunk_gc::*;
 pub use events::*;
+#[cfg(feature = "dormant-federation")]
 pub use federation::*;
 pub use r2_durability::*;
 pub use refresh::*;

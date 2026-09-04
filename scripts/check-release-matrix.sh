@@ -29,8 +29,11 @@ candidate_postdeployment_filter="deploy/remi-postdeployment-fencing.jq"
 candidate_artifact_script="scripts/remi-candidate-artifact.sh"
 timed_linker_script="scripts/timed-linker.sh"
 timed_rustc_wrapper="scripts/timed-rustc-wrapper.sh"
+static_build_script="scripts/build-static-conary.sh"
 candidate_cache_action=".github/actions/setup-remi-candidate-compiler-cache/action.yml"
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
+cross_source_lifecycle_manifest="apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
+cross_source_lifecycle_script="apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
@@ -111,6 +114,20 @@ require_job_match() {
     [[ -n "$block" ]] || fail "$job job missing in $file"
     rg -q --multiline -- "$pattern" <<<"$block" ||
         fail "$description missing in $file job $job"
+}
+
+forbid_job_match() {
+    local file="$1"
+    local job="$2"
+    local pattern="$3"
+    local description="$4"
+    local block
+
+    block="$(extract_job_block "$file" "$job")"
+    [[ -n "$block" ]] || fail "$job job missing in $file"
+    if rg -q --multiline -- "$pattern" <<<"$block"; then
+        fail "$description unexpectedly present in $file job $job"
+    fi
 }
 
 require_literal_count() {
@@ -320,9 +337,15 @@ require_match "$release_build" 'workspace-validation:' 'release workspace valida
 require_match "$release_build" 'workspace-validation:[\s\S]*needs: prepare' 'release workspace validation should depend on prepare'
 require_match "$release_build" 'cargo fmt --check' 'release formatting validation'
 require_match "$release_build" 'cargo clippy --workspace --all-targets -- -D warnings' 'release clippy validation'
+require_match "$release_build" 'cargo test -p conary --no-default-features --test test_hook_ownership --verbose' 'release ordinary Conary test-hook fence'
 require_match "$release_build" 'cargo test --workspace --exclude conary-test --verbose' 'release workspace test validation'
 require_match "$release_build" 'cargo test -p conary-test --verbose' 'release conary-test validation'
 require_match "$release_build" 'cargo test --doc --workspace --verbose' 'release doctest validation'
+require_match "$static_build_script" 'cargo build "\$\{cargo_packages\[@\]\}" --target "\$TARGET" --locked[[:space:]\\]*--features conary/test-hooks' 'static integration binary test-hooks feature'
+forbid_match "$release_build" '--features(=|[[:space:]])[^\n]*test-hooks|test-hooks[^\n]*--features' 'release-build test-hooks feature'
+if rg -q -- '--features(=|[[:space:]])[^\n]*test-hooks|test-hooks[^\n]*--features' packaging; then
+    fail "release packaging test-hooks feature unexpectedly present in packaging"
+fi
 require_match "$exact_ownership_action" '^        set -euo pipefail$' 'fail-closed exact ownership namespace setup'
 require_match "$exact_ownership_action" 'sudo sysctl -w kernel\.apparmor_restrict_unprivileged_userns=0' 'AppArmor user-namespace enablement'
 require_match "$exact_ownership_action" 'unshare --user --map-root-user --mount --propagation private /bin/true' 'exact ownership namespace proof'
@@ -332,7 +355,7 @@ for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
     require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
     forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 done
-namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\) cargo test -p conary --verbose[\\s\\S]*conary-core-repository\\) cargo test -p conary-core --lib repository:: --verbose[\\s\\S]*cargo test -p conary-core --lib --verbose -- --skip repository::[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
+namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\)[\\s\\S]*cargo test -p conary --no-default-features --test test_hook_ownership --verbose[\\s\\S]*cargo test -p conary --features test-hooks --verbose[\\s\\S]*conary-core-repository\\) cargo test -p conary-core --lib repository:: --verbose[\\s\\S]*cargo test -p conary-core --lib --verbose -- --skip repository::[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
 require_job_match "$pr_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'PR workspace test shards and ownership setup order'
 require_job_match "$merge_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'merge workspace test shards and ownership setup order'
 workspace_aggregate_pattern='needs: workspace-test-shards[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*SHARDS_RESULT: \$\{\{ needs\.workspace-test-shards\.result \}\}[\s\S]*test "\$SHARDS_RESULT" = success'
@@ -585,7 +608,16 @@ require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s
 require_job_match "$artifact_proof_workflow" native-package-lifecycle '\.schema_version == 1 and \(\.dry_run \| type\) == "boolean"' 'published artifact metadata schema and boolean dry-run validation'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh release download "\$RELEASE_TAG"[\s\S]*--pattern metadata\.json[\s\S]*sha256sum -c SHA256SUMS --ignore-missing[\s\S]*published_digest[\s\S]*actual_digest' 'published artifact metadata, checksum, and GitHub digest proof'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'Prove the signed bootstrap in a clean supported host[\s\S]*install-conary-preview\.sh[\s\S]*--manifest-url[\s\S]*--apply --yes' 'clean-host signed bootstrap proof'
-require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*--suite native-cross-source-lifecycle' 'published native package installation and Cartesian lifecycle proof'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'images build[\s\S]*--native-package "\$\{\{ steps\.release\.outputs\.native_package \}\}"[\s\S]*Prove the published binary rejects test hooks[\s\S]*/usr/bin/conary --version[\s\S]*test-hook environment variables are disabled[\s\S]*CONARY_TEST_REUSE_IMAGE: "1"[\s\S]*CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks[\s\S]*--suite native-cross-source-lifecycle' 'published native package fence and separate test-hook lifecycle proof'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle 'GitHub-hosted containers do not provide the real generation-mount[\s\S]*package-owned binary.s hook rejection, initialization, planning, dry-run[\s\S]*four mutations use the separate[\s\S]*explicitly named hooks[\s\S]*real-mount QEMU gate[\s\S]*#848[\s\S]*this job makes no such claim' 'honest published-byte container proof boundary'
+forbid_job_match "$artifact_proof_workflow" native-package-lifecycle '^[[:space:]]+CONARY_BIN:' 'whole-suite Conary binary override'
+require_match "$cross_source_lifecycle_manifest" 'run-cross-source-lifecycle-matrix\.sh --conary-bin \$\{CONARY_BIN\} --test-hooks-conary-bin \$\{CONARY_HOOKS_BIN\}' 'typed ordinary and test-hook lifecycle binary inputs'
+require_match "$cross_source_lifecycle_script" 'run_hook_free_conary\(\)[\s\S]*"\$\{ordinary_conary_bin\}"[\s\S]*run_hook_free_conary system init[\s\S]*preview="\$\(run_hook_free_conary install[\s\S]*update_preview="\$\(run_hook_free_conary install' 'published binary hook-free lifecycle coverage'
+require_literal_count "$cross_source_lifecycle_script" 'run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT' 4 'four explicit hook-dependent lifecycle mutations'
+require_match "$cross_source_lifecycle_script" 'begin_corpus_stage installation[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "\$\{v1_package\}"' 'explicit install mutation hook'
+require_match "$cross_source_lifecycle_script" 'begin_corpus_stage update[\s\S]*update_preview="\$\(run_hook_free_conary install[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "\$\{v2_package\}"' 'explicit update mutation hook'
+require_match "$cross_source_lifecycle_script" 'begin_corpus_stage rollback[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT[[:space:]\\]*[[:space:]]*system state rollback' 'explicit rollback mutation hook'
+require_match "$cross_source_lifecycle_script" 'begin_corpus_stage removal[\s\S]*run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove' 'explicit remove mutation hook'
 require_job_match "$artifact_proof_workflow" release-artifact-proof 'needs: native-package-lifecycle[\s\S]*MATRIX_RESULT[\s\S]*"\$MATRIX_RESULT" != "success"' 'stable all-distro published-artifact proof gate'
 
 require_artifact_matrix_row conary "protected release assets"

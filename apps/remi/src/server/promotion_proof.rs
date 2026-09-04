@@ -186,28 +186,14 @@ pub(crate) fn validate_inputs(inputs: &[RemiPromotionProofProfileInput]) -> Resu
 
 fn validate_sha256(value: &str) -> Result<()> {
     ensure!(
-        value.len() == 64
-            && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && value == value.to_ascii_lowercase(),
+        conary_core::hash::is_canonical_sha256(value),
         "promotion-proof revision must be an exact lowercase SHA-256 digest"
     );
     Ok(())
 }
 
 fn output_parent(output: &Path) -> Result<PathBuf> {
-    let parent = output
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let metadata = fs::symlink_metadata(parent)
-        .with_context(|| format!("inspect promotion proof parent {}", parent.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
-        bail!(
-            "promotion proof parent {} must be a real directory",
-            parent.display()
-        );
-    }
-    Ok(parent.to_path_buf())
+    crate::server::private_output::output_parent(output, "promotion proof parent")
 }
 
 fn reopen_published_outputs(

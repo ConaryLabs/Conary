@@ -96,6 +96,7 @@ pub(crate) async fn publish_current_universe_from_state(
     .await
     .context("signed Remi universe publication task did not complete")??;
 
+    let activated = matches!(&outcome, UniversePublicationOutcome::Activated { .. });
     if !matches!(outcome, UniversePublicationOutcome::Unavailable) {
         let (db_path, catalog_authority, search_engine) = {
             let guard = state.read().await;
@@ -106,7 +107,8 @@ pub(crate) async fn publish_current_universe_from_state(
             )
         };
         if let Some(search_engine) = search_engine {
-            tokio::task::spawn_blocking(move || {
+            let rebuild_engine = Arc::clone(&search_engine);
+            let rebuild = tokio::task::spawn_blocking(move || {
                 let universe = match super::public_universe::PublicUniverseSnapshot::load(&db_path)?
                 {
                     super::public_universe::PublicUniverseLoadOutcome::Current(universe) => {
@@ -115,17 +117,32 @@ pub(crate) async fn publish_current_universe_from_state(
                     super::public_universe::PublicUniverseLoadOutcome::NoActiveUniverse => {
                         anyhow::bail!("activated Remi universe pointer is absent")
                     }
+                    super::public_universe::PublicUniverseLoadOutcome::ObsoleteUniverseSchema {
+                        ..
+                    } => {
+                        anyhow::bail!("activated Remi universe schema is obsolete")
+                    }
                     super::public_universe::PublicUniverseLoadOutcome::ObsoleteProfileSchema => {
                         anyhow::bail!("activated Remi universe contains obsolete profile revisions")
                     }
                 };
-                search_engine
+                rebuild_engine
                     .rebuild_from_universe(&db_path, &catalog_authority, &universe)
-                    .context("rebuild search projection for activated Remi universe")?;
+                    .context("rebuild search projection for current Remi universe")?;
                 Ok::<_, anyhow::Error>(())
             })
-            .await
-            .context("activated-universe search rebuild task did not complete")??;
+            .await;
+            if let Err(error) = rebuild
+                .context("current-universe search rebuild task did not complete")
+                .and_then(|result| result)
+            {
+                if activated {
+                    search_engine.mark_unavailable();
+                    tracing::error!(%error, "Activated Remi universe has no current search projection");
+                } else {
+                    tracing::error!(%error, "Unchanged Remi universe search refresh failed; preserving its existing search authority");
+                }
+            }
         }
     }
 
@@ -138,6 +155,8 @@ struct UniverseInputs {
     base_sequence: u64,
     base_promotion_evidence_sha256: Option<String>,
     base_conversion_crawl_sha256: Option<String>,
+    base_profile_authority: Vec<(String, String)>,
+    base_canonical_map_sha256: Option<String>,
     active_manifest: Option<RemiUniverseManifestV2>,
     profiles: Vec<ProfileRevisionV2>,
     profile_physical_attestations: BTreeMap<String, RemiCatalogPhysicalAttestation>,
@@ -237,25 +256,27 @@ fn publish_current_universe_from_roots(
     )?;
     let canonical_map_bytes = canonical_bytes(&inputs.canonical_map)?;
     let canonical_map_sha256 = conary_core::hash::sha256(&canonical_map_bytes);
-    let (Some(active), Some(manifest_sha256)) =
-        (&inputs.active_manifest, &inputs.base_manifest_sha256)
-    else {
+    if inputs.base_manifest_sha256.is_none() {
         return Ok(UniversePublicationOutcome::Unavailable);
-    };
-    if !same_authority(active, &inputs.profiles, &canonical_map_sha256) {
-        bail!("evidence-free universe publication cannot change active profile authority");
     }
-    verify_published_bundle(
-        catalog_dir,
-        active,
-        manifest_sha256,
-        &inputs.profile_physical_attestations,
-    )?;
-    if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
-        return Ok(UniversePublicationOutcome::Unchanged {
-            manifest_sha256: manifest_sha256.clone(),
-            sequence: inputs.base_sequence,
-        });
+    if let Some(manifest_sha256) = &inputs.base_manifest_sha256 {
+        if !same_stored_authority(&inputs, &canonical_map_sha256)? {
+            bail!("evidence-free universe publication cannot change active profile authority");
+        }
+        if let Some(active) = &inputs.active_manifest {
+            verify_published_bundle(
+                catalog_dir,
+                active,
+                manifest_sha256,
+                &inputs.profile_physical_attestations,
+            )?;
+            if active_bundle_is_fresh(catalog_dir, active, manifest_sha256, Utc::now())? {
+                return Ok(UniversePublicationOutcome::Unchanged {
+                    manifest_sha256: manifest_sha256.clone(),
+                    sequence: inputs.base_sequence,
+                });
+            }
+        }
     }
 
     validate_canonical_candidate(
@@ -299,7 +320,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         .query_row(
             "SELECT active.manifest_sha256, active.sequence,
                     revision.promotion_evidence_sha256,
-                    revision.conversion_crawl_sha256, revision.manifest_json
+                    revision.conversion_crawl_sha256,
+                    revision.canonical_map_sha256, revision.manifest_json
              FROM remi_active_universe_revision active
              JOIN remi_universe_revisions revision
                ON revision.manifest_sha256 = active.manifest_sha256
@@ -312,6 +334,7 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
                 ))
             },
         )
@@ -321,36 +344,67 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_sequence,
         base_promotion_evidence_sha256,
         base_conversion_crawl_sha256,
+        base_canonical_map_sha256,
         active_manifest,
+        obsolete_profile_schema,
     ) = match active {
-        Some((sha256, sequence, promotion_evidence, conversion_crawl, manifest_json)) => {
+        Some((
+            sha256,
+            sequence,
+            promotion_evidence,
+            conversion_crawl,
+            canonical_map_sha256,
+            manifest_json,
+        )) => {
             let sequence =
                 u64::try_from(sequence).context("active universe sequence is negative")?;
-            let manifest = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
+            let (manifest, obsolete_profile_schema) = match super::universe_revision_inspection::inspect_stored_universe_manifest_v2(
                 &sha256,
                 i64::try_from(sequence).context("active universe sequence exceeds SQLite INTEGER range")?,
                 &manifest_json,
             )? {
-                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => Some(manifest),
-                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => None,
+                super::universe_revision_inspection::StoredUniverseManifestV2::Current(manifest) => (Some(manifest), false),
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteUniverseSchema { .. } => (None, false),
+                super::universe_revision_inspection::StoredUniverseManifestV2::ObsoleteProfileSchema => (None, true),
             };
             (
                 Some(sha256),
                 sequence,
                 Some(promotion_evidence),
                 Some(conversion_crawl),
+                Some(canonical_map_sha256),
                 manifest,
+                obsolete_profile_schema,
             )
         }
-        None => (None, 0, None, None, None),
+        None => (None, 0, None, None, None, None, false),
     };
 
-    if base_manifest_sha256.is_some() && active_manifest.is_none() {
+    let base_profile_authority = match &base_manifest_sha256 {
+        Some(manifest_sha256) => {
+            let mut statement = conn.prepare(
+                "SELECT source_profile, profile_revision_sha256
+                 FROM remi_universe_profile_revisions
+                 WHERE manifest_sha256 = ?1
+                 ORDER BY ordinal",
+            )?;
+            statement
+                .query_map([manifest_sha256], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?
+        }
+        None => Vec::new(),
+    };
+
+    if obsolete_profile_schema {
         return Ok(UniverseInputs {
             base_manifest_sha256,
             base_sequence,
             base_promotion_evidence_sha256,
             base_conversion_crawl_sha256,
+            base_profile_authority,
+            base_canonical_map_sha256,
             active_manifest,
             profiles: Vec::new(),
             profile_physical_attestations: BTreeMap::new(),
@@ -408,6 +462,8 @@ fn load_inputs(db_path: &Path) -> Result<UniverseInputs> {
         base_sequence,
         base_promotion_evidence_sha256,
         base_conversion_crawl_sha256,
+        base_profile_authority,
+        base_canonical_map_sha256,
         active_manifest,
         profiles,
         profile_physical_attestations,
@@ -440,18 +496,16 @@ fn registered_profile_pairs<'a>(
         .collect()
 }
 
-fn same_authority(
-    active: &RemiUniverseManifestV2,
-    profiles: &[ProfileRevisionV2],
-    canonical_map_sha256: &str,
-) -> bool {
-    active.canonical_map.sha256 == canonical_map_sha256
-        && active.profiles.len() == profiles.len()
-        && active
-            .profiles
-            .iter()
-            .zip(profiles)
-            .all(|(left, right)| left.revision == *right)
+fn same_stored_authority(inputs: &UniverseInputs, canonical_map_sha256: &str) -> Result<bool> {
+    let current_profiles = inputs
+        .profiles
+        .iter()
+        .map(|profile| Ok((profile.profile.clone(), profile.manifest_sha256()?)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(
+        inputs.base_canonical_map_sha256.as_deref() == Some(canonical_map_sha256)
+            && inputs.base_profile_authority == current_profiles,
+    )
 }
 
 fn active_bundle_is_fresh(
@@ -741,6 +795,275 @@ mod tests {
                 row.get::<_, i64>(0)
             })
             .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn obsolete_universe_schema_is_replaced_without_deserializing_it() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-obsolete-universe",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        let obsolete_sha256 = fixture
+            .catalogs
+            .replace_active_universe_with_obsolete_schema();
+
+        assert!(matches!(
+            crate::server::public_universe::PublicUniverseSnapshot::load(
+                fixture.catalogs.db_path()
+            )
+            .expect("classify obsolete universe"),
+            crate::server::public_universe::PublicUniverseLoadOutcome::ObsoleteUniverseSchema {
+                found: 1,
+                required: REMI_UNIVERSE_SCHEMA_V2,
+            }
+        ));
+
+        let UniversePublicationOutcome::Activated {
+            manifest_sha256,
+            sequence: 3,
+        } = fixture
+            .publish()
+            .expect("publish current-schema replacement")
+        else {
+            panic!("obsolete universe was not replaced")
+        };
+        assert_ne!(manifest_sha256, obsolete_sha256);
+        assert!(matches!(
+            crate::server::public_universe::PublicUniverseSnapshot::load(
+                fixture.catalogs.db_path()
+            )
+            .expect("load replacement universe"),
+            crate::server::public_universe::PublicUniverseLoadOutcome::Current(_)
+        ));
+    }
+
+    #[test]
+    fn obsolete_universe_replacement_requires_unchanged_evidenced_authority() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-obsolete-evidence-v1",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        let obsolete_sha256 = fixture
+            .catalogs
+            .replace_active_universe_with_obsolete_schema();
+        fixture.catalogs.activate(
+            "fedora-44",
+            2,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.4",
+                "1.fc44",
+                Some("x86_64"),
+                101,
+                "fedora-obsolete-evidence-v2",
+            )],
+        );
+
+        let error = fixture
+            .publish()
+            .expect_err("obsolete schema must not bypass promotion evidence");
+        assert!(
+            error.to_string().contains(
+                "evidence-free universe publication cannot change active profile authority"
+            ),
+            "{error:#}"
+        );
+        let conn = fixture.catalogs.connection();
+        assert_eq!(
+            conn.query_row(
+                "SELECT manifest_sha256 FROM remi_active_universe_revision WHERE singleton = 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+            obsolete_sha256
+        );
+    }
+
+    #[tokio::test]
+    async fn activated_outcome_survives_search_rebuild_failure() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-search-failure",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        fixture
+            .catalogs
+            .replace_active_universe_with_obsolete_schema();
+
+        let root = fixture
+            .catalogs
+            .catalog_dir()
+            .parent()
+            .expect("fixture root");
+        let config = crate::server::ServerConfig {
+            db_path: fixture.catalogs.db_path().to_path_buf(),
+            catalog_dir: fixture.catalogs.catalog_dir().to_path_buf(),
+            catalog_candidate_dir: fixture.candidate_dir.clone(),
+            chunk_dir: root.join("chunks"),
+            cache_dir: root.join("cache"),
+            release_publish: crate::server::config::ReleasePublishSection {
+                repository_keys_dir: Some(fixture.keys_root.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        fs::create_dir_all(&config.chunk_dir).expect("create chunk root");
+        fs::create_dir_all(&config.cache_dir).expect("create cache root");
+
+        let mut server_state = crate::server::ServerState::new(config).expect("server state");
+        server_state.catalog_authority =
+            crate::server::catalog_authority::CatalogAuthority::from_paths(
+                fixture.catalogs.db_path().to_path_buf(),
+                root.join("missing-search-catalogs"),
+                server_state.database_writer.clone(),
+            );
+        let search_dir = root.join("search");
+        let search_engine =
+            Arc::new(crate::server::SearchEngine::new(&search_dir).expect("create search engine"));
+        server_state.search_engine = Some(Arc::clone(&search_engine));
+        let state = Arc::new(RwLock::new(server_state));
+
+        let outcome = publish_current_universe_from_state(&state)
+            .await
+            .expect("activation outcome must not be replaced by search failure");
+        let UniversePublicationOutcome::Activated { sequence: 3, .. } = outcome else {
+            panic!("obsolete universe replacement did not activate")
+        };
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            crate::server::public_universe::PublicUniverseSnapshot::load(
+                fixture.catalogs.db_path(),
+            )
+            .expect("load activated universe")
+        else {
+            panic!("activated replacement is not current")
+        };
+        assert!(matches!(
+            search_engine.search_public_universe(universe.identity(), "bash", None, 10),
+            Err(crate::server::search::PublicSearchError::Unavailable)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unchanged_outcome_preserves_valid_search_authority_on_rebuild_failure() {
+        let fixture = PublicationFixture::new();
+        fixture.catalogs.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "bash",
+                "5.3",
+                "1.fc44",
+                Some("x86_64"),
+                100,
+                "fedora-unchanged-search-failure",
+            )],
+        );
+        fixture.publish().expect("publish initial universe");
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            crate::server::public_universe::PublicUniverseSnapshot::load(
+                fixture.catalogs.db_path(),
+            )
+            .expect("load active universe")
+        else {
+            panic!("initial universe is not current")
+        };
+
+        let root = fixture
+            .catalogs
+            .catalog_dir()
+            .parent()
+            .expect("fixture root");
+        let search_engine = Arc::new(
+            crate::server::SearchEngine::new(&root.join("search")).expect("create search engine"),
+        );
+        search_engine
+            .rebuild_from_universe(
+                fixture.catalogs.db_path(),
+                fixture.catalogs.authority(),
+                &universe,
+            )
+            .expect("seed current search authority");
+        assert_eq!(
+            search_engine
+                .search_public_universe(universe.identity(), "bash", None, 10)
+                .expect("search current universe")
+                .len(),
+            1
+        );
+
+        let config = crate::server::ServerConfig {
+            db_path: fixture.catalogs.db_path().to_path_buf(),
+            catalog_dir: fixture.catalogs.catalog_dir().to_path_buf(),
+            catalog_candidate_dir: fixture.candidate_dir.clone(),
+            chunk_dir: root.join("chunks"),
+            cache_dir: root.join("cache"),
+            release_publish: crate::server::config::ReleasePublishSection {
+                repository_keys_dir: Some(fixture.keys_root.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        fs::create_dir_all(&config.chunk_dir).expect("create chunk root");
+        fs::create_dir_all(&config.cache_dir).expect("create cache root");
+        let mut server_state = crate::server::ServerState::new(config).expect("server state");
+        server_state.catalog_authority =
+            crate::server::catalog_authority::CatalogAuthority::from_paths(
+                fixture.catalogs.db_path().to_path_buf(),
+                root.join("missing-search-catalogs"),
+                server_state.database_writer.clone(),
+            );
+        server_state.search_engine = Some(Arc::clone(&search_engine));
+        let state = Arc::new(RwLock::new(server_state));
+
+        let outcome = publish_current_universe_from_state(&state)
+            .await
+            .expect("unchanged publication must survive search refresh failure");
+        assert!(matches!(
+            outcome,
+            UniversePublicationOutcome::Unchanged { sequence: 1, .. }
+        ));
+        assert_eq!(
+            search_engine
+                .search_public_universe(universe.identity(), "bash", None, 10)
+                .expect("existing search authority remains valid")
+                .len(),
             1
         );
     }

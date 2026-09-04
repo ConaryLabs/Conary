@@ -1005,7 +1005,7 @@ mod tests {
         let (profiles, canonical, candidate, evidence_sha256, crawl_sha256) = fixture.plan();
         let physical_attestations =
             promotion_profile_physical_attestations(&profiles).expect("profile attestations");
-        let bundle = publish_candidate_files(
+        publish_candidate_files(
             &fixture.config.catalog_candidate_dir,
             &fixture.config.catalog_dir,
             &candidate,
@@ -1027,7 +1027,6 @@ mod tests {
             &fixture.config.db_path,
             &profiles,
             &candidate,
-            &bundle,
             None,
             &evidence_sha256,
             &crawl_sha256,

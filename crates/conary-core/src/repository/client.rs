@@ -19,7 +19,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+mod public_network;
 mod stream;
+pub(crate) use public_network::is_file_or_local_reference;
+pub use public_network::{require_public_repository_ip, validate_url_scheme};
 use stream::{ContentRange, ResponseStreamOptions, content_range, stream_response_to_file};
 
 /// Exact identity accumulated while response chunks are written.
@@ -125,50 +128,12 @@ pub(crate) async fn read_response_bytes_with_limit(
     Ok(body)
 }
 
-/// Validate that a URL uses an allowed scheme (HTTP or HTTPS only).
-///
-/// Rejects file://, gopher://, and other non-HTTP schemes to prevent SSRF.
-pub fn validate_url_scheme(url: &str) -> Result<()> {
-    if url.starts_with("https://") || url.starts_with("http://") {
-        Ok(())
-    } else {
-        Err(Error::ConfigError(format!(
-            "URL must use http:// or https:// scheme: {}",
-            url
-        )))
-    }
-}
-
-pub(crate) fn is_file_or_local_reference(url_or_path: &str) -> bool {
-    url_or_path.starts_with("file://") || !has_url_scheme(url_or_path)
-}
-
-fn has_url_scheme(input: &str) -> bool {
-    let Some(colon_index) = input.find(':') else {
-        return false;
-    };
-
-    let scheme = &input[..colon_index];
-    let mut bytes = scheme.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
-
-    first.is_ascii_alphabetic()
-        && bytes.all(|byte| {
-            matches!(
-                byte,
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'+' | b'-' | b'.'
-            )
-        })
-}
-
 fn local_path_from_reference(url_or_path: &str) -> Option<PathBuf> {
     if let Some(path) = url_or_path.strip_prefix("file://") {
         return Some(PathBuf::from(path));
     }
 
-    if has_url_scheme(url_or_path) {
+    if public_network::has_url_scheme(url_or_path) {
         return None;
     }
 
@@ -332,10 +297,6 @@ fn copy_local_file_bounded(
     Ok(())
 }
 
-pub async fn download_static_or_http_file(url_or_path: &str, dest_path: &Path) -> Result<()> {
-    download_static_or_http_file_with_expected_size(url_or_path, dest_path, None).await
-}
-
 pub(crate) async fn download_static_or_http_file_with_expected_size(
     url_or_path: &str,
     dest_path: &Path,
@@ -374,10 +335,12 @@ fn http_status_error(status: reqwest::StatusCode, url: &str) -> Error {
 }
 
 /// HTTP client wrapper with retry support
+#[derive(Clone)]
 pub struct RepositoryClient {
     client: Client,
     retry_policy: RetryConfig,
     timeouts: TimeoutConfig,
+    public_network_only: bool,
 }
 
 impl RepositoryClient {
@@ -397,7 +360,38 @@ impl RepositoryClient {
             client,
             retry_policy: RetryConfig::default(),
             timeouts,
+            public_network_only: false,
         })
+    }
+
+    /// Create a client whose HTTP requests resolve once, reject private
+    /// destinations, and connect only to the validated socket addresses.
+    pub fn new_public_network() -> Result<Self> {
+        let mut client = Self::new()?;
+        client.public_network_only = true;
+        Ok(client)
+    }
+
+    async fn send_get(
+        &self,
+        url: &str,
+        headers: &header::HeaderMap,
+        request_timeout: Option<Duration>,
+    ) -> Result<reqwest::Response> {
+        if self.public_network_only {
+            return public_network::get_following_public_redirects(
+                url,
+                headers,
+                &self.timeouts,
+                request_timeout,
+            )
+            .await;
+        }
+        let mut request = self.client.get(url).headers(headers.clone());
+        if let Some(timeout) = request_timeout {
+            request = request.timeout(timeout);
+        }
+        request.send().await.download_context(url)
     }
 
     /// Set a custom retry config (builder pattern)
@@ -405,11 +399,6 @@ impl RepositoryClient {
     pub fn with_retry_policy(mut self, policy: RetryConfig) -> Self {
         self.retry_policy = policy;
         self
-    }
-
-    /// Get a reference to the inner HTTP client
-    pub fn inner(&self) -> &Client {
-        &self.client
     }
 
     /// Fetch repository metadata from URL with retry support
@@ -422,15 +411,15 @@ impl RepositoryClient {
         };
 
         info!("Fetching repository metadata from {}", metadata_url);
-
         let mut attempt = 0;
         loop {
             attempt += 1;
             match self
-                .client
-                .get(&metadata_url)
-                .timeout(self.timeouts.metadata)
-                .send()
+                .send_get(
+                    &metadata_url,
+                    &header::HeaderMap::new(),
+                    Some(self.timeouts.metadata),
+                )
                 .await
             {
                 Ok(response) => {
@@ -474,10 +463,10 @@ impl RepositoryClient {
                     return Ok(metadata);
                 }
                 Err(e) => {
-                    if attempt >= self.retry_policy.max_attempts {
-                        return Err(Error::DownloadError(format!(
-                            "Failed to fetch metadata after {attempt} attempts: {e}"
-                        )));
+                    if attempt >= self.retry_policy.max_attempts
+                        || !matches!(&e, Error::DownloadError(_))
+                    {
+                        return Err(e);
                     }
                     warn!(
                         "Metadata fetch attempt {} failed: {}, retrying...",
@@ -516,15 +505,15 @@ impl RepositoryClient {
         max_size: u64,
     ) -> Result<(header::HeaderMap, Vec<u8>)> {
         validate_url_scheme(url)?;
-
         let max_attempts = self.retry_policy.max_attempts.max(1);
         for attempt in 1..=max_attempts {
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                header::HeaderValue::from_static("identity"),
+            );
             let response = self
-                .client
-                .get(url)
-                .header(header::ACCEPT_ENCODING, "identity")
-                .timeout(byte_download_timeout(&self.timeouts))
-                .send()
+                .send_get(url, &headers, Some(byte_download_timeout(&self.timeouts)))
                 .await;
             match response {
                 Ok(response) if is_transient_error(response.status()) => {
@@ -557,8 +546,8 @@ impl RepositoryClient {
                     }
                 }
                 Err(error) => {
-                    if attempt == max_attempts {
-                        return Err(error).download_context(url);
+                    if attempt == max_attempts || !matches!(&error, Error::DownloadError(_)) {
+                        return Err(error);
                     }
                     warn!("Byte download attempt {attempt} failed: {error}, retrying...");
                 }
@@ -637,7 +626,7 @@ impl RepositoryClient {
             .map(|_| ())
     }
 
-    async fn download_file_with_size_limit(
+    pub(crate) async fn download_file_with_size_limit(
         &self,
         url: &str,
         dest_path: &Path,
@@ -741,19 +730,27 @@ impl RepositoryClient {
                 )));
             }
 
-            let mut request = self
-                .client
-                .get(url)
-                .header(header::ACCEPT_ENCODING, "identity");
+            let mut headers = header::HeaderMap::new();
+            headers.insert(
+                header::ACCEPT_ENCODING,
+                header::HeaderValue::from_static("identity"),
+            );
             if existing_len > 0 {
                 debug!(
                     "Found partial download ({} bytes), requesting resume",
                     existing_len
                 );
-                request = request.header(header::RANGE, format!("bytes={}-", existing_len));
+                headers.insert(
+                    header::RANGE,
+                    header::HeaderValue::from_str(&format!("bytes={existing_len}-")).map_err(
+                        |error| Error::DownloadError(format!("invalid byte range: {error}")),
+                    )?,
+                );
             }
 
-            let response = tokio::time::timeout(self.timeouts.download, request.send()).await;
+            let response =
+                tokio::time::timeout(self.timeouts.download, self.send_get(url, &headers, None))
+                    .await;
             match response {
                 Err(_) => {
                     if attempt >= self.retry_policy.max_attempts {
@@ -979,10 +976,10 @@ impl RepositoryClient {
                     });
                 }
                 Ok(Err(e)) => {
-                    if attempt >= self.retry_policy.max_attempts {
-                        return Err(Error::DownloadError(format!(
-                            "Failed to download after {attempt} attempts: {e}"
-                        )));
+                    if attempt >= self.retry_policy.max_attempts
+                        || !matches!(&e, Error::DownloadError(_))
+                    {
+                        return Err(e);
                     }
                     warn!("Download attempt {} failed: {}, retrying...", attempt, e);
                     tokio::time::sleep(self.retry_policy.delay_for_attempt(attempt)).await;

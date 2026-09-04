@@ -136,6 +136,7 @@ fn mutating_cli(fixture: &TryPreflightFixture) -> Cli {
     fixture.parse_with_db(&["conary", "pin", "demo"])
 }
 
+#[cfg(feature = "test-hooks")]
 fn dry_run_cli(fixture: &TryPreflightFixture) -> Cli {
     fixture.parse_with_db(&["conary", "install", "demo", "--dry-run"])
 }
@@ -339,9 +340,10 @@ fn try_dispatch_watch_rejects_package_policy() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_read_only_preflight_allows_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
     set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
@@ -355,9 +357,10 @@ fn live_namespace_read_only_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_mutating_preflight_blocks_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
     set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
@@ -378,9 +381,10 @@ fn live_namespace_mutating_preflight_blocks_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_namespace_dry_run_preflight_allows_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     let session = fixture.create_session("try-live-ns", TrySessionMode::Namespace);
     set_launcher(&session, &fixture, i64::from(std::process::id()), "boot-a");
@@ -396,7 +400,7 @@ fn live_namespace_dry_run_preflight_allows_command() {
 #[test]
 fn completed_namespace_preflight_stays_active_and_blocks_mutation() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.create_session("try-complete-ns", TrySessionMode::Namespace);
 
@@ -418,7 +422,7 @@ fn completed_namespace_preflight_stays_active_and_blocks_mutation() {
 #[test]
 fn orphaned_namespace_preflight_marks_orphaned_and_blocks_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     let session = fixture.create_session("try-orphan-ns", TrySessionMode::Namespace);
     set_launcher(&session, &fixture, 9_999_999, "boot-a");
@@ -436,9 +440,10 @@ fn orphaned_namespace_preflight_marks_orphaned_and_blocks_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_read_only_preflight_allows_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(7);
     let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
@@ -454,9 +459,10 @@ fn live_activated_read_only_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_dry_run_preflight_allows_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(7);
     let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
@@ -472,9 +478,10 @@ fn live_activated_dry_run_preflight_allows_command() {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn live_activated_mutating_preflight_blocks_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(7);
     let session = fixture.create_session("try-live-activated", TrySessionMode::Activated);
@@ -498,7 +505,7 @@ fn live_activated_mutating_preflight_blocks_command() {
 #[test]
 fn orphaned_activated_interactive_preflight_marks_orphaned_and_blocks_command() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(8);
     let session = fixture.create_session("try-orphan-activated", TrySessionMode::Activated);
@@ -524,7 +531,7 @@ fn orphaned_activated_interactive_preflight_marks_orphaned_and_blocks_command() 
 #[test]
 fn orphaned_activated_env_forced_non_interactive_rolls_back() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let _non_interactive_guard = EnvVarGuard::set("CONARY_NON_INTERACTIVE", "1");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(8);
@@ -543,7 +550,7 @@ fn orphaned_activated_env_forced_non_interactive_rolls_back() {
 #[test]
 fn orphaned_activated_non_interactive_preflight_rolls_back() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     fixture.set_current_generation(8);
     let session = fixture.create_session("try-orphan-activated", TrySessionMode::Activated);
@@ -661,7 +668,7 @@ async fn artifact_form_publish_reaches_artifact_reader_without_preflight_db() {
 #[test]
 fn nested_db_command_preflights_selected_db_path() {
     let _env_lock = lock_env();
-    let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-a");
+    let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-a");
     let fixture = TryPreflightFixture::new();
     let session = fixture.create_session("try-nested-db", TrySessionMode::Namespace);
     set_launcher(&session, &fixture, 9_999_999, "boot-a");

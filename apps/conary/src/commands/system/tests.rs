@@ -21,9 +21,11 @@ use conary_core::db::models::{
 };
 use conary_core::db::paths::objects_dir;
 use conary_core::filesystem::CasStore;
+#[cfg(feature = "test-hooks")]
+use conary_core::generation::root_manifest::GenerationRootEntry;
 use conary_core::generation::root_manifest::{
-    CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry,
-    GenerationRootManifest, MutableStateManifest,
+    CapturedSelectedRoot, GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest,
+    MutableStateManifest,
 };
 use conary_core::payload::{
     PayloadContentAuthority, PayloadIdentity, PayloadNode, PayloadNodeKind, PayloadTimestamp,

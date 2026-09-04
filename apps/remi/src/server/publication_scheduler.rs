@@ -88,16 +88,34 @@ where
     CanonicalFuture: Future<Output = CanonicalCycleReport>,
 {
     let coordinator = state.read().await.publication_coordinator.clone();
-    let RepositoryRefreshAdmission::Execute(permit) = coordinator
+    let admission = coordinator
         .admit_repository_refresh(RepositoryRefreshScope::All, false, None)
-        .await
-    else {
+        .await;
+    let RepositoryRefreshAdmission::Execute(permit) = (match admission {
+        Ok(admission) => admission,
+        Err(error) => {
+            tracing::error!(%error, "could not timestamp initial repository refresh");
+            return (None, canonical().await);
+        }
+    }) else {
         unreachable!("background refreshes never provide a coalescing floor")
     };
     let refresh_output = refresh.await;
     let _publication_guard = match refresh_output.as_ref() {
-        Some(batch) => permit.complete(batch.clone()).0,
-        None => permit.fail(),
+        Some(batch) => match permit.complete(batch.clone()) {
+            Ok((guard, _execution)) => guard,
+            Err(error) => {
+                tracing::error!(%error, "could not timestamp completed repository refresh");
+                return (None, canonical().await);
+            }
+        },
+        None => match permit.fail() {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::error!(%error, "could not timestamp failed repository refresh");
+                return (None, canonical().await);
+            }
+        },
     };
     let canonical_output = canonical().await;
     record_repository_readiness(state, refresh_output.as_ref()).await;
@@ -107,16 +125,34 @@ where
 
 async fn refresh_repositories(state: &Arc<RwLock<ServerState>>) -> Option<RepoRefreshBatch> {
     let coordinator = state.read().await.publication_coordinator.clone();
-    let RepositoryRefreshAdmission::Execute(permit) = coordinator
+    let admission = coordinator
         .admit_repository_refresh(RepositoryRefreshScope::All, false, None)
-        .await
-    else {
+        .await;
+    let RepositoryRefreshAdmission::Execute(permit) = (match admission {
+        Ok(admission) => admission,
+        Err(error) => {
+            tracing::error!(%error, "could not timestamp repository refresh");
+            return None;
+        }
+    }) else {
         unreachable!("background refreshes never provide a coalescing floor")
     };
     let batch = refresh_repositories_uncoordinated(state).await;
     let _publication_guard = match batch.as_ref() {
-        Some(batch) => permit.complete(batch.clone()).0,
-        None => permit.fail(),
+        Some(batch) => match permit.complete(batch.clone()) {
+            Ok((guard, _execution)) => guard,
+            Err(error) => {
+                tracing::error!(%error, "could not timestamp completed repository refresh");
+                return None;
+            }
+        },
+        None => match permit.fail() {
+            Ok(guard) => guard,
+            Err(error) => {
+                tracing::error!(%error, "could not timestamp failed repository refresh");
+                return None;
+            }
+        },
     };
     record_repository_readiness(state, batch.as_ref()).await;
     batch

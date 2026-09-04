@@ -218,16 +218,15 @@ struct WatchLoopConfig {
 
 impl WatchLoopConfig {
     fn from_env() -> Self {
-        let max_refreshes = std::env::var("CONARY_TEST_TRY_WATCH_EXIT_AFTER_REFRESHES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok());
+        let hooks = crate::test_hooks::get();
+        let max_refreshes = hooks.try_watch_exit_after_refreshes();
         Self {
             poll_interval: Duration::from_millis(DEFAULT_POLL_MS),
             debounce: Duration::from_millis(DEFAULT_DEBOUNCE_MS),
             max_refreshes,
-            exit_after_ready: std::env::var_os("CONARY_TEST_TRY_WATCH_EXIT_AFTER_READY").is_some(),
-            ready_file: std::env::var_os("CONARY_TEST_TRY_WATCH_READY_FILE").map(PathBuf::from),
-            failure_file: std::env::var_os("CONARY_TEST_TRY_WATCH_FAILURE_FILE").map(PathBuf::from),
+            exit_after_ready: hooks.try_watch_exit_after_ready(),
+            ready_file: hooks.try_watch_ready_file(),
+            failure_file: hooks.try_watch_failure_file(),
         }
     }
 }

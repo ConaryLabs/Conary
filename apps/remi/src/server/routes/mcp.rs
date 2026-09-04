@@ -57,3 +57,6 @@ pub(super) fn create_mcp_router(
             },
         ))
 }
+
+#[cfg(test)]
+mod tests;

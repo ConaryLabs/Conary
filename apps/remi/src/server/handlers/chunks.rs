@@ -4,7 +4,6 @@
 //! With R2 configured, the durable store owns presence and GET requests use
 //! presigned redirects. Without R2, the endpoint serves the local CAS.
 //!
-//! Phase 0 hardening:
 //! - HEAD endpoint with Bloom filter protection
 //! - Batched missing-chunk discovery
 //! - Pull-through caching (fetch from upstream on miss)
@@ -37,10 +36,7 @@ const MAX_RANGE_SIZE: u64 = 64 * 1024 * 1024;
 /// Only lowercase hex is accepted to match the CAS on-disk format and avoid
 /// ambiguity between "ABCD..." and "abcd..." referring to the same chunk.
 pub(crate) fn is_valid_hash(hash: &str) -> bool {
-    hash.len() == 64
-        && hash
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    conary_core::hash::is_canonical_sha256(hash)
 }
 
 /// Normalize a hash to lowercase for consistent CAS path lookup.

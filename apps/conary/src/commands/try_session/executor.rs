@@ -75,16 +75,16 @@ fn spawn_try_command(
         bail!("try launcher command cannot be empty");
     }
     let boot_id = current_boot_id();
-    if let Some(test_launcher) = std::env::var_os("CONARY_TEST_TRY_LAUNCHER") {
+    if let Some(test_launcher) = crate::test_hooks::get().try_launcher() {
         let child = Command::new(test_launcher)
             .arg(namespace_root)
             .args(command)
             .spawn()
-            .context("failed to start CONARY_TEST_TRY_LAUNCHER")?;
+            .context("failed to start configured test launcher")?;
         return Ok(running_try_command(
             child,
             boot_id,
-            "CONARY_TEST_TRY_LAUNCHER",
+            "configured test launcher",
         ));
     }
     if activated {
@@ -157,12 +157,16 @@ fn find_command(command: &str) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "test-hooks")]
     use std::path::PathBuf;
 
+    #[cfg(feature = "test-hooks")]
     use conary_core::ccs::manifest::CcsManifest;
+    #[cfg(feature = "test-hooks")]
     use conary_core::db::models::TrySession;
 
     use super::super::test_support::*;
+    #[cfg(feature = "test-hooks")]
     use super::super::{TryStartRequest, begin_try_session};
     use super::*;
 
@@ -212,6 +216,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn try_command_records_child_liveness_before_wait_and_clears_after_exit() -> anyhow::Result<()>
     {
         let _env_lock = ENV_LOCK.lock().unwrap();
@@ -230,10 +235,10 @@ mod tests {
             permissions.set_mode(0o755);
             std::fs::set_permissions(&launcher, permissions)?;
         }
-        let _launcher_guard = EnvVarGuard::set("CONARY_TEST_TRY_LAUNCHER", &launcher);
+        let _launcher_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_LAUNCHER, &launcher);
         let _pid_guard = EnvVarGuard::set("TRY_PID_FILE", &pid_file);
         let _release_guard = EnvVarGuard::set("TRY_RELEASE_FILE", &release_file);
-        let _boot_guard = EnvVarGuard::set("CONARY_TEST_BOOT_ID", "boot-launcher");
+        let _boot_guard = EnvVarGuard::set(crate::test_hooks::names::BOOT_ID, "boot-launcher");
         let fixture = TryRuntimeFixture::new();
         let package = fixture.write_package(
             "try-launch-liveness",
@@ -311,6 +316,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(feature = "test-hooks")]
     fn poll_until<T>(
         timeout: std::time::Duration,
         mut probe: impl FnMut() -> Option<T>,

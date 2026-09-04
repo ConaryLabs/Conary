@@ -35,6 +35,7 @@ pub(crate) struct PublicUniverseSnapshot {
 pub(crate) enum PublicUniverseLoadOutcome {
     Current(PublicUniverseSnapshot),
     NoActiveUniverse,
+    ObsoleteUniverseSchema { found: u32, required: u32 },
     ObsoleteProfileSchema,
 }
 
@@ -80,6 +81,9 @@ impl PublicUniverseSnapshot {
             &manifest_json,
         )? {
             StoredUniverseManifestV2::Current(manifest) => manifest,
+            StoredUniverseManifestV2::ObsoleteUniverseSchema { found, required } => {
+                return Ok(PublicUniverseLoadOutcome::ObsoleteUniverseSchema { found, required });
+            }
             StoredUniverseManifestV2::ObsoleteProfileSchema => {
                 return Ok(PublicUniverseLoadOutcome::ObsoleteProfileSchema);
             }

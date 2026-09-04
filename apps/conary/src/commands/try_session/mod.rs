@@ -192,12 +192,16 @@ pub(super) mod test_support {
         TmpfilesHook, UserHook,
     };
     use conary_core::ccs::{BuildResult, ComponentData, FileEntry, SigningKeyPair, TrustPolicy};
+    #[cfg(feature = "test-hooks")]
     use conary_core::db::models::TrySession;
+    #[cfg(feature = "test-hooks")]
     use conary_core::generation::artifact::{
         ArtifactWriteInputs, BootAssetSources, CasObjectVerification, stage_boot_assets,
         write_generation_artifact,
     };
+    #[cfg(feature = "test-hooks")]
     use conary_core::generation::metadata::{GENERATION_FORMAT, GenerationMetadata};
+    #[cfg(feature = "test-hooks")]
     use conary_core::generation::root_manifest::{
         GENERATION_ROOT_MANIFEST_VERSION, GenerationRootManifest, MutableStateManifest,
     };
@@ -370,6 +374,7 @@ pub(super) mod test_support {
         })
     }
 
+    #[cfg(feature = "test-hooks")]
     pub(super) fn begin_activated_try(
         fixture: &TryRuntimeFixture,
         package_path: &Path,
@@ -384,12 +389,14 @@ pub(super) mod test_support {
         })
     }
 
+    #[cfg(feature = "test-hooks")]
     pub(super) fn stored_session(fixture: &TryRuntimeFixture, id: &str) -> TrySession {
         TrySession::find_by_id(&fixture.open(), id)
             .unwrap()
             .expect("stored try session")
     }
 
+    #[cfg(feature = "test-hooks")]
     pub(super) fn create_current_generation_link(root: &Path, generation: i64) {
         let generation_dir = root.join(format!("generations/{generation}"));
         let objects_dir = root.join("objects");
@@ -455,6 +462,7 @@ pub(super) mod test_support {
         conary_core::generation::mount::update_current_symlink(root, generation).unwrap();
     }
 
+    #[cfg(feature = "test-hooks")]
     pub(super) fn has_cas_object(root: &Path) -> bool {
         let objects_dir = root.join("objects");
         if !objects_dir.exists() {
@@ -470,6 +478,7 @@ pub(super) mod test_support {
             })
     }
 
+    #[cfg(feature = "test-hooks")]
     pub(super) fn write_try_mountinfo(path: &Path, mounted_paths: &[&Path]) -> anyhow::Result<()> {
         let mut contents = String::new();
         for (index, mounted_path) in mounted_paths.iter().enumerate() {
@@ -484,6 +493,7 @@ pub(super) mod test_support {
         Ok(())
     }
 
+    #[cfg(feature = "test-hooks")]
     fn escape_mountinfo_path(path: &Path) -> String {
         path.to_string_lossy()
             .replace('\\', "\\134")
@@ -501,7 +511,7 @@ pub(super) mod test_support {
         pub(super) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             assert_ne!(
                 key,
-                crate::commands::composefs_ops::TEST_MOUNT_SKIP_ENV,
+                crate::test_hooks::names::SKIP_GENERATION_MOUNT,
                 "use composefs_ops::test_mount_skip_guard for the shared mount-skip environment"
             );
             let previous = std::env::var_os(key);
@@ -619,7 +629,7 @@ mod tests {
         expected = "use composefs_ops::test_mount_skip_guard for the shared mount-skip environment"
     )]
     fn generic_env_guard_rejects_mount_skip_mutation_authority() {
-        let _guard = EnvVarGuard::set("CONARY_TEST_SKIP_GENERATION_MOUNT", "1");
+        let _guard = EnvVarGuard::set(crate::test_hooks::names::SKIP_GENERATION_MOUNT, "1");
     }
 
     #[test]

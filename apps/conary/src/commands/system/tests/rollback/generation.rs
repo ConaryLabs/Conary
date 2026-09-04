@@ -9,6 +9,7 @@ use conary_core::db::models::{
 use std::path::{Path, PathBuf};
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn rollback_commit_survives_publication_failure_and_retry_publishes_exact_root() {
     let (_temp_dir, db_path_str) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -104,6 +105,7 @@ async fn rollback_commit_survives_publication_failure_and_retry_publishes_exact_
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn rollback_generation_excludes_forward_activation_request() {
     let (_temp_dir, db_path_str) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();

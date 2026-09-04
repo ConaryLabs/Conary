@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 36
+last_updated: 2026-09-04
+revision: 37
 summary: Track Conary's signed-universe launch gate, daily-driver floor, synchronized preview release, and external tester milestone
 proof_baseline: "W7/#110 closed through PR #487; immutable v0.16.1 remains historical release evidence rather than tester authority; #598 owns first complete signed public universe; external tester result remains 0/10"
 current_milestone: first external tester loop
@@ -111,7 +111,7 @@ the stated scope, not whether a workstream happens to be active.
 | Bootstrap and self-hosting | limited | Rootful, chroot, fixture, and QEMU dependencies need repeatable current proof. |
 | Remi core and publication | active launch gate | The signed immutable-universe architecture is implemented through its production ceremony. #598 remains open because no complete Fedora/Ubuntu/Arch universe is active; public readiness correctly stays false. The v0.16.1 schema-40 deployment record is historical release evidence, not current production or tester authority. |
 | conaryd package and query service | limited | Authorization is exact root/daemon/configured-group authority; restart semantics, resolver-backed dry-run proof, and deployment remain incomplete. |
-| Federation | experimental | Only `/v1/federation/directory` is routed and no federation call exists in chunk serving, so the router is a library nothing invokes on a local miss. TLS fingerprint pinning is enforced in code; the documented disagreement is a docs defect. See the federation horizon for measured state and slice ordering. |
+| Federation | dormant | Default builds expose no federation directory, admin routes, MCP peer tools, or coordinator library. The stored fingerprint is peer identity rather than verified transport identity, and chunk serving is not wired; #844 owns the verifier and serving hard cut. |
 | Advanced derivation, lock, and reproducibility flows | unfinished | Several interfaces exist without complete persisted inputs or update-path integration. |
 | External product readiness | unfinished | W7 passed. The cross-distro milestone remains 0/10, and outreach is gated on W7.5's signed universe, daily-driver floor, synchronized release, performance/usefulness proof, guided pilot, cached-history clearance, and venue eligibility. Release proof is not tester readiness. |
 
@@ -490,15 +490,16 @@ Remi serving, admin changes reach runtime state, public chunk reachability is
 defined, and a two-node failure matrix passes. Topology tuning and alternative
 transports come later.
 
-Measured state on 2026-07-27, so the first slice is scoped against facts rather
-than against the "experimental" label. `apps/remi/src/federation/` carries
-circuit breaking, request coalescing, config, manifest, peer identity, and a
-router across 72 tests, and TLS fingerprint pinning is genuinely enforced:
-HTTPS peers require a pinned fingerprint and HTTP peers derive identity from a
-URL hash. The documentation-versus-enforcement disagreement above is therefore
-a docs defect, not absent code. What is missing is the serving wiring. Only
-`/v1/federation/directory` is routed, and no federation call exists anywhere in
-chunk serving, so the router is a library nothing invokes on a local miss.
+Measured state on 2026-09-04: `apps/remi/src/federation/` carries circuit
+breaking, request coalescing, config, manifest, peer identity, and routing, but
+the serving runtime has no `Federation::new` caller and no chunk miss reaches
+the federated fetcher. The configured HTTPS fingerprint becomes `PeerId`; the
+shared reqwest client performs normal platform TLS validation and never
+compares that fingerprint with the presented certificate. It is peer identity,
+not transport verification. Default builds now gate the library, directory,
+admin routes, and MCP peer tools behind `dormant-federation`. Issue #844 owns
+certificate verification, serving wiring, live admin state, and the two-node
+failure matrix required to remove that gate.
 
 Two facts constrain the first slice. Most modules were last substantively
 touched on 2026-04-01, and the commits since were repo-wide sweeps rather than

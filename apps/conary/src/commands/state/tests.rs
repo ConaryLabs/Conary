@@ -266,6 +266,7 @@ fn restore_state_member_requires_exact_optional_architecture() {
     assert_eq!(matched.architecture.as_deref(), Some("x86_64"));
 }
 
+#[cfg(feature = "test-hooks")]
 fn active_generation_has_path(db_path: &Path, path: &str) -> bool {
     let runtime_root =
         conary_core::runtime_root::ConaryRuntimeRoot::from_db_path(db_path.to_path_buf());
@@ -496,6 +497,7 @@ async fn state_restore_executes_typed_rpm_install_lifecycle_and_commits() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn test_state_restore_remove_only_executes_and_creates_one_changeset_and_snapshot() {
     let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
@@ -741,6 +743,7 @@ async fn test_state_restore_missing_repo_version_rolls_back_without_snapshot() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn test_state_restore_changeset_rolls_back_via_revert_metadata_wrapper() {
     let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();
@@ -820,6 +823,7 @@ async fn test_state_restore_changeset_rolls_back_via_revert_metadata_wrapper() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn test_state_restore_install_plan_executes_under_wrapping_changeset() {
     let (_tmp, db_path) = crate::commands::test_helpers::setup_command_test_db();
     let root = tempfile::tempdir().unwrap();

@@ -23,8 +23,6 @@
 //!                    pull-through cache
 //! ```
 
-use crate::federation::PeerTier;
-use crate::federation::mdns::MdnsDiscovery;
 use anyhow::Result;
 use axum::Router;
 use axum::body::Body;
@@ -32,6 +30,7 @@ use axum::extract::{Path, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
+use conary_core::federation_discovery::{MdnsDiscovery, PeerTier};
 use conary_core::repository::chunk_fetcher::{
     ChunkFetcher, CompositeChunkFetcher, HttpChunkFetcher, LocalCacheFetcher,
 };
@@ -132,7 +131,6 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
     tokio::fs::create_dir_all(&index_cache_dir).await?;
     tokio::fs::create_dir_all(config.cache_dir.join("objects")).await?;
 
-    // Step 1: Resolve upstream URL
     let upstream_url = resolve_upstream(&config).await?;
 
     if let Some(ref url) = upstream_url {
@@ -143,16 +141,13 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         warn!("[remi-lite] No upstream discovered or configured");
     }
 
-    // Step 2: Build chunk fetcher
     let chunk_fetcher = build_chunk_fetcher(&config, upstream_url.as_deref())?;
 
-    // Step 3: Build HTTP client for index proxying
     let http_client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("conary-remi-lite/0.1")
         .build()?;
 
-    // Step 4: Build state
     let state = Arc::new(RwLock::new(ProxyState {
         config: config.clone(),
         upstream_url: upstream_url.clone(),
@@ -161,7 +156,6 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         index_cache_dir: index_cache_dir.clone(),
     }));
 
-    // Step 5: Advertise via mDNS if enabled
     let mdns_handle = if config.advertise && config.mdns_enabled && !config.offline {
         match advertise_mdns(config.port) {
             Ok(mdns) => {
@@ -177,7 +171,6 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         None
     };
 
-    // Step 6: Create router and serve
     let app = create_proxy_router(state);
 
     let bind_addr = format!("0.0.0.0:{}", config.port);
@@ -190,7 +183,6 @@ pub async fn run_proxy(config: ProxyConfig) -> Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    // Step 7: Cleanup mDNS on shutdown
     if let Some(mdns) = mdns_handle {
         info!("[remi-lite] Shutting down mDNS...");
         if let Err(e) = mdns.shutdown() {
@@ -378,10 +370,7 @@ async fn health(State(state): State<Arc<RwLock<ProxyState>>>) -> Response {
 ///
 /// Only lowercase hex is accepted to match the CAS on-disk format.
 fn is_valid_hash(hash: &str) -> bool {
-    hash.len() == 64
-        && hash
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    conary_core::hash::is_canonical_sha256(hash)
 }
 
 /// GET /v1/chunks/:hash

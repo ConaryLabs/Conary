@@ -14,6 +14,7 @@ use conary_core::repository::catalog::{
     CatalogVerificationEvidenceV1, PORTABLE_CHUNK_SIZE_V1, PortableVfsMetricsV1,
     portable_manifest_size_v1,
 };
+use std::io::Write;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::time::Duration;
 
@@ -641,7 +642,7 @@ fn raw_report_must_remain_private_and_unaliased() {
 }
 
 #[test]
-fn public_report_parent_must_be_a_plain_directory() {
+fn public_report_parent_must_be_a_real_directory() {
     let root = tempfile::tempdir().unwrap();
     let raw_path = publish_raw(root.path(), &valid_report());
     let actual_parent = root.path().join("actual-public-parent");
@@ -652,7 +653,7 @@ fn public_report_parent_must_be_a_plain_directory() {
 
     let error = publish_and_reopen_public_report(&raw_path, &public_path)
         .expect_err("symlinked public-report parent must be rejected");
-    assert!(error.to_string().contains("plain directory"));
+    assert!(error.to_string().contains("real directory"));
     assert!(!actual_parent.join(PUBLIC_REPORT_FILE_NAME).exists());
 }
 

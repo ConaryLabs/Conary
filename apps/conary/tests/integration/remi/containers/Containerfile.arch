@@ -39,6 +39,7 @@ COPY conary* /tmp/install/
 # Install: exact staged Arch package or raw binary
 RUN if [ "$INSTALL_MODE" = "package" ] && [ -f /tmp/install/conary-release.pkg.tar.zst ]; then \
         pacman -U --noconfirm /tmp/install/conary-release.pkg.tar.zst; \
+        install -D -m 755 /tmp/install/conary /usr/libexec/conary-test/conary-test-hooks; \
     elif [ -f /tmp/install/conary ]; then \
         install -m 755 /tmp/install/conary /usr/bin/conary; \
     else \

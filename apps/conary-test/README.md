@@ -149,6 +149,7 @@ Environment variables override values from
 | `REMI_ADMIN_TOKEN` | Bearer token for the Remi admin API |
 | `DB_PATH` | SQLite database path |
 | `CONARY_BIN` | Path to conary binary |
+| `CONARY_HOOKS_BIN` | Path to the feature-enabled Conary integration binary; defaults to `CONARY_BIN` |
 | `RESULTS_DIR` | Directory for JSON result output |
 | `DISTRO` | Target distro name |
 

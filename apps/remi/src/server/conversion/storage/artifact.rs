@@ -339,9 +339,7 @@ fn publish_staged_archive(
     archive_bytes: u64,
 ) -> Result<PublishedConversionArtifact> {
     ensure!(
-        archive_sha256.len() == 64
-            && archive_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && archive_sha256 == archive_sha256.to_ascii_lowercase(),
+        conary_core::hash::is_canonical_sha256(archive_sha256),
         "verified conversion archive identity is not one lowercase SHA-256 digest"
     );
     ensure!(

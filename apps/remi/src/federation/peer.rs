@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 /// Unique peer identifier.
 ///
-/// HTTP peers use a SHA-256 of the endpoint URL. HTTPS peers use the pinned
-/// TLS certificate fingerprint so identity remains bound to the certificate
-/// rather than DNS for the hostname.
+/// HTTP peers use a SHA-256 of the endpoint URL. HTTPS peers use the declared
+/// TLS fingerprint as identity; transport verification is not implemented.
 pub type PeerId = String;
 
 /// A federation peer
@@ -35,7 +34,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    /// Create a peer from an endpoint URL and optional pinned TLS fingerprint.
+    /// Create a peer from an endpoint URL and optional declared TLS identity.
     pub fn from_endpoint_with_fingerprint(
         endpoint: &str,
         tier: PeerTier,
@@ -47,7 +46,7 @@ impl Peer {
         let id = match url.scheme() {
             "https" => normalize_tls_fingerprint(tls_fingerprint.ok_or_else(|| {
                 Error::ConfigError(format!(
-                    "HTTPS federation peer '{}' requires a pinned tls_fingerprint",
+                    "HTTPS federation peer '{}' requires a declared tls_fingerprint identity",
                     endpoint
                 ))
             })?)?,
@@ -104,7 +103,7 @@ fn normalize_tls_fingerprint(raw: &str) -> Result<String> {
         .unwrap_or(fingerprint)
         .to_ascii_lowercase();
 
-    if fingerprint.len() != 64 || !fingerprint.chars().all(|ch| ch.is_ascii_hexdigit()) {
+    if !conary_core::hash::is_canonical_sha256(&fingerprint) {
         return Err(Error::ConfigError(format!(
             "Invalid TLS fingerprint '{}': expected 64 hex characters",
             raw
@@ -265,14 +264,14 @@ mod tests {
     }
 
     #[test]
-    fn test_https_peer_requires_pinned_fingerprint() {
+    fn test_https_peer_requires_declared_fingerprint_identity() {
         let result = Peer::from_endpoint("https://remi.conary.io:7891", PeerTier::RegionHub);
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
                 .to_string()
-                .contains("requires a pinned tls_fingerprint")
+                .contains("requires a declared tls_fingerprint identity")
         );
     }
 

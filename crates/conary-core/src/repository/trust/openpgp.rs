@@ -32,6 +32,7 @@ pub struct PreparedOpenPgpTrust {
     repository_name: String,
     keyring_dir: PathBuf,
     policy: RepositoryTrustPolicy,
+    public_network_only: bool,
 }
 
 impl PreparedOpenPgpTrust {
@@ -42,6 +43,7 @@ impl PreparedOpenPgpTrust {
             repository_name: "test-repository".to_string(),
             keyring_dir: PathBuf::from("/unused/test-keyring"),
             policy,
+            public_network_only: false,
         }
     }
 
@@ -50,19 +52,42 @@ impl PreparedOpenPgpTrust {
         keyring_dir: &Path,
         policy: &RepositoryTrustPolicy,
     ) -> Result<Self> {
+        Self::prepare_with_network_policy(repository_name, keyring_dir, policy, false).await
+    }
+
+    pub(crate) async fn prepare_public_network(
+        repository_name: &str,
+        keyring_dir: &Path,
+        policy: &RepositoryTrustPolicy,
+    ) -> Result<Self> {
+        Self::prepare_with_network_policy(repository_name, keyring_dir, policy, true).await
+    }
+
+    async fn prepare_with_network_policy(
+        repository_name: &str,
+        keyring_dir: &Path,
+        policy: &RepositoryTrustPolicy,
+        public_network_only: bool,
+    ) -> Result<Self> {
         policy.validate()?;
+        let client = if public_network_only {
+            crate::repository::client::RepositoryClient::new_public_network()?
+        } else {
+            crate::repository::client::RepositoryClient::new()?
+        };
         if let RepositoryTrustPolicy::Arch { keyring, .. } = policy {
-            arch::prepare(repository_name, keyring_dir, keyring).await?;
+            arch::prepare(repository_name, keyring_dir, keyring, &client).await?;
         }
         for (role, roots) in policy_roles(policy) {
             for root in roots {
-                store::prepare_root(repository_name, keyring_dir, role, root).await?;
+                store::prepare_root(repository_name, keyring_dir, role, root, &client).await?;
             }
         }
         Ok(Self {
             repository_name: repository_name.to_string(),
             keyring_dir: keyring_dir.to_path_buf(),
             policy: policy.clone(),
+            public_network_only,
         })
     }
 
@@ -71,11 +96,29 @@ impl PreparedOpenPgpTrust {
         keyring_dir: &Path,
         policy: &RepositoryTrustPolicy,
     ) -> Result<Self> {
+        Self::from_prepared_with_network_policy(repository_name, keyring_dir, policy, false)
+    }
+
+    pub(crate) fn from_prepared_public_network(
+        repository_name: &str,
+        keyring_dir: &Path,
+        policy: &RepositoryTrustPolicy,
+    ) -> Result<Self> {
+        Self::from_prepared_with_network_policy(repository_name, keyring_dir, policy, true)
+    }
+
+    fn from_prepared_with_network_policy(
+        repository_name: &str,
+        keyring_dir: &Path,
+        policy: &RepositoryTrustPolicy,
+        public_network_only: bool,
+    ) -> Result<Self> {
         policy.validate()?;
         let prepared = Self {
             repository_name: repository_name.to_string(),
             keyring_dir: keyring_dir.to_path_buf(),
             policy: policy.clone(),
+            public_network_only,
         };
         if let RepositoryTrustPolicy::Arch { keyring, .. } = policy {
             prepared.arch_snapshot(keyring)?;
@@ -88,6 +131,14 @@ impl PreparedOpenPgpTrust {
 
     pub fn policy(&self) -> &RepositoryTrustPolicy {
         &self.policy
+    }
+
+    pub(crate) fn repository_client(&self) -> Result<crate::repository::client::RepositoryClient> {
+        if self.public_network_only {
+            crate::repository::client::RepositoryClient::new_public_network()
+        } else {
+            crate::repository::client::RepositoryClient::new()
+        }
     }
 
     /// Verifies a detached signature for one trust role.

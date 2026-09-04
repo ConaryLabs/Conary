@@ -391,6 +391,21 @@ fn obsolete_profile_revisions_are_unpopulated_deployment_state() {
 }
 
 #[test]
+fn obsolete_universe_manifest_schema_is_unpopulated_deployment_state() {
+    use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
+
+    let fixture = ActiveCatalogFixture::new();
+    fixture.activate("fedora-44", 1, Vec::new());
+    fixture.activate_universe(1);
+    fixture.replace_active_universe_with_obsolete_schema();
+    let conn = fixture.connection();
+    let configured = vec![("fedora-44".to_string(), 2)];
+    let profiles = inspect_deployment_profiles(&conn, fixture.authority(), &configured).unwrap();
+
+    assert!(inspect_active_universe(&conn, &profiles).unwrap().is_none());
+}
+
+#[test]
 fn obsolete_active_universe_is_unpopulated_deployment_state() {
     use crate::server::catalog_authority::test_support::ActiveCatalogFixture;
     use conary_core::db::models::RemiCatalogResource;

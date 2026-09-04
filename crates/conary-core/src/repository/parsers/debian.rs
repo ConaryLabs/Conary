@@ -15,7 +15,6 @@ use super::{
     RepositorySnapshotSink, SourceCandidatePreflightOutcome,
 };
 use crate::error::{Error, Result};
-use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     DebianMultiArch, RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
     RepositoryRequirementKind,
@@ -81,7 +80,7 @@ impl DebianParser {
 
         debug!("Downloading Debian Packages file from: {}", packages_url);
 
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         let packages_path = sink.work_directory().join("debian-packages");
         let download = client
             .download_file_with_identity_limit(&packages_url, &packages_path, authenticated.size)
@@ -119,7 +118,7 @@ impl DebianParser {
             self.distribution
         );
         let inrelease_url = format!("{release_base}/InRelease");
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         match client.download_to_bytes(&inrelease_url).await {
             Ok(inrelease) => self
                 .trust

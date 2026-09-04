@@ -8,6 +8,7 @@ use crate::cli::Cli;
 use crate::dispatch;
 
 pub async fn run() -> Result<()> {
+    crate::test_hooks::initialize()?;
     let cli = Cli::parse();
     conary_bootstrap::init_cli_tracing(crate::logging::verbosity_directive(
         cli.quiet,
@@ -22,6 +23,10 @@ pub async fn run() -> Result<()> {
 }
 
 pub fn report_error(err: &anyhow::Error) {
+    if let Some(test_hook_error) = err.downcast_ref::<crate::test_hooks::TestHooksError>() {
+        crate::ui::error(&test_hook_error.to_string());
+        return;
+    }
     for line in render_error_lines(err) {
         eprintln!("{line}");
     }

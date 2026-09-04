@@ -114,6 +114,8 @@ jobs:
         run: cargo fmt --check
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test ordinary Conary hook fence
+        run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose
       - name: Run workspace tests
         run: cargo test --workspace --exclude conary-test --verbose
       - name: Test conary-test

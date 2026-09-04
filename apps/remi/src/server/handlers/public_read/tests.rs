@@ -143,6 +143,45 @@ async fn every_package_read_surface_returns_typed_503_without_an_active_universe
 }
 
 #[tokio::test]
+async fn obsolete_universe_schema_is_typed_unavailable_to_public_reads() {
+    let fixture = ActiveCatalogFixture::new();
+    fixture.activate(
+        "fedora-44",
+        1,
+        vec![package(
+            "fedora-44",
+            "htop",
+            "3.4.1",
+            "1",
+            Some("x86_64"),
+            1024,
+            "fedora-htop",
+        )],
+    );
+    fixture.activate_universe(1);
+    fixture.replace_active_universe_with_obsolete_schema();
+
+    assert!(matches!(
+        PublicUniverseSnapshot::load(fixture.db_path()).unwrap(),
+        PublicUniverseLoadOutcome::ObsoleteUniverseSchema {
+            found: 1,
+            required: conary_core::repository::universe::REMI_UNIVERSE_SCHEMA_V2,
+        }
+    ));
+
+    let search_dir = tempfile::tempdir().unwrap();
+    let engine = Arc::new(SearchEngine::new(search_dir.path()).unwrap());
+    let (_runtime, app) = app(&fixture, engine).await;
+    let response = get(&app, "/v1/fedora/packages/htop").await;
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = json(response).await;
+    assert_eq!(body["reason"], "obsolete_universe_schema");
+
+    let response = get(&app, "/v1/universe/tuf/root.json").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn obsolete_public_universe_is_typed_unavailable_until_current_replacement_activates() {
     let fixture = ActiveCatalogFixture::new();
     let package = package(

@@ -20,19 +20,26 @@ pub struct GlobalConfig {
 
 impl GlobalConfig {
     pub fn apply_env_overrides(mut self) -> Result<Self> {
-        if let Ok(val) = std::env::var("REMI_ENDPOINT") {
+        self.apply_env_overrides_with(|name| std::env::var(name).ok());
+        Ok(self)
+    }
+
+    fn apply_env_overrides_with(&mut self, mut lookup: impl FnMut(&str) -> Option<String>) {
+        if let Some(val) = lookup("REMI_ENDPOINT") {
             self.remi.endpoint = val;
         }
-        if let Ok(val) = std::env::var("DB_PATH") {
+        if let Some(val) = lookup("DB_PATH") {
             self.paths.db = val;
         }
-        if let Ok(val) = std::env::var("CONARY_BIN") {
+        if let Some(val) = lookup("CONARY_BIN") {
             self.paths.conary_bin = val;
         }
-        if let Ok(val) = std::env::var("RESULTS_DIR") {
+        if let Some(val) = lookup("CONARY_HOOKS_BIN") {
+            self.paths.test_hooks_conary_bin = Some(val);
+        }
+        if let Some(val) = lookup("RESULTS_DIR") {
             self.paths.results_dir = val;
         }
-        Ok(self)
     }
 }
 
@@ -45,9 +52,30 @@ pub struct RemiConfig {
 pub struct PathsConfig {
     pub db: String,
     pub conary_bin: String,
+    pub test_hooks_conary_bin: Option<String>,
     pub results_dir: String,
     #[serde(default)]
     pub fixture_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedConaryBinaries {
+    pub ordinary: String,
+    pub test_hooks: String,
+}
+
+impl PathsConfig {
+    /// Resolve binary authority only after environment overrides have been
+    /// applied to the deserialized optional configuration.
+    pub(crate) fn resolve_conary_binaries(&self) -> ResolvedConaryBinaries {
+        ResolvedConaryBinaries {
+            ordinary: self.conary_bin.clone(),
+            test_hooks: self
+                .test_hooks_conary_bin
+                .clone()
+                .unwrap_or_else(|| self.conary_bin.clone()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -172,5 +200,114 @@ impl<'de> Deserialize<'de> for FixtureConfig {
     {
         let raw = FixtureConfigRaw::deserialize(deserializer)?;
         Ok(Self::from(raw))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::load_manifest;
+    use crate::engine::variables::{build_variables, expand_variables};
+    use std::path::PathBuf;
+
+    fn test_config(test_hooks_conary_bin: Option<&str>) -> GlobalConfig {
+        GlobalConfig {
+            remi: RemiConfig {
+                endpoint: "https://remi.example.test".to_string(),
+            },
+            paths: PathsConfig {
+                db: "/tmp/conary-test.db".to_string(),
+                conary_bin: "/usr/bin/conary".to_string(),
+                test_hooks_conary_bin: test_hooks_conary_bin.map(str::to_string),
+                results_dir: "/tmp/results".to_string(),
+                fixture_dir: None,
+            },
+            setup: SetupConfig::default(),
+            distros: HashMap::new(),
+            fixtures: None,
+        }
+    }
+
+    fn apply_binary_overrides(
+        mut config: GlobalConfig,
+        conary_bin: Option<&str>,
+        test_hooks_conary_bin: Option<&str>,
+    ) -> GlobalConfig {
+        config.apply_env_overrides_with(|name| match name {
+            "CONARY_BIN" => conary_bin.map(str::to_string),
+            "CONARY_HOOKS_BIN" => test_hooks_conary_bin.map(str::to_string),
+            _ => None,
+        });
+        config
+    }
+
+    #[test]
+    fn conary_bin_override_is_the_implicit_hook_binary_and_reaches_manifests() {
+        let config =
+            apply_binary_overrides(test_config(None), Some("/opt/conary-under-test"), None);
+        let resolved = config.paths.resolve_conary_binaries();
+        assert_eq!(resolved.ordinary, "/opt/conary-under-test");
+        assert_eq!(resolved.test_hooks, "/opt/conary-under-test");
+
+        let vars = build_variables(&config, "fedora44");
+        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml");
+        let manifest = load_manifest(&manifest_path).expect("load hook-dependent manifest");
+        let mut hook_dependent_commands = 0;
+        for test in &manifest.test {
+            for step in &test.step {
+                let Some(command) = &step.run else {
+                    continue;
+                };
+                if !command.contains("${CONARY_HOOKS_BIN}") {
+                    continue;
+                }
+                hook_dependent_commands += 1;
+                let expanded = expand_variables(command, &vars);
+                assert!(
+                    expanded.contains("--conary-bin /opt/conary-under-test"),
+                    "ordinary manifest input did not receive CONARY_BIN override: {expanded}"
+                );
+                assert!(
+                    expanded.contains("--test-hooks-conary-bin /opt/conary-under-test"),
+                    "implicit hook manifest input did not receive CONARY_BIN override: {expanded}"
+                );
+            }
+        }
+        assert!(
+            hook_dependent_commands > 0,
+            "fixture must contain hook-dependent commands"
+        );
+    }
+
+    #[test]
+    fn explicit_hook_override_wins_over_config_and_conary_override() {
+        let config = apply_binary_overrides(
+            test_config(Some("/configured/hooks-conary")),
+            Some("/opt/conary-under-test"),
+            Some("/opt/hooks-conary-under-test"),
+        );
+
+        assert_eq!(
+            config.paths.resolve_conary_binaries(),
+            ResolvedConaryBinaries {
+                ordinary: "/opt/conary-under-test".to_string(),
+                test_hooks: "/opt/hooks-conary-under-test".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn configured_hook_binary_wins_when_environment_has_no_binary_overrides() {
+        let config =
+            apply_binary_overrides(test_config(Some("/configured/hooks-conary")), None, None);
+
+        assert_eq!(
+            config.paths.resolve_conary_binaries(),
+            ResolvedConaryBinaries {
+                ordinary: "/usr/bin/conary".to_string(),
+                test_hooks: "/configured/hooks-conary".to_string(),
+            }
+        );
     }
 }

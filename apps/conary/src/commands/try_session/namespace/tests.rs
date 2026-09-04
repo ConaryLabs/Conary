@@ -1,13 +1,16 @@
 // apps/conary/src/commands/try_session/namespace/tests.rs
 //! Tests for try-session namespace materialization and declarative hooks.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "test-hooks")]
+use std::path::PathBuf;
 
-use conary_core::ccs::manifest::{
-    AlternativeHook, CcsManifest, DirectoryHook, SysctlHook, UserHook,
-};
+#[cfg(feature = "test-hooks")]
+use conary_core::ccs::manifest::DirectoryHook;
+use conary_core::ccs::manifest::{AlternativeHook, CcsManifest, SysctlHook, UserHook};
 
 use super::super::test_support::*;
+#[cfg(feature = "test-hooks")]
 use super::super::{TryStartRequest, begin_try_session, rollback_active_try_session};
 use super::*;
 
@@ -107,6 +110,7 @@ fn declarative_try_hooks_collect_post_hook_failures() -> anyhow::Result<()> {
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_declarative_hooks_write_to_live_etc_state_not_workdir() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -132,6 +136,7 @@ fn namespace_declarative_hooks_write_to_live_etc_state_not_workdir() -> anyhow::
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_command_sees_generation_files_and_hook_upperdir() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -148,7 +153,7 @@ fn namespace_command_sees_generation_files_and_hook_upperdir() -> anyhow::Result
         permissions.set_mode(0o755);
         std::fs::set_permissions(&launcher, permissions)?;
     }
-    let _launcher_guard = EnvVarGuard::set("CONARY_TEST_TRY_LAUNCHER", &launcher);
+    let _launcher_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_LAUNCHER, &launcher);
     let _seen_guard = EnvVarGuard::set("TRY_SEEN_ROOT_FILE", &seen_root);
     let fixture = TryRuntimeFixture::new();
     let mut manifest = CcsManifest::new_minimal("try-launch-root", "1.0.0");
@@ -196,6 +201,7 @@ fn namespace_command_sees_generation_files_and_hook_upperdir() -> anyhow::Result
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn activated_declarative_hooks_use_promotable_etc_state_before_publish() -> anyhow::Result<()> {
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
     let fixture = TryRuntimeFixture::new();
@@ -222,6 +228,7 @@ fn activated_declarative_hooks_use_promotable_etc_state_before_publish() -> anyh
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_rollback_unmounts_namespace_before_generation_root() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK
         .lock()
@@ -239,8 +246,9 @@ fn namespace_rollback_unmounts_namespace_before_generation_root() -> anyhow::Res
     let namespace_root = outcome.work_dir.join("namespace-root");
     let generation_root = outcome.work_dir.join("generation-root");
     write_try_mountinfo(&mountinfo, &[&namespace_root, &generation_root])?;
-    let _mountinfo_guard = EnvVarGuard::set("CONARY_TEST_TRY_MOUNTINFO_PATH", &mountinfo);
-    let _unmount_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_LOG", &unmount_log);
+    let _mountinfo_guard =
+        EnvVarGuard::set(crate::test_hooks::names::TRY_MOUNTINFO_PATH, &mountinfo);
+    let _unmount_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_UMOUNT_LOG, &unmount_log);
 
     rollback_active_try_session(&fixture.db_path_string)?;
 
@@ -261,6 +269,7 @@ fn namespace_rollback_unmounts_namespace_before_generation_root() -> anyhow::Res
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_rollback_leaves_session_retryable_when_unmount_fails() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK
         .lock()
@@ -278,9 +287,10 @@ fn namespace_rollback_leaves_session_retryable_when_unmount_fails() -> anyhow::R
     let namespace_root = outcome.work_dir.join("namespace-root");
     let generation_root = outcome.work_dir.join("generation-root");
     write_try_mountinfo(&mountinfo, &[&namespace_root, &generation_root])?;
-    let _mountinfo_guard = EnvVarGuard::set("CONARY_TEST_TRY_MOUNTINFO_PATH", &mountinfo);
-    let _unmount_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_LOG", &unmount_log);
-    let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_UMOUNT_FAIL", &namespace_root);
+    let _mountinfo_guard =
+        EnvVarGuard::set(crate::test_hooks::names::TRY_MOUNTINFO_PATH, &mountinfo);
+    let _unmount_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_UMOUNT_LOG, &unmount_log);
+    let _fail_guard = EnvVarGuard::set(crate::test_hooks::names::TRY_UMOUNT_FAIL, &namespace_root);
 
     let err = rollback_active_try_session(&fixture.db_path_string)
         .expect_err("rollback should fail before marking rolled_back when unmount fails");
@@ -309,6 +319,7 @@ fn namespace_rollback_leaves_session_retryable_when_unmount_fails() -> anyhow::R
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir()?;
@@ -323,7 +334,10 @@ fn switch_stable_namespace_root_restores_previous_on_forced_failure() -> anyhow:
     recreate_path_symlink(&previous, &stable)?;
 
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
-    let _fail_guard = EnvVarGuard::set("CONARY_TEST_TRY_REFRESH_FAIL_NAMESPACE_SWITCH", "1");
+    let _fail_guard = EnvVarGuard::set(
+        crate::test_hooks::names::TRY_REFRESH_FAIL_NAMESPACE_SWITCH,
+        "1",
+    );
     let exposure = StagedNamespaceExposure {
         generation_id: 2,
         next_namespace_root: staged,
@@ -373,6 +387,7 @@ fn teardown_try_namespace_mounts_removes_watch_generation_paths() -> anyhow::Res
 }
 
 #[test]
+#[cfg(feature = "test-hooks")]
 fn namespace_switch_commit_removes_superseded_generation_paths() -> anyhow::Result<()> {
     let _env_lock = ENV_LOCK.lock().unwrap();
     let temp = tempfile::tempdir()?;

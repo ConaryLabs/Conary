@@ -52,8 +52,7 @@ where
     info!("Rolling back changeset: {}", changeset_id);
     println!("Rolling back changeset: {}", changeset_id);
     std::io::stdout().flush()?;
-    if let Ok(delay_ms) = std::env::var("CONARY_TEST_HOLD_DURING_ROLLBACK_MS")
-        && let Ok(delay_ms) = delay_ms.parse::<u64>()
+    if let Some(delay_ms) = crate::test_hooks::get().hold_during_rollback_ms()
         && delay_ms > 0
     {
         std::thread::sleep(Duration::from_millis(delay_ms));

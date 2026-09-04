@@ -427,7 +427,7 @@ impl SelectedRootSession {
 }
 
 fn use_materialized_selected_root_backing() -> bool {
-    cfg!(test) || std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some()
+    cfg!(test) || crate::test_hooks::get().skip_generation_mount()
 }
 
 impl Drop for SelectedRootSession {

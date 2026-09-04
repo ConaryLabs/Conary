@@ -731,6 +731,10 @@ fn phase4_daily_driver_corpus_manifest_proves_remaining_configuration_states() {
         "--present \"${systemctl_path:-/usr/bin/true}\"",
         "--present \"${depmod_path}\"",
         "--present \"${install_path}\"",
+        "--conary-bin",
+        "--test-hooks-conary-bin",
+        "\"${ordinary_conary_bin}\" ccs build",
+        "\"${test_hooks_conary_bin}\" ccs install",
     ] {
         assert!(
             selected_root_helper.contains(required),

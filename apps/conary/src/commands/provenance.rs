@@ -940,11 +940,11 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn rekor_sign_verify_roundtrip() {
-        let db_path = std::env::var("CONARY_TEST_DB").expect("CONARY_TEST_DB is required");
-        let package =
-            std::env::var("CONARY_TEST_PACKAGE").expect("CONARY_TEST_PACKAGE is required");
-        let key = std::env::var("CONARY_TEST_KEY").ok();
-        let keyless = std::env::var("CONARY_TEST_KEYLESS").is_ok();
+        let hooks = crate::test_hooks::get();
+        let db_path = hooks.db().expect("test database hook is required");
+        let package = hooks.package().expect("test package hook is required");
+        let key = hooks.key();
+        let keyless = hooks.keyless();
 
         cmd_provenance_register(&db_path, &package, key.as_deref(), keyless, false)
             .await

@@ -435,11 +435,7 @@ fn collect_transport_objects(
 }
 
 fn validate_hash(hash: &str) -> Result<()> {
-    if hash.len() != 64
-        || !hash
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !conary_core::hash::is_canonical_sha256(hash) {
         bail!("chunk hash must be exactly 64 lowercase hexadecimal characters");
     }
     Ok(())

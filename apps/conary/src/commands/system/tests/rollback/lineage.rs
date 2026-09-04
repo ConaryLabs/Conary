@@ -2,9 +2,11 @@
 
 use super::*;
 use conary_core::db::models::{ChangesetKind, GenerationPublication};
+#[cfg(feature = "test-hooks")]
 use std::collections::BTreeSet;
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn sequential_rollback_ignores_applied_compensation_rows() {
     let (_temp_dir, db_path) = crate::commands::test_helpers::setup_command_test_db();
     let _mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();

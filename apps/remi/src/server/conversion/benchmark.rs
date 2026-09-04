@@ -864,9 +864,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 fn validate_sha256(value: &str, label: &str) -> Result<()> {
     ensure!(
-        value.len() == 64
-            && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-            && value == value.to_ascii_lowercase(),
+        conary_core::hash::is_canonical_sha256(value),
         "{label} must be one exact lowercase SHA-256 digest"
     );
     Ok(())
@@ -887,12 +885,14 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 struct PublishedInode {
     device: u64,
     inode: u64,
 }
 
+#[cfg(test)]
 impl PublishedInode {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
@@ -908,6 +908,7 @@ impl PublishedInode {
     }
 }
 
+#[cfg(test)]
 fn rollback_failed_publication(path: &Path, temporary: &Path, published: Option<PublishedInode>) {
     if let Some(published) = published
         && fs::symlink_metadata(path)

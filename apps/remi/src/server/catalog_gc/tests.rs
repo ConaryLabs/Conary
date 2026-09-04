@@ -55,6 +55,38 @@ fn retired_exact_bundle(path: &Path, kind: RemiCatalogResourceKind, manifest_byt
     fs::remove_file(path.join(CATALOG_PORTABLE_MANIFEST_FILE_NAME)).unwrap();
 }
 
+#[test]
+fn conversion_proof_gc_keeps_only_the_current_converter_version() {
+    let root = tempfile::tempdir().unwrap();
+    let db_path = root.path().join("remi.db");
+    conary_core::db::init(&db_path).unwrap();
+    let conn = conary_core::db::open_fast(&db_path).unwrap();
+    for (key, version) in [
+        (digest('a'), env!("CARGO_PKG_VERSION")),
+        (digest('b'), "0.0.0-obsolete"),
+    ] {
+        let proof = serde_json::json!({"key": {"converter_version": version}});
+        conn.execute(
+            "INSERT INTO remi_conversion_proofs (
+                 proof_key_sha256, proof_json, original_format, transport_json,
+                 total_size, ccs_path, scriptlet_summary_json
+             ) VALUES (?1, ?2, 'rpm', '{}', 0, '/tmp/proof.ccs', '{}')",
+            rusqlite::params![key, proof.to_string()],
+        )
+        .unwrap();
+    }
+
+    assert_eq!(delete_unreachable_conversion_proofs(&conn).unwrap(), 1);
+    let retained: Vec<String> = conn
+        .prepare("SELECT proof_key_sha256 FROM remi_conversion_proofs ORDER BY proof_key_sha256")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(retained, vec![digest('a')]);
+}
+
 #[tokio::test]
 async fn restart_recovery_fences_and_acknowledges_exact_expired_candidate() {
     let root = tempfile::tempdir().unwrap();
