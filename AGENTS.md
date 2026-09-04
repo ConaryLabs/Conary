@@ -99,10 +99,11 @@ essential operation available only through ad hoc shell or free-form output.
   reason to retry until green.
 - `scripts/check-line-cap.sh` enforces a 1,000 non-test-line cap for Rust source
   files; each checked-in exception names the issue that owns its decomposition.
-  Unit tests move to a sibling `<file>/tests.rs` once an inline test module
-  reaches 300 lines, and a sibling extraction must reduce the parent with that
-  reduction stated in the commit. Thin dispatch, registration, and re-export
-  wiring may remain in a large hub only through an issue-linked exception.
+  Once a Rust source file carries at least 300 inline unit-test lines, its unit
+  tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
+  the parent, with that reduction stated in the commit. Thin dispatch,
+  registration, and re-export wiring may remain in a large hub only through an
+  issue-linked exception.
 - Before changing behavior in a Rust file over 1,500 lines, name the ownership
   boundary being preserved or improved. Files over 2,500 lines need a reviewed
   decomposition path before major feature work unless the fix is urgent.

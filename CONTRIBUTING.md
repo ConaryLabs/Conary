@@ -196,11 +196,11 @@ cargo test -p conaryd
   Do not hand-roll status prefixes.
 - **Clippy-clean**: All code must pass `cargo clippy --workspace --all-targets -- -D warnings`. Pedantic lints are encouraged.
 - **Unit-test placement**: Keep small tests in an inline `#[cfg(test)] mod tests`.
-  Once the inline test module reaches 300 lines, move it to the sibling
-  `<file>/tests.rs` behind `#[cfg(test)] mod tests;`. A new sibling extraction
-  must reduce the parent, and its commit must state that reduction.
-  Package-level integration tests remain under the package's top-level `tests/`
-  directory.
+  Once a Rust source file carries at least 300 inline unit-test lines, its unit
+  tests belong in the sibling `<file>/tests.rs` behind `#[cfg(test)] mod tests;`.
+  A new sibling extraction must reduce the parent, and its commit must state
+  that reduction. Package-level integration tests remain under the package's
+  top-level `tests/` directory.
 
 ### Rust Specifics
 
