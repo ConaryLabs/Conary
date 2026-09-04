@@ -64,11 +64,7 @@ pub(crate) enum PublicSearchError {
 /// Full-text search engine backed by Tantivy
 pub struct SearchEngine {
     index: Index,
-    reader: IndexReader,
-    /// Exact signed universe projected by the currently committed index.
-    /// Persisted Tantivy bytes have no public authority until this process
-    /// successfully rebuilds and binds them.
-    authority: RwLock<Option<PublicUniverseIdentity>>,
+    projection: RwLock<SearchProjection>,
     name_field: Field,
     name_exact_field: Field,
     /// Full package identity key for accurate delete-before-update
@@ -81,6 +77,14 @@ pub struct SearchEngine {
     requirement_terms_field: Field,
     size_field: Field,
     converted_field: Field,
+}
+
+struct SearchProjection {
+    reader: IndexReader,
+    /// Exact signed universe projected by the currently committed index.
+    /// Persisted Tantivy bytes have no public authority until this process
+    /// successfully rebuilds and binds them.
+    authority: Option<PublicUniverseIdentity>,
 }
 
 impl SearchEngine {
@@ -132,14 +136,16 @@ impl SearchEngine {
 
         let reader = index
             .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
+            .reload_policy(ReloadPolicy::Manual)
             .try_into()
             .context("Failed to create index reader")?;
 
         Ok(Self {
             index,
-            reader,
-            authority: RwLock::new(None),
+            projection: RwLock::new(SearchProjection {
+                reader,
+                authority: None,
+            }),
             name_field,
             name_exact_field,
             name_distro_field,
@@ -219,8 +225,12 @@ impl SearchEngine {
             .context("Failed to create index writer")?;
 
         self.write_package(&mut writer, pkg)?;
+        let projection = self.projection.write();
         writer.commit().context("Failed to commit index")?;
-        self.reader.reload().context("Failed to reload reader")?;
+        projection
+            .reader
+            .reload()
+            .context("Failed to reload reader")?;
         Ok(())
     }
 
@@ -275,6 +285,24 @@ impl SearchEngine {
         catalog_authority: &CatalogAuthority,
         universe: &PublicUniverseSnapshot,
     ) -> Result<usize> {
+        self.rebuild_from_universe_with_reader_reload(
+            db_path,
+            catalog_authority,
+            universe,
+            |reader| reader.reload().context("Failed to reload reader"),
+        )
+    }
+
+    fn rebuild_from_universe_with_reader_reload<F>(
+        &self,
+        db_path: &Path,
+        catalog_authority: &CatalogAuthority,
+        universe: &PublicUniverseSnapshot,
+        reload_reader: F,
+    ) -> Result<usize>
+    where
+        F: FnOnce(&IndexReader) -> Result<()>,
+    {
         let conn = crate::server::open_runtime_db(db_path)?;
 
         let mut writer = self
@@ -380,16 +408,26 @@ impl SearchEngine {
             count += 1;
         }
 
-        // A public search holds this lock from its authority comparison through
-        // the Tantivy read. Take the matching write lock only for the committed
-        // index swap so no request can validate one revision and query another.
-        let mut authority = self.authority.write();
+        // Existing readers use manual reloads, so committing the candidate does
+        // not change the serving snapshot. Fully load a separate reader before
+        // taking the projection lock, then swap reader and authority together.
+        let candidate_reader = self
+            .index
+            .reader_builder()
+            .reload_policy(ReloadPolicy::Manual)
+            .try_into()
+            .context("Failed to create candidate search reader")?;
         writer.commit().context("Failed to commit rebuild")?;
-        if let Err(error) = self.reader.reload().context("Failed to reload reader") {
-            *authority = None;
-            return Err(error);
-        }
-        *authority = Some(universe.identity().clone());
+        reload_reader(&candidate_reader)?;
+
+        // A public search holds this lock from its authority comparison through
+        // the Tantivy read. Replace the complete projection under the matching
+        // write lock so no request can validate one revision and query another.
+        let mut projection = self.projection.write();
+        *projection = SearchProjection {
+            reader: candidate_reader,
+            authority: Some(universe.identity().clone()),
+        };
 
         tracing::info!(
             universe = %universe.identity().manifest_sha256,
@@ -399,6 +437,12 @@ impl SearchEngine {
         Ok(count)
     }
 
+    /// Retire any previously bound search projection after a failed rebuild.
+    /// The Tantivy bytes may still exist, but they are not serving authority.
+    pub(crate) fn mark_unavailable(&self) {
+        self.projection.write().authority = None;
+    }
+
     pub(crate) fn search_public_universe(
         &self,
         expected: &PublicUniverseIdentity,
@@ -406,19 +450,16 @@ impl SearchEngine {
         distro: Option<&str>,
         limit: usize,
     ) -> std::result::Result<Vec<SearchResult>, PublicSearchError> {
-        let authority = self.authority.read();
-        match authority.as_ref() {
+        let projection = self.projection.read();
+        match projection.authority.as_ref() {
             None => return Err(PublicSearchError::Unavailable),
             Some(actual) if actual != expected => {
                 return Err(PublicSearchError::RevisionMismatch);
             }
             Some(_) => {}
         }
-        let result = self
-            .search(query, distro, limit)
-            .map_err(PublicSearchError::Query);
-        drop(authority);
-        result
+        self.search_with_reader(&projection.reader, query, distro, limit)
+            .map_err(PublicSearchError::Query)
     }
 
     pub(crate) fn suggest_public_universe(
@@ -427,19 +468,16 @@ impl SearchEngine {
         prefix: &str,
         limit: usize,
     ) -> std::result::Result<Vec<String>, PublicSearchError> {
-        let authority = self.authority.read();
-        match authority.as_ref() {
+        let projection = self.projection.read();
+        match projection.authority.as_ref() {
             None => return Err(PublicSearchError::Unavailable),
             Some(actual) if actual != expected => {
                 return Err(PublicSearchError::RevisionMismatch);
             }
             Some(_) => {}
         }
-        let result = self
-            .suggest(prefix, limit)
-            .map_err(PublicSearchError::Query);
-        drop(authority);
-        result
+        self.suggest_with_reader(&projection.reader, prefix, limit)
+            .map_err(PublicSearchError::Query)
     }
 
     /// Full-text search with optional distro filter
@@ -449,7 +487,18 @@ impl SearchEngine {
         distro: Option<&str>,
         limit: usize,
     ) -> Result<Vec<SearchResult>> {
-        let searcher = self.reader.searcher();
+        let projection = self.projection.read();
+        self.search_with_reader(&projection.reader, query, distro, limit)
+    }
+
+    fn search_with_reader(
+        &self,
+        reader: &IndexReader,
+        query: &str,
+        distro: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchResult>> {
+        let searcher = reader.searcher();
 
         // Build query: search name (boosted) and description
         let mut query_parser =
@@ -560,11 +609,21 @@ impl SearchEngine {
 
     /// Autocomplete suggestions based on package name prefix
     pub fn suggest(&self, prefix: &str, limit: usize) -> Result<Vec<String>> {
+        let projection = self.projection.read();
+        self.suggest_with_reader(&projection.reader, prefix, limit)
+    }
+
+    fn suggest_with_reader(
+        &self,
+        reader: &IndexReader,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<Vec<String>> {
         if prefix.is_empty() {
             return Ok(Vec::new());
         }
 
-        let searcher = self.reader.searcher();
+        let searcher = reader.searcher();
 
         // Use regex query on the name_exact field for prefix matching
         // Escape special regex characters in the prefix
@@ -874,6 +933,79 @@ mod tests {
             2
         );
         assert!(results.iter().all(|result| !result.converted));
+    }
+
+    #[test]
+    fn failed_candidate_reader_reload_preserves_previous_search_projection() {
+        let fixture = ActiveCatalogFixture::new();
+        fixture.activate(
+            "fedora-44",
+            1,
+            vec![package(
+                "fedora-44",
+                "baseline-package",
+                "1.0",
+                "1",
+                Some("x86_64"),
+                42,
+                "baseline-source",
+            )],
+        );
+        fixture.activate_universe(1);
+        let crate::server::public_universe::PublicUniverseLoadOutcome::Current(universe) =
+            PublicUniverseSnapshot::load(fixture.db_path()).unwrap()
+        else {
+            panic!("fixture public universe is not current")
+        };
+        let identity = universe.identity().clone();
+        let (_dir, engine) = create_test_engine();
+        engine
+            .rebuild_from_universe(fixture.db_path(), fixture.authority(), &universe)
+            .unwrap();
+        assert_eq!(
+            engine
+                .search_public_universe(&identity, "baseline-package", Some("fedora"), 10)
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let conn = fixture.connection();
+        seed_native_publication(
+            &conn,
+            "fedora",
+            "candidate-only-package",
+            "2.0",
+            "1",
+            "x86_64",
+            "/tmp/candidate-only.ccs",
+        );
+        drop(conn);
+        let error = engine
+            .rebuild_from_universe_with_reader_reload(
+                fixture.db_path(),
+                fixture.authority(),
+                &universe,
+                |_| anyhow::bail!("injected candidate reader reload failure"),
+            )
+            .expect_err("candidate reader reload should fail");
+        assert!(error.to_string().contains("injected candidate reader"));
+
+        assert_eq!(
+            engine
+                .search_public_universe(&identity, "baseline-package", Some("fedora"), 10)
+                .unwrap()
+                .len(),
+            1,
+            "the previously authorized reader must remain live"
+        );
+        assert!(
+            engine
+                .search_public_universe(&identity, "candidate-only-package", Some("fedora"), 10,)
+                .unwrap()
+                .is_empty(),
+            "a failed candidate reader must never become searchable"
+        );
     }
 
     #[test]

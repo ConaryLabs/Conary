@@ -25,8 +25,7 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use super::client::{
-    RepositoryClient, download_static_or_http_file,
-    download_static_or_http_file_with_expected_size, is_file_or_local_reference,
+    RepositoryClient, download_static_or_http_file_with_expected_size, is_file_or_local_reference,
 };
 use super::metadata::DeltaInfo;
 use super::rpm_verifier::RpmOpenPgpVerifier;
@@ -51,6 +50,16 @@ impl DownloadOptions {
     pub fn for_repository(repo: &Repository, keyring_dir: &Path) -> Result<Self> {
         Ok(Self {
             trust: PreparedOpenPgpTrust::from_prepared(
+                &repo.name,
+                keyring_dir,
+                repo.require_trust_policy()?,
+            )?,
+        })
+    }
+
+    pub fn for_repository_public_network(repo: &Repository, keyring_dir: &Path) -> Result<Self> {
+        Ok(Self {
+            trust: PreparedOpenPgpTrust::from_prepared_public_network(
                 &repo.name,
                 keyring_dir,
                 repo.require_trust_policy()?,
@@ -114,7 +123,10 @@ async fn download_package_inner(
         )
         .await?;
     } else if let Some(pb) = progress {
-        let client = RepositoryClient::new()?;
+        let client = match options {
+            Some(options) => options.trust.repository_client()?,
+            None => RepositoryClient::new()?,
+        };
         client
             .download_file_with_progress(
                 &repo_pkg.download_url,
@@ -124,7 +136,17 @@ async fn download_package_inner(
             )
             .await?;
     } else {
-        download_static_or_http_file(&repo_pkg.download_url, &download_path).await?;
+        let client = match options {
+            Some(options) => options.trust.repository_client()?,
+            None => RepositoryClient::new()?,
+        };
+        client
+            .download_file_with_size_limit(
+                &repo_pkg.download_url,
+                &download_path,
+                Some(expected_size),
+            )
+            .await?;
     }
 
     // Verify checksum - clean up invalid file on failure
@@ -225,7 +247,7 @@ async fn fetch_and_verify_arch_signature(
     requirement: ArchSignatureRequirement,
 ) -> Result<Option<Vec<u8>>> {
     let signature_url = format!("{}.sig", repo_pkg.download_url);
-    let client = RepositoryClient::new()?;
+    let client = options.trust.repository_client()?;
     match client.download_to_bytes(&signature_url).await {
         Ok(signature) => {
             options.trust.verify_detached(

@@ -34,6 +34,7 @@ pub struct CatalogGcReport {
     pub deleted_source_resources: usize,
     pub removed_bundles: usize,
     pub acknowledged_deletions: usize,
+    pub deleted_conversion_proofs: usize,
 }
 
 struct CatalogGcTargets {
@@ -41,6 +42,7 @@ struct CatalogGcTargets {
     terminal_candidates: Vec<RemiCatalogRunCandidate>,
     deleted_profile_resources: usize,
     deleted_source_resources: usize,
+    deleted_conversion_proofs: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,6 +141,7 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
                     let conn = conary_core::db::open_fast(&db_path)?;
                     let plan = plan_catalog_collection(&conn)?;
                     let deleted = delete_catalog_collection(&conn, &plan)?;
+                    let deleted_conversion_proofs = delete_unreachable_conversion_proofs(&conn)?;
                     let current = plan_catalog_collection(&conn)?;
                     let pending_keys = current
                         .pending_deletions
@@ -179,6 +182,7 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
                         terminal_candidates,
                         deleted_profile_resources: deleted.deleted_profile_resources.len(),
                         deleted_source_resources: deleted.deleted_source_resources.len(),
+                        deleted_conversion_proofs,
                     })
                 })
                 .map_err(anyhow::Error::from)
@@ -246,7 +250,30 @@ pub(crate) async fn collect_catalog_garbage_uncoordinated(
         deleted_source_resources: targets.deleted_source_resources,
         removed_bundles,
         acknowledged_deletions: acknowledged_count,
+        deleted_conversion_proofs: targets.deleted_conversion_proofs,
     })
+}
+
+fn delete_unreachable_conversion_proofs(conn: &rusqlite::Connection) -> conary_core::Result<usize> {
+    let current_version = env!("CARGO_PKG_VERSION");
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "DELETE FROM remi_conversion_proof_bindings
+         WHERE proof_key_sha256 IN (
+             SELECT proof_key_sha256 FROM remi_conversion_proofs
+             WHERE COALESCE(json_type(proof_json, '$.key.converter_version'), '') != 'text'
+                OR json_extract(proof_json, '$.key.converter_version') != ?1
+         )",
+        [current_version],
+    )?;
+    let deleted = transaction.execute(
+        "DELETE FROM remi_conversion_proofs
+         WHERE COALESCE(json_type(proof_json, '$.key.converter_version'), '') != 'text'
+            OR json_extract(proof_json, '$.key.converter_version') != ?1",
+        [current_version],
+    )?;
+    transaction.commit()?;
+    Ok(deleted)
 }
 
 /// Serialize an exact collection inside a publication cycle whose profile
@@ -435,11 +462,7 @@ fn require_storage_component(value: &str, label: &str) -> Result<()> {
 }
 
 fn require_digest(value: &str, label: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
+    if !conary_core::hash::is_canonical_sha256(value) {
         bail!("{label} is not an exact lowercase SHA-256 digest");
     }
     Ok(())

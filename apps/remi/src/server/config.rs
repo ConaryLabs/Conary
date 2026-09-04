@@ -216,6 +216,7 @@ pub struct TrustedBuildAttestationSigner {
 
 /// Federation configuration
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FederationSection {
     /// Enable federation
     #[serde(default)]
@@ -224,18 +225,6 @@ pub struct FederationSection {
     /// Federation tier (region_hub, cell_hub, leaf)
     #[serde(default = "default_tier")]
     pub tier: String,
-
-    /// mTLS certificate path
-    pub cert_path: Option<PathBuf>,
-
-    /// mTLS key path
-    pub key_path: Option<PathBuf>,
-
-    /// mTLS CA certificate path for peer verification
-    pub ca_path: Option<PathBuf>,
-
-    /// Ed25519 signing key path
-    pub signing_key: Option<PathBuf>,
 
     /// Peer URLs
     #[serde(default)]
@@ -247,10 +236,6 @@ impl Default for FederationSection {
         Self {
             enabled: false,
             tier: default_tier(),
-            cert_path: None,
-            key_path: None,
-            ca_path: None,
-            signing_key: None,
             peers: Vec::new(),
         }
     }

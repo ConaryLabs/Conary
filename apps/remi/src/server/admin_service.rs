@@ -16,6 +16,7 @@ use tokio::sync::RwLock;
 
 use conary_core::db::models::admin_token::AdminToken;
 use conary_core::db::models::audit_log::AuditEntry;
+#[cfg(feature = "dormant-federation")]
 use conary_core::db::models::federation_peer::FederationPeer;
 use conary_core::db::models::{RemiActiveProfileRevision, Repository, RepositoryOwnership};
 use conary_core::repository::{
@@ -23,6 +24,7 @@ use conary_core::repository::{
 };
 use rusqlite::TransactionBehavior;
 
+#[cfg(feature = "dormant-federation")]
 use crate::federation::{Peer, PeerTier};
 use crate::server::ServerState;
 use crate::server::auth::{generate_token, hash_token, validate_scopes};
@@ -165,8 +167,9 @@ async fn test_db_path(state: &Arc<RwLock<ServerState>>) -> Result<String, Servic
         .ok_or_else(|| ServiceError::Internal("test_db_path not configured".to_string()))
 }
 
-/// Validate that a stored external URL cannot target local or cloud-metadata services.
-async fn validate_external_url(url_str: &str) -> Result<(), ServiceError> {
+/// Validate the persisted syntax; public-address enforcement happens at the
+/// fetch boundary, where DNS answers can be pinned to the request client.
+fn validate_external_url(url_str: &str) -> Result<(), ServiceError> {
     let parsed = url::Url::parse(url_str.trim())
         .map_err(|e| ServiceError::BadRequest(format!("Invalid URL '{url_str}': {e}")))?;
 
@@ -182,83 +185,12 @@ async fn validate_external_url(url_str: &str) -> Result<(), ServiceError> {
     let host = parsed
         .host_str()
         .ok_or_else(|| ServiceError::BadRequest("URL has no host".to_string()))?;
-
-    validate_external_host(host)?;
-
     if let Ok(ip) = IpAddr::from_str(host) {
-        validate_external_ip(&ip)?;
+        conary_core::repository::require_public_repository_ip(ip)
+            .map_err(|error| ServiceError::BadRequest(error.to_string()))?;
     }
-
-    let port = parsed
-        .port()
-        .unwrap_or(if parsed.scheme() == "https" { 443 } else { 80 });
-    let resolved_addrs: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|e| ServiceError::BadRequest(format!("Failed to resolve '{host}': {e}")))?
-        .collect();
-
-    if resolved_addrs.is_empty() {
-        return Err(ServiceError::BadRequest(format!(
-            "DNS resolution for '{host}' returned no addresses"
-        )));
-    }
-
-    for addr in resolved_addrs {
-        validate_external_ip(&addr.ip())?;
-    }
-
     Ok(())
 }
-
-fn validate_external_host(host: &str) -> Result<(), ServiceError> {
-    let lower_host = host.to_ascii_lowercase();
-    if lower_host == "localhost"
-        || lower_host.ends_with(".localhost")
-        || lower_host == "127.0.0.1"
-        || lower_host == "::1"
-        || lower_host == "0.0.0.0"
-    {
-        return Err(ServiceError::BadRequest(
-            "URLs targeting localhost are not allowed".to_string(),
-        ));
-    }
-
-    if lower_host == "metadata.google.internal" {
-        return Err(ServiceError::BadRequest(
-            "Cloud metadata endpoints are not allowed".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
-fn validate_external_ip(ip: &IpAddr) -> Result<(), ServiceError> {
-    match ip {
-        IpAddr::V4(v4) => {
-            if v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified() {
-                return Err(ServiceError::BadRequest(format!(
-                    "URLs targeting private or link-local IPs are not allowed: {ip}"
-                )));
-            }
-        }
-        IpAddr::V6(v6) => {
-            let segments = v6.segments();
-            let is_unique_local = (segments[0] & 0xfe00) == 0xfc00;
-            let is_link_local = (segments[0] & 0xffc0) == 0xfe80;
-            if v6.is_loopback() || v6.is_unspecified() || is_unique_local || is_link_local {
-                return Err(ServiceError::BadRequest(format!(
-                    "URLs targeting private or link-local IPs are not allowed: {ip}"
-                )));
-            }
-        }
-    }
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Chunk garbage collection
-// ---------------------------------------------------------------------------
 
 /// Chunks touched more recently than this are kept even when unreferenced, so
 /// an in-flight conversion cannot lose the chunks it is still writing.
@@ -430,6 +362,7 @@ pub async fn delete_token(state: &Arc<RwLock<ServerState>>, id: i64) -> Result<b
 // ---------------------------------------------------------------------------
 
 /// Input for adding a new federation peer.
+#[cfg(feature = "dormant-federation")]
 pub struct AddPeerInput {
     pub endpoint: String,
     pub tier: Option<String>,
@@ -438,6 +371,7 @@ pub struct AddPeerInput {
 }
 
 /// List all federation peers.
+#[cfg(feature = "dormant-federation")]
 pub async fn list_peers(
     state: &Arc<RwLock<ServerState>>,
 ) -> Result<Vec<FederationPeer>, ServiceError> {
@@ -454,6 +388,7 @@ pub async fn list_peers(
 /// Validates the endpoint URL and tier, derives the peer ID, and inserts via
 /// the `federation_peer` model. HTTPS peers must include a pinned TLS
 /// certificate fingerprint so the stored peer ID is certificate-bound.
+#[cfg(feature = "dormant-federation")]
 pub async fn add_peer(
     state: &Arc<RwLock<ServerState>>,
     input: AddPeerInput,
@@ -467,7 +402,7 @@ pub async fn add_peer(
     if url::Url::parse(&endpoint).is_err() {
         return Err(ServiceError::BadRequest("Invalid endpoint URL".to_string()));
     }
-    validate_external_url(&endpoint).await?;
+    validate_external_url(&endpoint)?;
 
     let tier = input.tier.unwrap_or_else(|| "leaf".to_string());
     if !["leaf", "cell_hub", "region_hub"].contains(&tier.as_str()) {
@@ -520,6 +455,7 @@ pub async fn add_peer(
 }
 
 /// Delete a federation peer by ID.  Returns `true` if a row was deleted.
+#[cfg(feature = "dormant-federation")]
 pub async fn delete_peer(state: &Arc<RwLock<ServerState>>, id: &str) -> Result<bool, ServiceError> {
     let db = db_path(state).await;
     let id_owned = id.to_string();
@@ -531,6 +467,7 @@ pub async fn delete_peer(state: &Arc<RwLock<ServerState>>, id: &str) -> Result<b
 }
 
 /// Get a single federation peer by ID.
+#[cfg(feature = "dormant-federation")]
 pub async fn get_peer(
     state: &Arc<RwLock<ServerState>>,
     id: &str,
@@ -640,11 +577,11 @@ pub async fn create_repo(
     state: &Arc<RwLock<ServerState>>,
     input: CreateRepoInput,
 ) -> Result<Repository, ServiceError> {
-    validate_external_url(&input.url).await?;
+    validate_external_url(&input.url)?;
     if let Some(ref content_url) = input.content_url
         && !content_url.trim().is_empty()
     {
-        validate_external_url(content_url).await?;
+        validate_external_url(content_url)?;
     }
     if let Some(trust) = input.trust.as_ref() {
         validate_repository_trust(trust).await?;
@@ -692,11 +629,11 @@ pub async fn update_repo(
     name: &str,
     input: UpdateRepoInput,
 ) -> Result<Option<Repository>, ServiceError> {
-    validate_external_url(&input.url).await?;
+    validate_external_url(&input.url)?;
     if let Some(ref content_url) = input.content_url
         && !content_url.trim().is_empty()
     {
-        validate_external_url(content_url).await?;
+        validate_external_url(content_url)?;
     }
     if let Some(trust) = input.trust.as_ref() {
         validate_repository_trust(trust).await?;
@@ -841,13 +778,13 @@ async fn validate_repository_trust(policy: &RepositoryTrustPolicy) -> Result<(),
         ..
     } = policy
     {
-        validate_external_url(url).await?;
+        validate_external_url(url)?;
     }
     if let RepositoryTrustPolicy::Arch { keyring, .. } = policy {
-        validate_external_url(&keyring.url).await?;
+        validate_external_url(&keyring.url)?;
     }
     for root in repository_trust_roots(policy) {
-        validate_external_url(&root.url).await?;
+        validate_external_url(&root.url)?;
     }
     Ok(())
 }

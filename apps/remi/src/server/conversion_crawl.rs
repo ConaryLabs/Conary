@@ -359,12 +359,8 @@ pub fn reopen_conversion_crawl(path: &Path) -> Result<(RemiConversionCrawlV4, Ve
 
 pub(super) fn validate_sha256(value: &str, field: &str) -> Result<()> {
     ensure!(
-        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "{field} must be an exact SHA-256 digest"
-    );
-    ensure!(
-        value == value.to_ascii_lowercase(),
-        "{field} must be lowercase"
+        conary_core::hash::is_canonical_sha256(value),
+        "{field} must be an exact lowercase SHA-256 digest"
     );
     Ok(())
 }

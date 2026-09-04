@@ -11,7 +11,7 @@ use super::metalink::parse_metalink_repomd_identity;
 use super::repomd::{self, RepoMdIndex, RepoMdRecord};
 use crate::error::{Error, Result};
 use crate::repository::catalog::{CatalogMetadataObjectScratchV1, CatalogMetadataScratchV1};
-use crate::repository::client::{DownloadedFileIdentity, RepositoryClient};
+use crate::repository::client::DownloadedFileIdentity;
 use crate::repository::parsers::{
     AuthenticatedMetadataObject, AuthenticatedMetadataObjectRole, AuthenticatedSnapshotIdentity,
 };
@@ -48,7 +48,7 @@ impl FedoraParser {
         let repomd_url = format!("{}/repodata/repomd.xml", repo_url.trim_end_matches('/'));
         debug!("Downloading repomd.xml from: {}", repomd_url);
 
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         let xml_bytes = client.download_to_bytes(&repomd_url).await?;
         let RepositoryTrustPolicy::Rpm { metadata, .. } = self.trust.policy() else {
             return Err(Error::ConfigError(
@@ -101,7 +101,7 @@ impl FedoraParser {
             document_url
         );
 
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         let path = work_directory.join(file_name);
         let identity = client
             .download_file_with_identity_limit(&document_url, &path, record.size)

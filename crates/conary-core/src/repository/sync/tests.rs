@@ -218,6 +218,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_repository_sync_uses_the_public_network_policy() {
+        let root = tempfile::tempdir().unwrap();
+        let mut repo = Repository::new(
+            "managed-json".to_string(),
+            "http://127.0.0.1:9/repository".to_string(),
+        );
+        repo.id = Some(7);
+        repo.set_parser_config(RepositoryParserConfig::Json)
+            .unwrap();
+
+        let error = sync_repository_from_db_path_public_network(
+            root.path().join("unused.db"),
+            repo,
+            ImmediateWriteAuthority,
+        )
+        .await
+        .expect_err("managed repository sync accepted loopback metadata");
+
+        assert!(error.to_string().contains("non-global"), "{error}");
+    }
+
+    #[tokio::test]
     async fn static_repo_without_tuf_enabled_hard_fails_before_native_or_json_fetch() {
         let (_temp, conn) = crate::db::testing::create_test_db();
         let mut repo = static_repo("static-test", "file:///definitely/missing/static-repo");

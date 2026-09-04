@@ -1,15 +1,11 @@
 // conary-core/src/repository/static_repo/location.rs
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use tokio::io::AsyncReadExt;
 
 use super::paths::validate_repo_relative_path;
-
-const STATIC_HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-const STATIC_HTTP_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RepoLocation {
@@ -44,13 +40,35 @@ impl RepoLocation {
         validate_repo_relative_path(relative)?;
 
         match self {
-            Self::Http { base } => Ok(format!("{base}/{relative}")),
+            Self::Http { base, .. } => Ok(format!("{base}/{relative}")),
             Self::File { root } => Ok(root.join(relative).display().to_string()),
         }
     }
 
     pub async fn fetch_bytes(&self, relative: &str, limit: u64) -> Result<Vec<u8>> {
-        match self.try_fetch_bytes(relative, limit).await? {
+        self.fetch_bytes_with_network_policy(relative, limit, false)
+            .await
+    }
+
+    pub(crate) async fn fetch_bytes_public_network(
+        &self,
+        relative: &str,
+        limit: u64,
+    ) -> Result<Vec<u8>> {
+        self.fetch_bytes_with_network_policy(relative, limit, true)
+            .await
+    }
+
+    async fn fetch_bytes_with_network_policy(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Vec<u8>> {
+        match self
+            .try_fetch_bytes_with_network_policy(relative, limit, public_network_only)
+            .await?
+        {
             Some(bytes) => Ok(bytes),
             None => bail!(
                 "static repo path not found: {}",
@@ -60,67 +78,53 @@ impl RepoLocation {
     }
 
     pub async fn try_fetch_bytes(&self, relative: &str, limit: u64) -> Result<Option<Vec<u8>>> {
+        self.try_fetch_bytes_with_network_policy(relative, limit, false)
+            .await
+    }
+
+    pub(crate) async fn try_fetch_bytes_public_network(
+        &self,
+        relative: &str,
+        limit: u64,
+    ) -> Result<Option<Vec<u8>>> {
+        self.try_fetch_bytes_with_network_policy(relative, limit, true)
+            .await
+    }
+
+    async fn try_fetch_bytes_with_network_policy(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Option<Vec<u8>>> {
         validate_repo_relative_path(relative)?;
 
         match self {
-            Self::Http { .. } => self.try_fetch_http_bytes(relative, limit).await,
+            Self::Http { .. } => {
+                self.try_fetch_http_bytes(relative, limit, public_network_only)
+                    .await
+            }
             Self::File { root } => try_fetch_file_bytes(root.join(relative), limit).await,
         }
     }
 
-    async fn try_fetch_http_bytes(&self, relative: &str, limit: u64) -> Result<Option<Vec<u8>>> {
+    async fn try_fetch_http_bytes(
+        &self,
+        relative: &str,
+        limit: u64,
+        public_network_only: bool,
+    ) -> Result<Option<Vec<u8>>> {
         let url = self.join_display(relative)?;
-        let response = reqwest::Client::builder()
-            .connect_timeout(STATIC_HTTP_CONNECT_TIMEOUT)
-            .timeout(STATIC_HTTP_TIMEOUT)
-            .build()
-            .context("build static repo HTTP client")?
-            .get(&url)
-            .header(reqwest::header::ACCEPT_ENCODING, "identity")
-            .send()
-            .await
-            .with_context(|| format!("fetch static repo path {url}"))?;
-
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+        let client = if public_network_only {
+            crate::repository::client::RepositoryClient::new_public_network()?
+        } else {
+            crate::repository::client::RepositoryClient::new()?
+        };
+        match client.download_to_bytes_with_limit(&url, limit).await {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(crate::Error::HttpStatus { status: 404, .. }) => Ok(None),
+            Err(error) => Err(error.into()),
         }
-
-        if !response.status().is_success() {
-            bail!("HTTP {} from {}", response.status(), url);
-        }
-
-        if let Some(content_length) = response.content_length()
-            && content_length > limit
-        {
-            bail!(
-                "static repo path exceeds byte limit ({} bytes, max {}): {}",
-                content_length,
-                limit,
-                url
-            );
-        }
-
-        let mut response = response;
-        let mut bytes = Vec::new();
-        let mut total = 0u64;
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .with_context(|| format!("read static repo response {url}"))?
-        {
-            total += chunk.len() as u64;
-            if total > limit {
-                bail!(
-                    "static repo path exceeds byte limit ({} bytes, max {}): {}",
-                    total,
-                    limit,
-                    url
-                );
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-
-        Ok(Some(bytes))
     }
 }
 

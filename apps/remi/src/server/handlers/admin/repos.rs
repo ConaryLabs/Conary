@@ -776,7 +776,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_repo_rejects_localhost_url() {
+    async fn repository_creation_defers_dns_authority_to_the_fetch_boundary() {
         let (app, _db_path) = test_app().await;
 
         let create_body = serde_json::json!({
@@ -796,7 +796,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::CREATED);
     }
 
     #[tokio::test]

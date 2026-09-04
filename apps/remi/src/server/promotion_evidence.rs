@@ -21,6 +21,7 @@ use super::conversion_crawl::{ConversionCrawlProfileV4, reopen_conversion_crawl}
 use super::universe_validation::validate_canonical_candidate;
 
 pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V1: u32 = 1;
+const MAX_PROMOTION_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct RemiPromotionProfileEvidenceInput {
@@ -399,22 +400,13 @@ fn write_and_reopen_promotion_evidence(
 }
 
 fn read_plain_file(path: &Path, label: &str) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path).with_context(|| format!("inspect {label}"))?;
-    ensure!(
-        metadata.file_type().is_file(),
-        "{label} is not a plain file"
-    );
-    fs::read(path).with_context(|| format!("read {label}"))
+    crate::server::private_output::read_regular_nofollow(path, label, MAX_PROMOTION_EVIDENCE_BYTES)
 }
 
 fn validate_sha256(value: &str, field: &str) -> Result<()> {
     ensure!(
-        value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()),
-        "{field} must be an exact SHA-256 digest"
-    );
-    ensure!(
-        value == value.to_ascii_lowercase(),
-        "{field} must be lowercase"
+        conary_core::hash::is_canonical_sha256(value),
+        "{field} must be an exact lowercase SHA-256 digest"
     );
     Ok(())
 }

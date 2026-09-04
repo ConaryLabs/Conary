@@ -13,7 +13,6 @@
 //!
 //! # Key Design Decisions
 //!
-//! Based on expert review (GPT 5.2 + Gemini 3 Pro):
 //! - **Rendezvous hashing** instead of Bloom filters: Deterministic K-peer selection
 //! - **Hierarchical cells** instead of full mesh: Prevents O(N²) complexity
 //! - **Request coalescing**: Singleflight pattern prevents duplicate fetches
@@ -334,25 +333,10 @@ impl Federation {
     /// Rejects peers that are not permitted by the configured `allowed_peers`
     /// global allowlist or the per-tier `tier_allowlists`.
     pub async fn add_peer(&self, peer: Peer) -> std::result::Result<(), String> {
-        // Global allowlist check
-        if let Some(ref allowed) = self.config.allowed_peers
-            && !allowed.iter().any(|a| a == &peer.endpoint)
-        {
+        if !Self::is_peer_allowed(&self.config, &peer) {
             return Err(format!(
-                "Peer {} rejected: not in allowed_peers list",
+                "Peer {} rejected by the configured allowlist",
                 peer.endpoint
-            ));
-        }
-
-        // Per-tier allowlist check
-        if !self
-            .config
-            .tier_allowlists
-            .is_allowed(&peer.endpoint, peer.tier)
-        {
-            return Err(format!(
-                "Peer {} rejected: not in tier allowlist for {:?}",
-                peer.endpoint, peer.tier
             ));
         }
 
@@ -996,7 +980,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_discovered_peer_rejects_https_without_pinned_fingerprint() {
+    fn test_prepare_discovered_peer_rejects_https_without_declared_fingerprint() {
         let config = FederationConfig::default();
         let result = Federation::prepare_discovered_peer(&config, true, &discovered_peer());
 

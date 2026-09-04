@@ -8,6 +8,10 @@ publish.workspace = true
 description = "Remi package server for Conary"
 license.workspace = true
 
+[features]
+default = []
+dormant-federation = []
+
 [dependencies]
 conary-bootstrap = { path = "../../crates/conary-bootstrap" }
 conary-core = { path = "../../crates/conary-core" }

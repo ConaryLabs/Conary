@@ -9,7 +9,6 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::packages::eopkg::xml;
-use crate::repository::RepositoryClient;
 use crate::repository::catalog::CatalogMetadataStreamScratchV1;
 use crate::repository::dependency_model::{
     CapabilityProvenance, ProvideArchitectureQualifier, RepositoryDependencyFlavor,
@@ -58,7 +57,7 @@ impl RepositoryParser for EopkgParser {
         }
         let index_url = format!("{origin}eopkg-index.xml.xz");
         let digest_url = format!("{index_url}.sha256sum");
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         let digest_bytes = client.download_to_bytes(&digest_url).await?;
         let enrolled_digest = parse_sha256_sidecar(&digest_bytes)?;
         let index_path = sink.work_directory().join("eopkg-index.xml.xz");

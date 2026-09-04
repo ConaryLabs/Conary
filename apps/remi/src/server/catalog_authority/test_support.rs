@@ -435,6 +435,78 @@ impl ActiveCatalogFixture {
         manifest_sha256
     }
 
+    /// Replace the active pointer with a stored universe manifest whose schema
+    /// predates the current reader, without relying on a compatibility parser.
+    pub(crate) fn replace_active_universe_with_obsolete_schema(&self) -> String {
+        let conn = self.connection();
+        let (current_sha256, current_sequence, manifest_json) = conn
+            .query_row(
+                "SELECT active.manifest_sha256, active.sequence, revision.manifest_json
+                 FROM remi_active_universe_revision active
+                 JOIN remi_universe_revisions revision
+                   ON revision.manifest_sha256 = active.manifest_sha256
+                 WHERE active.singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .expect("load active universe");
+        let obsolete_sequence = current_sequence + 1;
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&manifest_json).expect("parse active universe");
+        manifest["schema_version"] = serde_json::Value::from(1_u64);
+        manifest["sequence"] = serde_json::Value::from(obsolete_sequence);
+        let manifest_json = String::from_utf8(
+            conary_core::json::canonical_json(&manifest).expect("canonicalize obsolete universe"),
+        )
+        .expect("obsolete universe JSON is UTF-8");
+        let obsolete_sha256 = conary_core::hash::sha256(manifest_json.as_bytes());
+        conn.execute(
+            "INSERT INTO remi_universe_revisions (
+                 manifest_sha256, sequence, promotion_evidence_sha256,
+                 conversion_crawl_sha256, metadata_root_sha256,
+                 canonical_map_sha256, canonical_map_size, targets_version,
+                 snapshot_version, timestamp_version, manifest_json, durable, created_at
+             )
+             SELECT ?1, ?2, promotion_evidence_sha256,
+                    conversion_crawl_sha256, metadata_root_sha256,
+                    canonical_map_sha256, canonical_map_size, targets_version,
+                    snapshot_version, timestamp_version, ?3, durable, created_at
+             FROM remi_universe_revisions WHERE manifest_sha256 = ?4",
+            rusqlite::params![
+                &obsolete_sha256,
+                obsolete_sequence,
+                &manifest_json,
+                &current_sha256,
+            ],
+        )
+        .expect("insert obsolete universe revision");
+        conn.execute(
+            "INSERT INTO remi_universe_profile_revisions (
+                 manifest_sha256, ordinal, source_profile, profile_revision_sha256,
+                 catalog_sha256, catalog_size
+             )
+             SELECT ?1, ordinal, source_profile, profile_revision_sha256,
+                    catalog_sha256, catalog_size
+             FROM remi_universe_profile_revisions WHERE manifest_sha256 = ?2",
+            rusqlite::params![&obsolete_sha256, &current_sha256],
+        )
+        .expect("copy obsolete universe members");
+        conn.execute(
+            "UPDATE remi_active_universe_revision
+             SET manifest_sha256 = ?1, sequence = ?2
+             WHERE singleton = 1",
+            rusqlite::params![&obsolete_sha256, obsolete_sequence],
+        )
+        .expect("activate obsolete universe revision");
+        obsolete_sha256
+    }
+
     fn publish_revision(
         &self,
         profile: &str,

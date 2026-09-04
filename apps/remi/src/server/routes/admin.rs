@@ -101,27 +101,7 @@ pub fn create_external_admin_router(
             "/v1/admin/r2-durability",
             post(admin_handlers::r2_durability),
         )
-        .route(
-            "/v1/admin/federation/peers",
-            get(admin_handlers::list_peers),
-        )
-        .route("/v1/admin/federation/peers", post(admin_handlers::add_peer))
-        .route(
-            "/v1/admin/federation/peers/{id}",
-            delete(admin_handlers::delete_peer),
-        )
-        .route(
-            "/v1/admin/federation/peers/{id}/health",
-            get(admin_handlers::peer_health),
-        )
-        .route(
-            "/v1/admin/federation/config",
-            get(admin_handlers::get_federation_config),
-        )
-        .route(
-            "/v1/admin/federation/config",
-            put(admin_handlers::update_federation_config),
-        )
+        .merge(federation_admin_routes())
         .route(
             "/v1/admin/test-runs/gc",
             delete(admin_handlers::test_data::test_gc),
@@ -183,6 +163,32 @@ pub fn create_external_admin_router(
     }
 
     router
+}
+
+fn federation_admin_routes() -> Router<Arc<RwLock<ServerState>>> {
+    #[cfg(feature = "dormant-federation")]
+    {
+        return Router::new()
+            .route(
+                "/v1/admin/federation/peers",
+                get(admin_handlers::list_peers).post(admin_handlers::add_peer),
+            )
+            .route(
+                "/v1/admin/federation/peers/{id}",
+                delete(admin_handlers::delete_peer),
+            )
+            .route(
+                "/v1/admin/federation/peers/{id}/health",
+                get(admin_handlers::peer_health),
+            )
+            .route(
+                "/v1/admin/federation/config",
+                get(admin_handlers::get_federation_config)
+                    .put(admin_handlers::update_federation_config),
+            );
+    }
+    #[cfg(not(feature = "dormant-federation"))]
+    Router::new()
 }
 
 async fn admin_metrics(

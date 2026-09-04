@@ -11,7 +11,7 @@ pub async fn openapi_spec() -> Response {
         "openapi": "3.1.0",
         "info": {
             "title": "Remi Admin API",
-            "description": "Administration API for the Remi package server. Manage admin tokens, repositories, federation settings, and test-harness operations. Designed for human and LLM agent consumption.",
+            "description": "Administration API for the Remi package server. Manage admin tokens, repositories, and test-harness operations. Designed for human and LLM agent consumption.",
             "version": env!("CARGO_PKG_VERSION"),
             "contact": { "name": "Conary Labs" }
         },
@@ -660,6 +660,22 @@ pub async fn openapi_spec() -> Response {
         .expect("OpenAPI components.schemas must be an object");
     schemas.extend(repository::schemas());
 
+    #[cfg(not(feature = "dormant-federation"))]
+    {
+        let paths = spec
+            .get_mut("paths")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("OpenAPI paths must be an object");
+        for path in [
+            "/v1/admin/federation/peers",
+            "/v1/admin/federation/peers/{id}",
+            "/v1/admin/federation/peers/{id}/health",
+            "/v1/admin/federation/config",
+        ] {
+            paths.remove(path);
+        }
+    }
+
     (
         StatusCode::OK,
         [("content-type", "application/json")],
@@ -712,10 +728,6 @@ mod tests {
             ("/v1/admin/repos/{name}", &["get", "put", "delete"][..]),
             ("/v1/admin/repos/{name}/sync", &["post"][..]),
             ("/v1/admin/refresh", &["post"][..]),
-            ("/v1/admin/federation/peers", &["get", "post"][..]),
-            ("/v1/admin/federation/peers/{id}", &["delete"][..]),
-            ("/v1/admin/federation/peers/{id}/health", &["get"][..]),
-            ("/v1/admin/federation/config", &["get", "put"][..]),
             ("/v1/admin/chunk-gc", &["post"][..]),
             ("/v1/admin/test-runs/gc", &["delete"][..]),
             ("/v1/admin/test-health", &["get"][..]),
@@ -741,6 +753,12 @@ mod tests {
                 );
             }
         }
+
+        #[cfg(not(feature = "dormant-federation"))]
+        assert!(
+            paths.keys().all(|path| !path.contains("/federation/")),
+            "default OpenAPI must not advertise dormant federation routes"
+        );
     }
 
     #[tokio::test]

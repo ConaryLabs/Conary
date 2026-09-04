@@ -9,7 +9,7 @@
 //! - PUT /v1/profiles/:profile_hash -- publish profile (requires bearer token)
 
 use crate::server::ServerState;
-use crate::server::handlers::{cas_object_path, is_valid_hex_hash, require_admin_token};
+use crate::server::handlers::{cas_object_path, require_admin_token};
 use axum::{
     body::Body,
     extract::{Path, Request, State},
@@ -25,7 +25,7 @@ use tokio::sync::RwLock;
 
 /// Validate that a profile hash contains only hex characters and is exactly 64 chars.
 fn is_valid_profile_hash(hash: &str) -> bool {
-    is_valid_hex_hash(hash)
+    conary_core::hash::is_canonical_sha256(hash)
 }
 
 // ────────────────────────────────────────────────────────────
@@ -132,7 +132,7 @@ pub async fn put_profile(
     // Compute SHA-256 and verify it matches the URL parameter
     let computed_hash = conary_core::hash::sha256(&body_bytes);
 
-    if computed_hash != profile_hash.to_ascii_lowercase() {
+    if computed_hash != profile_hash {
         return (
             StatusCode::BAD_REQUEST,
             "Hash mismatch: body SHA-256 does not match profile_hash in URL",
@@ -180,8 +180,8 @@ mod tests {
         assert!(is_valid_profile_hash(
             "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
         ));
-        // Uppercase hex is also valid (hex digits include A-F)
-        assert!(is_valid_profile_hash(
+        // Uppercase is non-canonical and cannot name the lowercase CAS path.
+        assert!(!is_valid_profile_hash(
             "AABBCCDDEEFF00112233445566778899AABBCCDDEEFF00112233445566778899"
         ));
     }

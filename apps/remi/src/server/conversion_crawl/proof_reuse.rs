@@ -143,6 +143,10 @@ impl ConversionProofKeyV1 {
 
     pub fn sha256(&self) -> Result<String> {
         self.validate_current()?;
+        self.canonical_sha256()
+    }
+
+    fn canonical_sha256(&self) -> Result<String> {
         let canonical = conary_core::json::canonical_json(self).map_err(anyhow::Error::msg)?;
         Ok(conary_core::hash::sha256(&canonical))
     }
@@ -193,19 +197,27 @@ impl ConversionProofV1 {
     }
 
     pub fn validate_current(&self) -> Result<()> {
+        self.key.validate_current()?;
+        self.validate_bound_key(&self.key)
+    }
+
+    fn validate_bound_key(&self, expected_key: &ConversionProofKeyV1) -> Result<()> {
         ensure!(
             self.schema_version == CONVERSION_PROOF_SCHEMA_V1,
             "unsupported conversion proof schema {}",
             self.schema_version
         );
-        self.key.validate_current()?;
+        ensure!(
+            self.key == *expected_key,
+            "stored conversion proof key differs from its exact lookup key"
+        );
         validate_sha256(
             &self.validated_profile_revision_sha256,
             "conversion proof validation profile revision",
         )?;
         validate_sha256(&self.proof_key_sha256, "conversion proof key")?;
         ensure!(
-            self.proof_key_sha256 == self.key.sha256()?,
+            self.proof_key_sha256 == self.key.canonical_sha256()?,
             "conversion proof key digest differs from its exact key"
         );
         validate_sha256(&self.ccs_sha256, "conversion proof CCS")?;
@@ -309,11 +321,11 @@ impl ConversionProofStore {
         let Some(stored) = load_stored_proof(&conn, &proof_key_sha256)? else {
             return Ok(None);
         };
-        stored.validate_bytes()?;
         ensure!(
             stored.proof.key == expected_key,
             "conversion proof lookup returned a conflicting exact key"
         );
+        stored.validate_bytes(&expected_key)?;
 
         let proof = stored.proof.clone();
         self.database_writer.execute(|| {
@@ -403,7 +415,6 @@ impl ConversionProofStore {
             )?;
             let stored = load_stored_proof(&tx, &proof.proof_key_sha256)?
                 .context("conversion proof insert did not produce durable state")?;
-            stored.validate_bytes()?;
             ensure!(
                 stored.proof == proof
                     && stored.original_format == original_format
@@ -413,6 +424,7 @@ impl ConversionProofStore {
                     && stored.scriptlets == scriptlets,
                 "conversion proof key conflicts with existing durable evidence"
             );
+            stored.validate_bytes(&proof.key)?;
             bind_existing_row(&tx, converted_id, &proof.proof_key_sha256)?;
             tx.commit()?;
             Ok::<_, anyhow::Error>(())
@@ -466,11 +478,11 @@ pub(crate) fn reopen_promotion_binding(
     );
     let stored = load_stored_proof(conn, &bound_key)?
         .context("promotion proof binding has no durable proof row")?;
-    stored.validate_bytes()?;
     ensure!(
         stored.proof == *expected,
         "promotion proof binding differs from the complete crawl evidence"
     );
+    stored.validate_bytes(&expected.key)?;
     let artifact = converted.repository_artifact()?;
     ensure!(
         artifact.source_profile == expected.key.source_profile
@@ -528,8 +540,8 @@ pub(super) async fn validate_or_reuse(
 }
 
 impl StoredConversionProof {
-    fn validate_bytes(&self) -> Result<()> {
-        self.proof.validate_current()?;
+    fn validate_bytes(&self, expected_key: &ConversionProofKeyV1) -> Result<()> {
+        self.proof.validate_bound_key(expected_key)?;
         ensure!(
             self.original_format == public_format(&self.proof.key.source_profile)?,
             "reusable conversion proof source format has drifted"

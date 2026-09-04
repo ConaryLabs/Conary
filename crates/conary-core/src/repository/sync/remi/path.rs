@@ -12,6 +12,7 @@ pub(in crate::repository::sync) async fn sync_repository_remi_from_db_path<W>(
     db_path: std::path::PathBuf,
     repository: Repository,
     _write_authority: W,
+    public_network_only: bool,
 ) -> Result<usize>
 where
     W: RepositoryWriteAuthority,
@@ -25,7 +26,11 @@ where
                 repository.name
             ))
         })?;
-    crate::repository::universe::sync_remi_universe(&db_path, endpoint).await?;
+    if public_network_only {
+        crate::repository::universe::sync_remi_universe_public_network(&db_path, endpoint).await?;
+    } else {
+        crate::repository::universe::sync_remi_universe(&db_path, endpoint).await?;
+    }
     let repository_id = repository
         .id
         .ok_or_else(|| Error::MissingId("Remi repository has no ID".to_string()))?;

@@ -68,22 +68,47 @@ struct DownloadedObject {
 }
 
 pub async fn sync_remi_universe(db_path: &Path, endpoint: &str) -> Result<RemiUniverseSyncOutcome> {
+    sync_remi_universe_with_network_policy(db_path, endpoint, false).await
+}
+
+pub async fn sync_remi_universe_public_network(
+    db_path: &Path,
+    endpoint: &str,
+) -> Result<RemiUniverseSyncOutcome> {
+    sync_remi_universe_with_network_policy(db_path, endpoint, true).await
+}
+
+async fn sync_remi_universe_with_network_policy(
+    db_path: &Path,
+    endpoint: &str,
+    public_network_only: bool,
+) -> Result<RemiUniverseSyncOutcome> {
     let endpoint = normalize_remi_endpoint(endpoint)?;
     let state = {
         let conn = crate::db::open_fast(db_path)?;
         begin_sync(&conn, &endpoint)?
     };
-    let tuf_client = TufClient::new_static(
-        0,
-        &state.endpoint,
-        Some(&format!("{}/v1/universe/tuf", state.endpoint)),
-    )
+    let tuf_url = format!("{}/v1/universe/tuf", state.endpoint);
+    let tuf_client = if public_network_only {
+        TufClient::new_public_network(
+            0,
+            &state.endpoint,
+            Some(&tuf_url),
+            crate::trust::client::TufUpdateMode::StaticRepo,
+        )
+    } else {
+        TufClient::new_static(0, &state.endpoint, Some(&tuf_url))
+    }
     .map_err(|error| Error::TrustError(error.to_string()))?;
     let tuf = tuf_client
         .fetch_update_snapshot(state.tuf.clone())
         .await
         .map_err(|error| Error::TrustError(error.to_string()))?;
-    let client = RepositoryClient::new()?;
+    let client = if public_network_only {
+        RepositoryClient::new_public_network()?
+    } else {
+        RepositoryClient::new()?
+    };
     let (manifest, manifest_sha256, manifest_json) =
         fetch_manifest(&client, &state.endpoint, &tuf).await?;
     reject_rollback_or_fork(&state, &manifest, &manifest_sha256)?;

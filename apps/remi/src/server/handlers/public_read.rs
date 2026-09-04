@@ -28,6 +28,7 @@ const ERROR_HEADER: HeaderName = HeaderName::from_static("x-conary-error");
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PublicUniverseUnavailableReason {
     NoActiveUniverse,
+    ObsoleteUniverseSchema,
     ObsoleteProfileSchema,
     ProfileNotInUniverse,
     AuthorityUnavailable,
@@ -86,6 +87,14 @@ pub(crate) async fn context(state: &Arc<RwLock<ServerState>>) -> HandlerResult<P
         Ok(Ok(PublicUniverseLoadOutcome::NoActiveUniverse)) => {
             return Err(unavailable_response(
                 PublicUniverseUnavailableReason::NoActiveUniverse,
+                None,
+            )
+            .into());
+        }
+        Ok(Ok(PublicUniverseLoadOutcome::ObsoleteUniverseSchema { found, required })) => {
+            tracing::info!(found, required, "public universe schema is obsolete");
+            return Err(unavailable_response(
+                PublicUniverseUnavailableReason::ObsoleteUniverseSchema,
                 None,
             )
             .into());
@@ -152,6 +161,9 @@ pub(crate) fn unavailable_response(
     let message = match reason {
         PublicUniverseUnavailableReason::NoActiveUniverse => {
             "no signed public package universe is active"
+        }
+        PublicUniverseUnavailableReason::ObsoleteUniverseSchema => {
+            "the signed public package universe is unavailable while its schema is rebuilt"
         }
         PublicUniverseUnavailableReason::ObsoleteProfileSchema => {
             "the signed public package universe is unavailable while its profiles are rebuilt"

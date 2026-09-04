@@ -12,7 +12,6 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::catalog::{CatalogMetadataStreamAdmission, CatalogMetadataStreamScratchV1};
-use crate::repository::client::RepositoryClient;
 use crate::repository::dependency_model::{
     RepositoryDependencyFlavor, RepositoryProvide, RepositoryRequirementGroup,
     RepositoryRequirementKind,
@@ -67,7 +66,7 @@ impl ArchParser {
         let db_url = format!("{}/{}.db", repo_url.trim_end_matches('/'), self.repo_name);
         debug!("Downloading Arch database from: {}", db_url);
 
-        let client = RepositoryClient::new()?;
+        let client = self.trust.repository_client()?;
         let database_file = work_directory.join("arch-database");
         let download = client
             .download_file_with_identity_admission(&db_url, &database_file, scratch_admission)

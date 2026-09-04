@@ -53,7 +53,7 @@ pub mod versioning;
 pub mod chunk_fetcher;
 
 // Re-export main types and functions
-pub use client::RepositoryClient;
+pub use client::{RepositoryClient, require_public_repository_ip};
 pub use dependencies::download_dependencies;
 pub use download::{
     DownloadOptions, DownloadProgress, download_binary_package_verified,
@@ -95,10 +95,11 @@ pub use sync::{
     fetch_native_source_catalog, heartbeat_profile_sync_run, needs_sync, parse_timestamp,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
     stream_native_source_catalog, stream_native_source_catalog_verified_blocking_with_reuse,
+    stream_native_source_catalog_verified_blocking_with_reuse_public_network,
     stream_native_source_catalog_verified_with_scratch_admission,
     stream_native_source_catalog_verified_with_scratch_admission_blocking,
     stream_native_source_catalog_with_scratch_admission, sync_repository,
-    sync_repository_from_db_path,
+    sync_repository_from_db_path, sync_repository_from_db_path_public_network,
 };
 pub use trust::{
     ArchKeyringFormat, ArchKeyringTrust, ArchSigLevel, ArchSignatureRequirement, ArchTrustLevel,

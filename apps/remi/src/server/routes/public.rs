@@ -55,7 +55,6 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
     let public_routes = Router::new()
         .route("/health", get(health_check))
         .route("/health/ready", get(readiness_check))
-        .route("/v1/federation/directory", get(federation::directory))
         .route("/v1/{distro}/packages/{name}", get(packages::get_package))
         .route(
             "/v1/{distro}/packages/{name}/download",
@@ -163,8 +162,11 @@ pub async fn create_router(state: Arc<RwLock<ServerState>>) -> Router {
             get(oci::oci_catchall).head(oci::oci_catchall_head),
         )
         .layer(compression)
-        .layer(public_cors)
-        .with_state(state.clone());
+        .layer(public_cors);
+
+    #[cfg(feature = "dormant-federation")]
+    let public_routes = public_routes.route("/v1/federation/directory", get(federation::directory));
+    let public_routes = public_routes.with_state(state.clone());
 
     let web_routes = {
         let state_guard = state.read().await;
@@ -463,13 +465,20 @@ mod tests {
         assert_eq!(body, "OK");
 
         let (status, content_type, _) = get_path(&app, "/v1/federation/directory").await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(
-            content_type
-                .unwrap_or_default()
-                .starts_with("application/json"),
-            "federation directory must stay JSON"
-        );
+        #[cfg(feature = "dormant-federation")]
+        {
+            assert_eq!(status, StatusCode::OK);
+            assert!(
+                content_type
+                    .unwrap_or_default()
+                    .starts_with("application/json")
+            );
+        }
+        #[cfg(not(feature = "dormant-federation"))]
+        {
+            assert_eq!(status, StatusCode::NOT_FOUND);
+            assert!(!content_type.unwrap_or_default().starts_with("text/html"));
+        }
 
         let (status, content_type, body) = get_path(&app, "/v1/not-supported/metadata").await;
         assert_eq!(status, StatusCode::NOT_FOUND);

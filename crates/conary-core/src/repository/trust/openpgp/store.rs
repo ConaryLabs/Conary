@@ -24,14 +24,14 @@ use super::super::{OpenPgpTrustRoot, TrustRole};
 ///
 /// Only `https://`, `file://`, and the bounded exact embedded-key data form are
 /// representable; anything else is a typed configuration error.
-pub(super) async fn fetch_key_source(source: &str) -> Result<Vec<u8>> {
+pub(super) async fn fetch_key_source(source: &str, client: &RepositoryClient) -> Result<Vec<u8>> {
     if let Some(bytes) = super::super::decode_embedded_openpgp_source(source) {
         return bytes;
     }
     let url = Url::parse(source)
         .map_err(|error| Error::ConfigError(format!("invalid trust-root URL: {error}")))?;
     match url.scheme() {
-        "https" => RepositoryClient::new()?.download_to_bytes(source).await,
+        "https" => client.download_to_bytes(source).await,
         "file" => {
             let path = url.to_file_path().map_err(|_| {
                 Error::ConfigError(format!(
@@ -58,9 +58,10 @@ pub(super) async fn prepare_root(
     keyring_dir: &Path,
     role: TrustRole,
     root: &OpenPgpTrustRoot,
+    client: &RepositoryClient,
 ) -> Result<()> {
     root.validate()?;
-    let bytes = fetch_key_source(&root.url).await?;
+    let bytes = fetch_key_source(&root.url, client).await?;
     let mut matches = Vec::new();
     for parsed in CertParser::from_bytes(&bytes)
         .map_err(|error| Error::ParseError(format!("failed to parse OpenPGP keyring: {error}")))?

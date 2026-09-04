@@ -23,6 +23,16 @@ use std::str::FromStr;
 use thiserror::Error;
 use xxhash_rust::xxh3::{Xxh3Default, xxh3_128};
 
+/// Return whether `value` is the canonical lowercase hexadecimal spelling of
+/// one SHA-256 digest.
+#[must_use]
+pub fn is_canonical_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Hash algorithm selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum HashAlgorithm {
@@ -499,6 +509,15 @@ mod tests {
             "gggg6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f",
         );
         assert!(matches!(hash, Err(HashError::InvalidHex(_))));
+    }
+
+    #[test]
+    fn canonical_sha256_requires_lowercase_hex() {
+        let digest = "dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f";
+        assert!(is_canonical_sha256(digest));
+        assert!(!is_canonical_sha256(&digest.to_ascii_uppercase()));
+        assert!(!is_canonical_sha256(&digest[..63]));
+        assert!(!is_canonical_sha256(&format!("{}g", &digest[..63])));
     }
 
     #[test]
