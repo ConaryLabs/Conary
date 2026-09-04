@@ -3,7 +3,7 @@
 //! Verification command handlers.
 
 use anyhow::Result;
-use conary_core::derivation::index::{self, DerivationIndex};
+use conary_core::derivation::index::DerivationIndex;
 use conary_core::derivation::profile::BuildProfile;
 
 /// Trace all derivations in a profile back to the seed.

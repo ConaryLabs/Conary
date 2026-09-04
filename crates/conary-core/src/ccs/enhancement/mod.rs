@@ -120,7 +120,8 @@ pub enum EnhancementStatus {
 }
 
 impl EnhancementStatus {
-    pub(crate) fn from_row(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Self> {
+    /// Decode a stored status without accepting obsolete values as pending work.
+    pub fn from_row(row: &rusqlite::Row<'_>, column: usize) -> rusqlite::Result<Self> {
         Self::try_from(row.get::<_, String>(column)?.as_str()).map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 column,
