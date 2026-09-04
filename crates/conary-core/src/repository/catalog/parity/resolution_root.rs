@@ -12,6 +12,32 @@ use super::resolution_survey::{
 use crate::error::Error;
 
 #[allow(dead_code)] // Shared by feature-gated native producer root loops.
+pub(super) struct NativeRootResolutionSuccess {
+    pub(super) outcome: NativeResolutionOutcomeV1,
+    pub(super) explanation: Option<NativeResolutionSurveyNativeExplanationV1>,
+}
+
+#[allow(dead_code)]
+impl NativeRootResolutionSuccess {
+    pub(super) fn plain(outcome: NativeResolutionOutcomeV1) -> Self {
+        Self {
+            outcome,
+            explanation: None,
+        }
+    }
+
+    pub(super) fn explained(
+        outcome: NativeResolutionOutcomeV1,
+        explanation: NativeResolutionSurveyNativeExplanationV1,
+    ) -> Self {
+        Self {
+            outcome,
+            explanation: Some(explanation),
+        }
+    }
+}
+
+#[allow(dead_code)] // Shared by feature-gated native producer root loops.
 pub(super) struct NativeRootResolutionError {
     pub(super) error: Error,
     pub(super) reason: NativeResolutionSurveyErrorReasonV1,
@@ -190,7 +216,7 @@ fn strip_error_prefix(message: &str, prefix: &str) -> String {
 
 #[allow(dead_code)]
 pub(super) type NativeRootResolutionResult =
-    std::result::Result<NativeResolutionOutcomeV1, Box<NativeRootResolutionError>>;
+    std::result::Result<NativeRootResolutionSuccess, Box<NativeRootResolutionError>>;
 
 #[cfg(test)]
 mod tests {

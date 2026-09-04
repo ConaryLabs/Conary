@@ -28,16 +28,50 @@ pub(super) fn rpm_explanation(
     record_explanation_build();
     let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
         problems: Vec::new(),
+        resolved_packages: Vec::new(),
     };
     let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
     else {
         return withheld();
     };
-    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems } = &mut explanation else {
+    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems, .. } = &mut explanation else {
         unreachable!("new RPM explanation has the wrong ecosystem")
     };
     if !append_problems(pool, package_index, problems, source_problems, &mut budget) {
         return withheld();
+    }
+    explanation
+}
+
+pub(super) fn rpm_resolved_explanation(
+    pool: &SolvPool,
+    package_index: &PackageResolutionIndexReader,
+    source_packages: &[usize],
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
+    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
+        problems: Vec::new(),
+        resolved_packages: Vec::new(),
+    };
+    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+    else {
+        return withheld();
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Rpm {
+        resolved_packages, ..
+    } = &mut explanation
+    else {
+        unreachable!("new RPM explanation has the wrong ecosystem")
+    };
+    for index in source_packages {
+        let (Some(package), None) = rpm_package_field(pool, package_index, Some(*index)) else {
+            return withheld();
+        };
+        if !budget.retain(&package, !resolved_packages.is_empty()) {
+            return withheld();
+        }
+        resolved_packages.push(package);
     }
     explanation
 }
@@ -244,7 +278,10 @@ mod tests {
             .collect::<Vec<_>>();
 
         let full = rpm_explanation(&pool, &package_index, &problems, u64::MAX);
-        let NativeResolutionSurveyNativeExplanationV1::Rpm { problems: retained } = full else {
+        let NativeResolutionSurveyNativeExplanationV1::Rpm {
+            problems: retained, ..
+        } = full
+        else {
             panic!("unbounded RPM explanation must retain native problems")
         };
         assert_eq!(retained.len(), 3);

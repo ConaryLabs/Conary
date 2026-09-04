@@ -8,7 +8,9 @@ use super::ffi::{AptRelationKind, AptResolution, AptResolutionOutcome};
 use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_RESOLUTION_MANIFEST_FILE_NAME,
-    NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionOutcomeV1, NativeUnresolvedDependencyV1,
+    NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeResolutionNotInstallableReasonV1,
+    NativeResolutionOutcomeV1, NativeResolutionSurveyDebianResultV1,
+    NativeResolutionSurveyNativeExplanationV1, NativeUnresolvedDependencyV1,
     PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
     SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
@@ -1630,6 +1632,19 @@ fn resolution_survey_records_conflicts_as_outcomes_and_isolates_later_roots() {
     assert_eq!(survey.counts.not_installable_roots, 2);
     assert_eq!(survey.counts.failed_roots, 0);
     assert!(survey.failures.is_empty());
+    assert_eq!(survey.diagnostic_outcomes.len(), 1);
+    assert!(matches!(
+        survey.diagnostic_outcomes[0].outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+        }
+    ));
+    assert!(matches!(
+        &survey.diagnostic_outcomes[0].native_explanation,
+        NativeResolutionSurveyNativeExplanationV1::Debian {
+            result: NativeResolutionSurveyDebianResultV1::Conflicts { .. }
+        }
+    ));
     assert!(!directory.path().join("manifest.json").exists());
     assert!(!directory.path().join("roots.jsonl").exists());
 

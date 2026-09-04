@@ -37,7 +37,7 @@ use crate::repository::catalog::parity::resolution_parallel::{
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
-    NativeRootResolutionResult, RootOutcomeSink,
+    NativeRootResolutionResult, NativeRootResolutionSuccess, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
@@ -380,9 +380,11 @@ fn resolve_exact_root(
     {
         Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
         Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
-            return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            });
+            return Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+                },
+            ));
         }
         Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
             unreachable!("unknown admission decision returned from into_result")
@@ -418,18 +420,18 @@ fn resolve_exact_root(
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "apt-pkg closure for '{}' omits its exact root",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
+                return Ok(NativeRootResolutionSuccess::explained(
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    },
                     debian_explanation(&native, explanation_byte_limit),
                 ));
             }
-            Ok(NativeResolutionOutcomeV1::Resolved {
-                closure_package_keys_sha256: closure.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Resolved {
+                    closure_package_keys_sha256: closure.into_iter().collect(),
+                },
+            ))
         }
         AptResolutionOutcome::Unresolved(missing) => {
             let dependencies = missing
@@ -453,13 +455,18 @@ fn resolve_exact_root(
                     debian_explanation(&native, explanation_byte_limit),
                 ));
             }
-            Ok(NativeResolutionOutcomeV1::Unresolved {
-                dependencies: dependencies.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Unresolved {
+                    dependencies: dependencies.into_iter().collect(),
+                },
+            ))
         }
-        AptResolutionOutcome::ConflictingClosure => Ok(NativeResolutionOutcomeV1::NotInstallable {
-            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
-        }),
+        AptResolutionOutcome::ConflictingClosure => Ok(NativeRootResolutionSuccess::explained(
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+            },
+            debian_explanation(&native, explanation_byte_limit),
+        )),
     }
 }
 
@@ -535,7 +542,16 @@ fn debian_explanation(
             }
             explanation
         }
-        AptResolutionOutcome::ConflictingClosure => debian_unavailable(),
+        AptResolutionOutcome::ConflictingClosure => {
+            NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Conflicts {
+                    detail_unavailable_reason: Some(
+                        "apt_pkg_exposes_conflict_class_state_without_a_stable_rule_graph"
+                            .to_string(),
+                    ),
+                },
+            }
+        }
     }
 }
 

@@ -15,6 +15,7 @@ use crate::repository::catalog::parity::resolution_parallel::{
 };
 use crate::repository::catalog::parity::resolution_root::{
     NativeResolutionWireErrorV1, NativeRootResolutionError, NativeRootResolutionResult,
+    NativeRootResolutionSuccess,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
@@ -64,6 +65,7 @@ enum DebianResolutionWorkerResponse {
     Ready,
     Outcome {
         outcome: NativeResolutionOutcomeV1,
+        explanation: Option<NativeResolutionSurveyNativeExplanationV1>,
     },
     Failure {
         error: NativeResolutionWireErrorV1,
@@ -135,7 +137,13 @@ fn classify_worker_response(
     response: Result<DebianResolutionWorkerResponse>,
 ) -> Result<NativeRootResolutionResult> {
     match response? {
-        DebianResolutionWorkerResponse::Outcome { outcome } => Ok(Ok(outcome)),
+        DebianResolutionWorkerResponse::Outcome {
+            outcome,
+            explanation,
+        } => Ok(Ok(NativeRootResolutionSuccess {
+            outcome,
+            explanation,
+        })),
         DebianResolutionWorkerResponse::Failure {
             error,
             reason,
@@ -253,7 +261,10 @@ pub fn run_debian_resolution_worker(
             &policy,
             request.explanation_byte_limit,
         ) {
-            Ok(outcome) => DebianResolutionWorkerResponse::Outcome { outcome },
+            Ok(success) => DebianResolutionWorkerResponse::Outcome {
+                outcome: success.outcome,
+                explanation: success.explanation,
+            },
             Err(failure) => {
                 let (error, reason, explanation) = (*failure).into_wire();
                 DebianResolutionWorkerResponse::Failure {

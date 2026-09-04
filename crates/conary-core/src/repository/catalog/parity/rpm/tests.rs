@@ -13,9 +13,10 @@ use crate::repository::catalog::parity::{
 };
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NativeResolutionNotInstallableReasonV1,
-    NativeResolutionOutcomeV1, NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3,
-    ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1,
-    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    NativeResolutionOutcomeV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
+    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
 use crate::repository::{
@@ -1907,6 +1908,29 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     assert_eq!(survey.total_failures, 0);
     assert!(!survey.truncated);
     assert!(survey.failures.is_empty());
+    assert_eq!(survey.diagnostic_outcomes.len(), 1);
+    assert_eq!(survey.diagnostic_outcomes[0].name, "conflict-root");
+    assert!(matches!(
+        survey.diagnostic_outcomes[0].outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+        }
+    ));
+    let NativeResolutionSurveyNativeExplanationV1::Rpm { problems, .. } =
+        &survey.diagnostic_outcomes[0].native_explanation
+    else {
+        panic!("RPM conflict outcome must retain libsolv problem evidence");
+    };
+    assert!(
+        problems
+            .iter()
+            .flat_map(|problem| &problem.rules)
+            .any(|rule| {
+                rule.rule_type_numeric == 0x105
+                    && rule.rule_type_symbolic == "SOLVER_RULE_PKG_CONFLICTS"
+            })
+    );
+    assert_eq!(survey.retained_explanations, 1);
     assert!(!directory.path().join("manifest.json").exists());
     assert!(!directory.path().join("roots.jsonl").exists());
 

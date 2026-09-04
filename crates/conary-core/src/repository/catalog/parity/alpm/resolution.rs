@@ -28,7 +28,7 @@ use crate::repository::catalog::parity::resolution_parallel::{
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
-    NativeRootResolutionResult, RootOutcomeSink,
+    NativeRootResolutionResult, NativeRootResolutionSuccess, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityOracleReader,
@@ -37,10 +37,11 @@ use crate::repository::catalog::parity::{
     NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
-    NativeResolutionSurveyAlpmMissingV1, NativeResolutionSurveyAlpmPackageV1,
-    NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyErrorReasonV1,
-    NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
+    NativeResolutionSurveyAlpmConflictV1, NativeResolutionSurveyAlpmMissingV1,
+    NativeResolutionSurveyAlpmPackageV1, NativeResolutionSurveyAlpmResultV1,
+    NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
+    NativeResolutionSurveyNativeExplanationV1, NativeResolutionSurveyV1,
+    NativeUnresolvedDependencyV1, native_requirement_group_sha256,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
@@ -491,9 +492,11 @@ fn resolve_exact_root(
     {
         Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
         Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
-            return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            });
+            return Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+                },
+            ));
         }
         Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
             unreachable!("unknown admission decision returned from into_result")
@@ -659,10 +662,13 @@ fn resolve_initialized_transaction(
                         },
                     ));
                 }
-                Some(PrepareData::ConflictingDeps(_)) => {
-                    return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
-                    });
+                Some(PrepareData::ConflictingDeps(conflicts)) => {
+                    return Ok(NativeRootResolutionSuccess::explained(
+                        NativeResolutionOutcomeV1::NotInstallable {
+                            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                        },
+                        alpm_conflict_explanation(conflicts.iter(), explanation_byte_limit),
+                    ));
                 }
                 None => {
                     return Err(NativeRootResolutionError::new(
@@ -691,13 +697,18 @@ fn resolve_initialized_transaction(
                 .into_values()
                 .collect::<BTreeSet<_>>();
             if !closure.contains(&root.package_key_sha256) {
-                return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                    reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
-                });
+                return Ok(NativeRootResolutionSuccess::explained(
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    },
+                    alpm_prepared_explanation(alpm, explanation_byte_limit),
+                ));
             }
-            Ok(NativeResolutionOutcomeV1::Resolved {
-                closure_package_keys_sha256: closure.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Resolved {
+                    closure_package_keys_sha256: closure.into_iter().collect(),
+                },
+            ))
         }
         Preparation::Unsatisfied(missing) => {
             let packages = transaction_packages(alpm, profile, inputs).map_err(|error| {
@@ -737,9 +748,11 @@ fn resolve_initialized_transaction(
                     requirement_group_sha256,
                 });
             }
-            Ok(NativeResolutionOutcomeV1::Unresolved {
-                dependencies: dependencies.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Unresolved {
+                    dependencies: dependencies.into_iter().collect(),
+                },
+            ))
         }
     }
 }
@@ -804,6 +817,43 @@ fn alpm_unsatisfied_explanation<'a>(
             return evidence_withheld();
         }
         missing.push(entry);
+    }
+    explanation
+}
+
+fn alpm_conflict_explanation<'a>(
+    conflicts: impl IntoIterator<Item = &'a alpm::Conflict>,
+    byte_limit: u64,
+) -> NativeResolutionSurveyNativeExplanationV1 {
+    record_explanation_build();
+    let mut explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result: NativeResolutionSurveyAlpmResultV1::Conflicts {
+            conflicts: Vec::new(),
+        },
+    };
+    let Some(mut budget) = NativeExplanationBudget::for_explanation(&explanation, byte_limit)
+    else {
+        return evidence_withheld();
+    };
+    let NativeResolutionSurveyNativeExplanationV1::Alpm {
+        result:
+            NativeResolutionSurveyAlpmResultV1::Conflicts {
+                conflicts: retained,
+            },
+    } = &mut explanation
+    else {
+        unreachable!("new ALPM explanation has the wrong result")
+    };
+    for conflict in conflicts {
+        let entry = NativeResolutionSurveyAlpmConflictV1 {
+            package1: alpm_package_explanation(conflict.package1()),
+            package2: alpm_package_explanation(conflict.package2()),
+            reason: conflict.reason().to_string(),
+        };
+        if !budget.retain(&entry, !retained.is_empty()) {
+            return evidence_withheld();
+        }
+        retained.push(entry);
     }
     explanation
 }

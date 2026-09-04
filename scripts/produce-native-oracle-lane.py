@@ -49,7 +49,7 @@ SHA256_LENGTH = 64
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 3
-NATIVE_RESOLUTION_SURVEY_SCHEMA = 2
+NATIVE_RESOLUTION_SURVEY_SCHEMA = 3
 NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
 NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 2
 NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
@@ -268,6 +268,7 @@ def resolution_survey_evidence(
             "retained_explanations",
             "withheld_explanations",
             "truncated_evidence",
+            "diagnostic_outcomes",
             "failures",
         },
         "native resolution survey",
@@ -300,9 +301,11 @@ def resolution_survey_evidence(
     ):
         raise ValueError("native resolution survey architecture policy drifted")
     counts = survey["counts"]
+    diagnostic_outcomes = survey["diagnostic_outcomes"]
     failures = survey["failures"]
     if (
         not isinstance(counts, dict)
+        or not isinstance(diagnostic_outcomes, list)
         or not isinstance(failures, list)
         or survey["total_failures"] != counts.get("failed_roots")
         or survey["retained_failures"] != len(failures)
@@ -311,6 +314,43 @@ def resolution_survey_evidence(
         != (survey["retained_failures"] < survey["total_failures"])
     ):
         raise ValueError("native resolution survey counts drifted")
+    if len(diagnostic_outcomes) > counts.get("not_installable_roots", -1):
+        raise ValueError("native resolution survey has excess diagnostic outcomes")
+    previous_root = None
+    for index, record in enumerate(diagnostic_outcomes):
+        record = require_keys(
+            record,
+            {
+                "root_package_key_sha256",
+                "name",
+                "version",
+                "release",
+                "architecture",
+                "outcome",
+                "native_explanation",
+            },
+            f"native resolution survey diagnostic outcome {index}",
+        )
+        root_key = record["root_package_key_sha256"]
+        if (
+            not isinstance(root_key, str)
+            or len(root_key) != SHA256_LENGTH
+            or any(character not in "0123456789abcdef" for character in root_key)
+            or (previous_root is not None and root_key <= previous_root)
+            or record["outcome"]
+            != {"kind": "not_installable", "reason": "conflicting_closure"}
+            or not isinstance(record["native_explanation"], dict)
+        ):
+            raise ValueError("native resolution survey diagnostic outcome is invalid")
+        previous_root = root_key
+    explanation_records = len(diagnostic_outcomes) + len(failures)
+    if (
+        survey["retained_explanations"] + survey["withheld_explanations"]
+        != explanation_records
+        or survey["retained_evidence_bytes"] > survey["evidence_byte_limit"]
+        or survey["truncated_evidence"] != (survey["withheld_explanations"] > 0)
+    ):
+        raise ValueError("native resolution survey evidence counts drifted")
     return {
         "schema_version": survey["schema_version"],
         "sha256": sha256(survey_bytes),

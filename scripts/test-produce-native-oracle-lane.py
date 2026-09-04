@@ -87,6 +87,7 @@ else:
             "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 0, "resolved_roots": 0, "roots_walked": 0, "unresolved_roots": 0},
             "evidence_byte_limit": 67108864,
             "failure_record_limit": 5000,
+            "diagnostic_outcomes": [],
             "failures": [],
             "implementation": impl,
             "package_oracle_manifest_sha256": hashlib.sha256(package_manifest).hexdigest(),
@@ -96,7 +97,7 @@ else:
             "retained_evidence_bytes": 0,
             "retained_explanations": 0,
             "retained_failures": 0,
-            "schema_version": 2,
+            "schema_version": 3,
             "target_architecture": one("--architecture"),
             "total_failures": 0,
             "truncated": False,
@@ -279,7 +280,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
         self.assertEqual(manifest["survey"]["sha256"], digest(survey))
-        self.assertEqual(manifest["survey"]["schema_version"], 2)
+        self.assertEqual(manifest["survey"]["schema_version"], 3)
         self.assertEqual(manifest["resolution_implementation"]["workers"], 2)
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:

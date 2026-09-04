@@ -10,10 +10,11 @@ use super::*;
 use crate::repository::catalog::{
     CatalogArtifactV1, CatalogCountsV1, NATIVE_PARITY_PACKAGE_FILE_NAME,
     NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
-    NativeParityOracleWriter, NativeResolutionOutcomeV1, NativeUnresolvedDependencyV1,
-    PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2, SOURCE_SNAPSHOT_SCHEMA_V1,
-    SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1, SourceStreamV1,
-    native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
+    NativeParityOracleWriter, NativeResolutionNotInstallableReasonV1, NativeResolutionOutcomeV1,
+    NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyNativeExplanationV1,
+    NativeUnresolvedDependencyV1, PROFILE_REVISION_SCHEMA_V3, ProfileSourceMemberV2,
+    SOURCE_SNAPSHOT_SCHEMA_V1, SourceMetadataObjectV1, SourceProvenanceV1, SourceStreamKindV1,
+    SourceStreamV1, native_requirement_group_sha256, verify_native_resolution_oracle_bundle,
     write_native_parity_oracle_manifest,
 };
 use crate::repository::supported_profiles::ProfileSourceRole;
@@ -800,6 +801,19 @@ fn resolution_survey_records_conflicts_as_outcomes_and_keeps_later_healthy_roots
     assert_eq!(survey.counts.not_installable_roots, 1);
     assert_eq!(survey.counts.failed_roots, 0);
     assert!(survey.failures.is_empty());
+    assert_eq!(survey.diagnostic_outcomes.len(), 1);
+    assert!(matches!(
+        survey.diagnostic_outcomes[0].outcome,
+        NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure
+        }
+    ));
+    assert!(matches!(
+        &survey.diagnostic_outcomes[0].native_explanation,
+        NativeResolutionSurveyNativeExplanationV1::Alpm {
+            result: NativeResolutionSurveyAlpmResultV1::Conflicts { conflicts }
+        } if !conflicts.is_empty()
+    ));
     assert!(!directory.path().join("manifest.json").exists());
     assert!(!directory.path().join("roots.jsonl").exists());
 

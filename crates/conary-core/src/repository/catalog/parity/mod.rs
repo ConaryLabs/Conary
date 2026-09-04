@@ -123,7 +123,7 @@ pub use resolution_parallel::{
 };
 pub use resolution_survey::{
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,
-    NATIVE_RESOLUTION_SURVEY_SCHEMA_V2, NativeResolutionSurveyAlpmConflictV1,
+    NATIVE_RESOLUTION_SURVEY_SCHEMA_V3, NativeResolutionSurveyAlpmConflictV1,
     NativeResolutionSurveyAlpmMissingV1, NativeResolutionSurveyAlpmPackageV1,
     NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyCountsV1,
     NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
@@ -131,8 +131,9 @@ pub use resolution_survey::{
     NativeResolutionSurveyErrorKindV1, NativeResolutionSurveyErrorReasonV1,
     NativeResolutionSurveyErrorVariantV1, NativeResolutionSurveyEvidenceWithheldReasonV1,
     NativeResolutionSurveyFailureV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyRpmPackageV1, NativeResolutionSurveyRpmProblemV1,
-    NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1, write_native_resolution_survey,
+    NativeResolutionSurveyRootOutcomeV1, NativeResolutionSurveyRpmPackageV1,
+    NativeResolutionSurveyRpmProblemV1, NativeResolutionSurveyRpmRuleV1, NativeResolutionSurveyV1,
+    write_native_resolution_survey,
 };
 
 #[cfg(test)]

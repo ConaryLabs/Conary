@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
-last_updated: 2026-09-03
-revision: 56
+last_updated: 2026-09-04
+revision: 57
 status: active
 ---
 
@@ -443,9 +443,9 @@ schemas through 4, Conary candidate, Debian, and ALPM projection schemas through
 2, and comparison schemas through 2 have no compatibility readers. Every
 retained native-resolution, Conary candidate, and resolution-comparison bundle
 is invalid and must be regenerated before comparison or promotion proof. The
-package oracle is unchanged. Diagnostics survey envelopes remain at their
-existing schemas but their closed outcome enumeration accepts
-`conflicting_closure`.
+package oracle is unchanged. Native diagnostics surveys move to schema 3 so
+conflict-class outcomes can retain their solver-native evidence without
+reclassifying those roots as failures; older retained surveys are invalid.
 
 ### Diagnostics-only resolution survey
 
@@ -457,7 +457,7 @@ canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing
 path, and exits non-zero after writing when any root failed so unattended
 diagnostics cannot look successful.
 
-`NativeResolutionSurveyV1` schema 2 binds the profile identity and revision
+`NativeResolutionSurveyV1` schema 3 binds the profile identity and revision
 digest, package-oracle manifest digest, native implementation and projection
 schema, fixed resolution policy, and target architecture. Its counts record
 roots walked, resolved, unresolved, not-installable, and failed plus a canonical histogram
@@ -468,10 +468,19 @@ native explanation. The inventory retains at most 5,000 failure records while
 reporting the uncapped `total_failures`, retained count, limit, and explicit
 `truncated` state.
 
+`diagnostic_outcomes` separately records every `conflicting_closure` root with
+its exact typed outcome and byte-bounded native explanation. These records are
+successful outcomes, contribute to `not_installable_roots`, and never
+contribute to failure counts or the error histogram. No other successful
+outcome carries survey evidence. The explanation budget is shared with
+retained failure evidence and changes to explicit `withheld` records once
+exhausted.
+
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
 from/to package key plus name-EVR-architecture, dependency ID, and dependency
-text. Native-only provider admission removed the strict-priority multilib
+text. A resolved transaction that displaces its exact root instead preserves
+the complete native transaction package list. Native-only provider admission removed the strict-priority multilib
 problem shape, so there is no residual solve without strict priority.
 Conflict-class rules become ordinary `conflicting_closure` outcomes while
 architecture-only `INFARCH` remains outside that class. Any native field that

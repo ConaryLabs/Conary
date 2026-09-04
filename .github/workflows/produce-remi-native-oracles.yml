@@ -418,7 +418,7 @@ jobs:
             .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
             .lane_image == $lane_image and
             .package_oracle.schema_version == 1 and
-            .survey.schema_version == 2 and
+            .survey.schema_version == 3 and
             .survey.sha256 == $survey_sha256 and
             .survey.size > 0 and
             .resolution_implementation.schema_version == 1 and
@@ -427,10 +427,12 @@ jobs:
               .resolution_implementation.workers
           ' "$manifest" >/dev/null
           jq -e --arg profile "$PROFILE" --arg sha256 "$survey_sha256" '
-            .schema_version == 2 and
+            .schema_version == 3 and
             .profile == $profile and
             (.counts.roots_walked | type == "number") and
             (.counts.failed_roots | type == "number") and
+            (.diagnostic_outcomes | type == "array") and
+            (.diagnostic_outcomes | length) <= .counts.not_installable_roots and
             .total_failures == .counts.failed_roots
           ' "$survey" >/dev/null
           case "$PROFILE" in

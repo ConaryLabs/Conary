@@ -14,14 +14,16 @@ use super::resolution_contract::{
     NativeResolutionOutcomeV1, NativeResolutionPolicyV1, NativeResolutionRootV1,
 };
 use super::resolution_io::NativeResolutionOracleWriter;
-pub(super) use super::resolution_root::{NativeRootResolutionError, NativeRootResolutionResult};
+pub(super) use super::resolution_root::{
+    NativeRootResolutionError, NativeRootResolutionResult, NativeRootResolutionSuccess,
+};
 use crate::error::{Error, Result};
 
 #[allow(unused_imports)] // Consumed by feature-gated native explanation builders.
 pub(super) use super::survey_support::SurveyEvidenceBudget as NativeExplanationBudget;
 use super::survey_support::{canonical_value_size_with_limit, write_private_canonical_json};
 
-pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V2: u32 = 2;
+pub const NATIVE_RESOLUTION_SURVEY_SCHEMA_V3: u32 = 3;
 pub const NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = 5_000;
 pub const NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -46,15 +48,16 @@ pub struct NativeResolutionSurveyV1 {
     pub retained_explanations: u64,
     pub withheld_explanations: u64,
     pub truncated_evidence: bool,
+    pub diagnostic_outcomes: Vec<NativeResolutionSurveyRootOutcomeV1>,
     pub failures: Vec<NativeResolutionSurveyFailureV1>,
 }
 
 impl NativeResolutionSurveyV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_SURVEY_SCHEMA_V2 {
+        if self.schema_version != NATIVE_RESOLUTION_SURVEY_SCHEMA_V3 {
             return Err(Error::ConfigError(format!(
                 "native resolution survey schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_SURVEY_SCHEMA_V2
+                self.schema_version, NATIVE_RESOLUTION_SURVEY_SCHEMA_V3
             )));
         }
         validate_identity(&self.profile, "native resolution survey profile")?;
@@ -88,6 +91,16 @@ impl NativeResolutionSurveyV1 {
                 "native resolution survey failure counts are inconsistent".to_string(),
             ));
         }
+        if self.diagnostic_outcomes.len() as u64 > self.counts.not_installable_roots
+            || self
+                .diagnostic_outcomes
+                .windows(2)
+                .any(|pair| pair[0].root_package_key_sha256 >= pair[1].root_package_key_sha256)
+        {
+            return Err(Error::ConfigError(
+                "native resolution survey diagnostic outcomes are inconsistent".to_string(),
+            ));
+        }
         self.validate_evidence()?;
         Ok(())
     }
@@ -97,9 +110,33 @@ impl NativeResolutionSurveyV1 {
         let mut retained_explanations = 0_u64;
         let mut withheld_explanations = 0_u64;
         let mut evidence_withholding_started = false;
+        let mut explanations = Vec::with_capacity(
+            self.diagnostic_outcomes
+                .len()
+                .saturating_add(self.failures.len()),
+        );
+        for outcome in &self.diagnostic_outcomes {
+            outcome.validate()?;
+            explanations.push((
+                outcome.root_package_key_sha256.as_str(),
+                &outcome.native_explanation,
+            ));
+        }
         for failure in &self.failures {
             failure.validate()?;
-            match &failure.native_explanation {
+            explanations.push((
+                failure.root_package_key_sha256.as_str(),
+                &failure.native_explanation,
+            ));
+        }
+        explanations.sort_unstable_by_key(|(root, _)| *root);
+        if explanations.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(Error::ConfigError(
+                "native resolution survey repeats a diagnostic root".to_string(),
+            ));
+        }
+        for (_, explanation) in explanations {
+            match explanation {
                 NativeResolutionSurveyNativeExplanationV1::Withheld {
                     reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
                 } => {
@@ -148,7 +185,15 @@ impl NativeResolutionSurveyV1 {
                     "native resolution survey explanation counts exceed u64".to_string(),
                 )
             })?;
-        if retained_records != self.retained_failures
+        let expected_records = self
+            .retained_failures
+            .checked_add(self.diagnostic_outcomes.len() as u64)
+            .ok_or_else(|| {
+                Error::ConfigError(
+                    "native resolution survey diagnostic records exceed u64".to_string(),
+                )
+            })?;
+        if retained_records != expected_records
             || retained_evidence_bytes != self.retained_evidence_bytes
             || retained_evidence_bytes > self.evidence_byte_limit
             || retained_explanations != self.retained_explanations
@@ -346,6 +391,41 @@ impl NativeResolutionSurveyErrorVariantV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NativeResolutionSurveyRootOutcomeV1 {
+    pub root_package_key_sha256: String,
+    pub name: String,
+    pub version: String,
+    pub release: String,
+    pub architecture: Option<String>,
+    pub outcome: NativeResolutionOutcomeV1,
+    pub native_explanation: NativeResolutionSurveyNativeExplanationV1,
+}
+
+impl NativeResolutionSurveyRootOutcomeV1 {
+    fn validate(&self) -> Result<()> {
+        validate_identity(&self.name, "native resolution survey package name")?;
+        NativeResolutionRootV1 {
+            root_package_key_sha256: self.root_package_key_sha256.clone(),
+            outcome: self.outcome.clone(),
+        }
+        .validate()?;
+        if !matches!(
+            self.outcome,
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: super::resolution_contract::NativeResolutionNotInstallableReasonV1::ConflictingClosure
+            }
+        ) {
+            return Err(Error::ConfigError(
+                "native resolution survey retained diagnostics for a non-conflict outcome"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NativeResolutionSurveyFailureV1 {
     pub root_package_key_sha256: String,
     pub name: String,
@@ -381,6 +461,7 @@ pub enum NativeResolutionSurveyNativeExplanationV1 {
     },
     Rpm {
         problems: Vec<NativeResolutionSurveyRpmProblemV1>,
+        resolved_packages: Vec<NativeResolutionSurveyRpmPackageV1>,
     },
     Debian {
         result: NativeResolutionSurveyDebianResultV1,
@@ -436,6 +517,9 @@ pub enum NativeResolutionSurveyDebianResultV1 {
     },
     Unresolved {
         missing: Vec<NativeResolutionSurveyDebianMissingV1>,
+    },
+    Conflicts {
+        detail_unavailable_reason: Option<String>,
     },
     Unavailable {
         reason: String,
@@ -524,13 +608,13 @@ impl RootOutcomeSink<'_> {
         result: NativeRootResolutionResult,
     ) -> Result<()> {
         match (self, result) {
-            (Self::Strict(writer), Ok(outcome)) => writer.root(&NativeResolutionRootV1 {
+            (Self::Strict(writer), Ok(success)) => writer.root(&NativeResolutionRootV1 {
                 root_package_key_sha256: root.package_key_sha256.clone(),
-                outcome,
+                outcome: success.outcome,
             }),
             (Self::Strict(_), Err(failure)) => Err(failure.error),
-            (Self::Survey(collector), Ok(outcome)) => {
-                collector.success(outcome)?;
+            (Self::Survey(collector), Ok(success)) => {
+                collector.success(root, success)?;
                 Ok(())
             }
             (Self::Survey(collector), Err(failure)) => {
@@ -550,6 +634,7 @@ pub(super) struct NativeResolutionSurveyCollector {
     policy: NativeResolutionPolicyV1,
     counts: NativeResolutionSurveyCountsV1,
     histogram: BTreeMap<NativeResolutionSurveyErrorKindV1, u64>,
+    diagnostic_outcomes: Vec<NativeResolutionSurveyRootOutcomeV1>,
     failures: Vec<NativeResolutionSurveyFailureV1>,
     evidence_byte_limit: u64,
     retained_evidence_bytes: u64,
@@ -574,6 +659,7 @@ impl NativeResolutionSurveyCollector {
             policy,
             counts: NativeResolutionSurveyCountsV1::default(),
             histogram: BTreeMap::new(),
+            diagnostic_outcomes: Vec::new(),
             failures: Vec::new(),
             evidence_byte_limit: NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT,
             retained_evidence_bytes: 0,
@@ -583,9 +669,17 @@ impl NativeResolutionSurveyCollector {
         })
     }
 
-    fn success(&mut self, outcome: NativeResolutionOutcomeV1) -> Result<()> {
+    fn success(
+        &mut self,
+        root: &NativeParityPackageV1,
+        success: NativeRootResolutionSuccess,
+    ) -> Result<()> {
+        let NativeRootResolutionSuccess {
+            outcome,
+            explanation,
+        } = success;
         self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
-        match outcome {
+        match &outcome {
             NativeResolutionOutcomeV1::Resolved { .. } => {
                 self.counts.resolved_roots = checked_increment(self.counts.resolved_roots)?;
             }
@@ -597,13 +691,43 @@ impl NativeResolutionSurveyCollector {
                     checked_increment(self.counts.not_installable_roots)?;
             }
         }
+        let is_conflicting_closure = matches!(
+            outcome,
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: super::resolution_contract::NativeResolutionNotInstallableReasonV1::ConflictingClosure
+            }
+        );
+        match (is_conflicting_closure, explanation) {
+            (true, Some(explanation)) => {
+                let native_explanation = self.retain_explanation(explanation)?;
+                self.diagnostic_outcomes
+                    .push(NativeResolutionSurveyRootOutcomeV1 {
+                        root_package_key_sha256: root.package_key_sha256.clone(),
+                        name: root.name.clone(),
+                        version: root.version.clone(),
+                        release: root.package_release.clone(),
+                        architecture: root.architecture.clone(),
+                        outcome,
+                        native_explanation,
+                    });
+            }
+            (true, None) => {
+                return Err(Error::InternalError(
+                    "conflicting native resolution outcome has no survey explanation".to_string(),
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(Error::InternalError(
+                    "non-conflict native resolution outcome carries survey explanation".to_string(),
+                ));
+            }
+            (false, None) => {}
+        }
         Ok(())
     }
 
     fn remaining_evidence_bytes(&self) -> u64 {
-        if self.evidence_budget_exhausted
-            || self.failures.len() >= NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT
-        {
+        if self.evidence_budget_exhausted {
             0
         } else {
             self.evidence_byte_limit
@@ -702,7 +826,7 @@ impl NativeResolutionSurveyCollector {
         let retained_failures = self.failures.len() as u64;
         let total_failures = self.counts.failed_roots;
         let survey = NativeResolutionSurveyV1 {
-            schema_version: NATIVE_RESOLUTION_SURVEY_SCHEMA_V2,
+            schema_version: NATIVE_RESOLUTION_SURVEY_SCHEMA_V3,
             profile: self.profile,
             profile_revision_sha256: self.profile_revision_sha256,
             package_oracle_manifest_sha256: self.package_oracle_manifest_sha256,
@@ -719,6 +843,7 @@ impl NativeResolutionSurveyCollector {
             retained_explanations: self.retained_explanations,
             withheld_explanations: self.withheld_explanations,
             truncated_evidence: self.withheld_explanations > 0,
+            diagnostic_outcomes: self.diagnostic_outcomes,
             failures: self.failures,
         };
         survey.validate()?;
@@ -772,6 +897,7 @@ mod tests {
             },
             counts: NativeResolutionSurveyCountsV1::default(),
             histogram: BTreeMap::new(),
+            diagnostic_outcomes: Vec::new(),
             failures: Vec::new(),
             evidence_byte_limit,
             retained_evidence_bytes: 0,
@@ -807,9 +933,9 @@ mod tests {
     #[test]
     fn survey_retains_bounded_failures_and_reports_uncapped_truth() {
         let mut collector = collector(NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT);
-        let root = root();
-
-        for _ in 0..=NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT {
+        for index in 0..=NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT {
+            let mut root = root();
+            root.package_key_sha256 = format!("{index:064x}");
             collector
                 .failure(
                     &root,
@@ -818,12 +944,14 @@ mod tests {
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                         NativeResolutionSurveyNativeExplanationV1::Rpm {
                             problems: Vec::new(),
+                            resolved_packages: Vec::new(),
                         },
                     ),
                 )
                 .unwrap();
         }
 
+        assert!(collector.remaining_evidence_bytes() > 0);
         let survey = collector.finish().unwrap();
         assert_eq!(
             survey.total_failures,
@@ -866,6 +994,7 @@ mod tests {
     fn survey_withholds_explanations_after_canonical_byte_budget_is_exhausted() {
         let explanation = NativeResolutionSurveyNativeExplanationV1::Rpm {
             problems: Vec::new(),
+            resolved_packages: Vec::new(),
         };
         let explanation_bytes = canonical_value_size_with_limit(&explanation, u64::MAX)
             .unwrap()
@@ -875,9 +1004,9 @@ mod tests {
             crate::json::canonical_json(&explanation).unwrap().len() as u64
         );
         let mut collector = collector(explanation_bytes);
-        let root = root();
-
-        for _ in 0..3 {
+        for index in 0..3 {
+            let mut root = root();
+            root.package_key_sha256 = format!("{index:064x}");
             collector
                 .failure(
                     &root,
