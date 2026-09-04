@@ -325,6 +325,7 @@ pub enum NativeResolutionSurveyErrorReasonV1 {
     UnknownArchitectureToken,
     NativePackageConflict,
     NativeSolverUnexpectedFailure,
+    ProviderSearchBudgetExceeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -346,6 +347,7 @@ pub enum NativeResolutionSurveyErrorVariantV1 {
     DurableChunkUnavailable,
     HttpStatus,
     ConflictError,
+    ProviderSearchBudgetExceeded,
     ProfileArchitectureMismatch,
     UnknownArchitectureToken,
     UnsupportedNativeHostTarget,
@@ -395,6 +397,7 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::DurableChunkUnavailable { .. } => Self::DurableChunkUnavailable,
             Error::HttpStatus { .. } => Self::HttpStatus,
             Error::ConflictError(_) => Self::ConflictError,
+            Error::ProviderSearchBudgetExceeded { .. } => Self::ProviderSearchBudgetExceeded,
             Error::ProfileArchitectureMismatch { .. } => Self::ProfileArchitectureMismatch,
             Error::UnknownArchitectureToken { .. } => Self::UnknownArchitectureToken,
             Error::UnsupportedNativeHostTarget { .. } => Self::UnsupportedNativeHostTarget,
@@ -592,6 +595,10 @@ pub struct NativeResolutionSurveyDebianMissingV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NativeResolutionSurveyAlpmResultV1 {
+    ProviderSearchBudgetExceeded {
+        root: String,
+        checks: u32,
+    },
     Prepared {
         packages: Vec<NativeResolutionSurveyAlpmPackageV1>,
     },

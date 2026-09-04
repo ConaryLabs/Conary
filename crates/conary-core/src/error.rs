@@ -128,6 +128,10 @@ pub enum Error {
     #[error("Conflict: {0}")]
     ConflictError(String),
 
+    /// Native provider probing stopped before another evaluation could exceed its budget.
+    #[error("Native provider search budget exceeded for root '{root}' after {checks} checks")]
+    ProviderSearchBudgetExceeded { root: String, checks: u32 },
+
     /// Operator-supplied architecture disagrees with the selected profile authority.
     #[error("Architecture mismatch for profile '{profile}': expected '{expected}', got '{actual}'")]
     ProfileArchitectureMismatch {

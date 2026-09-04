@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
+summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-04
-revision: 63
+revision: 64
 status: active
 ---
 
@@ -771,16 +771,39 @@ typed architecture-excluded outcome before transaction setup. A conflicting
 dependency, obsoletion result, or prepared transaction that omits the exact
 root becomes `conflicting_closure`; missing dependencies become `unresolved`
 only when no conflict class exists. When preparation exposes missing first, the
-producer follows required dependencies with libalpm's database-precedence
-satisfier selection and runs libalpm's typed conflict check over each eligible
-reachable package set before accepting `unresolved`. The probe reuses
-`alpm_find_dbs_satisfier`, which shares native transaction preparation's
-`resolvedep` implementation: a satisfying literal is selected in registered
-database order, without admitting shadowed literals as alternatives. Only when
-native selection offers virtual-provider alternatives does the probe branch,
-using exactly the packages from libalpm's `SelectProvider` question. A conflict
-dominates only if every such eligible branch is conflict-blocked; matching and
-precedence are not reimplemented in the oracle. Ambiguous identities, unbound requirements,
+producer follows required dependencies depth-first in native dependency order,
+using `alpm_find_dbs_satisfier` (the same `resolvedep` implementation as native
+preparation), and checks that single default closure with libalpm. Satisfaction
+by already selected packages is also a native query. A satisfying literal is
+selected in registered database order; shadowed literals are never alternatives.
+
+Provider alternatives are considered only for dependencies whose selected
+provider is a party on either side of the reported conflict. In native
+`ALPM_QUESTION_SELECT_PROVIDER` question order, the producer re-prepares the
+exact root with one alternative answer for one such dependency, leaving every
+other dependency at its native default. Only providers offered by that native
+question are eligible. A candidate is accepted only after native preparation
+and, for missing-first results, the native default-closure conflict check report
+no conflict. Successful preparation produces `resolved`; a still-missing result
+keeps exactly that preparation's typed missing edges. All alternatives of the
+current conflict-party dependency are checked before moving to the next one.
+Answers for different dependencies are never combined, and unrelated provider
+choices are never enumerated. This is a linear sequence of native probes, not
+a second solver or a Cartesian-product closure search.
+
+`PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256` bounds each exact root's actual native
+evaluations: every `trans_prepare` and each additional missing-first
+`check_conflicts` consumes one check. Dependency/satisfier queries are not
+transaction/conflict evaluations. Before evaluation 257 the producer returns
+typed `ProviderSearchBudgetExceeded { root, checks: 256 }`; it never guesses an
+outcome after exhaustion. Strict production fails without publishing a complete
+bundle. Survey production records `provider_search_budget_exceeded` as the
+failure reason and error variant, with the exact root and completed check count
+in typed ALPM failure evidence, and continues to later roots. The budget and
+provider-answer callback are reset for each root. This is part of #814's
+current resolution/survey hard cut; the package oracle is unchanged.
+
+Ambiguous identities, unbound requirements,
 and unexpected native error classes fail the complete crawl. The public Arch profile's three
 authenticated database inputs are all `/os/x86_64`; their package rows are
 `x86_64` or architecture-independent `any` under the pinned lane.

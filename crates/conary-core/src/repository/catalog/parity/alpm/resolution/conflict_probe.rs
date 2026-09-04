@@ -1,114 +1,227 @@
 // crates/conary-core/src/repository/catalog/parity/alpm/resolution/conflict_probe.rs
 
-//! Path-sensitive libalpm conflict probing for missing-first transactions.
+//! Bounded, one-dependency-at-a-time native provider questions.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
-use alpm::{Alpm, Package};
+use alpm::{Alpm, Package, TransFlag};
 
-use super::evidence::alpm_conflict_explanation;
-use crate::repository::catalog::parity::NativeResolutionSurveyNativeExplanationV1;
+mod native;
 
-/// Re-probe an unsatisfied transaction using libalpm's eligible provider set.
-/// A conflict dominates only when every native-selectable provider path for
-/// the root-reachable closure is blocked by a native conflict.
-pub(super) fn unavoidable_reachable_conflict_explanation(
-    alpm: &Alpm,
-    root: &Package,
-    explanation_byte_limit: u64,
-) -> Option<NativeResolutionSurveyNativeExplanationV1> {
-    let mut pending = vec![vec![root]];
-    let mut visited = BTreeSet::new();
-    let mut satisfiers = BTreeMap::new();
-    let mut first_conflict = None;
+use super::super::database_name;
+use super::evidence::alpm_unavailable;
+use super::{Error, NativeParityPackageV1, NativeRootResolutionError, ResolutionExplanationLimits};
+use crate::repository::catalog::parity::{
+    NativeResolutionSurveyAlpmResultV1, NativeResolutionSurveyErrorReasonV1,
+    NativeResolutionSurveyNativeExplanationV1,
+};
 
-    while let Some(reachable) = pending.pop() {
-        let mut identity = reachable
-            .iter()
-            .map(|package| std::ptr::from_ref(*package).cast::<()>() as usize)
-            .collect::<Vec<_>>();
-        identity.sort_unstable();
-        if !visited.insert(identity) {
-            continue;
-        }
+pub(super) use native::Preparation;
+use native::prepare_once;
 
-        let conflicts = alpm.check_conflicts(reachable.iter().map(|package| package.as_ref()));
-        if !conflicts.is_empty() {
-            first_conflict.get_or_insert_with(|| {
-                alpm_conflict_explanation(conflicts.iter(), explanation_byte_limit)
-            });
-            continue;
-        }
+/// Maximum actual native preparation/conflict evaluations for one exact root.
+pub(super) const PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256;
 
-        let missing = alpm.check_deps(
-            std::iter::empty::<&alpm::Pkg>(),
-            std::iter::empty::<&alpm::Pkg>(),
-            reachable.iter().map(|package| package.as_ref()),
-            false,
-        );
-        let provider_choices = missing.iter().find_map(|dependency| {
-            let dependency = dependency.depend();
-            let providers = satisfiers
-                .entry(dependency.to_string())
-                .or_insert_with(|| alpm_satisfiers(alpm, dependency))
-                .iter()
-                .copied()
-                .filter(|provider| {
-                    !reachable
-                        .iter()
-                        .any(|candidate| std::ptr::eq(*candidate, *provider))
-                })
-                .collect::<Vec<_>>();
-            (!providers.is_empty()).then_some(providers)
-        });
-        let provider_choices = provider_choices?;
-        pending.extend(provider_choices.into_iter().map(|provider| {
-            let mut branch = reachable.clone();
-            branch.push(provider);
-            branch
-        }));
-    }
+type ProbeResult<T> = std::result::Result<T, Box<NativeRootResolutionError>>;
 
-    first_conflict
+pub(super) struct ConflictReport {
+    parties: BTreeSet<usize>,
+    pub(super) explanation: NativeResolutionSurveyNativeExplanationV1,
 }
 
-fn alpm_satisfiers<'a>(alpm: &'a Alpm, dependency: &alpm::Dep) -> Vec<&'a Package> {
-    // `alpm_find_dbs_satisfier` uses the same `resolvedep` routine as native
-    // transaction preparation: first select a satisfying literal in database
-    // order; only without one does it offer virtual-provider alternatives.
-    // Observe those alternatives instead of recreating native eligibility,
-    // version matching, or database precedence here. Keep the default answer.
-    let alternatives = Rc::new(RefCell::new(BTreeSet::new()));
+fn package_id(package: &Package) -> usize {
+    std::ptr::from_ref(package).cast::<()>() as usize
+}
+
+#[derive(Clone)]
+struct ProviderChoice {
+    dependency: String,
+    selected: usize,
+    providers: Vec<usize>,
+}
+
+#[derive(Default)]
+struct ProviderAnswers {
+    override_choice: Option<(String, usize)>,
+    choices: Vec<ProviderChoice>,
+}
+
+struct CheckBudget<'a> {
+    root: &'a NativeParityPackageV1,
+    checks: u32,
+}
+
+impl CheckBudget<'_> {
+    fn consume(&mut self) -> ProbeResult<()> {
+        if self.checks == PROVIDER_SEARCH_CHECK_LIMIT {
+            return Err(NativeRootResolutionError::new(
+                Error::ProviderSearchBudgetExceeded {
+                    root: self.root.name.clone(),
+                    checks: self.checks,
+                },
+                NativeResolutionSurveyErrorReasonV1::ProviderSearchBudgetExceeded,
+                NativeResolutionSurveyNativeExplanationV1::Alpm {
+                    result: NativeResolutionSurveyAlpmResultV1::ProviderSearchBudgetExceeded {
+                        root: self.root.name.clone(),
+                        checks: self.checks,
+                    },
+                },
+            ));
+        }
+        self.checks += 1;
+        #[cfg(test)]
+        CHECKS
+            .lock()
+            .unwrap()
+            .insert(self.root.package_key_sha256.clone(), self.checks);
+        Ok(())
+    }
+}
+
+/// Keep every unrelated dependency at its native default. Only replay answers
+/// for choices whose selected provider is a party to the baseline conflict,
+/// in the order libalpm asked them. Answers are never combined across choices.
+pub(super) fn prepare_with_conflict_probe(
+    alpm: &mut Alpm,
+    root: &NativeParityPackageV1,
+    limits: ResolutionExplanationLimits,
+) -> ProbeResult<Preparation> {
+    let answers = Rc::new(RefCell::new(ProviderAnswers::default()));
     let previous_callback = alpm.take_raw_question_cb();
-    alpm.set_question_cb(Rc::clone(&alternatives), |question, alternatives| {
-        if let alpm::Question::SelectProvider(question) = question.question() {
-            alternatives.borrow_mut().extend(
+    alpm.set_question_cb(Rc::clone(&answers), |question, answers| {
+        if let alpm::Question::SelectProvider(mut question) = question.question() {
+            let mut answers = answers.borrow_mut();
+            let dependency = question.depend().to_string();
+            let providers = question
+                .providers()
+                .iter()
+                .map(package_id)
+                .collect::<Vec<_>>();
+            if let Some((overridden, provider)) = &answers.override_choice
+                && overridden == &dependency
+                && let Some(index) = providers.iter().position(|id| id == provider)
+            {
+                // Native provider counts and callback indices are C ints.
                 question
-                    .providers()
+                    .set_index(i32::try_from(index).expect("native provider index exceeds i32"));
+            }
+            if let Ok(index) = usize::try_from(question.index())
+                && let Some(&selected) = providers.get(index)
+                && !answers
+                    .choices
                     .iter()
-                    .map(|package| std::ptr::from_ref(package).cast::<()>() as usize),
-            );
+                    .any(|choice| choice.dependency == dependency && choice.selected == selected)
+            {
+                answers.choices.push(ProviderChoice {
+                    dependency,
+                    selected,
+                    providers,
+                });
+            }
         }
     });
-    let selected = alpm.syncdbs().find_satisfier(dependency.to_string());
+    let mut budget = CheckBudget { root, checks: 0 };
+    let result = probe(alpm, root, limits, &answers, &mut budget);
     alpm.set_raw_question_cb(previous_callback);
-    let alternatives = alternatives.borrow();
-    if alternatives.is_empty() {
-        return selected.into_iter().collect();
-    }
+    result
+}
 
-    // Callback package borrows cannot escape the callback. Rebind their exact
-    // identities to the same immutable handle's package cache without unsafe
-    // lifetime extension or another satisfier-selection implementation.
-    let mut providers = Vec::new();
-    for database in alpm.syncdbs().iter() {
-        for package in database.pkgs().iter() {
-            if alternatives.contains(&(std::ptr::from_ref(package).cast::<()>() as usize)) {
-                providers.push(package);
+fn probe(
+    alpm: &mut Alpm,
+    root: &NativeParityPackageV1,
+    limits: ResolutionExplanationLimits,
+    answers: &RefCell<ProviderAnswers>,
+    budget: &mut CheckBudget<'_>,
+) -> ProbeResult<Preparation> {
+    let baseline = prepare_once(alpm, root, limits, budget)?;
+    let Preparation::Conflicting(conflict) = baseline else {
+        return Ok(baseline);
+    };
+    let choices = std::mem::take(&mut answers.borrow_mut().choices);
+    for choice in choices {
+        if !conflict.parties.contains(&choice.selected) {
+            continue;
+        }
+        for provider in choice.providers {
+            if provider == choice.selected {
+                continue;
+            }
+            answers.borrow_mut().override_choice = Some((choice.dependency.clone(), provider));
+            answers.borrow_mut().choices.clear();
+            restart_transaction(alpm, root)?;
+            let candidate = prepare_once(alpm, root, limits, budget)?;
+            if !matches!(candidate, Preparation::Conflicting(_)) {
+                return Ok(candidate);
             }
         }
     }
-    providers
+    Ok(Preparation::Conflicting(conflict))
+}
+
+fn restart_transaction(alpm: &mut Alpm, root: &NativeParityPackageV1) -> ProbeResult<()> {
+    alpm.trans_release().map_err(|error| {
+        native_error(
+            error,
+            NativeResolutionSurveyErrorReasonV1::TransactionReleaseFailed,
+        )
+    })?;
+    alpm.trans_init(TransFlag::DB_ONLY | TransFlag::NO_LOCK | TransFlag::NO_HOOKS)
+        .map_err(|error| {
+            native_error(
+                error,
+                NativeResolutionSurveyErrorReasonV1::TransactionInitializationFailed,
+            )
+        })?;
+    let package = exact_root(alpm, root)?;
+    alpm.trans_add_pkg(package).map_err(|error| {
+        native_error(
+            error.error,
+            NativeResolutionSurveyErrorReasonV1::TransactionAddRootFailed,
+        )
+    })
+}
+
+fn exact_root<'a>(alpm: &'a Alpm, root: &NativeParityPackageV1) -> ProbeResult<&'a Package> {
+    let name = database_name(root.member_ordinal as usize).map_err(|error| {
+        NativeRootResolutionError::new(
+            error,
+            NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+            alpm_unavailable("invalid_root_database"),
+        )
+    })?;
+    alpm.syncdbs()
+        .iter()
+        .find(|db| db.name() == name)
+        .and_then(|db| db.pkg(root.name.as_str()).ok())
+        .ok_or_else(|| {
+            NativeRootResolutionError::new(
+                Error::InternalError(
+                    "exact ALPM root disappeared during provider probing".to_string(),
+                ),
+                NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
+                alpm_unavailable("exact_root_disappeared_during_provider_probe"),
+            )
+        })
+}
+
+fn native_error(
+    error: alpm::Error,
+    reason: NativeResolutionSurveyErrorReasonV1,
+) -> Box<NativeRootResolutionError> {
+    NativeRootResolutionError::new(
+        Error::ResolutionError(error.to_string()),
+        reason,
+        alpm_unavailable("native_provider_probe_transaction_failed"),
+    )
+}
+
+#[cfg(test)]
+static CHECKS: std::sync::Mutex<std::collections::BTreeMap<String, u32>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+#[cfg(test)]
+pub(in crate::repository::catalog::parity::alpm) fn native_probe_checks(root_key: &str) -> u32 {
+    CHECKS.lock().unwrap()[root_key]
 }

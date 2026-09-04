@@ -23,6 +23,7 @@ use crate::repository::{
     RepositoryTrustPolicy,
 };
 
+mod conflict_budget;
 mod conflict_precedence;
 
 #[derive(Clone)]
