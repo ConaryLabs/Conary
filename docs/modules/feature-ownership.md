@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 92
+last_updated: 2026-09-04
+revision: 93
 summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
@@ -1211,6 +1211,38 @@ set, and each case binds its claims to source-artifact roles that must resolve
 to unique runtime SHA-256 identities. Only completed cases contribute coverage;
 the declared and emitted case counts and required/covered semantic sets must
 agree.
+
+## Repository Maintainability Gates
+
+**Slug:** maintainability
+
+**Capability:** enforce measurable Rust source-size and unit-test placement
+limits across the workspace while keeping every temporary exception tied to an
+owned decomposition issue.
+
+**Start here:** `scripts/check-line-cap.sh`; `scripts/test-line-cap.sh`;
+`scripts/line-cap-allowlist.txt`; `AGENTS.md`; `CONTRIBUTING.md`.
+
+**Neighbor systems:** every Rust source owner, pull-request shell gates,
+contributor guidance, and feature ownership routing.
+
+**Paths:** `scripts/check-line-cap.sh`; `scripts/test-line-cap.sh`;
+`scripts/line-cap-allowlist.txt`.
+
+**Focused proof:** `bash scripts/check-line-cap.sh`;
+`bash scripts/test-line-cap.sh`.
+
+**Interaction gate:** `bash scripts/check-doc-truth.sh` and
+`bash scripts/agent-context.sh --validate` when policy or routing changes.
+
+**Docs to update:** `AGENTS.md`; `CONTRIBUTING.md`;
+`docs/modules/feature-ownership.md`.
+
+**Safety notes:** the cap counts lines before the first inline
+`#[cfg(test)]` module, or the whole source file when none exists. Files named
+`tests.rs` and Rust files below a `tests/` directory are excluded. Every
+allowlist entry carries the issue that owns the remaining production
+decomposition; stale entries fail the gate.
 
 ## Developer Build Environment
 

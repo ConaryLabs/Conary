@@ -1,0 +1,7 @@
+# Rust source files currently above the 1,000 non-test-line cap.
+# Format: <repo-relative path> #<decomposition issue>
+apps/conary-test/src/engine/qemu.rs #846
+apps/conary/src/commands/generation/config_transaction.rs #846
+apps/remi/src/server/catalog_authority/test_support.rs #846
+apps/remi/src/server/mod.rs #846
+crates/conary-core/src/ccs/budget.rs #846

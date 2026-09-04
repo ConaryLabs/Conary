@@ -97,9 +97,12 @@ essential operation available only through ad hoc shell or free-form output.
 - Fix causes and prove the contract or property, not only the observed input.
 - Treat intermittent or unexplained failures as evidence of a defect, not as a
   reason to retry until green.
-- A slice adding behavior to a Rust source file over 1,000 lines must include
-  an ownership-based reorganization in the same issue or plan. Thin dispatch,
-  registration, and re-export wiring may remain in a large hub.
+- `scripts/check-line-cap.sh` enforces a 1,000 non-test-line cap for Rust source
+  files; each checked-in exception names the issue that owns its decomposition.
+  Unit tests move to a sibling `<file>/tests.rs` once an inline test module
+  reaches 300 lines, and a sibling extraction must reduce the parent with that
+  reduction stated in the commit. Thin dispatch, registration, and re-export
+  wiring may remain in a large hub only through an issue-linked exception.
 - Before changing behavior in a Rust file over 1,500 lines, name the ownership
   boundary being preserved or improved. Files over 2,500 lines need a reviewed
   decomposition path before major feature work unless the fix is urgent.

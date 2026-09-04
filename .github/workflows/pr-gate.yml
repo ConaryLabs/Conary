@@ -282,6 +282,10 @@ jobs:
         run: command -v rg >/dev/null
       - name: Check docs truth invariants
         run: bash scripts/check-doc-truth.sh
+      - name: Check Rust non-test line cap
+        run: bash scripts/check-line-cap.sh
+      - name: Test Rust non-test line cap checker
+        run: bash scripts/test-line-cap.sh
       - name: Test docs truth checker
         run: bash scripts/test-doc-truth.sh
       - name: Test agent context tool
