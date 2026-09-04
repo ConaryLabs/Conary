@@ -1220,17 +1220,19 @@ agree.
 limits across the workspace while keeping every temporary exception tied to an
 owned decomposition issue.
 
-**Start here:** `scripts/check-line-cap.sh`; `scripts/test-line-cap.sh`;
-`scripts/line-cap-allowlist.txt`; `AGENTS.md`; `CONTRIBUTING.md`.
+**Start here:** `crates/conary-xtask/src/line_cap.rs`;
+`crates/conary-xtask/Cargo.toml`; `scripts/check-line-cap.sh`;
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`; `AGENTS.md`;
+`CONTRIBUTING.md`.
 
 **Neighbor systems:** every Rust source owner, pull-request shell gates,
 contributor guidance, and feature ownership routing.
 
-**Paths:** `scripts/check-line-cap.sh`; `scripts/test-line-cap.sh`;
-`scripts/line-cap-allowlist.txt`.
+**Paths:** `crates/conary-xtask/**`; `scripts/check-line-cap.sh`;
+`scripts/test-line-cap.sh`; `scripts/line-cap-allowlist.txt`.
 
-**Focused proof:** `bash scripts/check-line-cap.sh`;
-`bash scripts/test-line-cap.sh`.
+**Focused proof:** `cargo test -p conary-xtask`;
+`bash scripts/check-line-cap.sh`; `bash scripts/test-line-cap.sh`.
 
 **Interaction gate:** `bash scripts/check-doc-truth.sh` and
 `bash scripts/agent-context.sh --validate` when policy or routing changes.
@@ -1238,11 +1240,12 @@ contributor guidance, and feature ownership routing.
 **Docs to update:** `AGENTS.md`; `CONTRIBUTING.md`;
 `docs/modules/feature-ownership.md`.
 
-**Safety notes:** the cap counts every line outside inline `#[cfg(test)]`
-modules and rejects inline test modules over 300 lines. Files named `tests.rs`
-and Rust files below a `tests/` directory are excluded. Every allowlist entry
-carries the issue that owns the remaining production or test-placement
-decomposition; stale entries fail the gate.
+**Safety notes:** the cap parses Rust syntax, counts every line outside items
+whose `cfg` predicate mentions `test`, and rejects files with more than 300
+total inline test-item lines. Files named `tests.rs` and Rust files below a
+`tests/` directory are excluded. Every allowlist entry carries the issue that
+owns the remaining production or test-placement decomposition; stale entries
+fail the gate.
 
 ## Developer Build Environment
 

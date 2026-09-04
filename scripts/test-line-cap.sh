@@ -41,8 +41,29 @@ echo '}'
 } > "$fixture_root/crates/fixture/src/inline_tests_at_cap.rs"
 write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
 write_lines "$fixture_root/crates/fixture/src/tests/helper.rs" 1200
+cat <<'EOF' > "$fixture_root/crates/fixture/src/block_comment_attribute.rs"
+#[cfg(test)]
+/* the typed item span crosses this block comment
+   without guessing where the module starts */
+mod tests {
+    const VALUE: usize = 1;
+}
+EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/doc_comment_attribute.rs"
+#[cfg(test)]
+/// A test-only helper.
+fn helper() {}
+EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/all_test_predicate.rs"
+#[cfg(all(test, feature = "fixture"))]
+const FIXTURE: &str = "fixture";
+EOF
 
 "$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+grep -q $'block_comment_attribute.rs\ttotal=6\tproduction=0\tinline_test=6' <<<"$report"
+grep -q $'doc_comment_attribute.rs\ttotal=3\tproduction=0\tinline_test=3' <<<"$report"
+grep -q $'all_test_predicate.rs\ttotal=2\tproduction=0\tinline_test=2' <<<"$report"
 
 {
 awk 'BEGIN { for (i = 1; i <= 400; i++) print "// fixture line " i }'
@@ -98,11 +119,33 @@ if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/in
     echo "ERROR: oversized inline test module unexpectedly passed" >&2
     exit 1
 fi
-grep -q 'inline #\[cfg(test)\] module at line 1 with 301 lines' "$fixture_root/inline-size.out"
+grep -q 'oversized_inline_tests.rs has 301 inline test lines' "$fixture_root/inline-size.out"
 
 echo 'crates/fixture/src/oversized_inline_tests.rs #846' > "$allowlist"
 "$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
 rm "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
+
+: > "$allowlist"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod first_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 148; i++) print "    // first test line " i }'
+echo '}'
+cat <<'EOF'
+#[cfg(test)]
+mod second_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 148; i++) print "    // second test line " i }'
+echo '}'
+} > "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/multiple-inline.out" 2>&1; then
+    echo "ERROR: multiple inline test regions were not summed" >&2
+    exit 1
+fi
+grep -q 'multiple_inline_tests.rs has 302 inline test lines' "$fixture_root/multiple-inline.out"
+rm "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
 
 : > "$allowlist"
 {
@@ -113,9 +156,19 @@ EOF
 awk 'BEGIN { for (i = 1; i <= 1001; i++) print "// production line " i }'
 } > "$fixture_root/crates/fixture/src/external_tests.rs"
 if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/external.out" 2>&1; then
-    echo "ERROR: external test module incorrectly truncated the production count" >&2
+    echo "ERROR: external test declaration hid trailing production lines" >&2
     exit 1
 fi
-grep -q 'external_tests.rs has 1003 non-test lines' "$fixture_root/external.out"
+grep -q 'external_tests.rs has 1001 non-test lines' "$fixture_root/external.out"
+
+rm "$fixture_root/crates/fixture/src/external_tests.rs"
+cat <<'EOF' > "$fixture_root/crates/fixture/src/malformed.rs"
+fn malformed( {
+EOF
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/malformed.out" 2>&1; then
+    echo "ERROR: malformed Rust fixture unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'failed to parse crates/fixture/src/malformed.rs' "$fixture_root/malformed.out"
 
 echo "line-cap tests passed."

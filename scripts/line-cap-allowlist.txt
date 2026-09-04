@@ -1,5 +1,5 @@
 # Rust source files currently above the 1,000 non-test-line cap or the
-# 300-line inline-test-module cap.
+# 300-line inline-test-item cap.
 # Format: <repo-relative path> #<decomposition issue>
 apps/conary-test/src/config/manifest.rs #846
 apps/conary-test/src/container/image.rs #846
@@ -41,6 +41,7 @@ apps/remi/src/server/release_publish.rs #843
 apps/remi/src/server/routes.rs #843
 apps/remi/src/server/universe_publish.rs #843
 crates/conary-core/src/ccs/budget.rs #846
+crates/conary-core/src/generation/root_manifest/delta.rs #846
 crates/conary-core/src/resolver/canonical.rs #814
 crates/conary-core/src/resolver/provides_index.rs #814
 crates/conary-mcp/src/stateless_http.rs #306
