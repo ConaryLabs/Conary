@@ -109,13 +109,25 @@ fi
 grep -q "invalid conary.verity value 'maybe'" "$case_root/stderr" ||
     fail "invalid conary.verity value did not report its grammar"
 
-case_root="$(prepare_case empty-value 'quiet conary.generation=1 conary.verity=')"
-if run_generator "$case_root" 0; then
-    fail "empty conary.verity value was accepted as the default"
-fi
-[[ ! -s "$case_root/mount.log" ]] ||
-    fail "empty conary.verity value reached the mount boundary"
-grep -q "invalid conary.verity value ''" "$case_root/stderr" ||
-    fail "empty conary.verity value did not report its grammar"
+for previous in absent on off; do
+    cmdline='quiet conary.generation=1'
+    if [[ "$previous" != absent ]]; then
+        cmdline+=" conary.verity=$previous"
+    fi
+    case_root="$(prepare_case "empty-value-after-$previous" "$cmdline conary.verity=")"
+    if run_generator "$case_root" 0; then
+        fail "empty conary.verity value was accepted after $previous"
+    fi
+    [[ ! -s "$case_root/mount.log" ]] ||
+        fail "empty conary.verity value reached the mount boundary"
+    grep -q "invalid conary.verity value ''" "$case_root/stderr" ||
+        fail "empty conary.verity value did not report its grammar"
+done
+
+case_root="$(prepare_case corrected-empty-value \
+    'quiet conary.generation=1 conary.verity= conary.verity=on')"
+run_generator "$case_root" 0 || fail "last valid verity argument did not override empty value"
+grep -q 'verity_check=1' "$case_root/mount.log" ||
+    fail "corrected empty verity value did not require fs-verity"
 
 echo "conary generator verity policy tests passed"

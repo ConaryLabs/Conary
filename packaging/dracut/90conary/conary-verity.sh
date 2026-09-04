@@ -4,7 +4,8 @@
 
 conary_read_verity() {
     conary_verity_cmdline_file="$1"
-    conary_verity_result=on
+    conary_verity_present=0
+    conary_verity_result=""
 
     if [ -r "$conary_verity_cmdline_file" ]; then
         # Kernel command-line arguments are whitespace-delimited. Repeated
@@ -13,12 +14,18 @@ conary_read_verity() {
         for conary_verity_opt in $(cat "$conary_verity_cmdline_file"); do
             case "$conary_verity_opt" in
                 conary.verity=*)
+                    conary_verity_present=1
                     conary_verity_result="${conary_verity_opt#conary.verity=}"
                     ;;
             esac
         done
     fi
 
+    # Only absence selects the default. A present empty value must reach the
+    # invalid-value branch in conary_composefs_options.
+    if [ "$conary_verity_present" -eq 0 ]; then
+        conary_verity_result=on
+    fi
     printf '%s\n' "$conary_verity_result"
 }
 

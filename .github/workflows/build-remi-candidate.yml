@@ -32,6 +32,12 @@ jobs:
       RUSTFLAGS: ""
       RUSTC_WRAPPER: sccache
     steps:
+      - name: Check out exact merged candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'push' && github.sha || inputs.commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Check out workflow authority for local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -40,13 +46,6 @@ jobs:
           sparse-checkout: .github/actions
           fetch-depth: 1
           persist-credentials: false
-      - name: Check out exact merged candidate
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.event_name == 'push' && github.sha || inputs.commit_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          clean: false
       - name: Bind exact protected-main source
         id: candidate
         env:

@@ -229,6 +229,49 @@ fn bootstrap_initramfs_verity_uses_last_kernel_argument() {
     }
 }
 
+#[test]
+fn bootstrap_initramfs_verity_distinguishes_absent_and_empty_arguments() {
+    let dir = tempfile::tempdir().unwrap();
+    let cmdline = dir.path().join("cmdline");
+    let shared_policy = include_str!("../../../../../packaging/dracut/90conary/conary-verity.sh");
+    let shell = format!(
+        "{shared_policy}\nCONARY_VERITY=\"$(conary_read_verity \"$1\")\"\n\
+         conary_composefs_options \"$CONARY_VERITY\" /conary/objects\n"
+    );
+
+    for (contents, valid) in [
+        ("quiet\n", true),
+        ("conary.verity=\n", false),
+        ("conary.verity=on conary.verity=\n", false),
+        ("conary.verity=off conary.verity=\n", false),
+        ("conary.verity= conary.verity=on\n", true),
+    ] {
+        std::fs::write(&cmdline, contents).unwrap();
+        let output = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&shell)
+            .arg("conary-verity-test")
+            .arg(&cmdline)
+            .output()
+            .unwrap();
+
+        assert_eq!(output.status.success(), valid, "cmdline: {contents}");
+        if valid {
+            assert_eq!(output.stdout, b"basedir=/conary/objects,verity_check=1\n");
+        } else {
+            assert!(
+                output.stdout.is_empty(),
+                "invalid policy emitted mount options"
+            );
+            assert!(
+                String::from_utf8(output.stderr)
+                    .unwrap()
+                    .contains("invalid conary.verity value ''")
+            );
+        }
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn test_configure_system_bridges_lib64_to_usr_lib_for_exported_generations() {

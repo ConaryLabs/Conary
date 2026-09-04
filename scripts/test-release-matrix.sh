@@ -3864,7 +3864,7 @@ test_check_release_matrix_rejects_release_tag_local_ssh_action() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "load the local SSH action from the workflow revision before checking out the release tag"
+        "load the local SSH action from the workflow revision after checking out the release tag"
 }
 
 test_check_release_matrix_rejects_historical_local_action_authority() {
@@ -3886,6 +3886,61 @@ test_check_release_matrix_rejects_historical_local_action_authority() {
         assert_check_release_matrix_fails \
             "$repo" \
             "historical checkout local-action authority"
+    done
+}
+
+test_check_release_matrix_rejects_reversed_authority_checkout_order() {
+    local target relative job mutation repo expected
+    for target in \
+        build-remi-candidate.yml:build-remi-candidate \
+        deploy-remi-candidate.yml:deploy-remi-candidate \
+        release-artifact-proof.yml:native-package-lifecycle \
+        remi-r2-durability.yml:inventory \
+        deploy-and-verify.yml:deploy-conary \
+        deploy-and-verify.yml:deploy-remi; do
+        relative="${target%%:*}"
+        job="${target#*:}"
+        for mutation in authority-first authority-after-action; do
+            repo="$(create_release_policy_fixture)"
+            python3 - "$repo/.github/workflows/$relative" "$job" "$mutation" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+job_start = text.index(f"  {sys.argv[2]}:\n")
+steps_start = text.index("    steps:\n", job_start) + len("    steps:\n")
+root_end = text.index("      - ", steps_start + len("      - "))
+authority_end = text.index("      - ", root_end + len("      - "))
+root = text[steps_start:root_end]
+authority = text[root_end:authority_end]
+assert "path: workflow-authority" in authority
+assert "path: workflow-authority" not in root
+if sys.argv[3] == "authority-first":
+    # Reproduce the broken fresh-runner sequence, including its ineffective
+    # clean:false workaround. Preserve formatting for unrelated policy checks.
+    text = text[:steps_start] + authority + root.rstrip() + "\n          clean: false\n" + text[authority_end:]
+else:
+    action_start = text.index("uses: ./workflow-authority/", authority_end)
+    action_end = text.index("      - ", action_start)
+    text = text[:root_end] + text[authority_end:action_end] + authority + text[action_end:]
+path.write_text(text)
+PY
+            expected="historical checkout local-action authority"
+            if [[ "$mutation" == authority-after-action ]]; then
+                case "$job" in
+                    deploy-conary)
+                        expected="check out the exact workflow repository before using the local SSH action"
+                        ;;
+                    deploy-remi)
+                        expected="load the local SSH action from the workflow revision after checking out the release tag"
+                        ;;
+                esac
+            fi
+            assert_check_release_matrix_fails \
+                "$repo" \
+                "$expected"
+        done
     done
 }
 
@@ -4151,6 +4206,7 @@ main() {
         test_check_release_matrix_rejects_missing_local_action_checkout
         test_check_release_matrix_rejects_release_tag_local_ssh_action
         test_check_release_matrix_rejects_historical_local_action_authority
+        test_check_release_matrix_rejects_reversed_authority_checkout_order
         test_check_release_matrix_rejects_single_static_site_deploy
     )
 

@@ -156,27 +156,28 @@ for path in sorted(Path(".github/workflows").glob("*.yml")):
     document = yaml.safe_load(path.read_text())
     for job_name, job in (document.get("jobs") or {}).items():
         steps = job.get("steps") or []
-        for checkout_index, step in enumerate(steps):
-            uses = str(step.get("uses", ""))
-            checkout = step.get("with") or {}
-            ref = str(checkout.get("ref", "")).strip()
-            if not uses.startswith("actions/checkout@") or not ref:
-                continue
-            if ref == "${{ github.workflow_sha }}":
-                continue
+        root_checkouts = [
+            index for index, step in enumerate(steps)
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+            and (step.get("with") or {}).get("path", ".") in ("", ".")
+        ]
+        historical_roots = [
+            index for index in root_checkouts
+            if str((steps[index].get("with") or {}).get("ref", "")).strip()
+            not in ("", "${{ github.workflow_sha }}")
+        ]
+        if not historical_roots:
+            continue
 
-            later_local_actions = [
-                candidate
-                for candidate in steps[checkout_index + 1 :]
-                if str(candidate.get("uses", "")).startswith("./")
-                and ".github/actions/" in str(candidate.get("uses", ""))
-            ]
-            if not later_local_actions:
+        for action_index, step in enumerate(steps):
+            local_uses = str(step.get("uses", ""))
+            if not local_uses.startswith("./"):
                 continue
-
+            preceding_roots = [index for index in root_checkouts if index < action_index]
+            root_index = max(preceding_roots, default=-1)
             authority_checkouts = [
                 candidate
-                for candidate in steps[:checkout_index]
+                for candidate in steps[root_index + 1 : action_index]
                 if str(candidate.get("uses", "")).startswith("actions/checkout@")
                 and str((candidate.get("with") or {}).get("ref", "")).strip()
                 == "${{ github.workflow_sha }}"
@@ -184,24 +185,17 @@ for path in sorted(Path(".github/workflows").glob("*.yml")):
                 and (candidate.get("with") or {}).get("sparse-checkout") == ".github/actions"
                 and (candidate.get("with") or {}).get("persist-credentials") is False
             ]
-            if not authority_checkouts:
+            if not any(index < action_index for index in historical_roots) or not authority_checkouts:
                 errors.append(
-                    f"{path}:{job_name}: historical checkout must be preceded by a "
-                    "credential-free, action-only github.workflow_sha checkout at "
-                    "workflow-authority"
+                    f"{path}:{job_name}: local action requires a historical root checkout, "
+                    "then a credential-free, action-only github.workflow_sha checkout at "
+                    "workflow-authority after the latest root checkout and before the action"
                 )
-            if checkout.get("clean") is not False:
+            if not local_uses.startswith("./workflow-authority/.github/actions/"):
                 errors.append(
-                    f"{path}:{job_name}: historical checkout must preserve workflow-authority "
-                    "with clean: false"
+                    f"{path}:{job_name}: local action after a historical checkout must "
+                    "resolve from workflow-authority"
                 )
-            for local_action in later_local_actions:
-                local_uses = str(local_action.get("uses", ""))
-                if not local_uses.startswith("./workflow-authority/.github/actions/"):
-                    errors.append(
-                        f"{path}:{job_name}: local action after a historical checkout must "
-                        "resolve from workflow-authority"
-                    )
 
 if errors:
     raise SystemExit("\n".join(errors))
@@ -562,7 +556,7 @@ require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.b
 require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\{?SOURCE_RUN\}?" --jq '\''\.head_branch'\''' 'source-run head-branch lookup for release fallback'
 require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
 require_job_match "$deploy_workflow" deploy-conary 'name: Check out workflow repository for local actions[\s\S]*uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*persist-credentials: false[\s\S]*name: Download source artifacts[\s\S]*name: Configure pinned production SSH' 'live Conary deployment must check out the exact workflow repository before using the local SSH action'
-require_job_match "$deploy_workflow" deploy-conary 'name: Verify self-update endpoint[\s\S]*name: Check out exact release tag for static sites[\s\S]*ref: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary static-site checkout must use the serialized release tag after endpoint verification'
+require_job_match "$deploy_workflow" deploy-conary 'name: Check out exact release tag for static sites[\s\S]*ref: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}[\s\S]*name: Verify self-update endpoint[\s\S]*name: Verify exact release tag checkout' 'live Conary static-site checkout must use the serialized release tag and verify it before site deployment'
 require_job_match "$deploy_workflow" deploy-conary 'name: Check out exact release tag for static sites[\s\S]*persist-credentials: false[\s\S]*git tag --points-at HEAD \| grep -Fx "\$TAG_NAME"' 'live Conary static-site checkout verification'
 require_job_match "$deploy_workflow" deploy-conary 'name: Set up pinned Node\.js for static sites[\s\S]*actions/setup-node@820762786026740c76f36085b0efc47a31fe5020[\s\S]*node-version: '\''24'\''' 'live Conary static-site pinned Node setup'
 require_job_match "$deploy_workflow" deploy-conary 'name: Install locked static-site dependencies[\s\S]*npm ci --prefix site[\s\S]*npm ci --prefix web' 'live Conary locked static-site dependency installation'
@@ -571,7 +565,7 @@ require_job_match "$deploy_workflow" deploy-conary 'name: Deploy both static sit
 require_job_match "$deploy_workflow" deploy-conary 'needs: \[resolve, validate-routing, deploy-remi\][\s\S]*needs\.deploy-remi\.result == '\''success'\''' 'Conary deployment must follow successful Remi deployment for one suite'
 require_job_match "$deploy_workflow" deploy-conary 'sha256sum -c SHA256SUMS[\s\S]*conary_deploy_dir[\s\S]*conary-\$\{VERSION\}\.ccs[\s\S]*sha256sum -- \* > SHA256SUMS' 'Conary deployment must verify the suite and stage only its product assets'
 require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[resolve, deploy-conary\][\s\S]*needs\.deploy-conary\.result == '\''success'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary deployment must hand the serialized tag to published-artifact proof'
-require_job_match "$deploy_workflow" deploy-remi 'name: Check out deploy-remi workflow repository for local actions[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*name: Configure pinned production SSH[\s\S]*uses: \./\.github/actions/setup-pinned-production-ssh[\s\S]*name: Check out exact release tag[\s\S]*ref: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Remi deployment must load the local SSH action from the workflow revision before checking out the release tag'
+require_job_match "$deploy_workflow" deploy-remi 'name: Check out deploy-remi workflow repository for local actions[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*name: Configure pinned production SSH[\s\S]*uses: \./workflow-authority/\.github/actions/setup-pinned-production-ssh' 'live Remi deployment must load the local SSH action from the workflow revision after checking out the release tag'
 require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]*name: Verify remi health[\s\S]*curl -fsS https://remi\.conary\.io/health >/dev/null[\s\S]*name: Verify remi readiness[\s\S]*body=\$\(curl -fsS --max-time 30 https://remi\.conary\.io/health/ready\)[\s\S]*jq -e '\''\.ready == true'\''' 'exact post-deploy Remi liveness and structured readiness proof'
 require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
 require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingress[\s\S]*inspect-remi[\s\S]*--require-repopulated[\s\S]*verify-ingress' 'suite Remi deploy verifies static ingress after mutation and completion'
