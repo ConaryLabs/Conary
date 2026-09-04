@@ -1,4 +1,4 @@
-// conary/tests/features/state_snapshots.rs
+// apps/conary/tests/features/state_snapshots.rs
 
 use super::*;
 

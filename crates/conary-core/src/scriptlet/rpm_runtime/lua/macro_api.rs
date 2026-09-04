@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/macro_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/macro_api.rs
 //! RPM macro-context bindings for bundled Lua execution.
 
 use super::lua_error;

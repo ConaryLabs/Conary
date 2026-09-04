@@ -1,4 +1,4 @@
-// conary-core/src/model/replatform/snapshot_tests.rs
+// crates/conary-core/src/model/replatform/snapshot_tests.rs
 
 use super::*;
 

@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/guest_profile.rs
+// crates/conary-core/src/bootstrap/guest_profile.rs
 
 use std::fs;
 use std::path::{Path, PathBuf};

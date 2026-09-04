@@ -1,4 +1,4 @@
-// conary-core/src/ccs/target_contract.rs
+// crates/conary-core/src/ccs/target_contract.rs
 //! Static CCS compatibility contracts for supported installation targets.
 //!
 //! These declarations describe product support and converter/runtime schema

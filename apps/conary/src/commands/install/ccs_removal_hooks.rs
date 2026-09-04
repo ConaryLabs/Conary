@@ -1,4 +1,4 @@
-// conary/src/commands/install/ccs_removal_hooks.rs
+// apps/conary/src/commands/install/ccs_removal_hooks.rs
 
 //! Exact CCS pre-remove authority for install-driven package removals.
 

@@ -1,4 +1,4 @@
-// conary-core/src/corpus/aggregate.rs
+// crates/conary-core/src/corpus/aggregate.rs
 
 //! Aggregation of corpus case results.
 //!

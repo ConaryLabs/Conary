@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/arch/keyring.rs
+// crates/conary-core/src/repository/trust/openpgp/arch/keyring.rs
 
 //! Exact grammar of a pacman keyring source.
 //!

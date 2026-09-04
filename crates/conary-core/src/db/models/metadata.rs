@@ -1,4 +1,4 @@
-// conary-core/src/db/models/metadata.rs
+// crates/conary-core/src/db/models/metadata.rs
 
 use rusqlite::{Connection, OptionalExtension};
 

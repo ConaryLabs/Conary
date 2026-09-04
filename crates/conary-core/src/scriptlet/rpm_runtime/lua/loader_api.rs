@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/loader_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/loader_api.rs
 //! Pure-Lua module loading confined to the RPM install target.
 
 use super::context::LuaRuntimeContext;

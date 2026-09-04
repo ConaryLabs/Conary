@@ -1,4 +1,4 @@
-// conary-test/src/config/corpus.rs
+// apps/conary-test/src/config/corpus.rs
 
 //! Persisted declarations for attributable just-works corpus cases.
 

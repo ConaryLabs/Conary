@@ -1,4 +1,4 @@
-// conary-core/src/repository/universe/mod.rs
+// crates/conary-core/src/repository/universe/mod.rs
 
 //! Signed immutable Remi universe wire and activation contracts.
 

@@ -1,4 +1,4 @@
-// src/commands/ccs/signing.rs
+// apps/conary/src/commands/ccs/signing.rs
 
 //! CCS package signing
 //!

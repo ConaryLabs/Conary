@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_transaction_staging.rs
+// crates/conary-core/src/db/models/package_transaction_staging.rs
 
 //! Transaction-local package row staging and set-based reconciliation.
 

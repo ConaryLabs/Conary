@@ -1,4 +1,4 @@
-// conary-core/src/repository/versioning/rpm_dependency.rs
+// crates/conary-core/src/repository/versioning/rpm_dependency.rs
 
 //! RPM dependency EVR grammar and `rpmdsCompare` component ordering.
 

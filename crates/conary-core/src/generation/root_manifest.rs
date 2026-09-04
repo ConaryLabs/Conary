@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest.rs
+// crates/conary-core/src/generation/root_manifest.rs
 
 //! Authoritative selected-root capture for generation and mutable-state publication.
 

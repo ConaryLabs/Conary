@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/eopkg.rs
+// crates/conary-core/src/ccs/native_transaction/tests/eopkg.rs
 
 use super::*;
 

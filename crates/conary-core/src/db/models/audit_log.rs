@@ -1,4 +1,4 @@
-// conary-core/src/db/models/audit_log.rs
+// crates/conary-core/src/db/models/audit_log.rs
 
 //! Admin audit log model - tracks admin API operations
 

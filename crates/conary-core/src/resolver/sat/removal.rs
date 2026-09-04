@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/removal.rs
+// crates/conary-core/src/resolver/sat/removal.rs
 
 use rusqlite::Connection;
 use std::collections::HashSet;

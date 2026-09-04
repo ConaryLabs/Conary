@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/tests.rs
+// crates/conary-core/src/recipe/kitchen/tests.rs
 
 use super::*;
 use crate::hash;

@@ -1,4 +1,4 @@
-// conary-test/src/suite_inventory.rs
+// apps/conary-test/src/suite_inventory.rs
 //! Suite manifest inventory for local conary-test agent resources.
 
 use std::{

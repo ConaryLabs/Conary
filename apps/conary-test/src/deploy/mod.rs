@@ -1,3 +1,3 @@
-// conary-test/src/deploy/mod.rs
+// apps/conary-test/src/deploy/mod.rs
 
 pub mod status;

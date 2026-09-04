@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/activation_capture.rs
+// crates/conary-core/src/scriptlet/activation_capture.rs
 
 //! Exact observation of runtime-manager argv inside the selected-root boundary.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/transaction/package_relations.rs
+// crates/conary-core/src/transaction/package_relations.rs
 
 //! Installed-state planning for typed conflict and replacement relations.
 

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/installed_file_capability.rs
+// crates/conary-core/src/db/models/installed_file_capability.rs
 
 //! Installed CCS file capability authority persisted for generation inputs.
 

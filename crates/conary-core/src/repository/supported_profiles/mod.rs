@@ -1,4 +1,4 @@
-// conary-core/src/repository/supported_profiles/mod.rs
+// crates/conary-core/src/repository/supported_profiles/mod.rs
 
 mod types;
 

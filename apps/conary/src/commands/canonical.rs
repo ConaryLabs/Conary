@@ -1,4 +1,4 @@
-// src/commands/canonical.rs
+// apps/conary/src/commands/canonical.rs
 //! Canonical package identity command implementations
 
 use super::open_db;

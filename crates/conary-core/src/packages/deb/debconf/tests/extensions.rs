@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/tests/extensions.rs
+// crates/conary-core/src/packages/deb/debconf/tests/extensions.rs
 
 use super::super::*;
 use super::support::*;

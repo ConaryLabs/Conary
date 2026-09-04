@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/tests.rs
+// crates/conary-core/src/packages/deb/debconf/tests.rs
 
 mod extensions;
 mod protocol;

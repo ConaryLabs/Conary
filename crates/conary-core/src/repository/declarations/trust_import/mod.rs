@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/trust_import/mod.rs
+// crates/conary-core/src/repository/declarations/trust_import/mod.rs
 
 //! Fail-closed trust-import planning for native repository declarations.
 //!

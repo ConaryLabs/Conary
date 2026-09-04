@@ -1,4 +1,4 @@
-// conary-test/src/paths.rs
+// apps/conary-test/src/paths.rs
 
 use anyhow::{Context, Result};
 use std::{

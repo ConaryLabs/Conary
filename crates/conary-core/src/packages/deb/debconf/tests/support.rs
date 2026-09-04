@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/tests/support.rs
+// crates/conary-core/src/packages/deb/debconf/tests/support.rs
 
 use super::super::*;
 use crate::packages::native_abi::{DebconfTemplateField, DebconfTemplateRecord};

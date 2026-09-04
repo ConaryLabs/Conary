@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository/source.rs
+// crates/conary-core/src/db/models/repository/source.rs
 
 //! Repository source identity, policy, trust, validation, and persistence.
 

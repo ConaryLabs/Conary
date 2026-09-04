@@ -1,4 +1,4 @@
-// src/cli/system.rs
+// apps/conary/src/cli/system.rs
 //! System-level commands: init, completions, gc, state, triggers, redirects, etc.
 
 use clap::Subcommand;

@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/native_lifecycle/contracts.rs
+// crates/conary-core/src/scriptlet/native_lifecycle/contracts.rs
 
 //! Executor-facing native lifecycle invocation contracts.
 

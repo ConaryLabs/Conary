@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/eopkg.rs
+// crates/conary-core/src/repository/declarations/eopkg.rs
 
 //! Lossless eopkg repository-order declaration grammar.
 

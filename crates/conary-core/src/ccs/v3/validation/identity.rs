@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation/identity.rs
+// crates/conary-core/src/ccs/v3/validation/identity.rs
 
 use super::super::diagnostics::{V3Diagnostic, V3DiagnosticCode};
 use super::super::schema::{AuthorityDocumentV3, DependencyKindV3};

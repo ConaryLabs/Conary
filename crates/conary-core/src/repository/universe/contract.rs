@@ -1,4 +1,4 @@
-// conary-core/src/repository/universe/contract.rs
+// crates/conary-core/src/repository/universe/contract.rs
 
 //! Strict content-addressed wire contract for one complete Remi universe.
 

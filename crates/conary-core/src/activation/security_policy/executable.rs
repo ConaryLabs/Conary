@@ -1,4 +1,4 @@
-// conary-core/src/activation/security_policy/executable.rs
+// crates/conary-core/src/activation/security_policy/executable.rs
 
 //! Exact executable identity captured from the selected root.
 

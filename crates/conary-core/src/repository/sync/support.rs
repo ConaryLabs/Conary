@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/support.rs
+// crates/conary-core/src/repository/sync/support.rs
 
 use crate::error::{Error, Result};
 use rusqlite::{Connection, params};

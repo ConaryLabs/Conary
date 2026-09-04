@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/tests.rs
+// crates/conary-core/src/packages/deb/tests.rs
 
 use super::*;
 use crate::packages::traits::{

@@ -1,4 +1,4 @@
-// conary-core/src/repository/static_repo/publish/tests.rs
+// crates/conary-core/src/repository/static_repo/publish/tests.rs
 
 use super::{
     ForcedRefreshForTest, StaticPublishOptions, prepare_static_key_dir, publish_static_repo,

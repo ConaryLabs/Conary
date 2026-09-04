@@ -1,4 +1,4 @@
-// conary-core/src/db/models/converted.rs
+// crates/conary-core/src/db/models/converted.rs
 
 //! Converted package tracking model
 //!

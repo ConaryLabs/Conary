@@ -1,4 +1,4 @@
-// conary-core/benches/installed_inventory.rs
+// crates/conary-core/benches/installed_inventory.rs
 
 use conary_core::packages::{
     InstalledFileAbsencePolicy, InstalledFileInfo, InstalledInventoryFile,

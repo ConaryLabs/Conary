@@ -1,4 +1,4 @@
-// conary-core/src/repository/enrollment/transaction.rs
+// crates/conary-core/src/repository/enrollment/transaction.rs
 
 //! SQLite planning and application for package-owned repository authority.
 

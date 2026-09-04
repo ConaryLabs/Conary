@@ -1,4 +1,4 @@
-// conary-core/src/corpus/coverage.rs
+// crates/conary-core/src/corpus/coverage.rs
 
 //! Typed semantic coverage for the just-works corpus gate.
 

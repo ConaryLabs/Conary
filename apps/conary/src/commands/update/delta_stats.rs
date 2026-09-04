@@ -1,4 +1,4 @@
-// src/commands/update/delta_stats.rs
+// apps/conary/src/commands/update/delta_stats.rs
 
 //! Delta update statistics command handler.
 

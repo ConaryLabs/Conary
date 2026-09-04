@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch.rs
+// crates/conary-core/src/packages/arch.rs
 
 //! Arch Linux package format parser
 //!

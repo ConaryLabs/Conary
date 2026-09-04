@@ -1,4 +1,4 @@
-// src/commands/install/execute.rs
+// apps/conary/src/commands/install/execute.rs
 //! Transaction execution helpers - CAS storage and file tracking
 //!
 //! In the composefs-native model, files are stored in CAS and tracked in the DB.

@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/durability.rs
+// crates/conary-core/src/filesystem/cas/durability.rs
 
 //! Filesystem-wide durability barriers shared by transaction-owned CAS batches.
 

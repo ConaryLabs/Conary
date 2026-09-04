@@ -1,4 +1,4 @@
-// src/cli/registry.rs
+// apps/conary/src/cli/registry.rs
 //! Registry management commands
 
 use super::DbArgs;

@@ -1,4 +1,4 @@
-// src/commands/ccs/build.rs
+// apps/conary/src/commands/ccs/build.rs
 
 //! CCS package building
 //!

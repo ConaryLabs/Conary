@@ -1,4 +1,4 @@
-// src/commands/profile.rs
+// apps/conary/src/commands/profile.rs
 
 //! Build profile command handlers
 

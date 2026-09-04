@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle.rs
 //! Exact lifecycle-bundle construction for native package conversion.
 
 mod builder;

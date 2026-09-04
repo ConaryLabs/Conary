@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository/source/persistence.rs
+// crates/conary-core/src/db/models/repository/source/persistence.rs
 
 //! Persisted repository-row decoding and typed source-policy reconstruction.
 

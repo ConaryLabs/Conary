@@ -1,4 +1,4 @@
-// conary-test/src/report/json.rs
+// apps/conary-test/src/report/json.rs
 
 use crate::engine::suite::TestSuite;
 use anyhow::Result;

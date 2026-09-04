@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/triggers.rs
+// crates/conary-core/src/packages/deb/triggers.rs
 
 //! Strict parser for the current `deb-triggers(5)` control-file grammar.
 

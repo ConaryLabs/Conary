@@ -1,4 +1,4 @@
-// conary-test/src/engine/qemu.rs
+// apps/conary-test/src/engine/qemu.rs
 
 use std::ffi::OsStr;
 use std::fs;

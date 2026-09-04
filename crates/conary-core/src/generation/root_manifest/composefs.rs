@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/composefs.rs
+// crates/conary-core/src/generation/root_manifest/composefs.rs
 
 //! Composefs/EROFS serialization from the exact typed generation-root tree.
 

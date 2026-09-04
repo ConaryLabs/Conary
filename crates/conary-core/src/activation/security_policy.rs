@@ -1,4 +1,4 @@
-// conary-core/src/activation/security_policy.rs
+// crates/conary-core/src/activation/security_policy.rs
 
 //! Exact SELinux and AppArmor policy operations split at the live-kernel edge.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/tests.rs
+// crates/conary-core/src/repository/sync/tests.rs
 
 mod tests {
     use super::*;

@@ -1,4 +1,4 @@
-// src/cli/model.rs
+// apps/conary/src/cli/model.rs
 //! System model management commands
 
 use super::{CommonArgs, DbArgs};

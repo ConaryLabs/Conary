@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/vfs/mod.rs
+// crates/conary-core/src/filesystem/vfs/mod.rs
 
 //! Virtual File System tree with arena allocation and O(1) path lookup
 //!

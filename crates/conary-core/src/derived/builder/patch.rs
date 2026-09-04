@@ -1,4 +1,4 @@
-// conary-core/src/derived/builder/patch.rs
+// crates/conary-core/src/derived/builder/patch.rs
 
 //! Typed unified-diff application for derived package payloads.
 

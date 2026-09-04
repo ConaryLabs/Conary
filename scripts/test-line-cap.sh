@@ -1,0 +1,304 @@
+#!/usr/bin/env bash
+# scripts/test-line-cap.sh
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+checker="$repo_root/scripts/check-line-cap.sh"
+[[ -x "$checker" ]] || {
+    echo "ERROR: scripts/check-line-cap.sh is not executable" >&2
+    exit 1
+}
+
+fixture_root="$(mktemp -d)"
+trap 'rm -rf "$fixture_root"' EXIT
+mkdir -p "$fixture_root/crates/fixture/src/tests"
+allowlist="$fixture_root/allowlist.txt"
+: > "$allowlist"
+
+write_lines() {
+    local path="$1"
+    local count="$2"
+    echo "// ${path#"$fixture_root"/}" > "$path"
+    awk -v count="$((count - 1))" 'BEGIN { for (i = 1; i <= count; i++) print "// fixture line " i }' >> "$path"
+}
+
+write_fixture() {
+    local path="$1"
+    { echo "// ${path#"$fixture_root"/}"; cat; } > "$path"
+}
+
+write_lines "$fixture_root/crates/fixture/src/at_cap.rs" 1000
+write_lines "$fixture_root/crates/fixture/src/inline_tests.rs" 900
+{
+cat <<'EOF'
+#[cfg(test)]
+mod tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 150; i++) print "    // test line " i }'
+echo '}'
+} >> "$fixture_root/crates/fixture/src/inline_tests.rs"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod tests_at_cap {
+EOF
+awk 'BEGIN { for (i = 1; i <= 297; i++) print "    // test line " i }'
+echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/inline_tests_at_cap.rs"
+write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
+write_lines "$fixture_root/crates/fixture/src/tests/helper.rs" 1200
+write_fixture "$fixture_root/crates/fixture/src/block_comment_attribute.rs" <<'EOF'
+#[cfg(test)]
+/* the typed item span crosses this block comment
+   without guessing where the module starts */
+mod tests {
+    const VALUE: usize = 1;
+}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/doc_comment_attribute.rs" <<'EOF'
+#[cfg(test)]
+/// A test-only helper.
+fn helper() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/all_test_predicate.rs" <<'EOF'
+#[cfg(all(test, feature = "fixture"))]
+const FIXTURE: &str = "fixture";
+EOF
+write_fixture "$fixture_root/crates/fixture/src/not_test_predicate.rs" <<'EOF'
+#[cfg(not(test))]
+fn production_when_not_testing() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/any_test_predicate.rs" <<'EOF'
+#[cfg(any(test, feature = "fixture"))]
+fn production_with_feature() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/standalone_tests.rs" <<'EOF'
+#[test]
+fn standalone() {}
+#[tokio::test]
+async fn asynchronous() {}
+#[cfg_attr(test, test)]
+fn conditional() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/inner_cfg_test.rs" <<'EOF'
+#![cfg(test)]
+fn helper() {}
+fn other() {}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/enclosing_cfg.rs" <<'EOF'
+#[cfg(any(test, feature = "prod"))]
+mod mixed {
+    #[cfg(not(feature = "prod"))]
+    fn test_only_child() {}
+    fn production_child() {}
+}
+EOF
+write_fixture "$fixture_root/crates/fixture/src/cfg_attr_gating.rs" <<'EOF'
+#[cfg_attr(all(), cfg(test))]
+fn unconditional_test() {}
+#[cfg_attr(all(), cfg_attr(feature = "x", cfg(test)))]
+fn conditional_production() {}
+EOF
+cat <<'EOF' > "$fixture_root/crates/fixture/src/correct_path_header.rs"
+// crates/fixture/src/correct_path_header.rs
+fn production() {}
+EOF
+
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+report="$("$checker" --root "$fixture_root" --allowlist "$allowlist" --report)"
+grep -q $'block_comment_attribute.rs\ttotal=7\tproduction=1\tinline_test=6' <<<"$report"
+grep -q $'doc_comment_attribute.rs\ttotal=4\tproduction=1\tinline_test=3' <<<"$report"
+grep -q $'all_test_predicate.rs\ttotal=3\tproduction=1\tinline_test=2' <<<"$report"
+grep -q $'not_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$report"
+grep -q $'any_test_predicate.rs\ttotal=3\tproduction=3\tinline_test=0' <<<"$report"
+grep -q $'standalone_tests.rs\ttotal=7\tproduction=3\tinline_test=4' <<<"$report"
+grep -q $'inner_cfg_test.rs\ttotal=4\tproduction=0\tinline_test=4' <<<"$report"
+grep -q $'enclosing_cfg.rs\ttotal=7\tproduction=5\tinline_test=2' <<<"$report"
+grep -q $'cfg_attr_gating.rs\ttotal=5\tproduction=3\tinline_test=2' <<<"$report"
+
+for header_kind in missing legacy; do
+    header_path="$fixture_root/crates/fixture/src/invalid_header.rs"
+    if [[ "$header_kind" == legacy ]]; then
+        echo '// fixture/src/invalid_header.rs' > "$header_path"
+    else
+        : > "$header_path"
+    fi
+    echo 'fn production() {}' >> "$header_path"
+    if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/invalid-header.out" 2>&1; then
+        echo "ERROR: $header_kind path header unexpectedly passed" >&2
+        exit 1
+    fi
+    grep -Fq "expected \`// crates/fixture/src/invalid_header.rs\`" "$fixture_root/invalid-header.out"
+    rm "$header_path"
+done
+
+cat <<'EOF' > "$fixture_root/crates/fixture/src/wrong_path_header.rs"
+// crates/wrong/src/wrong_path_header.rs
+fn production() {}
+EOF
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/path-header.out" 2>&1; then
+    echo "ERROR: mismatched Rust path header unexpectedly passed" >&2
+    exit 1
+fi
+grep -Fq "expected \`// crates/fixture/src/wrong_path_header.rs\`" "$fixture_root/path-header.out"
+rm "$fixture_root/crates/fixture/src/wrong_path_header.rs"
+
+{
+awk 'BEGIN { for (i = 1; i <= 399; i++) print "// fixture line " i }'
+cat <<'EOF'
+#[cfg(test)]
+mod middle_tests {
+    const OPEN_BRACE: &str = "{";
+    // }
+}
+EOF
+awk 'BEGIN { for (i = 1; i <= 300; i++) print "// middle production line " i }'
+cat <<'EOF'
+#[cfg(test)] mod later_tests {
+    const CLOSE_BRACE: &str = r#"}"#;
+}
+EOF
+awk 'BEGIN { for (i = 1; i <= 301; i++) print "// trailing production line " i }'
+} | write_fixture "$fixture_root/crates/fixture/src/production_after_inline.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/after-inline.out" 2>&1; then
+    echo "ERROR: production after an inline test module was not counted" >&2
+    exit 1
+fi
+grep -q 'production_after_inline.rs has 1001 non-test lines' "$fixture_root/after-inline.out"
+rm "$fixture_root/crates/fixture/src/production_after_inline.rs"
+
+write_lines "$fixture_root/crates/fixture/src/over_cap.rs" 1001
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/over.out" 2>&1; then
+    echo "ERROR: unallowlisted over-cap fixture unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'over_cap.rs has 1001 non-test lines' "$fixture_root/over.out"
+
+echo 'crates/fixture/src/over_cap.rs #0' > "$allowlist"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/nonpositive-issue.out" 2>&1; then
+    echo "ERROR: non-positive allowlist issue unexpectedly passed" >&2
+    exit 1
+fi
+grep -q "invalid allowlist entry" "$fixture_root/nonpositive-issue.out"
+
+echo 'crates/fixture/src/over_cap.rs #123' > "$allowlist"
+allowlisted_out="$("$checker" --root "$fixture_root" --allowlist "$allowlist")"
+grep -q 'ALLOWLISTED: crates/fixture/src/over_cap.rs .* issue=#123' <<<"$allowlisted_out"
+
+rm "$fixture_root/crates/fixture/src/over_cap.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/stale.out" 2>&1; then
+    echo "ERROR: stale allowlist fixture unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'stale line-cap allowlist entry' "$fixture_root/stale.out"
+
+: > "$allowlist"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod oversized_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 298; i++) print "    // test line " i }'
+echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/inline-size.out" 2>&1; then
+    echo "ERROR: oversized inline test module unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'oversized_inline_tests.rs has 301 inline test lines' "$fixture_root/inline-size.out"
+
+echo 'crates/fixture/src/oversized_inline_tests.rs #123' > "$allowlist"
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+rm "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
+
+: > "$allowlist"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod first_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 148; i++) print "    // first test line " i }'
+echo '}'
+cat <<'EOF'
+#[cfg(test)]
+mod second_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 148; i++) print "    // second test line " i }'
+echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/multiple-inline.out" 2>&1; then
+    echo "ERROR: multiple inline test regions were not summed" >&2
+    exit 1
+fi
+grep -q 'multiple_inline_tests.rs has 302 inline test lines' "$fixture_root/multiple-inline.out"
+rm "$fixture_root/crates/fixture/src/multiple_inline_tests.rs"
+
+{
+    echo '#[test]'
+    echo 'fn standalone() {}'
+    echo '#[cfg(test)]'
+    echo 'mod tests {'
+    awk 'BEGIN { for (i = 1; i <= 296; i++) print "    // test line " i }'
+    echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/mixed_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/mixed-inline.out" 2>&1; then
+    echo "ERROR: standalone and cfg-gated tests were not summed" >&2
+    exit 1
+fi
+grep -q 'mixed_inline_tests.rs has 301 inline test lines' "$fixture_root/mixed-inline.out"
+rm "$fixture_root/crates/fixture/src/mixed_inline_tests.rs"
+
+: > "$allowlist"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod tests;
+EOF
+awk 'BEGIN { for (i = 1; i <= 1000; i++) print "// production line " i }'
+} | write_fixture "$fixture_root/crates/fixture/src/external_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/external.out" 2>&1; then
+    echo "ERROR: external test declaration hid trailing production lines" >&2
+    exit 1
+fi
+grep -q 'external_tests.rs has 1001 non-test lines' "$fixture_root/external.out"
+
+rm "$fixture_root/crates/fixture/src/external_tests.rs"
+
+{
+    echo '#[cfg(any(test, not(unix)))]'
+    echo 'fn production_on_other_platforms() {'
+    awk 'BEGIN { for (i = 1; i <= 997; i++) print "    // production" }'
+    echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/platform_production.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/platform.out" 2>&1; then
+    echo "ERROR: negated platform predicate hid production lines" >&2
+    exit 1
+fi
+grep -q 'platform_production.rs has 1001 non-test lines' "$fixture_root/platform.out"
+rm "$fixture_root/crates/fixture/src/platform_production.rs"
+
+{
+    echo 'fn production() {'
+    echo '    #[cfg(test)]'
+    echo '    {'
+    awk 'BEGIN { for (i = 1; i <= 298; i++) print "        // test block" }'
+    echo '    }'
+    echo '}'
+} | write_fixture "$fixture_root/crates/fixture/src/test_block.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/test-block.out" 2>&1; then
+    echo "ERROR: oversized test-only block escaped the inline cap" >&2
+    exit 1
+fi
+grep -q 'test_block.rs has 301 inline test lines' "$fixture_root/test-block.out"
+rm "$fixture_root/crates/fixture/src/test_block.rs"
+
+write_fixture "$fixture_root/crates/fixture/src/malformed.rs" <<'EOF'
+fn malformed( {
+EOF
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/malformed.out" 2>&1; then
+    echo "ERROR: malformed Rust fixture unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'failed to parse crates/fixture/src/malformed.rs' "$fixture_root/malformed.out"
+
+echo "line-cap tests passed."

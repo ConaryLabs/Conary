@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle.rs
+// crates/conary-core/src/ccs/native_lifecycle.rs
 //! Preserved native package-manager lifecycle metadata for CCS packages.
 
 use crate::packages::native_abi::RpmScriptletSlot;

@@ -1,4 +1,4 @@
-// conary-core/src/packages/parse_metrics.rs
+// crates/conary-core/src/packages/parse_metrics.rs
 
 //! Exact diagnostic work counters for native package archive parsing.
 

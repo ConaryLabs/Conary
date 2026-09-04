@@ -1,4 +1,4 @@
-// conary-core/src/repository/trust/openpgp/pinned.rs
+// crates/conary-core/src/repository/trust/openpgp/pinned.rs
 
 //! Verification against an explicitly pinned certificate set.
 //!

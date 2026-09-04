@@ -1,4 +1,4 @@
-// conary-test/src/cli.rs
+// apps/conary-test/src/cli.rs
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};

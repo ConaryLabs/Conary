@@ -1,4 +1,4 @@
-// conary-core/src/capability/enforcement/landlock_enforce.rs
+// crates/conary-core/src/capability/enforcement/landlock_enforce.rs
 //! Landlock LSM filesystem and exact TCP-port enforcement
 //!
 //! Converts filesystem and network capability declarations into Landlock

@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/manifests.rs
+// apps/conary-test/src/config/tests/manifests.rs
 
 use super::*;
 

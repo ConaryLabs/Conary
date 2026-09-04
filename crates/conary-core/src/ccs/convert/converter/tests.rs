@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/converter/tests.rs
+// crates/conary-core/src/ccs/convert/converter/tests.rs
 
 use super::*;
 use crate::ccs::v3::PackageKindV3;

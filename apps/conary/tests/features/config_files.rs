@@ -1,4 +1,4 @@
-// conary/tests/features/config_files.rs
+// apps/conary/tests/features/config_files.rs
 
 use super::*;
 

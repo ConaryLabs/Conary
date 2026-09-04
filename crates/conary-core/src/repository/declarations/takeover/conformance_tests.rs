@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/conformance_tests.rs
+// crates/conary-core/src/repository/declarations/takeover/conformance_tests.rs
 
 use super::*;
 use crate::db::models::AuthenticatedSnapshotIdentity;

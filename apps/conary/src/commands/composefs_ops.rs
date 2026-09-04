@@ -1,4 +1,4 @@
-// src/commands/composefs_ops.rs
+// apps/conary/src/commands/composefs_ops.rs
 
 //! Shared composefs-native operations for CLI commands.
 //!

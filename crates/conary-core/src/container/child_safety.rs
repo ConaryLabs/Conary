@@ -1,4 +1,4 @@
-// conary-core/src/container/child_safety.rs
+// crates/conary-core/src/container/child_safety.rs
 
 //! Async-signal-safe primitives for the window between `fork()` and `exec()`.
 //!

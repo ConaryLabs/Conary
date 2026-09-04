@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/arguments.rs
+// crates/conary-core/src/scriptlet/arguments.rs
 
 use super::{ExecutionMode, PackageFormat, ScriptletExecutor};
 use crate::error::{Error, Result, ScriptletFailureKind};

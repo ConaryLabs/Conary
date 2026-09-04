@@ -8,6 +8,7 @@ members = [
     "crates/conary-agent-contract",
     "crates/conary-mcp",
     "crates/conary-core",
+    "crates/conary-xtask",
 ]
 exclude = ["third_party/resolvo-0.12.0-patched"]
 resolver = "3"
@@ -140,6 +141,9 @@ regex = "1.10"
 target-lexicon = "0.13.5"
 tree-sitter = "0.26.11"
 tree-sitter-bash = "0.25.1"
+proc-macro2 = { version = "1.0", features = ["span-locations"] }
+syn = { version = "2.0", features = ["full", "visit"] }
+quote = "1.0"
 
 [profile.release]
 lto = true

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/format_metadata.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/format_metadata.rs
 
 use crate::ccs::native_lifecycle::{
     ArchHookActionMetadata, ArchHookMetadata, ArchHookOperation as BundleArchHookOperation,

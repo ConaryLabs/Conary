@@ -1,4 +1,4 @@
-// conary-agent-contract/src/result.rs
+// crates/conary-agent-contract/src/result.rs
 //! Shared result envelope for Conary agent-facing operations.
 
 use std::collections::BTreeMap;

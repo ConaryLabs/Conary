@@ -1,4 +1,4 @@
-// src/commands/label.rs
+// apps/conary/src/commands/label.rs
 
 //! Label management CLI commands
 //!

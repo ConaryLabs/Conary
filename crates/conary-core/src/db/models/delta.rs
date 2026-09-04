@@ -1,4 +1,4 @@
-// conary-core/src/db/models/delta.rs
+// crates/conary-core/src/db/models/delta.rs
 
 //! Delta models - package deltas for efficient updates and bandwidth tracking
 

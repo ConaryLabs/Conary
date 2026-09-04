@@ -1,4 +1,4 @@
-// conary-core/src/ccs/export/mod.rs
+// crates/conary-core/src/ccs/export/mod.rs
 //! CCS package export to various image formats
 //!
 //! Supports exporting CCS packages to container images and other formats.

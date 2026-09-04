@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/test_support.rs
+// crates/conary-core/src/generation/builder/test_support.rs
 
 #[cfg(feature = "composefs-rs")]
 use std::path::Path;

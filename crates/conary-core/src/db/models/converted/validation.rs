@@ -1,4 +1,4 @@
-// conary-core/src/db/models/converted/validation.rs
+// crates/conary-core/src/db/models/converted/validation.rs
 
 use crate::ccs::convert::ScriptletBundleSummary;
 use crate::error::Result;

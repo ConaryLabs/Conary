@@ -1,4 +1,4 @@
-// conary-core/src/repository/mirror_selector.rs
+// crates/conary-core/src/repository/mirror_selector.rs
 
 //! Dynamic mirror selection based on health tracking data
 //!

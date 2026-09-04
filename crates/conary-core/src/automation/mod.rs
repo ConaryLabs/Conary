@@ -1,4 +1,4 @@
-// conary-core/src/automation/mod.rs
+// crates/conary-core/src/automation/mod.rs
 
 //! Automation system for self-healing and suggest-confirm maintenance flows.
 //!

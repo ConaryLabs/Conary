@@ -1,4 +1,4 @@
-// src/cli/derive.rs
+// apps/conary/src/cli/derive.rs
 //! Derived package management commands
 
 use super::DbArgs;

@@ -1,4 +1,4 @@
-// conary-core/src/provenance/dna.rs
+// crates/conary-core/src/provenance/dna.rs
 
 //! Package DNA - unique identifier for full provenance
 

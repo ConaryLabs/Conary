@@ -1,4 +1,4 @@
-// conary-core/src/derivation/seed_diff.rs
+// crates/conary-core/src/derivation/seed_diff.rs
 
 use std::collections::BTreeSet;
 use std::path::Path;

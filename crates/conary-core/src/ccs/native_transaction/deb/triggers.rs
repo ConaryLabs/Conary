@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/deb/triggers.rs
+// crates/conary-core/src/ccs/native_transaction/deb/triggers.rs
 
 //! Exact Debian trigger activation and pending-batch planning.
 

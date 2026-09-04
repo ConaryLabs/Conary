@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/vfs/tests.rs
+// crates/conary-core/src/filesystem/vfs/tests.rs
 
 use super::*;
 

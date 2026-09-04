@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/common.rs
+// crates/conary-core/src/repository/parsers/common.rs
 
 //! Shared parser helpers for repository metadata parsers.
 //!

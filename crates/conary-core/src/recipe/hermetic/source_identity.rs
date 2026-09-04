@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/source_identity.rs
+// crates/conary-core/src/recipe/hermetic/source_identity.rs
 
 use crate::error::{Error, Result};
 use crate::hash::{self, HashAlgorithm, Hasher};

@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/image/erofs_generation.rs
+// crates/conary-core/src/bootstrap/image/erofs_generation.rs
 
 //! Exact composefs-native bootstrap generation output.
 

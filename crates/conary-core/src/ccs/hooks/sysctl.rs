@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/sysctl.rs
+// crates/conary-core/src/ccs/hooks/sysctl.rs
 
 //! Sysctl integration for CCS hooks
 //!

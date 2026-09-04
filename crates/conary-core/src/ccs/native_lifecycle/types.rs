@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle/types.rs
+// crates/conary-core/src/ccs/native_lifecycle/types.rs
 //! Closed enums shared by native lifecycle contracts.
 
 use serde::{Deserialize, Serialize};

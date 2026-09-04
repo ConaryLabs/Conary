@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/immutable_catalog.rs
+// crates/conary-core/src/repository/sync/immutable_catalog.rs
 
 //! Native repository projection into immutable source-catalog candidates.
 

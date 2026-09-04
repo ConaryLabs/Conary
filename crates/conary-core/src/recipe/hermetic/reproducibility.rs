@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/reproducibility.rs
+// crates/conary-core/src/recipe/hermetic/reproducibility.rs
 
 use crate::recipe::hermetic::evidence::ReproducibilityRecord;
 use crate::{Error, Result};

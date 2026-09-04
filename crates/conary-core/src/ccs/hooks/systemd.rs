@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/systemd.rs
+// crates/conary-core/src/ccs/hooks/systemd.rs
 
 //! Exact systemd command adapter for CCS lifecycle hooks.
 //!

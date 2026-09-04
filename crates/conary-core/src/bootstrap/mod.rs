@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/mod.rs
+// crates/conary-core/src/bootstrap/mod.rs
 
 //! Bootstrap infrastructure for building Conary from scratch
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repository/source/policy.rs
+// crates/conary-core/src/db/models/repository/source/policy.rs
 
 //! Typed native source identity, stream, and authenticated-snapshot policy.
 

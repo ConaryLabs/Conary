@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/alternatives.rs
+// crates/conary-core/src/ccs/hooks/alternatives.rs
 
 //! Alternatives integration for CCS hooks
 //!

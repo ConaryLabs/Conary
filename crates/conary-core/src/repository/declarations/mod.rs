@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/mod.rs
+// crates/conary-core/src/repository/declarations/mod.rs
 
 //! Lossless, ecosystem-owned native repository declarations.
 //!

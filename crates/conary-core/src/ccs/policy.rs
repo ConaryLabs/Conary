@@ -1,4 +1,4 @@
-// conary-core/src/ccs/policy.rs
+// crates/conary-core/src/ccs/policy.rs
 //! Build-policy orchestration for CCS authoring.
 //!
 //! Metadata policies mutate typed file authority in place. Content policies

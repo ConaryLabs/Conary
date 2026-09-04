@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/traits.rs
+// crates/conary-core/src/resolver/provider/traits.rs
 
 //! resolvo trait implementations for `ConaryProvider`.
 //!

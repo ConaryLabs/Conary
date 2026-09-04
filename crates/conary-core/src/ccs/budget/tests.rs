@@ -1,4 +1,4 @@
-// conary-core/src/ccs/budget/tests.rs
+// crates/conary-core/src/ccs/budget/tests.rs
 
 use super::*;
 use crate::ccs::manifest::FileCapability;

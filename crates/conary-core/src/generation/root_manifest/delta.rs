@@ -1,4 +1,4 @@
-// conary-core/src/generation/root_manifest/delta.rs
+// crates/conary-core/src/generation/root_manifest/delta.rs
 
 //! Normalized changed-path authority for selected-root transactions.
 

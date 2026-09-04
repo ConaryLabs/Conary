@@ -1,4 +1,4 @@
-// conary-core/src/ccs/signing.rs
+// crates/conary-core/src/ccs/signing.rs
 //! CCS package signing
 //!
 //! Provides Ed25519 signing for CCS package manifests.

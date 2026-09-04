@@ -1,4 +1,4 @@
-// conary-core/src/model/lockfile.rs
+// crates/conary-core/src/model/lockfile.rs
 
 //! Model lockfile for pinning remote include content hashes
 //!

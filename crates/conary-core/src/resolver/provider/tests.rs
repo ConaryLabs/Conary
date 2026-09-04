@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/tests.rs
+// crates/conary-core/src/resolver/provider/tests.rs
 
 use super::*;
 use crate::db;

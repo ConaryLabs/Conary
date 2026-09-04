@@ -1,4 +1,4 @@
-// conary/tests/features.rs
+// apps/conary/tests/features.rs
 
 //! Feature-specific tests: install reasons, collections, config files, and system state.
 

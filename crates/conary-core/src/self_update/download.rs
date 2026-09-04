@@ -1,4 +1,4 @@
-// conary-core/src/self_update/download.rs
+// crates/conary-core/src/self_update/download.rs
 
 use crate::error::{Error, Result};
 use std::fs;

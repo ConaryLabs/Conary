@@ -1,4 +1,4 @@
-// src/commands/model/apply.rs
+// apps/conary/src/commands/model/apply.rs
 
 mod derived;
 mod packages;

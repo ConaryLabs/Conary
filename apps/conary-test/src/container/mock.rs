@@ -1,4 +1,4 @@
-// conary-test/src/container/mock.rs
+// apps/conary-test/src/container/mock.rs
 //
 // Shared mock ContainerBackend for unit tests across executor, runner, and
 // coordinator modules.  A single configurable struct replaces four nearly

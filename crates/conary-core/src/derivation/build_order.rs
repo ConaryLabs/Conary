@@ -1,4 +1,4 @@
-// conary-core/src/derivation/build_order.rs
+// crates/conary-core/src/derivation/build_order.rs
 
 //! Build ordering and stage classification for bootstrap packages.
 //!

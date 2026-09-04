@@ -1,4 +1,4 @@
-// conary-test/src/cli/image_config.rs
+// apps/conary-test/src/cli/image_config.rs
 
 //! Typed distro image and Containerfile resolution for CLI image operations.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/rpm_verifier.rs
+// crates/conary-core/src/repository/rpm_verifier.rs
 
 //! RPM signature framing backed by Conary's pinned OpenPGP authority.
 //!

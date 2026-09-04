@@ -1,4 +1,4 @@
-// src/commands/ccs/inspect.rs
+// apps/conary/src/commands/ccs/inspect.rs
 
 //! CCS package inspection and verification
 //!

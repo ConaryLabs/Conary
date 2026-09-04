@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/mod.rs
+// crates/conary-core/src/recipe/kitchen/mod.rs
 
 //! Kitchen: the isolated build environment for cooking recipes
 //!

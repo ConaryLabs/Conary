@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/lua/process_api.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/lua/process_api.rs
 //! Target-sandboxed process APIs for RPM's bundled Lua runtime.
 
 use super::context::LuaRuntimeContext;

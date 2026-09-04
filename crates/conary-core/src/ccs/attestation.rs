@@ -1,4 +1,4 @@
-// conary-core/src/ccs/attestation.rs
+// crates/conary-core/src/ccs/attestation.rs
 
 //! CCS build attestation envelopes and release-publish evidence.
 

@@ -1,4 +1,4 @@
-// conary-core/src/model/signing.rs
+// crates/conary-core/src/model/signing.rs
 
 //! Ed25519 signing and verification for model collections
 //!

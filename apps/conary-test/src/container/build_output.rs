@@ -1,4 +1,4 @@
-// conary-test/src/container/build_output.rs
+// apps/conary-test/src/container/build_output.rs
 
 use anyhow::{Context, Result, bail};
 use bollard::models::BuildInfo;

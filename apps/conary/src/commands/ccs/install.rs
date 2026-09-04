@@ -1,4 +1,4 @@
-// src/commands/ccs/install.rs
+// apps/conary/src/commands/ccs/install.rs
 
 //! CCS package installation
 //!

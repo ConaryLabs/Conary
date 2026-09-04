@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/native_lifecycle/arch_install.rs
+// crates/conary-core/src/scriptlet/native_lifecycle/arch_install.rs
 
 //! Exact libalpm-style execution of Arch `.INSTALL` function libraries.
 

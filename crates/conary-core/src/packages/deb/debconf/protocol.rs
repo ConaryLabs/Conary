@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/protocol.rs
+// crates/conary-core/src/packages/deb/debconf/protocol.rs
 
 //! Byte-preserving debconf command and response grammar.
 

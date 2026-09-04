@@ -1,4 +1,4 @@
-// conary-core/src/db/models/generation_activation.rs
+// crates/conary-core/src/db/models/generation_activation.rs
 
 //! Durable runtime activation work owned by immutable generations.
 //!

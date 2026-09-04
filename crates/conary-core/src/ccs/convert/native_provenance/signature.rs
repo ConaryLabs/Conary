@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/native_provenance/signature.rs
+// crates/conary-core/src/ccs/convert/native_provenance/signature.rs
 
 //! Exact native-package signature extraction.
 

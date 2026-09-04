@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provides_index.rs
+// crates/conary-core/src/resolver/provides_index.rs
 
 //! Demand-driven index mapping capability names to provider packages.
 //!

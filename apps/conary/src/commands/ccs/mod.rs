@@ -1,4 +1,4 @@
-// src/commands/ccs/mod.rs
+// apps/conary/src/commands/ccs/mod.rs
 
 //! CCS package format commands
 //!

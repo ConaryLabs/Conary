@@ -1,4 +1,4 @@
-// conary-core/src/repository/parsers/snapshot.rs
+// crates/conary-core/src/repository/parsers/snapshot.rs
 
 //! Authenticated native repository metadata-root identity.
 

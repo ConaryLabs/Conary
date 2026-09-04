@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/debug_projection.rs
+// crates/conary-core/src/ccs/v3/debug_projection.rs
 
 use super::schema::{AuthorityDocumentV3, ConfigSemanticsV3, PackageDataV3, PackageKindV3};
 use crate::packages::config_authority::{ConfigPayloadAssociation, SourceConfigDeclaration};

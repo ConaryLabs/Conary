@@ -1,4 +1,4 @@
-// tests/logging_verbosity.rs
+// apps/conary/tests/logging_verbosity.rs
 
 use std::process::{Command, Output};
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/verify.rs
+// crates/conary-core/src/ccs/verify.rs
 
 //! Trusted CCS v3 package verification.
 //!

@@ -1,4 +1,4 @@
-// tests/bootstrap_workflow.rs
+// apps/conary/tests/bootstrap_workflow.rs
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -1,4 +1,4 @@
-// conary-core/src/provenance/mod.rs
+// crates/conary-core/src/provenance/mod.rs
 
 //! Package DNA / Full Provenance tracking
 //!

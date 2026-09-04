@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/system_config/tests.rs
+// crates/conary-core/src/bootstrap/system_config/tests.rs
 
 use super::*;
 

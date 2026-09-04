@@ -1,4 +1,4 @@
-// src/commands/update/package.rs
+// apps/conary/src/commands/update/package.rs
 
 //! Single-package update command execution.
 

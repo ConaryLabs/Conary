@@ -1,4 +1,4 @@
-// src/commands/bootstrap/state.rs
+// apps/conary/src/commands/bootstrap/state.rs
 
 use std::path::{Path, PathBuf};
 

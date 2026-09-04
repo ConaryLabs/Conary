@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm.rs
+// crates/conary-core/src/packages/rpm.rs
 
 //! RPM package format parser
 

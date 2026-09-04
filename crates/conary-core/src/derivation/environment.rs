@@ -1,4 +1,4 @@
-// conary-core/src/derivation/environment.rs
+// crates/conary-core/src/derivation/environment.rs
 
 //! Build environment lifecycle for CAS-layered bootstrap derivations.
 //!

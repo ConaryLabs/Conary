@@ -1,4 +1,4 @@
-// conary/src/commands/install/validation.rs
+// apps/conary/src/commands/install/validation.rs
 
 use super::{ComponentSelection, OwnershipMode, resolve::is_local_package_request};
 use anyhow::Result;

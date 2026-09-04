@@ -1,4 +1,4 @@
-// conary-core/src/derivation/profile.rs
+// crates/conary-core/src/derivation/profile.rs
 
 //! Build profile type for deterministic build plans.
 //!

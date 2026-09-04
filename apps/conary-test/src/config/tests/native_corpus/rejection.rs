@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/native_corpus/rejection.rs
+// apps/conary-test/src/config/tests/native_corpus/rejection.rs
 
 use super::conary_fixture_path;
 

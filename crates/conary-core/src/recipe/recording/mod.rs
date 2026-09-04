@@ -1,3 +1,4 @@
+// crates/conary-core/src/recipe/recording/mod.rs
 pub mod capabilities;
 pub mod draft;
 pub mod report;

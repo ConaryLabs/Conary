@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/rpm_tests.rs
+// crates/conary-core/src/ccs/native_transaction/rpm_tests.rs
 
 use super::*;
 use crate::ccs::native_lifecycle::{

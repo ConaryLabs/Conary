@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/lifecycle_helpers/invoke_rc_d.rs
+// crates/conary-core/src/packages/deb/lifecycle_helpers/invoke_rc_d.rs
 
 use super::HelperGrammarError;
 use super::common::{InitScriptAction, validate_argument, validate_word};

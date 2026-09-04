@@ -1,4 +1,4 @@
-// conary-test/src/report/stream.rs
+// apps/conary-test/src/report/stream.rs
 
 use serde::Serialize;
 

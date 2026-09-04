@@ -1,4 +1,4 @@
-// conary-test/src/report/mod.rs
+// apps/conary-test/src/report/mod.rs
 
 pub mod corpus;
 pub mod json;

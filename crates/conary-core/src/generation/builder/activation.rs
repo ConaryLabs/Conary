@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/activation.rs
+// crates/conary-core/src/generation/builder/activation.rs
 
 pub enum GenerationActivation {
     /// Publish the generated DB snapshot as the active state immediately.

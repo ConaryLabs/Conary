@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/dpkg/render.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/dpkg/render.rs
 
 use super::{DpkgArchiveBackendAction, DpkgDisposition, DpkgMutationAction, DpkgReadOnlyAction};
 

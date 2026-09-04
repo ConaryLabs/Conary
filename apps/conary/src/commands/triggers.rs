@@ -1,4 +1,4 @@
-// src/commands/triggers.rs
+// apps/conary/src/commands/triggers.rs
 
 //! Trigger management commands
 

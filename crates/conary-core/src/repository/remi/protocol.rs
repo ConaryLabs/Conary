@@ -1,4 +1,4 @@
-// conary-core/src/repository/remi/protocol.rs
+// crates/conary-core/src/repository/remi/protocol.rs
 
 use super::*;
 

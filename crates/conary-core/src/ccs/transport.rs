@@ -1,4 +1,4 @@
-// conary-core/src/ccs/transport.rs
+// crates/conary-core/src/ccs/transport.rs
 
 //! Versioned repository transport for signed CCS control documents and objects.
 //!

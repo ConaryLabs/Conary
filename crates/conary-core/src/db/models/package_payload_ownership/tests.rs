@@ -1,4 +1,4 @@
-// conary-core/src/db/models/package_payload_ownership/tests.rs
+// crates/conary-core/src/db/models/package_payload_ownership/tests.rs
 
 use super::*;
 use crate::db::models::{PayloadClaimAnchorPolicy, TroveType};

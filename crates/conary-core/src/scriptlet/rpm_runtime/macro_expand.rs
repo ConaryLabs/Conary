@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand.rs
 
 //! RPM macro parser and scoped expansion engine.
 //!

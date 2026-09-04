@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/hardlinks.rs
+// crates/conary-core/src/packages/rpm/payload/hardlinks.rs
 
 //! RPM hardlink-set transaction projection.
 //!

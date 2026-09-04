@@ -1,4 +1,4 @@
-// remi/src/server/readiness.rs
+// apps/remi/src/server/readiness.rs
 
 //! Evidence-bearing readiness evaluation for Remi serving.
 //!

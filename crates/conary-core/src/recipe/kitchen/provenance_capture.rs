@@ -1,4 +1,4 @@
-// conary-core/src/recipe/kitchen/provenance_capture.rs
+// crates/conary-core/src/recipe/kitchen/provenance_capture.rs
 
 //! Provenance capture during recipe builds
 //!

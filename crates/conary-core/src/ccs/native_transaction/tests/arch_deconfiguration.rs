@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/arch_deconfiguration.rs
+// crates/conary-core/src/ccs/native_transaction/tests/arch_deconfiguration.rs
 
 //! Source-family isolation for Debian state-only transaction elements.
 

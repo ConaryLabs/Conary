@@ -1,4 +1,4 @@
-// conary-test/src/bootstrap.rs
+// apps/conary-test/src/bootstrap.rs
 // conary-test/src/bootstrap.rs
 //! Local developer bootstrap inspection for conary-test.
 

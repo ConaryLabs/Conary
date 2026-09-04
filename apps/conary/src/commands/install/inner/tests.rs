@@ -1,4 +1,4 @@
-// conary/src/commands/install/inner/tests.rs
+// apps/conary/src/commands/install/inner/tests.rs
 
 use super::*;
 use crate::commands::PackageFormatType;

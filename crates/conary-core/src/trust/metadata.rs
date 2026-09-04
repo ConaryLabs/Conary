@@ -1,4 +1,4 @@
-// conary-core/src/trust/metadata.rs
+// crates/conary-core/src/trust/metadata.rs
 
 //! TUF metadata types
 //!

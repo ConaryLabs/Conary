@@ -1,4 +1,4 @@
-// conary-core/src/model/replatform/tests.rs
+// crates/conary-core/src/model/replatform/tests.rs
 
 use super::*;
 use crate::db::models::{

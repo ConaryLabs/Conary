@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/payload/digest.rs
+// crates/conary-core/src/packages/rpm/payload/digest.rs
 
 //! Typed RPM per-file digest computation state.
 

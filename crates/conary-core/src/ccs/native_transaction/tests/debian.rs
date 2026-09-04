@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/tests/debian.rs
+// crates/conary-core/src/ccs/native_transaction/tests/debian.rs
 
 //! Debian transaction tests grouped by native ownership boundary.
 

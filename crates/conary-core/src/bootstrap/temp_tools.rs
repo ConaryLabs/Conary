@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/temp_tools.rs
+// crates/conary-core/src/bootstrap/temp_tools.rs
 
 //! Phase 2: Temporary tools (LFS Chapters 6-7)
 //!

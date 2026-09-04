@@ -1,4 +1,4 @@
-// conary-core/src/recipe/cache.rs
+// crates/conary-core/src/recipe/cache.rs
 
 //! Build artifact caching for the Kitchen
 //!

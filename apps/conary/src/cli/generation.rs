@@ -1,4 +1,4 @@
-// src/cli/generation.rs
+// apps/conary/src/cli/generation.rs
 //! CLI definitions for generation management
 
 use super::DbArgs;

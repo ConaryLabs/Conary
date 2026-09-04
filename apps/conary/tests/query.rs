@@ -1,4 +1,4 @@
-// tests/query.rs
+// apps/conary/tests/query.rs
 
 //! Query operation tests: package queries, dependency lookups, provides, changesets.
 

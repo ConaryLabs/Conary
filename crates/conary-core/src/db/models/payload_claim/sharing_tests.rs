@@ -1,4 +1,4 @@
-// conary-core/src/db/models/payload_claim/sharing_tests.rs
+// crates/conary-core/src/db/models/payload_claim/sharing_tests.rs
 
 use super::*;
 use crate::db::models::{

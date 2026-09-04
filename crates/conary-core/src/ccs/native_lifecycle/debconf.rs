@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_lifecycle/debconf.rs
+// crates/conary-core/src/ccs/native_lifecycle/debconf.rs
 
 //! Package-level debconf templates authority transported by native lifecycle CCS.
 

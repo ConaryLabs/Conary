@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/types.rs
+// crates/conary-core/src/repository/sync/types.rs
 
 use crate::db::models::{
     AuthenticatedSnapshotIdentity, RepositoryPackage, RepositoryPackageKey, RepositoryProvide,

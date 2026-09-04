@@ -1,4 +1,4 @@
-// conary-core/src/resolver/sat/tests/canonical.rs
+// crates/conary-core/src/resolver/sat/tests/canonical.rs
 
 use super::formal_dependencies::insert_repo_pkg_with_reqs;
 use super::*;

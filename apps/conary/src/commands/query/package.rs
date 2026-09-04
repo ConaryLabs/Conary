@@ -1,4 +1,4 @@
-// src/commands/query/package.rs
+// apps/conary/src/commands/query/package.rs
 
 //! Package query commands
 //!

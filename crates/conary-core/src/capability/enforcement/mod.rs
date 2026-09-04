@@ -1,4 +1,4 @@
-// conary-core/src/capability/enforcement/mod.rs
+// crates/conary-core/src/capability/enforcement/mod.rs
 //! Capability enforcement via Linux kernel security features
 //!
 //! This module provides runtime enforcement of package capability declarations

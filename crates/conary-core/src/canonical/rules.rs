@@ -1,4 +1,4 @@
-// conary-core/src/canonical/rules.rs
+// crates/conary-core/src/canonical/rules.rs
 
 //! Exact, versioned canonical package-map contracts.
 //!

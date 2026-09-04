@@ -1,4 +1,4 @@
-// conary-core/benches/generation_db_snapshot.rs
+// crates/conary-core/benches/generation_db_snapshot.rs
 
 //! Generation database snapshot scaling against accumulated SQLite history.
 

@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/workflow.rs
+// apps/conary-test/src/config/tests/workflow.rs
 
 use serde::Deserialize;
 use std::{
@@ -173,6 +173,44 @@ struct WorkflowStep {
 
 fn workflow_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows/pr-gate.yml")
+}
+
+#[test]
+fn line_cap_installs_rust_before_running_its_checkers() {
+    let workflow = load_workflow();
+    let docs: WorkspaceTestJob = parse_job(&workflow, "docs-truth");
+    assert!(docs.steps.iter().all(|step| {
+        step.uses.as_deref() != Some(COMPILER_CACHE_SETUP_ACTION)
+            && !step
+                .run
+                .as_deref()
+                .unwrap_or_default()
+                .contains("line-cap.sh")
+    }));
+    let job: WorkspaceTestJob = parse_job(&workflow, "line-cap");
+    assert_eq!(job.needs.as_deref(), Some("gnu-compiler-cache"));
+    let setup = job
+        .steps
+        .iter()
+        .position(|step| step.uses.as_deref() == Some(COMPILER_CACHE_SETUP_ACTION))
+        .unwrap();
+    assert_eq!(
+        job.steps[setup].with["compiler-cache"].as_str(),
+        Some("reader")
+    );
+    for command in [
+        "bash scripts/check-line-cap.sh",
+        "bash scripts/test-line-cap.sh",
+        "cargo test -p conary-xtask",
+    ] {
+        let check = job
+            .steps
+            .iter()
+            .position(|step| step.run.as_deref() == Some(command))
+            .unwrap();
+        assert!(setup < check, "Rust setup must precede {command}");
+        assert!(!job.steps[check].continue_on_error);
+    }
 }
 
 fn load_workflow() -> Workflow {

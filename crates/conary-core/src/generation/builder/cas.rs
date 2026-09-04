@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/cas.rs
+// crates/conary-core/src/generation/builder/cas.rs
 
 use std::path::{Path, PathBuf};
 

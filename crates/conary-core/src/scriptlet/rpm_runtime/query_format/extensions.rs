@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/query_format/extensions.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/query_format/extensions.rs
 //! Exact RPM computed-header extensions derived from persisted typed facts.
 //! Source authority: RPM `lib/tagexts.cc` at
 //! `a8f0192aee1c08bd1454ed2ac6ebaf506004b55c`.

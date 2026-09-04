@@ -1,4 +1,4 @@
-// conary-core/src/recipe/recording/report.rs
+// crates/conary-core/src/recipe/recording/report.rs
 
 use std::path::{Path, PathBuf};
 

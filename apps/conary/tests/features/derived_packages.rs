@@ -1,4 +1,4 @@
-// conary/tests/features/derived_packages.rs
+// apps/conary/tests/features/derived_packages.rs
 
 use super::*;
 

@@ -1,4 +1,4 @@
-// src/commands/ccs/install/command.rs
+// apps/conary/src/commands/ccs/install/command.rs
 
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsPackage, TrustPolicy, verify};

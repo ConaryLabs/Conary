@@ -1,4 +1,4 @@
-// conary-core/src/filesystem/cas/stream.rs
+// crates/conary-core/src/filesystem/cas/stream.rs
 
 //! Exact bounded-memory CAS ingestion.
 

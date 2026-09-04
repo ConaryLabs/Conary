@@ -1,4 +1,4 @@
-// conary-core/src/model/replatform/requirement_tests.rs
+// crates/conary-core/src/model/replatform/requirement_tests.rs
 
 use super::*;
 use crate::db::models::RepositoryRequirementGroup as DbRequirementGroup;

@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand/runtime.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/runtime.rs
 //! Target-root authority for RPM macro builtins with runtime effects.
 
 use crate::ccs::native_lifecycle::RpmRuntimeMetadata;

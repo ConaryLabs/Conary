@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand/builtins.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/builtins.rs
 
 //! Exact dispatch for the builtin table in RPM's `rpmio/macro.cc`.
 

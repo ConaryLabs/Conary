@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/tests/native.rs
+// crates/conary-core/src/repository/sync/tests/native.rs
 
 #[path = "native/source_config.rs"]
 mod source_config;

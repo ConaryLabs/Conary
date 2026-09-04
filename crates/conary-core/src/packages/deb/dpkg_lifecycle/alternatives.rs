@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/dpkg_lifecycle/alternatives.rs
+// crates/conary-core/src/packages/deb/dpkg_lifecycle/alternatives.rs
 
 use super::common::{
     DpkgLifecycleGrammarError, UPDATE_ALTERNATIVES, require_absolute, require_no_nul,

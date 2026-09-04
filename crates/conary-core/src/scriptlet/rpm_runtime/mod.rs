@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/mod.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/mod.rs
 
 //! Conary-owned runtime for RPM scriptlet body transforms and embedded Lua.
 //!

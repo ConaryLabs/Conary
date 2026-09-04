@@ -1,4 +1,4 @@
-// conary-test/src/config/tests/native_corpus/evidence.rs
+// apps/conary-test/src/config/tests/native_corpus/evidence.rs
 
 use super::conary_fixture_path;
 

@@ -1,4 +1,4 @@
-// conary-core/src/trust/keys.rs
+// crates/conary-core/src/trust/keys.rs
 
 //! TUF key utilities
 //!

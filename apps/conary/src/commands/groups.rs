@@ -1,4 +1,4 @@
-// src/commands/groups.rs
+// apps/conary/src/commands/groups.rs
 //! Package group command implementations
 
 use super::open_db;

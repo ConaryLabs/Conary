@@ -1,4 +1,4 @@
-// src/commands/install/lifecycle.rs
+// apps/conary/src/commands/install/lifecycle.rs
 
 use super::{
     ComponentSelection, InstallPhase, InstallProgress, InstallTransactionResult, run_triggers,

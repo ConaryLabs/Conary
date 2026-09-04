@@ -1,4 +1,4 @@
-// tests/batch_install.rs
+// apps/conary/tests/batch_install.rs
 
 //! Integration tests for batch (atomic multi-package) installation.
 //!

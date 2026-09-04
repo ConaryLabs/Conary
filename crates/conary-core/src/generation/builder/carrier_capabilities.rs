@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/carrier_capabilities.rs
+// crates/conary-core/src/generation/builder/carrier_capabilities.rs
 
 //! Persisted target capability projection into generation artifact authority.
 

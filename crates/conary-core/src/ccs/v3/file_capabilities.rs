@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/file_capabilities.rs
+// crates/conary-core/src/ccs/v3/file_capabilities.rs
 
 //! Canonical signed projection for Linux file capability declarations.
 

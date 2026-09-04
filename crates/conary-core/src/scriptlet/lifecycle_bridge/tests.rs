@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/lifecycle_bridge/tests.rs
+// crates/conary-core/src/scriptlet/lifecycle_bridge/tests.rs
 
 use super::*;
 use std::io::{Read, Write};

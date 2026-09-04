@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/root_validation.rs
+// crates/conary-core/src/generation/builder/root_validation.rs
 
 use std::collections::{HashMap, HashSet};
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/resolution_policy.rs
+// crates/conary-core/src/repository/resolution_policy.rs
 
 //! Repository resolution policy types.
 //!

@@ -1,4 +1,4 @@
-// src/commands/adopt/status.rs
+// apps/conary/src/commands/adopt/status.rs
 
 //! Adoption status reporting
 //!

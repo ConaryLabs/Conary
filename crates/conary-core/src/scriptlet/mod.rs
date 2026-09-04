@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/mod.rs
+// crates/conary-core/src/scriptlet/mod.rs
 
 //! Scriptlet execution for package install/remove hooks
 //!

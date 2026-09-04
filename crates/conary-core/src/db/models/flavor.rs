@@ -1,4 +1,4 @@
-// conary-core/src/db/models/flavor.rs
+// crates/conary-core/src/db/models/flavor.rs
 
 //! Flavor model - build-time variations (architecture, features, toolchain)
 

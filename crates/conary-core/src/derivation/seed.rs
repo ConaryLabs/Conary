@@ -1,4 +1,4 @@
-// conary-core/src/derivation/seed.rs
+// crates/conary-core/src/derivation/seed.rs
 
 //! Layer 0 seed model for loading and verifying bootstrap seeds.
 //!

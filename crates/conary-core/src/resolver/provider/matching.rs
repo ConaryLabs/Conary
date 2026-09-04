@@ -1,4 +1,4 @@
-// conary-core/src/resolver/provider/matching.rs
+// crates/conary-core/src/resolver/provider/matching.rs
 
 //! Version constraint matching functions.
 //!

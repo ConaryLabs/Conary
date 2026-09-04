@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/hardlinks.rs
+// crates/conary-core/src/ccs/native_export/hardlinks.rs
 //! Shared fail-closed hardlink validation for native package exporters.
 
 use crate::ccs::builder::{BuildResult, FileEntry};

@@ -1,4 +1,4 @@
-// src/commands/install/native_events/graph_execution.rs
+// apps/conary/src/commands/install/native_events/graph_execution.rs
 
 //! Execution adapters for the core native transaction graph.
 

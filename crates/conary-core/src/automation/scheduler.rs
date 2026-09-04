@@ -1,4 +1,4 @@
-// conary-core/src/automation/scheduler.rs
+// crates/conary-core/src/automation/scheduler.rs
 
 //! Scheduler for periodic automation checks.
 //!

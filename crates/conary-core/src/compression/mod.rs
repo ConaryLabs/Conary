@@ -1,4 +1,4 @@
-// conary-core/src/compression/mod.rs
+// crates/conary-core/src/compression/mod.rs
 //! Unified compression/decompression utilities
 //!
 //! Provides a consistent interface for handling multiple compression formats

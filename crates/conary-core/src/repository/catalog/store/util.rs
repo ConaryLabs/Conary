@@ -1,4 +1,4 @@
-// conary-core/src/repository/catalog/store/util.rs
+// crates/conary-core/src/repository/catalog/store/util.rs
 
 //! Catalog filesystem, canonical JSON, and SQLite conversion helpers.
 

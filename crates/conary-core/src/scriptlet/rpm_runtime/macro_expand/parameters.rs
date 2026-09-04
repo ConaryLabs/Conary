@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/macro_expand/parameters.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/macro_expand/parameters.rs
 //! RPM parametric-macro argument and automatic-macro projection.
 
 use anyhow::{Result, bail};

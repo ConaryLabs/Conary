@@ -1,4 +1,4 @@
-// conary-core/src/derived/builder/parent.rs
+// crates/conary-core/src/derived/builder/parent.rs
 
 //! Exact installed-parent selection for derived builds.
 

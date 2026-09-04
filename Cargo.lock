@@ -1231,6 +1231,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "conary-xtask"
+version = "0.16.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "conaryd"
 version = "0.16.1"
 dependencies = [

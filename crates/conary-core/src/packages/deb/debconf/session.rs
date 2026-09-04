@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/debconf/session.rs
+// crates/conary-core/src/packages/deb/debconf/session.rs
 
 //! Per-confmodule debconf session state.
 

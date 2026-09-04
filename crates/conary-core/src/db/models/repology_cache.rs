@@ -1,4 +1,4 @@
-// conary-core/src/db/models/repology_cache.rs
+// crates/conary-core/src/db/models/repology_cache.rs
 
 use crate::error::Result;
 use rusqlite::{Connection, params};

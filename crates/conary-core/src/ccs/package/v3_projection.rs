@@ -1,4 +1,4 @@
-// conary-core/src/ccs/package/v3_projection.rs
+// crates/conary-core/src/ccs/package/v3_projection.rs
 
 //! Structural projection of native CCS v3 authority into package-install data.
 

@@ -1,4 +1,4 @@
-// conary-core/src/packages/traits.rs
+// crates/conary-core/src/packages/traits.rs
 
 //! Common traits for package format parsers
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/convert/scriptlet_bundle/native_contracts.rs
+// crates/conary-core/src/ccs/convert/scriptlet_bundle/native_contracts.rs
 
 use crate::ccs::native_lifecycle::{
     LifecyclePath, NativeInvocation, NativeLifecycleEntryKind, TransactionOrder,

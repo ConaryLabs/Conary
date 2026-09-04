@@ -1,4 +1,4 @@
-// conary-core/src/ccs/builder/cpu_admission.rs
+// crates/conary-core/src/ccs/builder/cpu_admission.rs
 //! Work-conserving CPU admission for CCS archive encode and decode.
 
 use super::package_writer::CcsArchiveCompression;

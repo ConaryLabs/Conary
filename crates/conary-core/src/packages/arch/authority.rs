@@ -1,4 +1,4 @@
-// conary-core/src/packages/arch/authority.rs
+// crates/conary-core/src/packages/arch/authority.rs
 
 //! Exact ALPM identity and declared-provision authority.
 

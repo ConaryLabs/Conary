@@ -1,4 +1,4 @@
-// src/cli/federation.rs
+// apps/conary/src/cli/federation.rs
 //! CLI definitions for federation commands
 
 use super::DbArgs;

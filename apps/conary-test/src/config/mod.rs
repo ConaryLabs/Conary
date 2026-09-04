@@ -1,4 +1,4 @@
-// conary-test/src/config/mod.rs
+// apps/conary-test/src/config/mod.rs
 
 pub mod corpus;
 pub mod distro;

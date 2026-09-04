@@ -1,4 +1,4 @@
-// conary-core/src/repository/client.rs
+// crates/conary-core/src/repository/client.rs
 
 //! HTTP client for repository operations
 //!

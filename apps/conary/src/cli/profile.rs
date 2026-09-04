@@ -1,4 +1,4 @@
-// src/cli/profile.rs
+// apps/conary/src/cli/profile.rs
 
 //! Build profile CLI commands
 

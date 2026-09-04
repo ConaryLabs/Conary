@@ -1,4 +1,4 @@
-// src/cli/state.rs
+// apps/conary/src/cli/state.rs
 //! System state snapshot and rollback commands
 
 use super::{CommonArgs, DbArgs};

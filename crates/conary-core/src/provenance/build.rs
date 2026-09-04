@@ -1,4 +1,4 @@
-// conary-core/src/provenance/build.rs
+// crates/conary-core/src/provenance/build.rs
 
 //! Build layer provenance - how the package was built
 

@@ -1,4 +1,4 @@
-// conary-core/src/canonical/stream.rs
+// crates/conary-core/src/canonical/stream.rs
 
 //! Bounded streaming parser for canonical-map universe objects.
 

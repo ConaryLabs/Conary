@@ -1,4 +1,4 @@
-// src/cli/distro.rs
+// apps/conary/src/cli/distro.rs
 //! Named source-feed diagnostics
 
 use super::DbArgs;

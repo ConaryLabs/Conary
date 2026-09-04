@@ -1,4 +1,4 @@
-// conary-core/src/repository/enrollment/derive.rs
+// crates/conary-core/src/repository/enrollment/derive.rs
 
 //! Exact pre-mutation repository-intent derivation from package payloads.
 

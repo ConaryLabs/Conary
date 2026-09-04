@@ -1,4 +1,4 @@
-// conary-core/src/activation/systemd/grammar.rs
+// crates/conary-core/src/activation/systemd/grammar.rs
 
 //! Single lexical authority shared by typed systemctl parsing and proxy generation.
 

@@ -1,4 +1,4 @@
-// src/cli/trigger.rs
+// apps/conary/src/cli/trigger.rs
 //! Trigger management commands
 
 use super::DbArgs;

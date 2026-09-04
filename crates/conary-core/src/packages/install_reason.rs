@@ -1,4 +1,4 @@
-// conary-core/src/packages/install_reason.rs
+// crates/conary-core/src/packages/install_reason.rs
 
 //! Exact native package-manager install-reason query support.
 

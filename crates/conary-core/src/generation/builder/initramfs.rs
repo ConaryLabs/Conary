@@ -1,4 +1,4 @@
-// conary-core/src/generation/builder/initramfs.rs
+// crates/conary-core/src/generation/builder/initramfs.rs
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};

@@ -1,4 +1,4 @@
-// src/commands/progress.rs
+// apps/conary/src/commands/progress.rs
 //! Progress tracking for package operations
 //!
 //! Provides visual feedback during package installation, removal, and updates

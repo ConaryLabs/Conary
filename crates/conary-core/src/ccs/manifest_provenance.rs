@@ -1,4 +1,4 @@
-// conary-core/src/ccs/manifest_provenance.rs
+// crates/conary-core/src/ccs/manifest_provenance.rs
 //! CCS manifest provenance data transfer objects.
 
 use serde::{Deserialize, Serialize};

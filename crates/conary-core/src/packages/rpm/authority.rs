@@ -1,4 +1,4 @@
-// conary-core/src/packages/rpm/authority.rs
+// crates/conary-core/src/packages/rpm/authority.rs
 
 //! Exact RPM identity and declared-provision authority.
 

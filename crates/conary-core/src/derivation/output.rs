@@ -1,4 +1,4 @@
-// conary-core/src/derivation/output.rs
+// crates/conary-core/src/derivation/output.rs
 
 //! Exact package-output authority for derivation build results.
 

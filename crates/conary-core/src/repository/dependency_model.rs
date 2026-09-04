@@ -1,4 +1,4 @@
-// conary-core/src/repository/dependency_model.rs
+// crates/conary-core/src/repository/dependency_model.rs
 
 //! Native repository dependency model.
 //!

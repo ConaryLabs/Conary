@@ -1,4 +1,4 @@
-// conary-core/src/corpus/mod.rs
+// crates/conary-core/src/corpus/mod.rs
 
 //! Typed result vocabulary for the just-works corpus gate.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/repository/sync/immutable_catalog/authority.rs
+// crates/conary-core/src/repository/sync/immutable_catalog/authority.rs
 
 //! Exact source-manifest authority derived from one enrolled native repository.
 

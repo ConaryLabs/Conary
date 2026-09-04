@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/divergence.rs
+// crates/conary-core/src/recipe/hermetic/divergence.rs
 
 use serde::{Deserialize, Serialize};
 

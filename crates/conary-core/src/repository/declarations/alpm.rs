@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/alpm.rs
+// crates/conary-core/src/repository/declarations/alpm.rs
 
 //! ALPM/pacman repository declaration authority.
 

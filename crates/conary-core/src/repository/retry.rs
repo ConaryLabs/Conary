@@ -1,4 +1,4 @@
-// conary-core/src/repository/retry.rs
+// crates/conary-core/src/repository/retry.rs
 
 //! Consolidated retry logic with exponential backoff.
 //!

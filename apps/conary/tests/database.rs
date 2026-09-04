@@ -1,4 +1,4 @@
-// tests/database.rs
+// apps/conary/tests/database.rs
 
 //! Database initialization, transactions, and core model tests.
 

@@ -1,4 +1,4 @@
-// conary-core/src/repository/registry.rs
+// crates/conary-core/src/repository/registry.rs
 
 //! Repository format registry
 //!

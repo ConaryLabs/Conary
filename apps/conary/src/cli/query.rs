@@ -1,4 +1,4 @@
-// src/cli/query.rs
+// apps/conary/src/cli/query.rs
 //! Query commands: dependencies, components, labels, and advanced analysis
 
 use clap::Subcommand;

@@ -1,4 +1,4 @@
-// conary-core/src/recipe/mod.rs
+// crates/conary-core/src/recipe/mod.rs
 
 //! Recipe system for building packages from source
 //!

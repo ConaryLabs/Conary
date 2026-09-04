@@ -1,4 +1,4 @@
-// src/commands/query/components.rs
+// apps/conary/src/commands/query/components.rs
 
 //! Component query commands
 //!

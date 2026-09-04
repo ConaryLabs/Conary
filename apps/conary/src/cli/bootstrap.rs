@@ -1,4 +1,4 @@
-// src/cli/bootstrap.rs
+// apps/conary/src/cli/bootstrap.rs
 //! CLI definitions for bootstrap commands
 
 use clap::Subcommand;

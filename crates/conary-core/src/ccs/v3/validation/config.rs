@@ -1,4 +1,4 @@
-// conary-core/src/ccs/v3/validation/config.rs
+// crates/conary-core/src/ccs/v3/validation/config.rs
 
 //! Exact signed configuration and package-policy validation.
 

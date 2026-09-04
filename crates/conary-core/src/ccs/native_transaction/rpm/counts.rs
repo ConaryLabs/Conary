@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/rpm/counts.rs
+// crates/conary-core/src/ccs/native_transaction/rpm/counts.rs
 
 //! RPM database and script-argument instance counts at exact lifecycle boundaries.
 

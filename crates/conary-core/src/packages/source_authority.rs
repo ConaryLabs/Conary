@@ -1,4 +1,4 @@
-// conary-core/src/packages/source_authority.rs
+// crates/conary-core/src/packages/source_authority.rs
 
 //! Closed source-package identity and declared-capability authority.
 

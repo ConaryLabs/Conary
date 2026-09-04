@@ -465,7 +465,19 @@ grep -q $'^native-parity\t' <<<"$real_list" || fail "real map --list missing nat
 grep -q $'^canonical-map\t' <<<"$real_list" || fail "real map --list missing canonical-map slug"
 grep -q $'^release\t' <<<"$real_list" || fail "real map --list missing release slug"
 grep -q $'^database-state\t' <<<"$real_list" || fail "real map --list missing database-state slug"
-[[ "$(wc -l <<<"$real_list")" -eq 19 ]] || fail "real map --list did not print 19 cards"
+real_map="$repo_root/docs/modules/feature-ownership.md"
+expected_real_count="$(awk '
+    /^## / {
+        heading = substr($0, 4)
+        if (heading != "How To Use This Map" && heading != "Card Schema") {
+            count++
+        }
+    }
+    END { print count + 0 }
+' "$real_map")"
+actual_real_count="$(awk 'END { print NR + 0 }' <<<"$real_list")"
+[[ "$actual_real_count" -eq "$expected_real_count" ]] \
+    || fail "real map --list printed $actual_real_count of $expected_real_count cards"
 
 executed_fields="$({
     while IFS=$'\t' read -r slug _; do

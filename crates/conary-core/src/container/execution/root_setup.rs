@@ -1,4 +1,4 @@
-// conary-core/src/container/execution/root_setup.rs
+// crates/conary-core/src/container/execution/root_setup.rs
 
 //! Selected-root, namespace, mount, and enforcement setup for sandboxed children.
 //!

@@ -1,4 +1,4 @@
-// conary-core/src/repository/declarations/takeover/eopkg_tests.rs
+// crates/conary-core/src/repository/declarations/takeover/eopkg_tests.rs
 
 use super::*;
 

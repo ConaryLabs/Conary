@@ -1,4 +1,4 @@
-// conary-core/src/db/models/trove/identity.rs
+// crates/conary-core/src/db/models/trove/identity.rs
 
 //! Persistence-boundary validation for exact trove identity authority.
 

@@ -1,4 +1,4 @@
-// conary-core/src/ccs/hooks/capabilities/filesystem_security.rs
+// crates/conary-core/src/ccs/hooks/capabilities/filesystem_security.rs
 
 //! Target-supplied filesystem security authority for generation carriers.
 

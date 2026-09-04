@@ -1,4 +1,4 @@
-// conary-core/src/recipe/graph.rs
+// crates/conary-core/src/recipe/graph.rs
 
 //! Recipe dependency graph for build ordering
 //!

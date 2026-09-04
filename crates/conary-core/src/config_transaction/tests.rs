@@ -1,4 +1,4 @@
-// conary-core/src/config_transaction/tests.rs
+// crates/conary-core/src/config_transaction/tests.rs
 
 use super::*;
 use crate::payload::{PayloadIdentity, PayloadNode, PayloadTimestamp};

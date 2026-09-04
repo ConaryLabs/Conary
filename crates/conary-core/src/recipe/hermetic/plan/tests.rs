@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/plan/tests.rs
+// crates/conary-core/src/recipe/hermetic/plan/tests.rs
 
 use super::*;
 use crate::recipe::format::{

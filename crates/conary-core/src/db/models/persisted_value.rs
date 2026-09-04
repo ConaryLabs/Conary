@@ -1,4 +1,4 @@
-// conary-core/src/db/models/persisted_value.rs
+// crates/conary-core/src/db/models/persisted_value.rs
 
 //! Typed failures for persisted enum and tagged-value corruption.
 

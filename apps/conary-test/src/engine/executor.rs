@@ -1,4 +1,4 @@
-// conary-test/src/engine/executor.rs
+// apps/conary-test/src/engine/executor.rs
 
 use std::collections::HashMap;
 use std::path::PathBuf;

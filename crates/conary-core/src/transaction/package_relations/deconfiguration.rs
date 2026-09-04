@@ -1,4 +1,4 @@
-// conary-core/src/transaction/package_relations/deconfiguration.rs
+// crates/conary-core/src/transaction/package_relations/deconfiguration.rs
 
 //! Typed dependency closure for package-relation deconfiguration.
 

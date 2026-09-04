@@ -1,4 +1,4 @@
-// conary/src/commands/update/package/tests.rs
+// apps/conary/src/commands/update/package/tests.rs
 
 use super::*;
 use crate::commands::test_helpers::{

@@ -1,4 +1,4 @@
-// src/commands/adopt/hooks.rs
+// apps/conary/src/commands/adopt/hooks.rs
 
 //! System package manager hooks for automatic Conary refresh
 //!

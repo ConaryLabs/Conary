@@ -1,4 +1,4 @@
-// conary-core/src/scriptlet/rpm_runtime/query_format/tests.rs
+// crates/conary-core/src/scriptlet/rpm_runtime/query_format/tests.rs
 
 use super::format;
 use crate::ccs::native_lifecycle::{

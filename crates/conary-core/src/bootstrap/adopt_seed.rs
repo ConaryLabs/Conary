@@ -1,4 +1,4 @@
-// conary-core/src/bootstrap/adopt_seed.rs
+// crates/conary-core/src/bootstrap/adopt_seed.rs
 
 //! Create a bootstrap seed from an adopted system's filesystem.
 

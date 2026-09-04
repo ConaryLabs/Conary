@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_export/deb.rs
+// crates/conary-core/src/ccs/native_export/deb.rs
 //! DEB package generator
 //!
 //! Generates Debian .deb packages from CCS build results.

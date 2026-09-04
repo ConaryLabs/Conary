@@ -1,4 +1,4 @@
-// conary-core/src/db/models/installed_ccs_remove_hook.rs
+// crates/conary-core/src/db/models/installed_ccs_remove_hook.rs
 
 //! Exact persisted authority for an installed CCS package's pre-remove hook.
 

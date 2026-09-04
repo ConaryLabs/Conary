@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/mod.rs
+// crates/conary-core/src/recipe/hermetic/mod.rs
 
 pub mod command_risk;
 pub mod divergence;

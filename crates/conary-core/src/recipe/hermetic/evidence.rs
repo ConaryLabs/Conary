@@ -1,4 +1,4 @@
-// conary-core/src/recipe/hermetic/evidence.rs
+// crates/conary-core/src/recipe/hermetic/evidence.rs
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 

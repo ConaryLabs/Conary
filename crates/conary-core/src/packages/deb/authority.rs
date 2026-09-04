@@ -1,4 +1,4 @@
-// conary-core/src/packages/deb/authority.rs
+// crates/conary-core/src/packages/deb/authority.rs
 
 //! Exact Debian identity and declared-provision authority.
 

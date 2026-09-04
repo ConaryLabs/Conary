@@ -1,4 +1,4 @@
-// conary-core/src/delta/generator.rs
+// crates/conary-core/src/delta/generator.rs
 
 //! Delta generator using zstd dictionary compression
 //!

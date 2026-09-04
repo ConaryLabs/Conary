@@ -1,4 +1,4 @@
-// conary-core/src/db/models/derived.rs
+// crates/conary-core/src/db/models/derived.rs
 
 //! Derived package models for enterprise customization
 //!

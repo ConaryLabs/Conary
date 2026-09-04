@@ -1,4 +1,4 @@
-// conary-core/src/ccs/native_transaction/eopkg.rs
+// crates/conary-core/src/ccs/native_transaction/eopkg.rs
 
 //! eopkg transaction-wide system configuration event.
 
