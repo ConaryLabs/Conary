@@ -242,7 +242,7 @@ async fn run_cli_command(command: PackageCommand, db_path: String, root: String)
                 MutationIntent::from_apply_intent(apply_intent),
             )?;
             for package in packages {
-                cmd_remove(&package, &db_path, None, None, SandboxMode::Always, purge).await?;
+                cmd_remove(&package, &db_path, None, None, SandboxMode::Always, purge)?;
                 require_generation_publication_complete(&db_path)?;
             }
         }
