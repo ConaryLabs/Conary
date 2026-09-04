@@ -1,16 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 <db-path> <selected-runtime-root>" >&2
+ordinary_conary_bin=""
+test_hooks_conary_bin=""
+usage() {
+  echo "Usage: $0 --conary-bin <path> --test-hooks-conary-bin <path> <db-path> <selected-runtime-root>" >&2
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      ordinary_conary_bin="$2"
+      shift 2
+      ;;
+    --test-hooks-conary-bin)
+      [[ $# -ge 2 ]] || { usage; exit 64; }
+      test_hooks_conary_bin="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      usage
+      exit 64
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+if [[ -z "${ordinary_conary_bin}" || -z "${test_hooks_conary_bin}" || $# -ne 2 ]]; then
+  usage
   exit 64
 fi
+for binary in "${ordinary_conary_bin}" "${test_hooks_conary_bin}"; do
+  if [[ "${binary}" != /* || ! -x "${binary}" ]]; then
+    echo "Conary binary input must be an executable absolute path: ${binary}" >&2
+    exit 64
+  fi
+done
 
 db_path="$1"
 runtime_root="$2"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fixtures_dir="$(cd "${script_dir}/.." && pwd)"
-conary_bin="${CONARY_BIN:-conary}"
 layout_fixture="${fixtures_dir}/native-selected-root-layout"
 authority_dir="${fixtures_dir}/ccs-test-authority"
 work="/tmp/conary-selected-root-layout"
@@ -193,7 +228,7 @@ printf 'selected-root-test-kernel\n' > "${runtime_root}/boot/vmlinuz-test-kernel
 printf 'selected-root-test-initramfs\n' > "${runtime_root}/boot/initramfs-test-kernel.img"
 printf 'selected-root-test-efi\n' > "${runtime_root}/boot/EFI/BOOT/BOOTX64.EFI"
 
-"${conary_bin}" ccs build "${layout_fixture}" \
+"${ordinary_conary_bin}" ccs build "${layout_fixture}" \
   --source "${stage}" \
   --output "${output}" \
   --target ccs \
@@ -208,7 +243,7 @@ if [[ "${#layout_packages[@]}" -ne 1 ]]; then
 fi
 
 CONARY_TEST_SKIP_GENERATION_MOUNT=1 \
-  "${conary_bin}" ccs install "${layout_packages[0]}" \
+  "${test_hooks_conary_bin}" ccs install "${layout_packages[0]}" \
     --policy "${authority_dir}/trust-policy.toml" \
     --db-path "${db_path}" \
     --root "${runtime_root}" \

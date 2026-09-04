@@ -446,11 +446,15 @@ struct BuiltForPublication {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-hooks")]
     use conary_core::config_transaction::{
         ConfigArtifact, ConfigPathTransaction, ConfigTransactionOperation,
     };
+    #[cfg(feature = "test-hooks")]
     use conary_core::db::models::{ConfigFile, ConfigStatus, Trove};
+    #[cfg(feature = "test-hooks")]
     use conary_core::payload::ResolvedPayloadNode;
+    #[cfg(feature = "test-hooks")]
     use std::path::Path;
 
     #[test]
@@ -522,6 +526,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn recovery_replays_projection_and_backup_after_link_swap_before_phase() {
         let fixture = PublicationCrashFixture::new();
         let mut interrupted = false;
@@ -581,6 +586,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn recovery_replays_backup_after_link_swap_and_active_state_mark() {
         let fixture = PublicationCrashFixture::new();
         let mut interrupted = false;
@@ -631,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn recovery_completes_after_database_backup_before_terminal_state() {
         let fixture = PublicationCrashFixture::new();
         let mut interrupted = false;
@@ -681,6 +688,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn normal_publication_finalizes_one_self_contained_terminal_delta() {
         let fixture = PublicationCrashFixture::new();
         fixture
@@ -745,6 +753,7 @@ mod tests {
         assert!(fixture.generation_backup_exists(&fixture.reload_debt()));
     }
 
+    #[cfg(feature = "test-hooks")]
     struct PublicationCrashFixture {
         _temp: tempfile::TempDir,
         _mount_guard: crate::commands::composefs_ops::TestMountSkipGuard,
@@ -754,6 +763,7 @@ mod tests {
         runtime_root: ConaryRuntimeRoot,
     }
 
+    #[cfg(feature = "test-hooks")]
     impl PublicationCrashFixture {
         fn new() -> Self {
             let mount_guard = crate::commands::composefs_ops::test_mount_skip_guard();
@@ -871,6 +881,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-hooks")]
     fn config_artifact(runtime_root: &ConaryRuntimeRoot, content: &[u8]) -> ConfigArtifact {
         let node = ResolvedPayloadNode::from_numeric_source(
             crate::commands::test_helpers::test_regular_payload_node(0o644),

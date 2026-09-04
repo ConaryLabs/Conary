@@ -44,7 +44,7 @@ fn runtime_root_for_db_path(db_path: &str) -> ConaryRuntimeRoot {
 }
 
 fn boot_root_for_generation_build(runtime_root: &ConaryRuntimeRoot) -> PathBuf {
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
+    if crate::test_hooks::get().skip_generation_mount() {
         let test_boot = runtime_root.root().join("boot");
         if test_boot.is_dir() {
             return test_boot;
@@ -127,10 +127,8 @@ fn build_generation_for_input(
         config_transactions,
     )?;
 
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_some() {
-        info!(
-            "Skipping generation fs-verity enablement because CONARY_TEST_SKIP_GENERATION_MOUNT is set"
-        );
+    if crate::test_hooks::get().skip_generation_mount() {
+        info!("Skipping generation fs-verity enablement because the test hook is active");
         return Ok(BuiltGeneration {
             generation_number: gen_num,
             state_number: gen_num,
@@ -190,7 +188,7 @@ pub(crate) fn build_inactive_generation_for_runtime(
         &transactions,
     )?;
 
-    if std::env::var_os("CONARY_TEST_SKIP_GENERATION_MOUNT").is_none() {
+    if !crate::test_hooks::get().skip_generation_mount() {
         let gen_dir = generations_dir.join(gen_num.to_string());
         enable_generation_rootfs_verity(&gen_dir, &build_result.image_path).map_err(|e| {
             anyhow::anyhow!(
@@ -288,14 +286,16 @@ pub fn rebuild_and_mount_from_installed_state(
 }
 
 fn forced_generation_rebuild_failure() -> Option<anyhow::Error> {
-    std::env::var_os("CONARY_TEST_FAIL_GENERATION_REBUILD").map(|message| {
-        let message = message.to_string_lossy();
-        if message.is_empty() {
-            anyhow::anyhow!("forced generation rebuild failure for test")
-        } else {
-            anyhow::anyhow!("forced generation rebuild failure for test: {message}")
-        }
-    })
+    crate::test_hooks::get()
+        .fail_generation_rebuild()
+        .map(|message| {
+            let message = message.to_string_lossy();
+            if message.is_empty() {
+                anyhow::anyhow!("forced generation rebuild failure for test")
+            } else {
+                anyhow::anyhow!("forced generation rebuild failure for test: {message}")
+            }
+        })
 }
 
 #[cfg(test)]
@@ -310,7 +310,7 @@ static TEST_MOUNT_SKIP_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // This variable controls behavior across the whole unit-test process. Every
 // mutation must stay behind TEST_MOUNT_SKIP_LOCK.
 #[cfg(test)]
-pub(crate) const TEST_MOUNT_SKIP_ENV: &str = "CONARY_TEST_SKIP_GENERATION_MOUNT";
+pub(crate) const TEST_MOUNT_SKIP_ENV: &str = crate::test_hooks::names::SKIP_GENERATION_MOUNT;
 
 #[cfg(test)]
 fn lock_test_mount_skip() -> std::sync::MutexGuard<'static, ()> {
@@ -359,30 +359,30 @@ impl Drop for TestMountSkipGuard {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(crate) struct TestGenerationRebuildFailureGuard {
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 static TEST_GENERATION_REBUILD_FAILURE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 pub(crate) fn test_forced_generation_rebuild_failure_guard(
     message: &str,
 ) -> TestGenerationRebuildFailureGuard {
     let guard = TEST_GENERATION_REBUILD_FAILURE_LOCK.lock().unwrap();
     unsafe {
-        std::env::set_var("CONARY_TEST_FAIL_GENERATION_REBUILD", message);
+        std::env::set_var(crate::test_hooks::names::FAIL_GENERATION_REBUILD, message);
     }
     TestGenerationRebuildFailureGuard { _guard: guard }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-hooks"))]
 impl Drop for TestGenerationRebuildFailureGuard {
     fn drop(&mut self) {
         unsafe {
-            std::env::remove_var("CONARY_TEST_FAIL_GENERATION_REBUILD");
+            std::env::remove_var(crate::test_hooks::names::FAIL_GENERATION_REBUILD);
         }
     }
 }
@@ -409,6 +409,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn forced_generation_rebuild_failure_reads_test_env_message() {
         let _guard = test_forced_generation_rebuild_failure_guard("slice-d forced failure");
 
@@ -459,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-hooks")]
     fn boot_root_for_generation_build_prefers_self_contained_test_boot_when_requested() {
         let _guard = test_mount_skip_guard();
         let temp = tempfile::TempDir::new().unwrap();

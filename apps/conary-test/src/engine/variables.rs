@@ -13,10 +13,12 @@ use crate::config::manifest::{Assertion, FileChecksum, QemuBoot, QemuGuestCopy, 
 /// via `${VAR}` substitution in manifest fields.
 pub fn build_variables(config: &GlobalConfig, distro: &str) -> HashMap<String, String> {
     let mut vars = HashMap::new();
+    let conary_binaries = config.paths.resolve_conary_binaries();
     vars.insert("DISTRO".to_string(), distro.to_string());
     vars.insert("REMI_ENDPOINT".to_string(), config.remi.endpoint.clone());
     vars.insert("DB_PATH".to_string(), config.paths.db.clone());
-    vars.insert("CONARY_BIN".to_string(), config.paths.conary_bin.clone());
+    vars.insert("CONARY_BIN".to_string(), conary_binaries.ordinary);
+    vars.insert("CONARY_HOOKS_BIN".to_string(), conary_binaries.test_hooks);
     if let Some(fixture_dir) = &config.paths.fixture_dir {
         vars.insert("FIXTURE_DIR".to_string(), fixture_dir.clone());
         let fixture_root = std::path::Path::new(fixture_dir);
@@ -293,6 +295,7 @@ mod tests {
             paths: PathsConfig {
                 db: "/tmp/conary-test.db".to_string(),
                 conary_bin: "/usr/local/bin/conary".to_string(),
+                test_hooks_conary_bin: Some("/usr/local/libexec/conary-test-hooks".to_string()),
                 results_dir: "/tmp/results".to_string(),
                 fixture_dir: Some("/opt/remi-tests/fixtures".to_string()),
             },
@@ -365,6 +368,10 @@ mod tests {
         assert_eq!(vars["REMI_ENDPOINT"], "https://remi.conary.io");
         assert_eq!(vars["DB_PATH"], "/tmp/conary-test.db");
         assert_eq!(vars["CONARY_BIN"], "/usr/local/bin/conary");
+        assert_eq!(
+            vars["CONARY_HOOKS_BIN"],
+            "/usr/local/libexec/conary-test-hooks"
+        );
         assert_eq!(vars["DISTRO"], "fedora44");
         assert_eq!(vars["REMI_DISTRO"], "fedora-44");
         assert_eq!(vars["REPO_NAME"], "remi-fedora-44");
@@ -387,6 +394,16 @@ mod tests {
             vars["FIXTURE_CCS_EXPIRED_POLICY"],
             "/opt/remi-tests/fixtures/ccs-test-authority/expired-trust-policy.toml"
         );
+    }
+
+    #[test]
+    fn test_hooks_binary_defaults_to_the_ordinary_integration_binary() {
+        let mut config = test_config();
+        config.paths.test_hooks_conary_bin = None;
+
+        let vars = build_variables(&config, "fedora44");
+
+        assert_eq!(vars["CONARY_HOOKS_BIN"], vars["CONARY_BIN"]);
     }
 
     #[test]

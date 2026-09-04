@@ -10,4 +10,5 @@ pub mod commands;
 pub mod dispatch;
 pub mod live_host_safety;
 pub mod logging;
+pub(crate) mod test_hooks;
 pub mod ui;

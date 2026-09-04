@@ -1,4 +1,5 @@
 // apps/conary/tests/rpm_named_ownership.rs
+#![cfg(feature = "test-hooks")]
 
 //! End-to-end proof that RPM header names remain source authority while the
 //! selected target root supplies the numeric identity used at apply time.

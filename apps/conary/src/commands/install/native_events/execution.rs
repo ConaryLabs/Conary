@@ -41,7 +41,7 @@ impl PreparedNativeTransaction {
         mode: &ExecutionMode,
         bridge: Option<&super::debian_runtime::DebianLifecycleBridge>,
     ) -> Result<()> {
-        if let Some(message) = std::env::var_os("CONARY_TEST_FAIL_NATIVE_LIFECYCLE") {
+        if let Some(message) = crate::test_hooks::get().fail_native_lifecycle() {
             anyhow::bail!(
                 "forced native lifecycle failure for test: {}",
                 message.to_string_lossy()

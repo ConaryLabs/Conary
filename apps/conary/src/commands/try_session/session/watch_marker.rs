@@ -20,8 +20,7 @@ pub(super) fn write_try_watch_marker(
     work_dir: &Path,
     marker: TryWatchMarkerRequest<'_>,
 ) -> Result<()> {
-    #[cfg(test)]
-    if std::env::var_os("CONARY_TEST_TRY_WATCH_MARKER_FAIL").is_some() {
+    if crate::test_hooks::get().try_watch_marker_fail() {
         anyhow::bail!("failed to write try watch marker: forced test failure");
     }
 

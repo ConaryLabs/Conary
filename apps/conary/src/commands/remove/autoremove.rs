@@ -281,14 +281,15 @@ fn autoremove_identity(trove: &Trove) -> (String, String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-hooks")]
     use conary_core::ccs::native_lifecycle::{
         LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation, NativeLifecycleBundle,
         NativeLifecycleEntry, NativeLifecycleEntryKind, ScriptletFidelity, SourceFormat,
         TransactionOrder, VersionScheme,
     };
-    use conary_core::db::models::{
-        InstallReason, InstallSource, InstalledNativeLifecycleBundle, TroveType,
-    };
+    #[cfg(feature = "test-hooks")]
+    use conary_core::db::models::InstalledNativeLifecycleBundle;
+    use conary_core::db::models::{InstallReason, InstallSource, TroveType};
     use tempfile::TempDir;
 
     #[test]
@@ -348,6 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "test-hooks")]
     async fn autoremove_automatically_replays_native_remove_lifecycle() {
         let _mount_skip = crate::commands::composefs_ops::test_mount_skip_guard();
         let tmp = TempDir::new().unwrap();
@@ -514,6 +516,7 @@ mod tests {
         trove.insert(conn).unwrap()
     }
 
+    #[cfg(feature = "test-hooks")]
     fn seed_installed_native_lifecycle_bundle(
         conn: &rusqlite::Connection,
         trove_id: i64,
@@ -524,6 +527,7 @@ mod tests {
         installed.insert_or_replace(conn).unwrap();
     }
 
+    #[cfg(feature = "test-hooks")]
     fn native_post_remove_bundle(package: &str) -> NativeLifecycleBundle {
         let entry = native_post_remove_entry();
         NativeLifecycleBundle {
@@ -549,6 +553,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "test-hooks")]
     fn native_post_remove_entry() -> NativeLifecycleEntry {
         let body = r#"
 local marker = assert(io.open("/autoremove-native-lifecycle-ran", "w"))
@@ -604,6 +609,7 @@ marker:close()
         }
     }
 
+    #[cfg(feature = "test-hooks")]
     fn table_count(conn: &rusqlite::Connection, table: &str) -> i64 {
         conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
             row.get(0)
@@ -611,6 +617,7 @@ marker:close()
         .unwrap()
     }
 
+    #[cfg(feature = "test-hooks")]
     fn changeset_metadata_by_description(
         conn: &rusqlite::Connection,
         description: &str,

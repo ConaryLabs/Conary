@@ -817,6 +817,27 @@ printf 'fixture\n' > "$output/$file"
     }
 
     #[test]
+    fn release_containerfiles_keep_a_separate_test_hook_binary() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let containers = manifest_dir.join("../conary/tests/integration/remi/containers");
+        for file in [
+            "Containerfile.fedora44",
+            "Containerfile.ubuntu-26.04",
+            "Containerfile.arch",
+        ] {
+            let contents =
+                fs::read_to_string(containers.join(file)).expect("read release containerfile");
+            assert!(
+                contents.contains(
+                    "install -D -m 755 /tmp/install/conary \
+                     /usr/libexec/conary-test/conary-test-hooks",
+                ),
+                "{file} must preserve the integration binary beside the published binary"
+            );
+        }
+    }
+
+    #[test]
     fn artix_container_uses_core_mirrors_before_package_sync() {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let containerfile =

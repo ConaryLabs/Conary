@@ -910,7 +910,9 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     );
     let command = tests.run.as_deref().expect("workspace shard dispatch");
     for predicate in [
-        "conary) cargo test -p conary --verbose",
+        "conary)",
+        "cargo test -p conary --no-default-features --test test_hook_ownership --verbose",
+        "cargo test -p conary --features test-hooks --verbose",
         "conary-core-repository) cargo test -p conary-core --lib repository:: --verbose",
         "cargo test -p conary-core --lib --verbose -- --skip repository::",
         "conary-core-targets) cargo test -p conary-core --bins --test '*' --verbose",
@@ -1025,9 +1027,26 @@ fn release_artifact_workflow_installs_every_published_native_package() {
             .is_some_and(|run| run.contains("--native-package"))
     );
 
+    let ordinary_fence = named_step(&job.steps, "Prove the published binary rejects test hooks");
+    let ordinary_fence_script = ordinary_fence
+        .run
+        .as_deref()
+        .expect("published binary fence script");
+    for required in [
+        "/usr/bin/conary --version",
+        "CONARY_TEST_SKIP_GENERATION_MOUNT=1 /usr/bin/conary --version",
+        "test-hook environment variables are disabled",
+        "/usr/libexec/conary-test/conary-test-hooks --version",
+    ] {
+        assert!(
+            ordinary_fence_script.contains(required),
+            "published binary fence must contain {required}"
+        );
+    }
+
     let lifecycle = named_step(
         &job.steps,
-        "Run Cartesian lifecycle parity with the published binary",
+        "Run container lifecycle parity with explicit binary authority",
     );
     assert!(
         lifecycle
@@ -1041,6 +1060,14 @@ fn release_artifact_workflow_installs_every_published_native_package() {
             .get("CONARY_TEST_REUSE_IMAGE")
             .map(String::as_str),
         Some("1")
+    );
+    assert_eq!(
+        lifecycle.env.get("CONARY_HOOKS_BIN").map(String::as_str),
+        Some("/usr/libexec/conary-test/conary-test-hooks")
+    );
+    assert!(
+        !lifecycle.env.contains_key("CONARY_BIN"),
+        "the package-owned /usr/bin/conary must remain the ordinary suite binary"
     );
 
     let gate: GateJob = parse_job(&workflow, RELEASE_ARTIFACT_GATE_ID);

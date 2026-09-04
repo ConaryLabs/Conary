@@ -258,6 +258,7 @@ async fn ccs_install_rejects_child_before_package_symlink() {
 }
 
 #[tokio::test]
+#[cfg(feature = "test-hooks")]
 async fn ccs_install_persists_usrmerge_payload_under_usr_path() {
     use conary_core::ccs::{BuildResult, CcsManifest, ComponentData};
     use conary_core::hash;

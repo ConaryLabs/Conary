@@ -6,6 +6,7 @@
 #   REMI_ENDPOINT  - override [remi] endpoint
 #   DB_PATH        - override [paths] db
 #   CONARY_BIN     - override [paths] conary_bin
+#   CONARY_HOOKS_BIN - override the optional hook binary; defaults to CONARY_BIN
 #   RESULTS_DIR    - override [paths] results_dir
 #   DISTRO         - select which [distros.*] section to use
 

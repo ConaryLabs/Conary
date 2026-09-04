@@ -84,7 +84,7 @@ semantic = "lifecycle_shell"
 artifact_roles = ["install_request", "update_request"]
 
 [[test.step]]
-run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-rpm.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} rpm"
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-rpm.json /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh --conary-bin ${CONARY_BIN} --test-hooks-conary-bin ${CONARY_HOOKS_BIN} ${native_lifecycle_oracle_format} rpm"
 
 [test.step.assert]
 exit_code = 0
@@ -126,7 +126,7 @@ semantic = "lifecycle_shell"
 artifact_roles = ["install_request", "update_request"]
 
 [[test.step]]
-run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-deb.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} deb"
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-deb.json /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh --conary-bin ${CONARY_BIN} --test-hooks-conary-bin ${CONARY_HOOKS_BIN} ${native_lifecycle_oracle_format} deb"
 
 [test.step.assert]
 exit_code = 0
@@ -168,7 +168,7 @@ semantic = "lifecycle_shell"
 artifact_roles = ["install_request", "update_request"]
 
 [[test.step]]
-run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-arch.json CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh ${native_lifecycle_oracle_format} arch"
+run = "CONARY_CORPUS_EVIDENCE_PATH=/tmp/conary-corpus-arch.json /opt/remi-tests/fixtures/native/run-cross-source-lifecycle-matrix.sh --conary-bin ${CONARY_BIN} --test-hooks-conary-bin ${CONARY_HOOKS_BIN} ${native_lifecycle_oracle_format} arch"
 
 [test.step.assert]
 exit_code = 0
@@ -182,7 +182,7 @@ fatal = false
 group = "native-cross-source-lifecycle"
 
 [[test.step]]
-run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/run-openrc-service-lifecycle.sh ${target_init_system}"
+run = "/opt/remi-tests/fixtures/native/run-openrc-service-lifecycle.sh --conary-bin ${CONARY_BIN} --test-hooks-conary-bin ${CONARY_HOOKS_BIN} ${target_init_system}"
 
 [test.step.assert]
 exit_code = 0

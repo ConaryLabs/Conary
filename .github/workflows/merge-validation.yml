@@ -253,7 +253,10 @@ jobs:
         run: |
           set -euo pipefail
           case "$TEST_SHARD" in
-            conary) cargo test -p conary --verbose ;;
+            conary)
+              cargo test -p conary --no-default-features --test test_hook_ownership --verbose
+              cargo test -p conary --features test-hooks --verbose
+              ;;
             conary-core-repository) cargo test -p conary-core --lib repository:: --verbose ;;
             conary-core-remaining)
               cargo test -p conary-core --lib --verbose -- --skip repository::

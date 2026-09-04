@@ -20,6 +20,14 @@ domain in `crates/conary-core`.
 - A built conary binary (`cargo build -p conary`)
 - The conary-test app crate (`cargo build -p conary-test`)
 
+Conary CLI integration controls are available only in binaries built with the
+non-default `test-hooks` Cargo feature, and `apps/conary/src/test_hooks.rs`
+owns their complete typed environment snapshot. Run hook-dependent package
+tests with `cargo test -p conary --features test-hooks`; the static integration
+artifact builder enables that feature explicitly for `conary-test` manifests,
+while ordinary and release binaries reject any `CONARY_TEST_*` variable at
+startup instead of honoring or silently ignoring it.
+
 ## Running Tests
 
 ```bash
@@ -184,6 +192,26 @@ once, caches it, and produces a statically linked `conary` for
 that default to stage a specific binary. The build is debug profile and the
 binary is a test-staging artifact, not a release artifact. Distro container
 images stage the same artifact through `build_context = "static-binary"`.
+Published-native-package proof images keep that integration artifact at
+`/usr/libexec/conary-test/conary-test-hooks` while the package owns the
+ordinary `/usr/bin/conary`. The release lane proves `/usr/bin/conary` rejects
+test-hook variables, then passes the ordinary and integration paths as separate
+typed lifecycle inputs. Hook-free setup, fixture construction, and install or
+update planning run through the package-owned binary. Only mutation steps that
+explicitly name `CONARY_TEST_SKIP_GENERATION_MOUNT` use the integration binary.
+The integration path is never packaged. GitHub-hosted containers do not supply
+the real generation-mount and fs-verity substrate, so this lane does not claim
+that release bytes performed install, update, rollback, or remove mutations.
+Release-byte mutation evidence belongs only in a real-mount QEMU/KVM lane.
+
+Groups O and P provide that real-mount substrate, but their current
+`stage_conary = true` path resolves to the locally built static integration
+artifact, which carries `test-hooks`; the local wrapper does not download or
+bind an immutable native release package. Issue #848 owns the separate work to
+verify a published artifact, stage those exact ordinary bytes, and run the
+Group O/P mutations with them. Until that lands, documentation and release
+automation must not claim published-byte mutation coverage.
+
 For the protected PR matrix, `--with-test-harness` also produces fully static
 `conary-test` and library-test executables. One producer packages those three
 binaries with exact source, toolchain, flag, cache-policy, and digest evidence;

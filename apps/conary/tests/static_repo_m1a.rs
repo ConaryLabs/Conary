@@ -1,4 +1,5 @@
 // apps/conary/tests/static_repo_m1a.rs
+#![cfg(feature = "test-hooks")]
 
 use std::collections::HashMap;
 use std::ffi::OsStr;

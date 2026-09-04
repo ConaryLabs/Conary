@@ -160,7 +160,7 @@ conary = "repo sync ${REPO_NAME} --force"
 exit_code = 0
 
 [[suite.setup]]
-run = "CONARY_BIN=${CONARY_BIN} /opt/remi-tests/fixtures/native/prepare-selected-root.sh ${DB_PATH} /conary"
+run = "/opt/remi-tests/fixtures/native/prepare-selected-root.sh --conary-bin ${CONARY_BIN} --test-hooks-conary-bin ${CONARY_HOOKS_BIN} ${DB_PATH} /conary"
 
 [suite.setup.assert]
 exit_code = 0

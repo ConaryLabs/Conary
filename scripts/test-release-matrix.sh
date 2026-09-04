@@ -263,6 +263,8 @@ create_release_policy_fixture() {
         "$repo/.github/ISSUE_TEMPLATE" \
         "$repo/.github/workflows" \
         "$repo/apps/remi/src/server" \
+        "$repo/apps/conary/tests/fixtures/native" \
+        "$repo/apps/conary/tests/integration/remi/manifests" \
         "$repo/docs/operations" \
         "$repo/site/src/lib" \
         "$repo/site/static" \
@@ -308,6 +310,7 @@ create_release_policy_fixture() {
         "$repo/scripts/verify-native-oracle-producer.py"
     cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
     cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
+    cp "$REPO_ROOT/scripts/build-static-conary.sh" "$repo/scripts/build-static-conary.sh"
     cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
         "$repo/deploy/remi-predeployment-inspection.jq"
     cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
@@ -315,6 +318,10 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" \
         "$repo/deploy/remi-deploy-helper.sh"
     cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
+    cp "$REPO_ROOT/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
+    cp "$REPO_ROOT/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml" \
+        "$repo/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
     cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
     cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
@@ -3490,6 +3497,77 @@ test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
 }
 
+test_check_release_matrix_rejects_test_hooks_in_release_workflow() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo fmt --check' \
+        '        run: cargo fmt --check --features test-hooks'
+
+    assert_check_release_matrix_fails "$repo" "release-build test-hooks feature"
+}
+
+test_check_release_matrix_requires_ordinary_conary_hook_fence() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-build.yml" \
+        '        run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose' \
+        '        run: echo "ordinary Conary hook fence removed"'
+
+    assert_check_release_matrix_fails "$repo" "release ordinary Conary test-hook fence"
+}
+
+test_check_release_matrix_rejects_published_binary_as_hook_runner() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/release-artifact-proof.yml" \
+        '          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks' \
+        '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published native package fence and separate test-hook lifecycle proof"
+}
+
+test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+        'preview="$(run_hook_free_conary install "${v1_package}" \' \
+        'preview="$(run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}" \'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "published binary hook-free lifecycle coverage"
+}
+
+test_check_release_matrix_requires_named_hook_for_every_container_mutation() {
+    local original
+    local repo
+    local replacement
+
+    while IFS='|' read -r original replacement; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
+            "$original" \
+            "$replacement"
+
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "four explicit hook-dependent lifecycle mutations"
+    done <<'CASES'
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v1_package}"
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v2_package}"
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT \|run_conary_requiring_hook CONARY_TEST_UNDECLARED \
+run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove "${package_name}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED remove "${package_name}"
+CASES
+}
+
 test_check_release_matrix_rejects_non_failing_artifact_upload() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3931,6 +4009,11 @@ main() {
         test_check_release_matrix_requires_hosted_debian_parity_producer
         test_check_release_matrix_requires_hosted_debian_resolution_binary
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
+        test_check_release_matrix_rejects_test_hooks_in_release_workflow
+        test_check_release_matrix_requires_ordinary_conary_hook_fence
+        test_check_release_matrix_rejects_published_binary_as_hook_runner
+        test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step
+        test_check_release_matrix_requires_named_hook_for_every_container_mutation
         test_check_release_matrix_rejects_non_failing_artifact_upload
         test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
         test_check_release_matrix_rejects_missing_tester_authority_boundary
