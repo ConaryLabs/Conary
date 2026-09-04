@@ -1,6 +1,6 @@
 // apps/conary/tests/cli_daily_ux.rs
 
-mod common;
+pub mod common;
 
 use conary_core::db::models::{InstallSource, Repository, RepositoryPackage, Trove, TroveType};
 use conary_core::packages::InstalledPackageIdentity;

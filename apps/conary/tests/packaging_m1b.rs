@@ -1,7 +1,7 @@
 // apps/conary/tests/packaging_m1b.rs
 #![cfg(feature = "test-hooks")]
 
-mod common;
+pub mod common;
 
 use std::collections::HashMap;
 use std::fs;

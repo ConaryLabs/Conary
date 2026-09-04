@@ -23,7 +23,7 @@ use conary_core::repository::static_repo::publish_context::{
 use super::super::publish::{
     PublishDestination, StaticArtifactPublishServiceInput, publish_static_artifact_form_service,
 };
-use super::projection::{AgentProjectionMode, project_packaging_output};
+use super::projection::project_packaging_output;
 use super::publish_plan::{PublishPlanMaterial, PublishPlanRegistry, stage_artifact_private};
 use super::records;
 use super::types::{
@@ -548,7 +548,6 @@ impl PackagingAgentService {
             operation,
             &output,
             RiskLevel::High,
-            AgentProjectionMode::Apply,
             Some(resource::packaging_artifact(&material.artifact_sha256)),
         );
         envelope

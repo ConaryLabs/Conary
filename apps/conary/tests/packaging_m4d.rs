@@ -1,6 +1,6 @@
 // apps/conary/tests/packaging_m4d.rs
 
-mod common;
+pub mod common;
 
 use std::process::Command;
 

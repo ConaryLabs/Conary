@@ -40,7 +40,6 @@ fn is_repo_version_newer(trove: &Trove, package: &RepositoryPackage) -> Result<b
     Ok(true)
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct SelectedUpdateCandidate {
     pub(super) package: RepositoryPackage,
@@ -72,7 +71,6 @@ impl UpdateCandidateSelection {
     }
 }
 
-#[allow(dead_code)]
 fn persisted_source_profile(trove: &Trove) -> Option<&str> {
     trove.source_profile.as_deref()
 }

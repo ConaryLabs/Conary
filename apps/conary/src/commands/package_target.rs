@@ -74,7 +74,7 @@ pub(crate) fn resolve_installed_package(
     }
 }
 
-pub(crate) fn matching_installed_packages<'a>(
+fn matching_installed_packages<'a>(
     troves: &'a [Trove],
     selector: &InstalledPackageSelector,
 ) -> Vec<&'a Trove> {
@@ -101,7 +101,7 @@ fn architecture_matches(selector: Option<&str>, actual: Option<&str>) -> bool {
     }
 }
 
-pub(crate) fn format_installed_variant(trove: &Trove) -> String {
+fn format_installed_variant(trove: &Trove) -> String {
     format!(
         "version {} [{}] ({}, {})",
         trove.version,
@@ -111,7 +111,7 @@ pub(crate) fn format_installed_variant(trove: &Trove) -> String {
     )
 }
 
-pub(crate) fn format_installed_variants(troves: &[Trove]) -> String {
+fn format_installed_variants(troves: &[Trove]) -> String {
     troves
         .iter()
         .map(format_installed_variant)

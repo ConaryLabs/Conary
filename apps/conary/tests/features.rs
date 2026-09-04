@@ -2,7 +2,7 @@
 
 //! Feature-specific tests: install reasons, collections, config files, and system state.
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 

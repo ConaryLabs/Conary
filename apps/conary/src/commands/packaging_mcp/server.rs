@@ -23,7 +23,6 @@ use super::types::{
 #[derive(Clone)]
 pub(crate) struct PackagingMcpServer {
     service: PackagingAgentService,
-    #[allow(dead_code)] // Read by rmcp's tool_router macro via generated code.
     tool_router: ToolRouter<Self>,
 }
 

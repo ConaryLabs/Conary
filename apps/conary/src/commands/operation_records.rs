@@ -36,7 +36,6 @@ pub fn packaging_operations_dir_from_state_home(state_home: &Path) -> PathBuf {
         .join("operations")
 }
 
-#[allow(dead_code)]
 pub fn default_packaging_operations_dir() -> Result<PathBuf> {
     if let Some(override_dir) = std::env::var_os("CONARY_PACKAGING_OPERATIONS_DIR") {
         return Ok(PathBuf::from(override_dir));
@@ -59,7 +58,6 @@ pub fn default_packaging_operations_dir() -> Result<PathBuf> {
     )
 }
 
-#[allow(dead_code)]
 pub(crate) fn write_packaging_record_unchecked<T: Serialize>(
     dir: &Path,
     operation_id: &str,
@@ -77,7 +75,6 @@ pub(crate) fn write_packaging_record_unchecked<T: Serialize>(
     Ok(path)
 }
 
-#[allow(dead_code)]
 pub fn list_packaging_records(dir: &Path) -> Result<Vec<PathBuf>> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -91,14 +88,6 @@ pub fn list_packaging_records(dir: &Path) -> Result<Vec<PathBuf>> {
     }
     records.sort();
     Ok(records)
-}
-
-#[allow(dead_code)]
-pub fn load_latest_packaging_record<T: DeserializeOwned>(dir: &Path) -> Result<Option<T>> {
-    let Some(path) = list_packaging_records(dir)?.pop() else {
-        return Ok(None);
-    };
-    Ok(Some(load_json_record(&path)?))
 }
 
 pub fn load_packaging_record_by_id<T: DeserializeOwned>(
@@ -170,9 +159,8 @@ mod tests {
 
     use super::{
         list_packaging_records, load_json_record, load_latest_failed_packaging_record,
-        load_latest_packaging_record, load_packaging_record_by_id,
-        packaging_operations_dir_from_state_home, takeover_operations_dir, write_json_record,
-        write_packaging_record_unchecked,
+        load_packaging_record_by_id, packaging_operations_dir_from_state_home,
+        takeover_operations_dir, write_json_record, write_packaging_record_unchecked,
     };
 
     #[test]
@@ -239,10 +227,6 @@ mod tests {
             std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
             0o700
         );
-        let latest = load_latest_packaging_record::<Fixture>(&dir)
-            .unwrap()
-            .unwrap();
-        assert_eq!(latest.operation_id, "cook-54");
         let records = list_packaging_records(&dir).unwrap();
         assert_eq!(records.len(), 50);
         assert!(!dir.join("cook-00.json").exists());

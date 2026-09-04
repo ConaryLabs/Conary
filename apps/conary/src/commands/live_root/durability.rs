@@ -75,6 +75,7 @@ impl MutationDurability {
         }
     }
 
+    #[cfg(test)]
     pub(super) const fn metrics(&self) -> LiveRootDurabilityMetrics {
         self.metrics
     }

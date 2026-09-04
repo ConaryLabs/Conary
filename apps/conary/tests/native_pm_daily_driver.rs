@@ -1,7 +1,7 @@
 // apps/conary/tests/native_pm_daily_driver.rs
 #![cfg(feature = "test-hooks")]
 
-mod common;
+pub mod common;
 
 use conary_core::ccs::native_lifecycle::{
     LifecyclePath, NATIVE_LIFECYCLE_SCHEMA_REVISION, NATIVE_LIFECYCLE_SCHEMA_V1, NativeInvocation,

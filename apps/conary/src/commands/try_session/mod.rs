@@ -17,7 +17,6 @@ mod validation;
 mod watch;
 mod watch_source;
 
-#[allow(unused_imports)]
 pub(crate) use session::refresh_try_session;
 pub(crate) use session::{
     activated_try_session_is_live, begin_try_session, current_boot_id,

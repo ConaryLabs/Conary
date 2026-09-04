@@ -1,6 +1,6 @@
 // apps/conary/tests/cli_output_snapshots.rs
 
-mod common;
+pub mod common;
 
 use conary_core::db::models::{Trove, TroveType};
 use std::process::Command;

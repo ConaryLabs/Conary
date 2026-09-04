@@ -1,6 +1,6 @@
 // apps/conary/tests/packaging_m4a.rs
 
-mod common;
+pub mod common;
 
 use conary_core::ccs::builder::write_v3_ccs_package_from_bounded_memory_for_tests;
 use conary_core::ccs::signing::SigningKeyPair;

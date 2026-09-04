@@ -1,6 +1,6 @@
 // apps/conary/tests/query_scripts.rs
 
-mod common;
+pub mod common;
 
 use clap::Parser;
 use conary::cli::{Cli, Commands, QueryCommands};

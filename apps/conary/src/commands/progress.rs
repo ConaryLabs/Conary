@@ -4,9 +4,6 @@
 //! Provides visual feedback during package installation, removal, and updates
 //! with overall progress bars and per-operation status displays.
 //!
-//! These types are public API, used by command modules as they are integrated.
-#![allow(dead_code)]
-
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::time::Duration;
 
@@ -15,10 +12,9 @@ use std::time::Duration;
 /// Displays an overall progress bar at the top with a status line below
 /// showing the current operation.
 pub struct InstallProgress {
-    multi: MultiProgress,
+    _multi: MultiProgress,
     overall: ProgressBar,
     status: ProgressBar,
-    total_packages: u64,
     completed: u64,
 }
 
@@ -54,10 +50,9 @@ impl InstallProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
-            total_packages,
             completed: 0,
         }
     }
@@ -82,10 +77,9 @@ impl InstallProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
-            total_packages: 1,
             completed: 0,
         }
     }
@@ -126,19 +120,6 @@ impl InstallProgress {
         self.set_phase(package, InstallPhase::Failed(error.to_string()));
     }
 
-    /// Add a sub-progress bar for file deployment
-    pub fn add_file_progress(&self, total_files: u64, package: &str) -> ProgressBar {
-        let pb = ProgressBar::new(total_files);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("    {msg} [{bar:30.blue/dim}] {pos}/{len}")
-                .expect("Invalid progress bar template")
-                .progress_chars("=>-"),
-        );
-        pb.set_message(format!("Files for {}", package));
-        self.multi.add(pb)
-    }
-
     /// Finish the overall progress with a success message
     pub fn finish(&self, message: &str) {
         self.status.finish_and_clear();
@@ -149,11 +130,6 @@ impl InstallProgress {
     pub fn finish_with_error(&self, message: &str) {
         self.status.finish_and_clear();
         self.overall.abandon_with_message(message.to_string());
-    }
-
-    /// Get the MultiProgress handle for adding custom progress bars
-    pub fn multi(&self) -> &MultiProgress {
-        &self.multi
     }
 }
 
@@ -176,7 +152,7 @@ pub enum InstallPhase {
 
 /// Progress tracker for package removal
 pub struct RemoveProgress {
-    multi: MultiProgress,
+    _multi: MultiProgress,
     overall: ProgressBar,
     status: ProgressBar,
 }
@@ -207,7 +183,7 @@ impl RemoveProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
         }
@@ -222,18 +198,6 @@ impl RemoveProgress {
             RemovePhase::UpdatingDb => "Updating database...",
         };
         self.status.set_message(msg.to_string());
-    }
-
-    /// Add a file removal progress bar
-    pub fn add_file_progress(&self, total_files: u64) -> ProgressBar {
-        let pb = ProgressBar::new(total_files);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("    Removing files [{bar:30.red/dim}] {pos}/{len}")
-                .expect("Invalid progress bar template")
-                .progress_chars("=>-"),
-        );
-        self.multi.add(pb)
     }
 
     /// Finish with success
@@ -260,10 +224,9 @@ pub enum RemovePhase {
 
 /// Progress tracker for update operations
 pub struct UpdateProgress {
-    multi: MultiProgress,
+    _multi: MultiProgress,
     overall: ProgressBar,
     status: ProgressBar,
-    total: u64,
     completed: u64,
 }
 
@@ -292,10 +255,9 @@ impl UpdateProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
-            total: total_packages,
             completed: 0,
         }
     }
@@ -331,24 +293,6 @@ impl UpdateProgress {
         self.set_phase(package, UpdatePhase::Failed(error.to_string()));
     }
 
-    /// Get the MultiProgress handle
-    pub fn multi(&self) -> &MultiProgress {
-        &self.multi
-    }
-
-    /// Add a download progress bar
-    pub fn add_download_progress(&self, name: &str, size: u64) -> ProgressBar {
-        let pb = ProgressBar::new(size);
-        pb.set_style(
-            ProgressStyle::default_bar()
-                .template("    {msg} [{bar:30.cyan/dim}] {bytes}/{total_bytes} ({bytes_per_sec})")
-                .expect("Invalid progress bar template")
-                .progress_chars("#>-"),
-        );
-        pb.set_message(name.to_string());
-        self.multi.add(pb)
-    }
-
     /// Finish with success
     pub fn finish(&self, message: &str) {
         self.status.finish_and_clear();
@@ -370,10 +314,9 @@ pub enum UpdatePhase {
 
 /// Progress tracker for package adoption
 pub struct AdoptProgress {
-    multi: MultiProgress,
+    _multi: MultiProgress,
     overall: ProgressBar,
     status: ProgressBar,
-    total_packages: u64,
     completed: u64,
 }
 
@@ -403,10 +346,9 @@ impl AdoptProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
-            total_packages,
             completed: 0,
         }
     }
@@ -430,10 +372,9 @@ impl AdoptProgress {
         let status = multi.add(status);
 
         Self {
-            multi,
+            _multi: multi,
             overall,
             status,
-            total_packages: 1,
             completed: 0,
         }
     }

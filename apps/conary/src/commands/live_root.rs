@@ -12,15 +12,11 @@ use std::path::{Component, Path, PathBuf};
 mod content;
 mod durability;
 mod path;
-mod recovery;
 pub(crate) use content::LiveRootContent;
 use content::create_live_root_leaf;
 pub(crate) use durability::DeferredOverlayDurability;
 use durability::*;
 pub(crate) use path::target_path;
-pub(crate) use recovery::recover_pending_journals;
-#[cfg(test)]
-pub(crate) use recovery::recover_pending_journals_with_changesets;
 
 const JOURNAL_SCHEMA: &str = "conary.live-root-journal.v2";
 
@@ -829,59 +825,6 @@ fn validate_parent_components(root: &Path, parent: &Path) -> Result<()> {
             .with_context(|| format!("Failed to inspect {}", current.display()))?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
             bail!("unsafe parent {} for live-root path", current.display());
-        }
-    }
-    Ok(())
-}
-
-fn validate_existing_or_removed_parent(
-    root: &Path,
-    target: &Path,
-    removed_dirs: &[PathBuf],
-) -> Result<()> {
-    let Some(parent) = target.parent() else {
-        return Ok(());
-    };
-    let root_meta = fs::symlink_metadata(root)
-        .with_context(|| format!("Failed to inspect target root {}", root.display()))?;
-    if root_meta.file_type().is_symlink() || !root_meta.is_dir() {
-        bail!("unsafe parent {} for live-root path", root.display());
-    }
-    let relative = parent.strip_prefix(root).with_context(|| {
-        format!(
-            "live-root path {} is not below target root {}",
-            parent.display(),
-            root.display()
-        )
-    })?;
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        match component {
-            Component::Normal(part) => current.push(part),
-            Component::CurDir => continue,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                bail!(
-                    "live-root path {} escapes the target root",
-                    parent.display()
-                );
-            }
-        }
-        match fs::symlink_metadata(&current) {
-            Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
-                bail!("unsafe parent {} for live-root path", current.display());
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if removed_dirs.iter().any(|dir| current.starts_with(dir)) {
-                    return Ok(());
-                }
-                return Err(error)
-                    .with_context(|| format!("Failed to inspect {}", current.display()));
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("Failed to inspect {}", current.display()));
-            }
         }
     }
     Ok(())

@@ -2,7 +2,7 @@
 
 //! Database initialization, transactions, and core model tests.
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 use tempfile::NamedTempFile;

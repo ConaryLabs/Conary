@@ -69,7 +69,7 @@ impl AdoptionWarning {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ChangesetMetadataEnvelope {
+struct ChangesetMetadataEnvelope {
     pub schema: String,
     #[serde(default)]
     pub removed_troves: Vec<TroveSnapshot>,
@@ -107,6 +107,7 @@ pub(crate) fn metadata_with_removed_troves(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn metadata_with_deferred_follow_up(
     snapshots: Vec<TroveSnapshot>,
     deferred_follow_up: Vec<DeferredFollowUp>,
@@ -114,6 +115,7 @@ pub(crate) fn metadata_with_deferred_follow_up(
     metadata_with_envelope_sections(snapshots, false, None, None, deferred_follow_up, Vec::new())
 }
 
+#[cfg(test)]
 pub(crate) fn metadata_with_adoption_warnings(
     snapshots: Vec<TroveSnapshot>,
     deferred_follow_up: Vec<DeferredFollowUp>,
@@ -154,6 +156,7 @@ fn metadata_with_envelope_sections(
     .map_err(Into::into)
 }
 
+#[cfg(test)]
 pub(crate) fn parse_rollback_snapshots(snapshot_json: &str) -> Result<Vec<TroveSnapshot>> {
     Ok(parse_changeset_metadata(Some(snapshot_json))?.removed_troves)
 }
@@ -237,6 +240,7 @@ pub(crate) fn deferred_follow_up(snapshot_json: Option<&str>) -> Result<Vec<Defe
     Ok(parse_changeset_metadata(snapshot_json)?.deferred_follow_up)
 }
 
+#[cfg(test)]
 pub(crate) fn adoption_warnings(snapshot_json: Option<&str>) -> Result<Vec<AdoptionWarning>> {
     Ok(parse_changeset_metadata(snapshot_json)?.adoption_warnings)
 }

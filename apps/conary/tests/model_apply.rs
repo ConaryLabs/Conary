@@ -1,7 +1,7 @@
 // apps/conary/tests/model_apply.rs
 #![cfg(feature = "test-hooks")]
 
-mod common;
+pub mod common;
 
 use conary_core::db::models::Trove;
 use std::process::Command;

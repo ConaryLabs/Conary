@@ -8,7 +8,6 @@ mod cache;
 pub mod canonical;
 mod capability;
 pub mod ccs;
-#[allow(dead_code)]
 mod changeset_metadata;
 mod collection;
 pub(crate) mod composefs_ops;
@@ -29,13 +28,11 @@ pub(crate) mod hermetic_state;
 mod install;
 mod installed_authority_snapshot;
 mod label;
-#[allow(dead_code)]
 mod live_root;
 mod model;
 mod new;
 mod operation_records;
 mod package_parsing;
-#[allow(dead_code)]
 mod package_target;
 pub(crate) mod packaging_mcp;
 mod profile;
@@ -91,14 +88,16 @@ pub use capability::{
     cmd_capability_validate,
 };
 pub use ccs::CcsInitTemplate;
-#[allow(unused_imports)]
 pub(crate) use changeset_metadata::{
-    AdoptionWarning, ChangesetMetadataEnvelope, DeferredFollowUp, DeferredFollowUpKind,
-    RollbackAuthority, adoption_warnings, append_adoption_warning_metadata,
-    append_deferred_follow_up_metadata, classify_deferred_follow_up_kind, deferred_follow_up,
-    metadata_with_adoption_warnings, metadata_with_deferred_follow_up,
-    metadata_with_removed_troves, parse_rollback_authority, parse_rollback_snapshots,
-    publication_deferred_follow_up,
+    AdoptionWarning, DeferredFollowUp, DeferredFollowUpKind, RollbackAuthority,
+    append_adoption_warning_metadata, append_deferred_follow_up_metadata,
+    classify_deferred_follow_up_kind, deferred_follow_up, metadata_with_removed_troves,
+    parse_rollback_authority, publication_deferred_follow_up,
+};
+#[cfg(test)]
+pub(crate) use changeset_metadata::{
+    adoption_warnings, metadata_with_adoption_warnings, metadata_with_deferred_follow_up,
+    parse_rollback_snapshots,
 };
 pub use collection::{
     cmd_collection_add, cmd_collection_create, cmd_collection_delete, cmd_collection_install,
@@ -136,20 +135,16 @@ pub use label::{
     cmd_label_add, cmd_label_delegate, cmd_label_link, cmd_label_list, cmd_label_path,
     cmd_label_query, cmd_label_remove, cmd_label_set, cmd_label_show,
 };
-#[allow(unused_imports)]
 pub(crate) use live_root::{
     DeferredOverlayDurability, LiveRootContent, LiveRootFile, LiveRootStats, LiveRootTransaction,
-    recover_pending_journals, target_path,
 };
 pub use model::{
     ApplyOptions, cmd_model_apply, cmd_model_check, cmd_model_diff, cmd_model_lock,
     cmd_model_publish, cmd_model_remote_diff, cmd_model_snapshot, cmd_model_update,
 };
 pub use new::cmd_new;
-#[allow(unused_imports)]
 pub(crate) use package_target::{
-    InstalledPackageSelector, ResolvedInstalledPackage, format_installed_variant,
-    format_installed_variants, package_authority_label, resolve_installed_package,
+    InstalledPackageSelector, package_authority_label, resolve_installed_package,
 };
 pub use packaging_mcp::cmd_mcp_packaging;
 pub use profile::{cmd_profile_diff, cmd_profile_generate, cmd_profile_publish, cmd_profile_show};

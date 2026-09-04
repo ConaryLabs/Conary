@@ -5,12 +5,10 @@ use anyhow::{Result, bail};
 use conary_core::ccs::CcsPackage;
 use conary_core::ccs::manifest::{CcsManifest, HookExecutionRoot};
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TryExecutionRoot {
     Namespace,
     Generation,
-    Host,
 }
 
 impl TryExecutionRoot {
@@ -18,12 +16,10 @@ impl TryExecutionRoot {
         match self {
             Self::Namespace => HookExecutionRoot::TryRoot,
             Self::Generation => HookExecutionRoot::GenerationRoot,
-            Self::Host => HookExecutionRoot::HostRoot,
         }
     }
 }
 
-#[allow(dead_code)]
 pub(super) fn validate_try_package_policy(
     package: &CcsPackage,
     execution_root: TryExecutionRoot,
@@ -32,7 +28,6 @@ pub(super) fn validate_try_package_policy(
     validate_try_manifest_policy(package.manifest(), execution_root, activated)
 }
 
-#[allow(dead_code)]
 fn validate_try_manifest_policy(
     manifest: &CcsManifest,
     execution_root: TryExecutionRoot,
@@ -65,16 +60,6 @@ fn validate_try_manifest_policy(
     }
 
     validate_m1b_try_declarative_hook_support(manifest, activated)?;
-
-    if matches!(execution_root, TryExecutionRoot::Host) && hooks.has_declarative_hooks() {
-        if activated {
-            bail!(
-                "try hooks cannot execute against the host root; \
-                 host-root lifecycle helper is M2 work"
-            );
-        }
-        bail!("try hooks cannot execute against the host root");
-    }
 
     if hooks.has_irreversible_hooks_for_try_root(execution_root.hook_execution_root()) {
         bail!("try package contains irreversible hooks for the planned execution root");
@@ -366,26 +351,19 @@ rpm_runtime = {{ program = "external", criticality = "warning-only", raw_flags =
         let manifest = CcsManifest::new_minimal("no-hooks", "1.0.0");
         validate_manifest(&manifest, TryExecutionRoot::Namespace, false)?;
         validate_manifest(&manifest, TryExecutionRoot::Generation, false)?;
-        validate_manifest(&manifest, TryExecutionRoot::Host, true)?;
 
         let package = minimal_package(manifest)?;
         validate_try_package_policy(&package, TryExecutionRoot::Namespace, false)
     }
 
     #[test]
-    fn declarative_hooks_are_allowed_only_for_try_or_generation_roots() {
+    fn declarative_hooks_are_allowed_for_try_and_generation_roots() {
         let manifest = manifest_with_declarative_hook();
 
         validate_manifest(&manifest, TryExecutionRoot::Namespace, false)
             .expect("namespace-root declarative hooks should be allowed");
         validate_manifest(&manifest, TryExecutionRoot::Generation, false)
             .expect("generation-root declarative hooks should be allowed");
-        assert_policy_error_contains(
-            &manifest,
-            TryExecutionRoot::Host,
-            false,
-            "try hooks cannot execute against the host root",
-        );
     }
 
     #[test]

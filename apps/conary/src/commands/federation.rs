@@ -158,24 +158,22 @@ pub async fn cmd_federation_peers(
     };
 
     let query = format!(
-        "SELECT id, endpoint, node_name, tier, latency_ms, success_count,
-                failure_count, consecutive_failures, is_enabled, last_seen
+        "SELECT endpoint, node_name, tier, latency_ms, success_count,
+                failure_count, is_enabled, last_seen
          FROM federation_peers{} ORDER BY tier, latency_ms",
         where_clause
     );
 
     let row_to_peer = |row: &rusqlite::Row| -> rusqlite::Result<PeerRow> {
         Ok(PeerRow {
-            id: row.get(0)?,
-            endpoint: row.get(1)?,
-            name: row.get(2)?,
-            tier: row.get(3)?,
-            latency: row.get(4)?,
-            successes: row.get(5)?,
-            failures: row.get(6)?,
-            consecutive_failures: row.get(7)?,
-            enabled: row.get::<_, i64>(8)? == 1,
-            last_seen: row.get(9)?,
+            endpoint: row.get(0)?,
+            name: row.get(1)?,
+            tier: row.get(2)?,
+            latency: row.get(3)?,
+            successes: row.get(4)?,
+            failures: row.get(5)?,
+            enabled: row.get::<_, i64>(6)? == 1,
+            last_seen: row.get(7)?,
         })
     };
 
@@ -290,8 +288,8 @@ pub async fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
     let conn = open_db(db_path)?;
 
     let mut stmt = conn.prepare(
-        "SELECT date, bytes_from_peers, bytes_from_upstream, chunks_from_peers,
-                chunks_from_upstream, requests_coalesced, circuit_breaker_trips, peer_count
+        "SELECT date, bytes_from_peers, bytes_from_upstream,
+                requests_coalesced, circuit_breaker_trips
          FROM federation_stats
          ORDER BY date DESC
          LIMIT ?1",
@@ -302,11 +300,8 @@ pub async fn cmd_federation_stats(db_path: &str, days: u32) -> Result<()> {
             date: row.get(0)?,
             bytes_peers: row.get(1)?,
             bytes_upstream: row.get(2)?,
-            chunks_peers: row.get(3)?,
-            chunks_upstream: row.get(4)?,
-            coalesced: row.get(5)?,
-            circuit_trips: row.get(6)?,
-            peer_count: row.get(7)?,
+            coalesced: row.get(3)?,
+            circuit_trips: row.get(4)?,
         })
     })?;
 
@@ -548,16 +543,12 @@ pub async fn cmd_federation_scan(db_path: &str, duration_secs: u64, add_peers: b
 // Helper types
 
 struct PeerRow {
-    #[allow(dead_code)] // Populated from DB row; reserved for peer detail display
-    id: String,
     endpoint: String,
     name: Option<String>,
     tier: String,
     latency: i64,
     successes: i64,
     failures: i64,
-    #[allow(dead_code)] // Populated from DB; reserved for health display
-    consecutive_failures: i64,
     enabled: bool,
     last_seen: String,
 }
@@ -566,14 +557,8 @@ struct StatsRow {
     date: String,
     bytes_peers: i64,
     bytes_upstream: i64,
-    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
-    chunks_peers: i64,
-    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
-    chunks_upstream: i64,
     coalesced: i64,
     circuit_trips: i64,
-    #[allow(dead_code)] // Populated from DB; reserved for detailed stats output
-    peer_count: i64,
 }
 
 fn truncate(s: &str, max_len: usize) -> String {

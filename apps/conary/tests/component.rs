@@ -2,7 +2,7 @@
 
 //! Explicit component-contract and selective-install integration tests.
 
-mod common;
+pub mod common;
 
 use conary_core::db;
 
