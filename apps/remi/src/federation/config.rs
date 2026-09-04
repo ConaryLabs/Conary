@@ -67,7 +67,7 @@ fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
     let Ok(endpoint) = url::Url::parse(endpoint) else {
         return false;
     };
-    let port_wildcard = pattern.ends_with(":*");
+    let port_wildcard = pattern.strip_suffix(":*").is_some();
     let pattern_without_port = pattern.strip_suffix(":*").unwrap_or(pattern);
     let subdomain_wildcard = pattern_without_port.contains("://*.");
     let parseable_pattern = if subdomain_wildcard {
@@ -92,12 +92,33 @@ fn endpoint_matches(endpoint: &str, pattern: &str) -> bool {
         };
         endpoint_host
             .strip_suffix(base)
-            .is_some_and(|prefix| prefix.ends_with('.') && prefix.len() > 1)
+            .and_then(|prefix| prefix.strip_suffix('.'))
+            .is_some_and(|label| !label.is_empty())
     } else {
         endpoint_host == pattern_host
     };
     host_matches
         && (port_wildcard || endpoint.port_or_known_default() == pattern.port_or_known_default())
+        && endpoint_path_matches(&endpoint, &pattern)
+}
+
+fn endpoint_path_matches(endpoint: &url::Url, pattern: &url::Url) -> bool {
+    fn segments(url: &url::Url) -> Option<Vec<&str>> {
+        let mut segments = url.path_segments()?.collect::<Vec<_>>();
+        while segments.last().is_some_and(|segment| segment.is_empty()) {
+            segments.pop();
+        }
+        Some(segments)
+    }
+
+    let (Some(endpoint), Some(pattern)) = (segments(endpoint), segments(pattern)) else {
+        return false;
+    };
+    pattern.len() <= endpoint.len()
+        && pattern
+            .iter()
+            .zip(endpoint.iter())
+            .all(|(allowed, actual)| allowed == actual)
 }
 
 /// Federation configuration
@@ -354,6 +375,34 @@ mod tests {
         assert!(!endpoint_matches(
             "https://remi.conary.io:7891",
             "https://other.conary.io:7891"
+        ));
+    }
+
+    #[test]
+    fn test_endpoint_path_prefix_is_segment_bounded() {
+        assert!(endpoint_matches(
+            "https://remi.conary.io/remi-a",
+            "https://remi.conary.io/remi-a"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io/remi-a/region-1",
+            "https://remi.conary.io/remi-a"
+        ));
+        assert!(endpoint_matches(
+            "https://remi.conary.io/remi-a/",
+            "https://remi.conary.io/remi-a"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io/remi-b",
+            "https://remi.conary.io/remi-a"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io/remi-a-shadow",
+            "https://remi.conary.io/remi-a"
+        ));
+        assert!(!endpoint_matches(
+            "https://remi.conary.io/remi-a",
+            "https://remi.conary.io/remi-a/region-1"
         ));
     }
 
