@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 3
+last_updated: 2026-09-03
+revision: 4
 summary: Define deterministic fail-closed trust-import planning for selected-root APT, DNF5, libzypp, and ALPM repository declarations
 ---
 
@@ -8,7 +8,7 @@ summary: Define deterministic fail-closed trust-import planning for selected-roo
 
 Issue #379 is the second bounded Workstream 10 slice. It consumes the lossless
 declarations from
-[`native-repository-declarations.md`](native-repository-declarations.md) and
+[the native repository declarations specification](native-repository-declarations.md) and
 produces strict, serializable preview data. Planning does not fetch keys,
 persist trust, enable repositories, invoke a native manager, or mutate the
 selected root.

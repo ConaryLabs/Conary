@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 163
-summary: Document obsolete-profile-schema universe fencing and replacement activation, profile-owned source-derived full machine-identity admission for native and Conary resolution evidence, byte-bounded deterministic parallel private diagnostics-only all-roots native and Conary resolution surveys with isolated solvers and recorded worker evidence, collect-all native/candidate comparison surveys, filesystem-independent catalog chunk attestation and authenticated SQLite serving with per-handoff registered-layout and proof reauthentication, deletion-only hard-cut collection of exact retired terminal candidates, the strict isolated schema-v8 conversion and registered-reopen benchmark with canonical parallel MGZIP reopen and one-pass authenticated payload preparation, signed cancelled-write phase deltas, terminal typed failure publication, a path-free public evidence projection, typed single-finalizer native conversion with sealed inode-bound archive publication, single-pass verified-CAS durability with explicitly separated benchmark reopen boundaries, admitted single-decode native projection spooling and deferred bulk provide indexes, causal publication-attested bounded private-candidate deployment inspection, typed process-local refresh generations and startup/deployment handoff, linear verified-candidate proof handoff with one independent durable-destination reopen, build-once exact-main deployment artifacts, constant-time coherent typed deployment baselines, zero-copy same-schema deployment rollback and phase-timed failure evidence, exact immutable profile reuse for unchanged ordered source members, exact registered durable-source reuse after current upstream authentication, manifest-scoped catalog resources with byte-identical artifact aliases, authenticated-root-churn projection reuse keyed by exact parser inputs and root-derived bounds, bounded authenticated response-body recovery, latest-successful private-candidate retention, exact-profile deployment retry, linear profile composition and catalog relation verification, direct-output SQLite catalog compaction without rollback-journal copy-back, exact process-shared registered-source reader reuse, exact same-process and versioned durable projection-cache and registered-profile logical-and-relational verification proof reuse across physical immutable reopens, immutable retention and network-free export of exact authenticated native metadata, exact private-candidate native-oracle input materialization and protected pinned full-candidate native-oracle production, typed native-only RPM architecture admission and strict-priority unresolved-dependency projection over the reachable unshadowed requiring frontier, typed and causally inspectable private-candidate and active-repopulation deployment completion, complete pre-write native source- and profile-candidate growth admission, typed exact-chunk admission for unknown-length Arch and eopkg metadata, the stopped-runtime promotion-proof and resolution-survey operators, evidence-bound atomic public promotion, durable private refresh candidates, stopped-runtime configured-durability candidate-selected conversion crawling and promotion evidence, complete Conary candidate resolution evidence, independent persisted CCS reopen proof for the strict zero-exclusion public-universe conversion crawl, pinned ALPM, RPM, and Debian native full-catalog package-fact and resolution parity, canonical candidate validation, typed support tiers, complete source universes, immutable catalogs, deterministic duplicate handling, signed endpoint-wide universe publication and activation, exact revision pinning, signing, readiness, and serving authority
+revision: 166
+summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
 # Remi
@@ -15,7 +15,7 @@ upstream RPM, DEB, Arch, and candidate EOPKG packages into CCS artifacts, stores
 content-addressed store, and publishes every chunk to R2 when that durable
 authority is configured.
 
-M4d routes every `{distro}` path parameter through repository-feed profile
+Remi routes every `{distro}` path parameter through repository-feed profile
 validation before DB queries, cache/key filesystem paths, or release-upload
 trust gates. Public Remi route slugs remain `fedora`, `ubuntu`, and `arch`;
 they are backed by profile route metadata rather than a local hard-coded
@@ -23,9 +23,17 @@ they are backed by profile route metadata rather than a local hard-coded
 
 ## Package Source Authority
 
+Source-format identity, relations, payload, configuration, lifecycle, and
+consumer projections are owned by
+[the source-package authority specification](../specs/source-package-authority.md) and are
+not repeated here. This section starts at Remi's authenticated repository
+ingestion boundary.
+
+### Source Manifests And Trust
+
 Hosted package sources are declared in `deploy/remi-repositories.toml` and
 loaded by `apps/remi/src/server/repository_manifest.rs`. Every source names one
-exact known profile and carries typed parser construction data: RPM declares
+known profile and carries parser construction data: RPM declares
 architecture; Debian declares distribution, component, and architecture; Arch
 declares the repository database name; JSON is explicit when a source actually
 serves Conary JSON metadata.
@@ -39,7 +47,7 @@ roots are transient refresh inputs and become immutable source-catalog evidence;
 they are not mutable repository revision state. Reconciliation replaces a
 repository transactionally when those source inputs change; ordinary enabled,
 precedence, and expiry changes preserve the enrollment. The supported-profile
-catalog independently declares the exact target machine architecture,
+catalog independently declares the target machine architecture,
 repository identities, roles, and precedence required for each complete
 profile. Its closed `ProfileTargetArchitecture` authority declares Fedora 44
 `x86_64`, Ubuntu 26.04 `amd64`, and Arch `x86_64`. The hosted manifest must match
@@ -67,6 +75,8 @@ names, URL substrings, file extensions, route-family aliases, and SQL `LIKE`
 expressions are not source, parser, or trust authority. A configured native
 parser or trust failure is an error for that source; it does not silently retry
 the URL as another metadata format or continue unsigned.
+
+### Source And Profile Catalogs
 
 Native refresh writes immutable candidate package authority outside the
 operational database.
@@ -101,7 +111,7 @@ upgrade/rebuild classification and strict manifest deserialization;
 corresponding reuse decision.
 Every serving projection resolves a package origin back to that manifest.
 When two members publish the same source-independent native package identity,
-profile composition retains the member with the exact higher declared
+profile composition retains the member with the higher declared
 precedence. Public member precedences are unique, so no repository identity or
 incidental order breaks a tie. The origins collapse only when payload digest and
 every source-independent semantic and relation row agree; any disagreement is
@@ -115,8 +125,10 @@ comparison. Member precedence never hides a different version, release, or
 architecture. Member order, repository names, and catalog insertion order never
 select a package.
 
+### Sink Projection And Capacity Admission
+
 `RepositorySnapshotSink` projection schema 2 is the only native parser output
-contract. Each parser gives the sink the exact run-local file that supplied
+contract. Each parser gives the sink the run-local file that supplied
 every authenticated metadata-object fact; the immutable sink transfers those
 verified bytes into the source candidate before parser work-file cleanup.
 Fedora primary/filelists XML, Debian Packages stanzas, ALPM archive records,
@@ -151,20 +163,22 @@ entire member replay. Exact duplicate identities still compare every intrinsic
 package and relation field; their indexed destination reads reuse cached
 statements and any disagreement fails the private candidate before publication.
 
+### Catalog Proof, Reuse, And Retention
+
 Candidate finalization calculates the deterministic logical digest and then
 performs one complete independent candidate reopen. That full reopen mints an opaque,
-non-serializable process-local proof bound to the exact scope, byte SHA-256 and
+non-serializable process-local proof bound to the scope, byte SHA-256 and
 size, logical digest, and relation counts. Private staging carries that proof
 through source manifesting, projection-cache publication, profile composition,
 and profile manifesting instead of reconstructing and re-digesting the same
-rows a third or fourth time. Manifesting requires that exact reader to own the
+rows a third or fourth time. Manifesting requires that same reader to own the
 canonical private candidate path and binding, then hands the same linear reader
 to publication. Publication rechecks bounded directory and manifest structure,
 drops the candidate reader, atomically renames the same directory, and performs
-one complete independent destination reopen. An already-existing exact
+one complete independent destination reopen. An already-existing matching
 destination is independently reopened instead. The destination proof checks
 file type and sidecars, byte hash and size, SQLite application/schema identity
-and integrity, the complete stored binding, manifest evidence, and exact
+and integrity, the complete stored binding, manifest evidence, and
 directory membership. The exact-byte proof
 carries the already-completed canonical logical replay, computed table
 cardinalities, and explicit missing-package/group rejection, so neither the
@@ -178,14 +192,14 @@ a canonical attestation bound to the exact catalog binding. A later hit first
 re-derives the complete projection identity from the stream, parser-projection,
 and catalog schema identities plus every authenticated child
 role/path/digest/size and typed root-derived parser bound. The top-level
-authenticated root is verified before lookup and remains exact authority in the
+authenticated root is verified before lookup and remains authority in the
 new source manifest, but its signature, timestamp, and other wrapper-only bytes
 do not invalidate an unchanged normalized projection. It then checks the
 canonical manifest and attestation,
 regular-file and sidecar policy, byte SHA-256 and size, SQLite
 application/schema identity and integrity, the complete stored binding, and
-exact source evidence. Only after those checks does it mint a new process-local
-proof. The exact catalog SHA-256 binds the publisher's canonical logical proof,
+source evidence. Only after those checks does it mint a new process-local
+proof. The catalog SHA-256 binds the publisher's canonical logical proof,
 computed table cardinalities, and orphan rejection, so cache lookup does not
 replay any complete relation pass.
 The schema hard cut makes older cache entries misses; separately loaded bundles
@@ -193,15 +207,15 @@ and signed artifacts retain their own verification authorities.
 
 Before projection-cache materialization, refresh also resolves the latest
 successful private-candidate and active profile manifests through the durable
-resource registry. A planned member may offer its exact registered
+resource registry. A planned member may offer its registered
 `SourceSnapshotV1` and canonical bundle path as a reuse candidate. That offer
 does not establish freshness: the native parser independently authenticates
 the current top-level root and every projection-affecting child, rebuilds the
-complete source authority, and accepts reuse only when it is byte-for-byte the
-registered manifest authority. An exact match performs one registered durable
+complete source state, and accepts reuse only when it is byte-for-byte the
+registered manifest. An exact match performs one registered durable
 bundle reopen, creates and reserves no source-candidate SQLite file, and
 carries that reader directly through profile composition and the already-
-published source boundary. The registered reopen checks file type, exact
+published source boundary. The registered reopen checks file type,
 directory membership, compact portable-manifest identity and size, SQLite
 application identity, embedded binding, and retained metadata. Its read-only
 VFS authenticates every demanded fixed-size chunk before SQLite receives it,
@@ -216,38 +230,38 @@ not a uniqueness key: a newly authenticated upstream root may produce a new
 immutable source manifest while its exact authenticated children and normalized
 catalog projection remain byte-identical. Schema 55 retains the ability for both resources to
 bind those same bytes. Registration still compares complete immutable metadata
-for an exact resource replay, and profile membership, reader pins, reachability,
+for a resource replay, and profile membership, reader pins, reachability,
 GC deletion intents, and bundle paths remain keyed by the manifest resource
 SHA-256. Changing provenance is therefore recorded instead of discarded, while
 projection reuse cannot fail merely because the resulting catalog bytes already
-exist under another exact manifest.
+exist under another manifest.
 
 Schema 55 also binds every registered resource row to one immutable,
-filesystem-independent physical attestation for the exact catalog artifact
-named by that manifest. It records the lowercase SHA-256 and exact size of a
+filesystem-independent physical attestation for the catalog artifact
+named by that manifest. It records the lowercase SHA-256 and size of a
 canonical `catalog.sqlite.chunks-v1` portable chunk manifest, the fixed
 65,536-byte v1 chunk size, and
-the exact chunk count implied by the artifact size. The manifest header binds
+the chunk count implied by the artifact size. The manifest header binds
 those facts back to the ordinary catalog SHA-256, and each domain-separated
 chunk digest binds its position and actual length. Missing, malformed,
 mis-sized, stale, or artifact-mismatched attestations fail before
-registration. Publication derives the proof from the exact retained candidate
+registration. Publication derives the proof from the retained candidate
 descriptor, durably places it beside the catalog before the bundle rename,
 then independently reopens the destination through the authenticated VFS.
-Reusing an already-published destination requires the same exact proof and
+Reusing an already-published destination requires the same proof and
 attestation; publication never repairs or replaces an existing bundle. There
 is no filesystem-selected proof kind and no durable full-scan fallback. This
 attestation remains local operational state and does not alter or compete with
-the source/profile manifest authority.
+the source/profile manifest.
 
 After every source is authenticated and staged, refresh derives the complete
 ordered `ProfileSourceMemberV2` contract from those verified source manifests
 without visiting package rows. It inspects the latest successful private
-candidate and active revision manifests in that order. Exact profile,
+candidate and active revision manifests in that order. Profile,
 profile-projection version, ordinal, role, precedence, required state, source,
 repository, stream, and source-snapshot identity equality makes an existing
 immutable profile eligible for reuse. The selected V2 bundle is resolved
-through its exact durable registry entry and content-addressed canonical
+through its durable registry entry and content-addressed canonical
 manifest, then independently reopened with the same physical, SQLite,
 binding, and member-evidence checks described above. The registered reopen
 authenticates demanded chunks and performs no complete SQLite integrity scan;
@@ -259,7 +273,7 @@ foreign-key-scanning every row after each service restart. Externally supplied
 or unregistered bundles do not receive this authority. The reader pin remains
 live until the new fenced run completes as a durable candidate. Every new
 request that reuses a process-cached registered reader reauthenticates the
-current canonical manifest, exact registered top-level layout, and portable
+current canonical manifest, registered top-level layout, and portable
 proof, then proves that the open catalog descriptor still names the registered
 path inode before handing out the reader. Source reauthentication also proves
 that retained native metadata remains a real private directory boundary; it
@@ -289,9 +303,9 @@ any authenticated decoded-length bound consumed by the parser, parser
 projection version, catalog schema, and verified catalog binding. Every parser
 supplies at least one authenticated child. The independently verified
 top-level root is deliberately not a projection-byte identity: wrapper-only
-root churn can produce a new exact source manifest over unchanged catalog
+root churn can produce a new source manifest over unchanged catalog
 bytes. A changed child or root-derived parser bound misses and reparses. A
-tampered, mixed, or noncanonical entry is removed from this exact cache
+tampered, mixed, or noncanonical entry is removed from this cache
 namespace and cannot become package authority. Cache candidates are private,
 synchronized, and atomically renamed; a cache fault fails the private refresh
 and leaves the active profile pointer unchanged.
@@ -314,13 +328,13 @@ SQLite integrity, schema, ordering, counts, logical digest, and source
 membership are reopened and checked before durable registration. Every source
 candidate has exactly `catalog.sqlite`, `manifest.json`, and a private
 `native-metadata/` directory containing only digest-named objects declared by
-the manifest; profile candidates retain their exact two-file layout.
+the manifest; profile candidates retain their two-file layout.
 Publication derives and synchronizes `catalog.sqlite.chunks-v1` before the
-atomic rename, so registered source bundles have four exact entries and
+atomic rename, so registered source bundles have exactly four entries and
 registered profile bundles have three. The catalog, manifest, portable proof,
 retained metadata objects, and their directories are synchronized before the
 content-addressed bundle becomes durable. Only then does one short operational-database
-transaction prove the current run owner and fencing epoch, register the exact
+transaction prove the current run owner and fencing epoch, register the
 source/profile resources, and complete the run as a terminal `candidate`.
 Refresh never advances a profile or universe pointer and never updates
 `last_published_at`; checked, changed, and validated timestamps describe only
@@ -330,7 +344,7 @@ and the previous public universe readable.
 Long parser, profile-composition, and immutable publication-verification calls
 renew that fenced lease from an independent coordinator thread at the
 core-owned heartbeat cadence, including while the run is `ready_to_publish`.
-Candidate completion ends the lease; the exact current candidate survives
+Candidate completion ends the lease; the current candidate survives
 restart and lease expiry as typed promotion input. A successor refresh advances
 the fencing scope and fences the previous writer, but an in-flight, failed, or
 abandoned successor does not erase the latest successful immutable candidate.
@@ -340,27 +354,27 @@ roots, so retained work remains activatable rather than merely undeleted. Thus
 a CPU-bound metadata record stream cannot starve its own ownership proof.
 
 Operational SQLite owns refresh runs and leases, resource metadata, ordered
-profile members, the exact current private candidate, the active pointer, and
-exact revision pins. It does not own
+profile members, the current private candidate, the active pointer, and
+revision pins. It does not own
 package, provide, or requirement rows for the activated native Remi catalog.
 `crates/conary-core/src/repository/sync/remi/run/candidate.rs` owns the durable
 candidate transition, exact run-to-revision member proof, and current-candidate
 lookup; the parent run module retains lease, heartbeat, and failure fencing.
 `CatalogAuthority` resolves the pointer, registered resource, and persisted
 portable attestation, records a reader pin for the handle lifetime, validates
-the exact three-file bundle and compact proof, and opens the catalog through
+the three-file bundle and compact proof, and opens the catalog through
 the read-only authenticated SQLite VFS. The registered reopen checks the
-SQLite header and exact stored binding through authenticated reads; it performs
+SQLite header and stored binding through authenticated reads; it performs
 no complete userspace catalog hash, SQLite integrity scan, or logical replay.
 Universe publication and explicit promotion validation retain their complete
 candidate/destination proofs, but those full-scan readers never seed serving
 state. Later opens in one authority process may share a reader only when the
-exact profile revision and complete physical attestation agree; a mismatch
+profile revision and complete physical attestation agree; a mismatch
 fails instead of replacing authority silently.
 
-Each exact source snapshot referenced below a pinned profile is resolved again
+Each source snapshot referenced below a pinned profile is resolved again
 through the durable resource registry. Its serving cache likewise requires the
-exact snapshot digest, source profile, complete manifest, bundle path, and
+snapshot digest, source profile, complete manifest, bundle path, and
 physical attestation. The VFS authenticates every covering chunk before its
 bytes reach SQLite and owns the verified bytes in its bounded cache, so a
 mutation after open cannot turn a cached trusted bit into authority for changed
@@ -368,17 +382,17 @@ backing storage. Unregistered source candidates continue through complete
 artifact, integrity, binding, and logical verification and cannot consume a
 registered portable attestation.
 Readers opened before promotion therefore finish on the old revision; later
-readers see the complete new revision. Conversion outcomes own durable exact
+readers see the complete new revision. Conversion outcomes own durable
 revision pins. Catalog garbage collection computes reachability from active,
 latest-successful-candidate, reader, work, and conversion pins and removes only resources
-absent from that exact graph. A superseded candidate is collectable unless a
+absent from that graph. A superseded candidate is collectable unless a
 different typed pin retains it; age, repository names, process liveness, and
-guessed retention windows are not collection authority. An absent exact bundle or
+guessed retention windows are not collection authority. An absent registered bundle or
 never-published profile namespace is idempotent absence during collection; a
 symlink or non-directory at either boundary still fails closed.
-After the schema-55 hard cut, only cleanup of an exact unregistered terminal
+After the schema-55 hard cut, only cleanup of an unregistered terminal
 run candidate may also recognize the retired schema-54 two-file profile layout
-and its exact source layout with `native-metadata/`. Registered schema-55
+and its source layout with `native-metadata/`. Registered schema-55
 deletion intents remain current-layout-only. Extra entries, malformed proof
 geometry, manifest/digest mismatches, symlinks, invalid native-metadata names,
 and non-regular metadata objects still fail closed. Retired layouts never
@@ -390,9 +404,9 @@ so their plan, filesystem removal, and acknowledgement phases cannot consume
 the same deletion intent while source retrieval, parsing, and catalog
 construction remain parallel.
 Before a profile candidate file exists, core independently validates every
-reopened source reader against its exact snapshot manifest and derives one
+reopened source reader against its snapshot manifest and derives one
 canonical `CatalogProfileCandidateScratchV1` from the ordered member facts.
-The requirement allocates the exact input catalog bytes once for destination
+The requirement allocates the input catalog bytes once for destination
 payload, once for arbitrary B-tree repacking, one fixed 4096-byte catalog page
 for each input package's expanded profile-origin row, and the full input bytes
 for the rollback-journal ceiling. Remi reserves that complete sum on the
@@ -403,7 +417,7 @@ the actual pre-compaction database is within the separately recorded database
 ceiling, releases the growth lease, and asks for the page-derived finalization
 lease below. A one-byte-short refusal leaves no profile candidate file.
 Before each source or profile catalog enters SQLite compaction, the catalog
-writer commits its private logical state and derives the exact current database
+writer commits its private logical state and derives the current database
 bytes from SQLite's positive `page_size` and `page_count`. Finalization writes
 one compacted `VACUUM INTO` output to a private same-directory sibling. Remi
 reserves one database-sized output against a process-local ledger keyed by the
@@ -411,25 +425,25 @@ owning filesystem device, re-reading available space for every admission. It
 does not run in-place `VACUUM`, create a database-sized rollback journal, or
 copy the compacted pages back over the unpublished input. After output sync,
 the writer closes the input, atomically replaces it with the compacted file,
-synchronizes the directory, and subjects that exact path to the normal complete
+synchronizes the directory, and subjects that path to the normal complete
 independent reopen. Structured logs record logical-digest, compaction, artifact
-hash, independent-reopen, and total finalization times with exact row and byte
+hash, independent-reopen, and total finalization times with row and byte
 facts. Concurrent finalizers cannot collectively reserve more than the
 filesystem reports available; the lease releases on success, error,
 cancellation unwind, or process restart. A one-byte-short refusal is a typed
 `storage_capacity` refresh failure before compaction, and candidate cleanup
 preserves the active revision.
-When a newly finalized source catalog has no exact projection-cache entry, the
+When a newly finalized source catalog has no matching projection-cache entry, the
 cache derives another typed requirement from the verified catalog artifact size
-and the exact canonical cache-manifest bytes. It reserves those bytes on the
+and the canonical cache-manifest bytes. It reserves those bytes on the
 cache filesystem through the same ledger before creating a private stage, then
 retains the lease through copy, file and directory synchronization, atomic
-rename, and independent reopen. A current exact cache hit writes and reserves
+rename, and independent reopen. A current cache hit writes and reserves
 nothing. Refusal is typed and leaves no cache candidate. Immutable source and
 profile publication itself moves verified candidates by same-filesystem atomic
 rename, so it creates no second catalog-file copy.
 Before Fedora or Debian child metadata is downloaded, the authenticated root
-supplies each selected object's exact compressed length: signed `repomd.xml`
+supplies each selected object's compressed length: signed `repomd.xml`
 records bind RPM primary/filelists bytes, while the verified Debian `Release`
 SHA256 entry binds `Packages.gz`. The parser turns those role, path, and size
 facts into one canonical typed requirement, reserves the candidate filesystem
@@ -448,25 +462,25 @@ resets the staged prefix, while HTTP 416 proves completion only when
 stale prefix. Final authenticated digest and size remain authority on every
 path.
 When an RPM repository omits filelists metadata, the parser audits every
-positive path requirement against the exact primary projection already held by
+positive path requirement against the retained primary projection held by
 the repository sink. The immutable sink walks its private catalog transaction
 one typed requirement at a time; the compatibility sink checks its collected
 projection. No second SQLite audit database or other parser work file is
 created for those duplicated facts.
 Arch repository databases may publish each package's desc and depends records
 out of order. Before candidate creation, its read-only pass accounts for each
-exact raw fragment, each desc projection, and every separately published
+raw fragment, each desc projection, and every separately published
 depends relation group without assuming archive order. After growth admission,
-the common normalized spool replays those exact fragments into a strict transient
+the common normalized spool replays those fragments into a strict transient
 table inside the private catalog candidate transaction, rejects duplicate and
 orphan fragments, replays complete pairs in source-directory order, and drops
 the table before finalization. The compatibility sink performs the same typed
 pairing in its existing in-memory state. No Arch-specific SQLite spool or
 sidecar is created; transient fragment pages remain in the candidate high-water
 mark consumed by finalization admission.
-Arch database signatures and eopkg index digest sidecars authenticate exact
+Arch database signatures and eopkg index digest sidecars authenticate
 completed bytes but publish no signed size before download. Each parser binds a
-typed stream subject to the exact metadata role and repository-relative source
+typed stream subject to the metadata role and repository-relative source
 path, then uses the download client's explicit admitted-identity path. The
 shared filesystem coordinator measures current free space and reserves every
 positive response chunk before its run-local write. That permit remains live
@@ -485,15 +499,15 @@ separately ordered requirement groups. It retains those facts in the common
 run-local projection spool so candidate construction does not repeat the native
 parser pass; the staged byte count and in-process digest are verified during
 replay, and every exit removes the spool.
-`CatalogSourceCandidateScratchV1` allocates those exact canonical projection
+`CatalogSourceCandidateScratchV1` allocates those canonical projection
 bytes once for destination payload and once for
 B-tree repacking, the fixed schema roots and one 4096-byte page per package,
-and a full candidate-database rollback-journal ceiling. On an exact projection
+and a full candidate-database rollback-journal ceiling. On a projection
 cache hit, the independently reopened artifact bytes and its bound package
 count replace that parser preflight. Remi reserves the complete sum through the
 shared candidate-filesystem ledger before the writer creates SQLite. Fedora
 supplemental file capabilities bulk-load with the final capability and raw
-query indexes absent; exact pkgid joins retain their construction-only package
+query indexes absent; pkgid joins retain their construction-only package
 index, and finalization builds each deferred query index once before hashing or
 publication. The lease survives replay and committed metadata/evidence; after
 file and parent sync the writer proves the actual database remains below the
@@ -502,20 +516,22 @@ page-derived finalization scratch. A
 one-byte-short refusal leaves no native candidate file. Profile candidates use
 the corresponding ordered-member contract described above.
 
+### Readiness, Deployment, And Refresh Coordination
+
 `apps/remi/src/server/readiness.rs` owns serving-readiness orchestration, while
-`apps/remi/src/server/readiness/source_profiles.rs` owns exact configured-profile
+`apps/remi/src/server/readiness/source_profiles.rs` owns configured-profile
 and active-catalog population inspection. `/health` is an unconditional
 liveness reply and proves only that the process is listening;
 `/health/ready` is the evidence-bearing one. It opens the database read-only,
 requires the expected schema revision, and requires usable typed repository and
 canonical publication outcomes from the initial scheduler cycle. The validated
-manifest supplies the required exact-profile policy; every required profile
-must have a valid durable active pointer, strict canonical manifest, exact
+manifest supplies the required-profile policy; every required profile
+must have a valid durable active pointer, strict canonical manifest,
 three-file registered bundle, a regular catalog file with the signed size, an
 authenticated portable proof matching persisted authority, and a nonzero
 package count. This bounded inspection neither claims the process SQLite writer
 nor rehashes the catalog; serving opens retain the authenticated VFS contract
-above. A server without an exact configured profile is not ready. It
+above. A server without a configured profile is not ready. It
 also checks the serving directories and configured free-space floor. A probe that cannot run reports
 `unavailable` rather than success, so an unmeasurable resource never reads as
 ready. A public package cache miss before that profile is populated returns the
@@ -539,8 +555,8 @@ hard cut with no reader for schema 2; existing completed backup manifests are
 historical evidence, while any unfinished old-schema transition must be
 resolved with its owning binary before deploying this cut. Startup reconciles the installed
 manifest before opening listeners, then immediately refreshes metadata and runs
-the canonical discovery fetch and exact-contract rebuild before eligible
-exact-profile prewarm. Before creating storage subdirectories, opening the
+the canonical discovery fetch and contract rebuild before eligible
+profile prewarm. Before creating storage subdirectories, opening the
 runtime database, or reconciling that manifest, the server takes a nonblocking
 kernel-backed exclusive lock on `.remi-runtime.lock` inside the canonicalized
 `storage.root` and retains its file descriptor until the owned Tokio runtime
@@ -628,7 +644,7 @@ binary deployment green.
 `--require-repopulated` remains the post-promotion contract: it reads package
 counts from each active immutable profile manifest, counts only conversions
 pinned to that active revision, and requires the fresh signed universe to name
-the exact same ordered revision set. Retired mutable Remi package rows are not
+the same ordered revision set. Retired mutable Remi package rows are not
 deployment evidence, and neither predicate grants publication authority.
 
 `apps/remi/src/server/publication_scheduler.rs` owns startup publication order
@@ -638,10 +654,10 @@ serializes background cycles, repository-admin mutations, MCP canonical cycles,
 and package cache-miss readiness/reservation decisions. Their network, parsing,
 and mutation phases therefore cannot invalidate one another's publication
 decision. Every all/profile refresh receives a monotonic process-local
-generation, exact scope, producer force policy, timestamps, and terminal batch
+generation, scope, producer force policy, timestamps, and terminal batch
 or incomplete/error disposition. A deployment force request may provide
 `accept_completed_after`; after acquiring the same exclusion lock it consumes
-the newest exact all-profile generation only when that batch completed strictly
+the newest all-profile generation only when that batch completed strictly
 after the floor, is complete, and contains zero skipped sources. This closes
 the missed-wakeup window without treating a startup no-op, partial result,
 failed generation, profile retry, or older process as forced-refresh evidence.
@@ -658,17 +674,17 @@ interval, an overdue canonical deadline is serviced immediately after the
 current refresh, and each deadline resets only after its owning attempt
 completes. Repository refresh entrypoints never publish endpoint universes.
 The one-shot promotion owner consumes the canonical promotion evidence and
-complete crawl, reopens their exact candidates or already-active revisions,
+complete crawl, reopens their selected candidates or already-active revisions,
 and alone may change the public profile set and signed universe. No partial
 candidate set becomes public merely because an admin or background refresh
 completed.
 
-Eligible exact-profile prewarm jobs run concurrently under the configured
+Eligible profile-specific prewarm jobs run concurrently under the configured
 conversion bound shared with request-driven conversions. Each profile preserves
 its own top-N ordering and sequential conversion semantics, while a slow first
 profile cannot starve the profiles after it. Multi-source refresh returns one
 typed result or failure per source. A source failure remains visible but cannot
-discard successful source commits or suppress prewarm for another exact
+discard successful source commits or suppress prewarm for another
 profile. Prewarm eligibility comes only from the successful result's persisted
 `source_profile`; repository names, URLs, formats, and error text are not
 selectors.
@@ -679,19 +695,19 @@ digest and integrity verification for each package.
 Both internal and external `POST /v1/admin/refresh` routes use the same response
 projection: HTTP 200 means every source completed or was current, 207 carries a
 mixed success/failure batch, and 502 means every configured source failed.
-Every response includes the exact producer generation, scope, force policy,
+Every response includes the producer generation, scope, force policy,
 start/finish timestamps, and `coalesced` disposition. The optional positive
 Unix `accept_completed_after` parameter is valid only with `force=true` on the
 all-profile route; other combinations are HTTP 400.
-Omitting `profile` selects every configured source. Supplying one exact
+Omitting `profile` selects every configured source. Supplying one
 configured native profile selects only that profile and no legacy repository;
 it is the retry boundary after a partial batch and cannot upgrade global
 publication readiness from its profile-local result. Global database/setup
 failures remain HTTP 500. The release deployment gate
-requires exact source reconciliation, every configured profile populated in
+requires source reconciliation, every configured profile populated in
 its active immutable catalog, the fresh signed universe matching those
 revisions, and at least one validated converted artifact pinned to every
-current profile revision. Result and failure arrays are sorted by exact repository name,
+current profile revision. Result and failure arrays are sorted by repository name,
 so concurrent completion order is not API order.
 
 `apps/remi/src/server/admin_service/refresh.rs` owns the batch state, typed
@@ -719,7 +735,7 @@ universe.
 
 The Conary `remi` strategy synchronizes one endpoint-wide signed immutable
 universe. `RemiUniverseManifestV2` binds one monotonic sequence, the complete
-ordered set of public `ProfileRevisionV2` catalogs, the exact canonical-map
+ordered set of public `ProfileRevisionV2` catalogs, the canonical-map
 object, every content digest and size, schema versions, row counts, generation
 time, expiry, and the dedicated metadata-root digest. The universe
 `targets` role authorizes exactly that manifest and its digest-addressed
@@ -731,20 +747,20 @@ Promotion writes and synchronizes every referenced object and the signed
 reopens the complete bundle, then uses one immediate transaction to publish
 every selected candidate run, advance every changed public-profile pointer,
 insert the evidence-bound universe revision, and advance
-`remi_active_universe_revision`. Schema 55 stores the exact canonical
+`remi_active_universe_revision`. Schema 55 stores the canonical
 `RemiPromotionEvidenceV1` and `RemiConversionCrawlV4` digests on that universe
 revision. A catalog, proof, CAS, signed-metadata, fence, canonical-map,
 transaction, or reopen fault leaves the complete previous public state
-selected. Exact replay returns the already-active revision. The background
+selected. Replay returns the already-active revision. The background
 publisher cannot create an initial universe or change profile or canonical
 authority without promotion evidence; it may only renew signed freshness for
-the exact active authority after revalidating its durable bindings.
+the active authority after revalidating its durable bindings.
 
 Canonical-map schema validity is insufficient publication evidence. Before a
-new universe is signed, Remi independently reopens every exact public profile
+new universe is signed, Remi independently reopens every public profile
 catalog and requires each canonical implementation's literal package name to
-exist in that exact profile revision. It repeats the same cross-object proof
-after the durable universe bundle is reopened. Presence uses the indexed exact
+exist in that profile revision. It repeats the same cross-object proof
+after the durable universe bundle is reopened. Presence uses the indexed literal
 package name only; provides, aliases, descriptions, case folding, and discovery
 caches cannot satisfy it. A missing profile or package is a typed failure, does
 not create a replacement universe bundle, and preserves the prior active
@@ -754,16 +770,16 @@ distribution-sized package-name set.
 
 ### Native Oracle Input Materialization
 
-`remi native-oracle-input` is the read-only handoff from exact production
+`remi native-oracle-input` is the read-only handoff from production
 private candidates to the pinned native package-manager producers. It requires
 exact `PROFILE=SHA256` bindings in canonical Fedora 44, Ubuntu 26.04, and Arch
 order. Before network or output mutation it reproves each current fenced run,
-opens a durable reader pin on every exact immutable profile, and independently
+opens a durable reader pin on every immutable profile, and independently
 reopens every ordered source snapshot catalog. Active-only revisions,
 candidate-tier Solus, missing or reordered profiles, and noncanonical digests
 fail closed.
 
-Refresh retains every exact parser-authenticated metadata file in the immutable
+Refresh retains every parser-authenticated metadata file in the immutable
 source bundle that owns its digest, size, role, and source path. The
 materializer reopens each strict four-entry registered source bundle,
 authenticates its portable proof, revalidates every
@@ -774,7 +790,7 @@ publication.
 
 `NativeOracleInputSetV1` schema 1 binds the complete profile revisions, ordered
 source manifests, and digest-sorted deduplicated object inventory. Its atomic
-directory contains canonical `manifest.json` and exact digest-named files under
+directory contains canonical `manifest.json` and digest-named files under
 `objects/`. The independent reopener rejects unknown or missing entries,
 symlinks, noncanonical JSON, size drift, and byte tamper. A final fenced
 candidate recheck must match the initial candidate records before success.
@@ -788,10 +804,10 @@ Production transport is owned by the protected
 successful protected-main private-candidate deployment run, derives all three
 revision bindings from that run's typed inspection, calls the fixed root-owned
 helper operation, and independently reopens every transported manifest and
-object byte before retaining the short-lived handoff artifact. Its exact
+object byte before retaining the short-lived handoff artifact. Its
 workflow commit must equal freshly fetched protected `main` before any SSH and
 again immediately at the SSH boundary. Native-oracle production accepts the
-result only when the export run used its own exact current-main operator
+result only when the export run used its own current-main operator
 revision. Callers cannot supply paths, profile order, conversion commands, or
 publication operations.
 
@@ -814,495 +830,19 @@ remi native-oracle-input \
 
 ### Native Full-Catalog Parity Artifact
 
-`NativeParityOracleV1` is the sole accepted contract for independent native
-package-fact parity against one exact `ProfileRevisionV2`. Its strict manifest
-binds the profile revision and logical digests, ordered source members and
-precedence, pinned RPM, Debian, or ALPM implementation and version, projection
-schema, normalized counts, and the exact SHA-256 and size of a canonical JSONL
-package artifact. Each row carries the exact package variant, contributing
-member, source snapshot, payload checksum/size/download authority, providers,
-and grouped positive and negative relations. Conflict, break, replacement, and
-obsolescence declarations remain typed group authority.
-
-The writer and independent reopener reject unknown fields, unsupported schema,
-noncanonical bytes, duplicate or reordered keys, count drift, extra bundle
-entries, symlinks, and artifact tamper. Comparison merge-walks the verified
-oracle and immutable catalog by exact package key, retains one candidate/oracle
-package pair at a time, and reports typed candidate-only, oracle-only, identity,
-precedence, payload, provider, grouped-requirement, or negative-relation drift.
-The native evidence producer must be the pinned implementation named by the
-manifest; constructing oracle rows from Conary's own catalog is test support,
-not release evidence.
-
-ALPM and RPM have implemented native package-fact producers. The explicit
-`native-alpm-oracle` feature links the exact pinned Rust bindings to libalpm;
-ordinary Conary and Remi builds remain free of that host-library requirement.
-For each ordered profile member, the producer separately verifies the bound
-`SourceSnapshotV1` manifest and its exact authenticated `ArchDatabase` object,
-then reads package and relation facts through libalpm. It uses a bounded private
-spool for profile precedence and exact-identity conflict handling, writes the
-canonical bundle, and reopens the complete result before success. It consumes
-neither the Conary catalog nor Conary's Arch repository parser.
-Versioned ALPM soname-v1 provides such as `libacl.so=1-64` remain one atomic
-soname capability with no package-version authority. libalpm exposes that text
-through generic dependency fields split at `=`, so the producer requires those
-fields to reconstruct the exact native text while the pinned ALPM grammar owns
-its soname classification. Ordinary package relations still require exact
-field-for-field normalized name and version agreement.
-
-The explicit `native-rpm-oracle` feature links a narrow private C shim to exact
-libsolv 0.7.36. It separately rehashes each ordered member's compressed primary
-and filelists objects before libsolv reopens them, then projects every package
-variant, payload fact, declared and file provider, required/prerequisite group,
-weak RPM relation, conflict, and obsolete. Typed libsolv rich-relation trees
-must agree with the canonical RPM grammar. The producer renders canonical RPM
-text from the typed tree instead of treating libsolv display text as lossless;
-it flattens only the right-associated `with` spine and retains parentheses for
-left-nested same-operator trees before reparsing and requiring exact agreement.
-At that source-decoding boundary, RPM's empty serialized epoch and explicit
-epoch zero both become omitted epoch zero; positive epochs remain exact, and
-canonical or persisted requirements remain strict.
-Profile precedence applies only to fact-identical duplicate identities;
-contradictory duplicates fail. The producer uses the shared bounded spool,
-canonical writer, and independent complete bundle reopener and reads neither
-the Conary catalog nor the Fedora parser's projected packages.
-libsolv derives `namespace:splitprovides(prefix with /path)` supplements from
-source-declared `prefix:/path` capabilities as legacy installed-package update
-machinery. These are not authenticated RPM `Supplements:` records. The producer
-requires the exact `REL_NAMESPACE`/`REL_WITH` tree to bind an existing atomic
-declared capability and same-package authenticated file coverage. Coverage is
-either that exact path or a strict descendant separated by `/`; lexical prefixes
-and files owned only by another package do not establish it. The producer then
-excludes only that derived relation from source package facts. Unknown
-namespaces, malformed trees or paths, and missing declared facts fail closed;
-declared rich supplements retain full typed tree and canonical RPM grammar
-agreement.
-
-The explicit `native-debian-oracle` feature links a narrow private C++ shim to
-exact apt-pkg 3.2.0 in the pinned Ubuntu 26.04 image. For each ordered member it
-requires exactly one authenticated `DebianPackages` object, rehashes the exact
-compressed bytes, and reopens every deb822 stanza and dependency expression
-through apt-pkg. It projects package variants and `Multi-Arch`, payload
-authority, declared providers, grouped alternatives and architecture
-qualifiers, required and weak relations, conflicts, breaks, and replacements.
-Repeated authority fields, malformed or unsupported relations, missing
-payload facts, and contradictory exact identities fail the complete input.
-apt-pkg's process-global state is serialized for the native handle lifetime.
-The producer invokes no apt/dpkg executable or database and reads neither the
-Conary catalog nor the Conary Debian parser. It uses the shared bounded spool,
-canonical writer, and independent complete bundle reopener.
-
-The hosted `phase4-native-pm-parity` jobs remain deterministic one-package
-lifecycle and CLI release tests. They do not satisfy this complete-candidate
-contract.
-
-Protected production uses `produce-remi-native-oracles` with one exact
-successful native-input export run and one explicit full producer commit,
-which operators set to the deployed commit unless intentionally selecting a
-newer producer. Authorization independently reopens that transport and its
-deployment evidence, requires deployed-to-producer-to-`origin/main` ancestry,
-and each native lane builds from the exact clean producer tree. The checked-in lane adapter
-derives source order and object paths only from canonical profile members,
-source-snapshot digests, authenticated object roles, and the digest-addressed
-inventory. Fedora runs with pinned libsolv 0.7.36, Ubuntu with apt-pkg 3.2.0,
-and Arch with the pinned archive/libalpm image. Each lane retains the complete
-package and resolution bundles plus sanitized manifest, artifact, count,
-implementation, candidate, export, deployed/producer commit, and both producer
-binary SHA-256 bindings for seven days. It has
-no repository refresh, conversion, proof, activation, or pointer authority.
-Every selected lane uploads a separately typed diagnostics-only resolution
-survey before strict resolution decides lane success. The optional closed
-`lanes` subset defaults to all three profiles; assembly fills unselected lanes
-from the newest successful strict artifact for the same export, verifies its
-GitHub archive and internal digests, and accepts mixed producer commits only
-when each is a merged descendant of the common deployed commit under the same
-schema and implementation pins. Exactly one strict Fedora, Ubuntu, and Arch
-lane is mandatory, and survey artifacts are never assembly authority.
-
-`NativeResolutionOracleV1` is the separate resolver-owned contract for native
-solver closure and unresolved-dependency evidence. It binds the exact profile
-and package-oracle manifest, pinned solver implementation/version, target
-architecture, and one fixed typed policy: empty installed state, every exact
-package as a root, required/pre-required groups only, and native
-provider/repository precedence. The policy architecture must equal the profile
-revision's typed target architecture during bundle binding, comparison, and
-promotion proof validation. Native and Conary producers derive the solver
-architecture from that field; `--architecture` is retained only as a checked
-operator assertion, and a mismatch fails with typed
-`ProfileArchitectureMismatch` before any root walk or output bundle. Package
-projection and oracle reopen reject any architecture absent from its typed
-authority with `UnknownArchitectureToken { scheme, token }`
-before resolution evidence exists. The vendored tables are RPM 6.0.1 tag
-`rpm-6.0.1-release` `rpmrc.in` architecture lines; dpkg 1.23.7 tag `1.23.7`
-`data/cputable` and `data/tupletable`. Pacman
-`7.1.0.r9.g54d9411-2` commit
-`54d94116164b0b2202c6061c4a59c6f3e70820d8` `makepkg.conf.in` plus the
-2026-08-02 Arch core, extra, and multilib database `arch` values prove the
-supported x86_64 profile snapshot. Pacman defines no format-wide closed token
-table: the registry declares each ALPM profile's target token plus `any`, and
-libalpm compares those configured strings literally. Exact files, versions,
-commits, and upstream URLs are recorded in the fixture headers.
-
-`NativeMachineIdentityV1` contains only CPU, pointer width, endianness, and
-32-bit ARM float ABI. It is derived from compile-time machine facts without
-the executable's libc, target environment, or OS, so GNU and musl builds for
-one machine are identical hosts. Package libc/ABI is separate: dpkg contributes
-its `gnu`, `musl`, or `uclibc` tuple dimension, while RPM and ALPM carry their
-profile-declared implied glibc ABI. Native-only admission requires package
-machine equality with the host and package ABI equality with the exact source
-profile. RPM `arch_compat` and `buildarch_compat` enumerate known tokens but
-cannot grant native-only compatibility.
-
-`native_only` admission returns `Admitted`,
-`Excluded { identity: NativeMachineIdentityV1 }`, or
-`UnknownArchitectureToken { scheme, token }`. Only a known non-native identity
-becomes `architecture_excluded`; unknown tokens are producer failures and have
-their own survey error kind. Native package managers retain provider-selection
-authority under their pinned architecture configuration, and Conary root and
-provider matching consumes the same checked full identities. Every
-package root has exactly one canonical resolved closure, typed unresolved set,
-known-identity `architecture_excluded` outcome, or `conflicting_closure`
-outcome. The latter means the required closure cannot coexist or an obsoletes
-transaction displaces the exact root; it carries no cross-solver evidence set.
-Independent reopen uses a
-private disk-backed membership index for referenced package and required-group
-authority plus a bounded merge walk for complete root coverage. Comparison
-retains one native/candidate root pair and reports typed root, outcome, closure,
-unresolved-set, or not-installable-reason drift.
-
-ALPM, RPM, and Debian have implemented native solver producers. Each independently
-reopens and freshly reproduces the bound package oracle from the exact
-authenticated native metadata before solving every package as an exact root
-against empty installed state. The ALPM producer records prepared libalpm
-transaction packages and typed missing-dependency records. The RPM producer
-uses exact libsolv transaction and problem-rule IDs, applies profile precedence
-as native repository priority, excludes weak relations, and reopens complete
-filelists for typed file-provider resolution. Its resolution projection schema
-5 calls libsolv 0.7.36 `pool_setarchpolicy` with the single native architecture
-after `pool_setarch`; pinned libsolv still admits `noarch`, while cross-machine
-solvables are not installable and are absent from its provider index. An exact
-excluded root must report `SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the
-typed excluded outcome. The same rule for an admitted root is fatal.
-Native-only admission removes the former strict-priority multilib
-strict-plus-conflict shape. Any `PKG_CONFLICTS`, `PKG_SAME_NAME`,
-`PKG_OBSOLETES`, or implicit-obsoletes rule in any failed problem, and any
-successful transaction that omits its exact root, maps to
-`conflicting_closure`. Architecture-only `INFARCH` remains outside that class.
-Ordinary same-architecture strict-priority blocked requirements still project
-their terminal unresolved edge when no conflict-class rule exists.
-
-The Debian producer uses private
-volatile apt-pkg source indexes and empty installed state, projects profile
-order into candidate and provider priority, records exact native transactions,
-and forces each exact root through apt 3.0's complete-version solver with
-non-strict pinning. Native policy still prefers the highest-precedence
-dependency version that permits a complete transaction, while a shadowed lower
-version remains eligible when required by the protected exact root. After a
-failed solve, apt-pkg scans every selected broken package in the root-reachable
-state. A rejected `Conflicts` or `Breaks` relation, or a selected version that
-cannot coexist with the required target, maps to `conflicting_closure`.
-Otherwise a required or pre-required group with no authenticated satisfying
-candidate maps to typed unresolved evidence. This covers pure missing chains,
-absent names, and names available only at incompatible versions. The exact
-requiring-package identity, relation kind, and parser-owned native group text
-bind directly back to package oracle authority without textual normalization.
-Pinned apt-pkg 3.2.0 does not
-publicly expose solver3's typed reason graph, and rendered diagnostics are not
-authority. A failed state with neither conflict-class nor typed missing
-authority remains a fatal `NativeSolverFailed` producer error.
-All three bind closures and missing groups back to exact package-oracle
-authority. Policy-excluded Debian and ALPM roots are typed before native
-solving; the configured Ubuntu profile contains sixteen `binary-amd64` indexes
-and the Arch profile contains three `/os/x86_64` databases, with `all` and `any`
-admitted respectively. Libalpm conflicting-dependency or obsoletion preparation
-results and prepared transactions that omit the exact root map to
-`conflicting_closure`. Identity or input drift and unexpected native errors
-remain fatal. The
-producers write the canonical resolution bundle and fully reopen it before
-success.
-
-The resolution contract is schema 3; Conary candidate, Debian, and ALPM
-projections are schema 3; RPM is schema 5; comparison is schema 3. Survey
-envelopes retain their existing schemas while accepting the expanded outcome
-enumeration. There are no compatibility readers for the bumped contracts.
-Every retained native-resolution and Conary candidate bundle from the
-superseded schemas is invalid and must be regenerated before promotion proof;
+The full-catalog package-fact and resolution contract is owned by
+[the native parity oracle specification](../specs/remi-native-parity-oracle.md).
+That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
+schema hard cuts, bounded surveys, comparison rules, and production transport.
+Remi consumes only independently reopened artifacts bound to the selected
+private profile candidates; survey output never authorizes promotion.
+Resolution schema 3 admits `not_installable { reason: conflicting_closure }`
+when conflict, break, same-name, obsoletion, or exact-root displacement makes a
+root-reachable closure inconsistent. Conflict-class attribution dominates
+missing requirements. The RPM projection is schema 5; Debian, ALPM, Conary
+candidate, and comparison projections are schema 3. Every retained resolution,
+candidate, and comparison bundle from the superseded schemas must be rebuilt;
 the package oracle is unchanged.
-
-The same three binaries expose a mutually exclusive `--survey <FILE>`
-diagnostic destination. Survey mode uses the identical per-root native solve
-and projection path but inventories every projection failure instead of
-stopping the walk. The versioned `NativeResolutionSurveyV1` binds the exact
-profile, package oracle, implementation, policy, and architecture; records
-complete outcome counts and a typed error histogram; and retains at most 5,000
-root failures with explicit truncation and uncapped totals. Retained native
-explanations have a separate 64 MiB budget measured by canonical serialized
-size at collection time. Once exhausted, later retained failure records carry
-a typed evidence-budget-exhausted marker; byte and explanation counts plus an
-independent evidence-truncation flag remain validated in the single JSON
-document. RPM failures carry
-the complete per-problem libsolv rule dump; rule slots that are not dependency
-IDs, including job indices, remain null with a typed unavailability reason.
-apt-pkg and libalpm carry the
-typed native results those APIs safely expose or an explicit unavailability
-reason. The create-only JSON file is private to its creating user on Unix,
-never writes strict bundle filenames, and is
-diagnostics only: Remi comparison, proof, activation, and publication do not
-accept it as authority. The command exits non-zero after writing any non-empty
-failure inventory.
-
-Strict and survey producers dispatch exact roots to a bounded worker set and
-reassemble results by package-oracle sequence before touching the writer or
-collector. That single ordered sink keeps bundle bytes, manifest digests,
-survey counts and histograms, the 5,000-record cap, and the 64 MiB explanation
-budget identical to a one-worker run. Each next root goes to the first worker
-that becomes available, preserving capacity when solve times are uneven. A
-strict failure stops further dispatch, then returns the first failure in
-canonical order after draining workers.
-
-RPM threads each own a libsolv pool loaded from the staged authenticated
-metadata; ALPM threads each own a private staged libalpm root and handle;
-Conary threads each own a read-only projected-catalog SQLite connection and
-fresh per-root resolvo state. Debian uses processes because apt-pkg's
-configuration and system objects are process-global. Each Debian worker builds
-its own apt cache from the same staged authenticated inputs and opens the
-projection index read-only.
-
-All three oracle binaries and `remi resolution-survey` accept typed
-`--workers <n>`. The automatic value is bounded by Rust available parallelism,
-the cgroup-v2 CPU quota, root count, and memory capacity. Worker memory uses a
-1.5 GiB Fedora pool allowance, rounded above a retained 1,271,280 KiB
-one-worker root-walk RSS observation; the effective budget subtracts
-`memory.current` from every bounded cgroup-v2 ancestor (or uses host
-`MemAvailable`), reserves 25% of the remaining memory, and never exceeds 8 GiB.
-Native binaries write selected worker count, effective budget, retained pool
-allowance, and per-worker pool/cache load milliseconds to the required separate
-`--implementation-evidence` JSON file. Remi writes equivalent per-profile
-candidate and comparison implementation files. Scheduling evidence therefore
-remains comparable without contaminating canonical survey or oracle bytes.
-
-The fresh Fedora export from successful
-`export-remi-native-oracle-inputs` run `33699383309` supplied 101,187 roots for
-the retained full-scale measurement. The profile-manifest SHA-256 was
-`9004072f1fc9b1b932616a4b8b33a2277241c481734670f4172aa378433ba084`;
-both passes used release binary SHA-256
-`407485a67107802a670561db60b4fbcb3cc2f05a11c6b0baef58bbdd4e387198`
-from commit `23f702c3` in `conary-oracle-fedora-slice6`. The observed 12 CPUs
-and 8 GiB worker budget made five workers the automatic capacity.
-
-| Workers | Wall seconds | User seconds | System seconds | Peak RSS KiB | Per-worker pool load ms |
-| ---: | ---: | ---: | ---: | ---: | :--- |
-| 1 | 10,832.801 | 3,231.511 | 184.536 | 1,656,556 | 26,540 |
-| 5 | 6,774.840 | 3,458.632 | 192.119 | 3,801,984 | 31,460; 31,540; 31,676; 31,479; 31,519 |
-
-That is a 1.60x end-to-end wall-time speedup. Each run recorded the same 45
-typed failures, and their 167,998-byte canonical survey files were identical:
-SHA-256
-`0fd754eed04d6cd9bfa5e7a58d392b1eec4c9b3bf4b31b91805e833c3826874c`.
-The mandatory package-oracle reprojection was storage-bound and varied between
-the sequential runs, which is why CPU, RSS, and per-worker load evidence remains
-beside wall time. On the largest checked-in RPM fixture, one worker took 930 ms
-and two workers took 986 ms; strict bundle bytes and survey JSON were identical,
-and the tiny load-bound input correctly showed no speedup.
-
-`ConaryResolutionSurveyV1` schema 1 applies that collector discipline to the
-Conary SAT candidate. It binds the exact schema-3 profile revision,
-package-oracle manifest, `conary-sat` implementation, native-only policy, and
-profile-owned typed target architecture. The producer and strict candidate
-writer share one per-root sink walk. Each successful root retains its exact
-package identity and key with a complete `resolved`, `unresolved`, or
-`not_installable` outcome; each hard failure contributes to uncapped totals
-and the typed error-variant/reason histogram. At most 5,000 failures retain
-their exact root, full error message, and lazily built native explanation.
-
-The explanation is a direct typed projection of resolvo's conflict graph. It
-contains unresolved-node incoming edges with requiring solvable and rendered
-requirement/version sets, conflict edges with both solvables and the typed
-conflict kind, and excluded solvables with their typed provider reason. It
-never parses resolvo's user-friendly diagnostic text. The 64 MiB canonical
-byte budget, first-exhaustion withholding behavior, create-only mode `0600`
-writer, counts, histogram, and truncation validation are shared with the
-native survey.
-
-For outcome production, a conflict edge or excluded node dominates an
-unresolved node. Resolvo can minimize a mixed failure to its missing edge, so
-the candidate producer repeatedly re-solves with only the already-attributed
-persisted missing groups discharged. A conflict exposed by that bounded typed
-probe becomes `conflicting_closure`; a conflict-free remainder preserves the
-original unresolved edges. A graph with neither typed class remains fatal.
-
-`NativeResolutionComparisonSurveyV1` schema 1 consumes independently reopened
-complete native and candidate bundles. It walks every root pair in canonical
-key order and retains up to 5,000 mismatches. Each record contains the exact
-root identity, typed mismatch kind, both complete outcomes, and the manifest
-SHA-256 identifying each side. Uncapped mismatch totals, exact histograms by
-mismatch kind and by outcome-kind pair, and explicit truncation remain in the
-validated document. The strict comparison still aborts on the first mismatch.
-
-`remi resolution-survey` is the stopped-runtime owner. It takes the normal
-exclusive runtime lock and exactly mirrors `promotion-prove`'s canonical
-ordered `--candidate`, `--package-oracle`, `--native-resolution`, and
-`--architecture` bindings. Reordered profiles, foreign revisions, or an
-operator architecture that differs from the profile's typed target fail
-before a survey file is created. The destination must be a new directory; it
-is mode `0700` on Unix and every contained JSON file is create-only mode
-`0600`.
-
-```text
-remi resolution-survey \
-  --config /etc/conary/remi.toml \
-  --candidate fedora-44=<revision> \
-  --candidate ubuntu-26.04=<revision> \
-  --candidate arch=<revision> \
-  --package-oracle fedora-44=<directory> \
-  --package-oracle ubuntu-26.04=<directory> \
-  --package-oracle arch=<directory> \
-  --native-resolution fedora-44=<directory> \
-  --native-resolution ubuntu-26.04=<directory> \
-  --native-resolution arch=<directory> \
-  --architecture fedora-44=x86_64 \
-  --architecture ubuntu-26.04=amd64 \
-  --architecture arch=x86_64 \
-  --workers 4 \
-  --output-dir <new-private-survey-directory>
-```
-
-The command writes `<profile>.candidate-resolution-survey.json` and
-`<profile>.candidate-resolution-implementation.json`. When that
-profile has no hard candidate failures it builds a strict candidate only in an
-automatically removed temporary directory and writes
-`<profile>.native-resolution-comparison-survey.json` plus
-`<profile>.comparison-resolution-implementation.json`; otherwise comparison for
-that profile is skipped because no complete candidate exists. All profiles are
-still visited, and the command returns Remi's top-level failure status `101`
-after reporting any findings.
-
-These files are diagnosis, never authority. They cannot satisfy a strict
-resolution-bundle or `NativeResolutionComparisonV1` reader, and promotion
-proof, activation, publication, and public binding paths reject them. They
-contain no input paths, credentials, process environment, or host identity.
-
-Production operators dispatch `.github/workflows/survey-remi-resolution.yml`
-from protected `main` with `oracle_run_id` naming one successful
-`produce-remi-native-oracles` run. The workflow derives the common export run
-and deployment run from its canonical assembled three-lane evidence, and
-requires the oracle run head to equal its own exact current protected-main
-operator commit. For each
-Fedora, Ubuntu, and Arch lane, including a retained same-export lane from an
-earlier successful producer run, it reopens the recorded workflow and successful
-producer job, verifies the API-bound artifact archive digest before safe
-extraction, and requires the lane evidence, producer provenance, export
-manifest, deployment inspection, installed binary digest, exact candidates,
-oracle manifests, and typed architectures to agree. The export must also carry the
-typed operator attestation binding its exact workflow commit to the protected
-pinned-host-key SSH contract; pre-attestation exports are non-authority. It
-transfers one authenticated
-oracle archive, requires the helper from its exact protected
-`github.workflow_sha` to be byte-identical to the freshly fetched protected-main
-helper and the complete workflow revision to be that exact current main commit.
-It stages the helper, then refetches protected main and repeats both the commit
-and digest checks immediately before the existing `install-helper` action. The
-root helper independently resolves current protected main over pinned HTTPS,
-downloads that exact commit's helper itself, requires its digest to match, and
-installs those root-fetched bytes rather than the caller's staged file. It
-then invokes
-the production survey entry point:
-
-```text
-sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution \
-  <survey-id> <export-id> \
-  /tmp/remi-resolution-survey-oracles-<survey-id>.tar
-```
-
-Rerunning an older workflow revision fails before root mutation even when its
-helper bytes remain unchanged, so stale verifier code cannot certify evidence.
-Any protected-main advance during input authentication also fences the run.
-
-The helper obtains candidate revisions from the stopped deployment's current
-private-candidate pointers; they are deliberately absent from its argument
-contract. It runs `remi resolution-survey` as the service user with
-`--config /etc/conary/remi.toml`, the three authenticated oracle directory
-pairs, and the profiles' typed `x86_64`, `amd64`, and `x86_64` architectures.
-It writes durable private output below
-`/conary/evidence/resolution-surveys/<survey-id>`, copies the completed JSON into
-root-owned staging before restoring the service, restores and probes Remi even
-when the survey returns status `101` for recorded findings, accepts that status
-only when the typed outcome reports at least one finding, and requires a bounded successful
-`/health/ready` response before it considers restoration complete. It then emits
-`/tmp/remi-resolution-survey-<survey-id>.tar`. The workflow independently
-reopens that archive, requires every deployment, candidate, architecture, and
-oracle binding to equal the authenticated input verification, and uploads its
-canonical JSON, exact digest/size/binding manifest, and count/histogram
-verification plus the authenticated three-lane assembly for seven days. The
-independent reader enforces every typed Rust survey field, outcome, histogram,
-the exact 5,000-record and 64-MiB evidence limits, explanation byte count, and
-mismatch-evidence relationship.
-Transport manifest and verification evidence schema 2 additionally bind each
-candidate and comparison survey to its separate implementation-evidence file.
-The independent reader reopens those files and verifies the selected worker
-count, exact per-worker load-time vector, effective memory budget, and retained
-per-worker RSS allowance before accepting the survey artifact.
-Comparison counts must cover the exact zero-failure candidate root population;
-every retained mismatch root, identity, and candidate outcome must match that
-candidate survey.
-It also requires the candidate producer to be profile-ecosystem `conary-sat`
-projection schema 3; a merely well-formed implementation identity is rejected.
-Neither helper input admission nor runner output verification imposes an
-aggregate transport ceiling absent from the producer contract. Each still
-admits only a plain archive. Runner construction uses uncompressed GNU
-base-256 tar headers, so an authenticated member larger than USTAR's 8-GiB
-ceiling does not become an invented unsupported class; no PAX metadata is
-admitted. The independent reader chunk-copies and hashes each declared member
-into private mode-`0700` staging, then maps the authenticated JSON read-only
-and decodes large outcome, failure, and mismatch arrays one canonical record
-at a time. Its candidate/comparison join retains
-only the at-most-5,000 mismatch bindings, so neither the archive nor a complete
-survey document or candidate-root index is held in memory.
-Remi returns a bounded per-profile summary with the exact comparison candidate
-manifest digest; the helper uses that summary rather than reparsing survey
-documents with `jq`. The independent reader reconstructs the strict candidate
-`roots.jsonl` bytes and manifest from streamed successful outcomes plus the
-authenticated package-oracle manifest, and requires the comparison digest to
-match even when there are no retained mismatches. It maps the authenticated
-package artifact directly from the oracle archive and requires every
-zero-failure candidate root key and identity to cover those package rows in
-order. Nested closure and unresolved-dependency arrays are decoded one element
-at a time, while copied survey documents are retained for only one profile and
-deleted before the next profile is admitted.
-Every profile's total root count and each retained success or failure identity
-is checked against the package rows before the findings branch. For complete
-profiles, the reader also maps the authenticated native `roots.jsonl`, walks it
-in lockstep with candidate outcomes, and recomputes matching and mismatch
-counts, histograms, and retained evidence rather than trusting the survey's
-comparison summary.
-The sanitized manifest's aggregate and per-profile summaries retain exact JSON
-integer types. After Remi is restored, the helper archives the root-owned
-frozen survey snapshot directly, without another survey-sized staging copy.
-The authenticated oracle members are materialized in a private root-owned
-staging directory on the `/conary/evidence` capacity domain, rather than
-duplicating the unbounded transport beneath `/tmp`.
-The protected runner deletes each authenticated GitHub artifact ZIP after
-extraction and consumes each extracted lane member immediately after adding it
-to the oracle transport, keeping no three-copy full-catalog working set.
-The helper arms cleanup immediately after creating root staging.
-Raw deployment-inspection and survey stderr remain only in its mode-`0600`
-diagnostic file, are destroyed during helper cleanup, and are never copied to
-SSH or workflow logs;
-public failures are typed helper messages. The Markdown summary escapes all
-shell-interpolated code spans. This path cannot promote, activate, or publish
-anything.
-
-Conary separately replays the exact verified profile catalog into a
-private temporary resolver projection, resolves every exact package key
-against empty installed state for the oracle's target architecture, maps
-successful closures and typed missing groups back to package-oracle authority,
-writes and independently reopens its complete candidate bundle, and requires
-exact native comparison. Exact root constraints cannot substitute a different
-version, release, architecture, repository, or variant; optional and build
-groups remain excluded from the positive solve. Initial conversion crawling,
-exact proof reuse, independent CCS reopen, and target preflight retain their
-own evidence contracts. The promotion-evidence producer below binds all of
-these independently reopened records to the same exact candidates.
 
 ### Initial Full-Universe Conversion Crawl
 
@@ -1324,7 +864,7 @@ catalog, chunk, cache, and repository-key paths come only from that config;
 callers cannot compose a second storage authority from raw path flags.
 
 When the deployed config enables R2, the operator initializes and probes that
-exact store before attempting a package, attaches it to the conversion
+configured store before attempting a package, attaches it to the conversion
 service, and retains the configured bounded local-cache owner. Every newly
 produced CCS transport reaches R2 before its conversion row and reusable proof
 can commit. A failed durable write is a failed package outcome and prevents a
@@ -1344,7 +884,7 @@ revalidates the canonical proof, transport and foreign-conversion boundary,
 then creates the later revision's own converted row and durable profile pin.
 It does not download or convert the unchanged artifact again.
 
-After persistence, the crawl independently reopens each exact `.ccs` path
+After persistence, the crawl independently reopens each `.ccs` path
 under the source profile's targets trust anchor. The second verification reads
 the persisted bytes, rechecks the complete signed authority and every payload
 object, reproduces the transport envelope, and binds format, signer, catalog
@@ -1354,8 +894,8 @@ post-persistence proof.
 
 The command writes `RemiConversionCrawlV4`, a strict schema-4 JSON artifact
 binding the complete ordered public-profile set, each pinned profile revision,
-expected package counts, exact package identities, repository checksums,
-terminal states, typed failure evidence, and one exact `ConversionProofV1`
+expected package counts, package identities, repository checksums,
+terminal states, typed failure evidence, and one `ConversionProofV1`
 with a `validated` or `reused` disposition for every success. The proof binds
 its key, CCS SHA-256, `CcsArtifactReopenProofV1`, validation-origin profile
 revision, and complete ordered `CcsTargetCompatibilityProofV1` set. A reused
@@ -1384,7 +924,7 @@ remi conversion-crawl \
   --output /conary/evidence/initial-conversion-crawl.json
 ```
 
-### Exact Candidate Promotion Evidence
+### Candidate Promotion Evidence
 
 `RemiPromotionEvidenceV1` is the single promotion-proof authority for one
 exact ordered public candidate set. Its producer accepts exactly the declared
@@ -1398,10 +938,10 @@ the pinned native package-fact oracle, and both the native and Conary
 resolution bundles. It recomputes package-fact and resolution comparison
 records rather than accepting caller-supplied comparison claims. It also
 canonically reopens the complete `RemiConversionCrawlV4` artifact and walks its
-ordered outcomes against the candidate catalog, requiring exact revision,
+ordered outcomes against the candidate catalog, requiring matching revision,
 count, package key, name, version, release, architecture, and repository
 checksum equality. The crawl's own strict reopen proves every package
-succeeded with a current exact proof key, independently reopened CCS artifact,
+succeeded with a current proof key, independently reopened CCS artifact,
 and complete supported-target preflight set.
 
 Canonical-map validation runs against these same reopened candidate catalogs,
@@ -1411,7 +951,7 @@ crawl digest, canonical-map digest/revision/count, every profile revision and
 catalog digest/size, the package-oracle manifest digest, and both resolution
 manifest digests through the recomputed comparisons. The writer stages and
 synchronizes canonical bytes, atomically publishes them, synchronizes the
-parent directory, independently reopens the plain file, and requires exact
+parent directory, independently reopens the plain file, and requires
 value equality before success. This proof does not advance any active pointer;
 activation must additionally prove that every referenced catalog, CAS, and
 signed metadata object is durable and successfully reopened.
@@ -1432,7 +972,7 @@ profile catalog without consulting an active pointer, produces the complete
 Conary empty-state candidate-resolution bundle, and independently reopens and
 compares it with the supplied native resolution oracle. It then loads the
 canonical map from the same stopped runtime database and produces the final
-`RemiPromotionEvidenceV1` against the exact complete conversion crawl.
+`RemiPromotionEvidenceV1` against the complete conversion crawl.
 
 All candidate-resolution directories and `promotion.json` are written below
 one mode-private staged directory on the destination filesystem. The command
@@ -1936,209 +1476,8 @@ cargo run -p remi --release -- conversion-benchmark \
   --iterations 2
 ```
 
-`--work-root` must name a new directory outside the live Remi storage root.
-The Remi service and every other one-shot runtime owner must be stopped. The
-command acquires the existing runtime root's exclusive kernel lock before it
-snapshots the operational SQLite database and retains that lock through strict
-reopen of the durable report. This keeps activation and catalog garbage
-collection from changing the registered catalog set during the run. It clears runtime
-conversion/cache state in that copy, stages the admitted source artifact, and
-places every mutation below the work root. Deployed catalogs, signing keys, and
-the source database remain read-only authorities; the benchmark cannot warm or
-otherwise mutate live conversion state. Use a distinct new work root for every
-subject and revision being compared.
-
-The strict `conversion-benchmark-v8.json` report records the exact binary path
-and digest, source commit and dirty state, Remi and host identity, CPU and
-memory, and the device, filesystem, and block size for every authority and
-scratch root. It pins each profile and source resource, catalog artifact,
-logical digest, portable-manifest digest and size, and exact chunk geometry as
-well as the benchmark subject.
-
-Before conversion repetitions, `setup.prepare`, `setup.profile`,
-`setup.source`, and `setup.finalize` are separately bounded, non-overlapping
-setup phases. Evidence assembly between probes is excluded rather than charged
-to the next phase.
-The profile and source records separately expose `reopen` and required
-authority-`query` work; query VFS counters are checked deltas from the owning
-reader at the end of its reopen. VFS snapshot extraction is included in the
-phase it describes. Each phase records process wall/user/system
-time, RSS endpoints and process-lifetime peak, faults, logical bytes and
-syscalls from `/proc/self/io`, storage bytes, context switches, and endpoint
-thread occupancy. Cancelled-write bytes are a signed phase delta, so a counter
-regression is retained rather than rejected. Each catalog record also names
-exact verification-pass
-evidence and authenticated-VFS read/chunk/cache work. Schema-v6 validation requires exactly one
-compact portable-manifest validation, one stored-binding check, demanded VFS
-authentication with no integrity failure, and zero complete userspace catalog
-hash, SQLite integrity scan, or logical replay. The chosen chunk size, count,
-and proof size must agree exactly with catalog geometry.
-
-Each repetition separates `conversion_core` from `end_to_end`, records the same
-process resource counters, and retains phase timings and deterministic work
-counters. Successful cold evidence independently reopens the signed transport
-and hashes the complete CCS archive; the report records the CCS, transport,
-and canonical signed-object-set identities and byte counts.
-
-Schema v6 retains exact native payload amplification evidence. The
-`native_payload_spool_file_reopens` counter records each successful physical
-reopen after spooling, including an open of a zero-length file, while
-`native_payload_spool_bytes_reread` records bytes actually read through those
-reopens. For a cold RPM conversion, validation requires declared bytes to
-equal spooled bytes and both reopen counters to be zero. The RPM decoder pairs
-the exact `FILEDIGESTALGO` with every `FILEDIGESTS` value and produces typed,
-algorithm-tagged evidence during its bounded decode/spool copy. Code 8 shares
-the content SHA-256 state, so `native_payload_bytes_hashed` is exactly one
-times spooled bytes; every other supported file-digest algorithm runs one
-concurrent declared-digest state, so it is exactly two times spooled bytes.
-Additive CPIO CRC work is excluded from that cryptographic counter.
-
-Schema v6 hard-cuts the former split payload-reference derivation and payload-
-object emission paths. One `payload_derivation_and_object_staging` phase opens
-each regular content owner once, validates its whole-content identity, derives
-canonical chunk identities where required, and writes each unique staged
-object once. Its counters separately record source opens/bytes, zero source
-reopens/rereads, chunk-identity and whole-content SHA-256 input, their checked
-aggregate, unique writes, deduplicated occurrences/bytes, and zero canonical
-staging rereads or durability calls. The retired phases, nested temporary-
-staging timing, and second-pass/temp-incoming-hash fields are absent rather than
-reported as zero. Prepared layouts and the exact unique object census must
-match final v3 authority before signing.
-
-The two current reopen timers have different owners and boundaries. The
-`timing.phases` entry named `independent_transport_reopen` consumes the
-converter's typed pending artifact, verifies it under the exact profile targets
-key, and streams its signed objects into permanent CAS. It remains inside the
-`end_to_end` view and is the sole internal verification/finalization boundary.
-`output.independent_transport_reopen_ms` is instead a benchmark-only proof
-performed after the end-to-end conversion call. It is inside the outer
-repetition process envelope but outside both views, and it is never credited as
-a conversion optimization. The adjacent
-`output.independent_complete_archive_hash_ms` is also post-conversion proof.
-
-The internal independent transport reopen streams signed object bytes directly
-into the permanent verified-CAS batch. The current schema-v8 contract
-attributes that fused wall time once to `independent_transport_reopen` and
-records `durable_cas_ingestion` as skipped with the exact reason
-`fused into independent transport reopen; no post-verification object pass`.
-The `independent_transport_reopen_object_bytes_hashed` and
-`cas_incoming_bytes_hashed` counters therefore describe the same physical hash
-pass and must agree with the signed object byte count; they are not additive.
-An isolated cold benchmark starts with an empty application CAS, so its
-missing-object bytes are written once behind one staged-data and one
-canonical-name barrier. A hot repetition has zero conversion `timing.work`,
-but the benchmark still performs its separate output proof; outer process wall
-time is therefore not hot service latency.
-
-CCS archive emission uses one portable Rust canonical MGZIP representation with
-fixed ordered 1 MiB DEFLATE blocks. Authenticated reopen validates every exact
-header, encoded-size bound, DEFLATE completion, decoded-size footer, and CRC,
-returns decoded bytes in carrier order, and rejects ordinary gzip, malformed or
-short blocks, and trailing bytes. Reordered or substituted valid blocks cannot
-survive the canonical tar layout plus signed object authority. Remi derives one
-shared bounded archive-CPU capacity from logical parallelism; emission and
-reopen lease that capacity without oversubscription. The raw and public records
-carry exact encode and decode workers, blocks, bytes, and checked buffer
-ceilings. Existing pre-alpha single-member CCS artifacts require rebuild; no
-compatibility reader remains.
-
-Schema v8 retains the schema-v4 hard cut that removed the former
-converter-owned immediate reopen and its inferred work fields entirely; it is
-not represented by a zero-duration or skipped compatibility phase. Foreign
-conversion now returns a typed pending artifact. Remi storage consumes that
-value and is the only code that can hand a verified conversion to transport
-construction and persistence. A signature, archive, object, or
-reconstructed-layout failure therefore still terminates before transport,
-chunk bookkeeping, or conversion rows become authoritative.
-The writer hashes every compressed output byte beneath its MGZIP write and
-binds that identity into the pending value. Remi first copies those bytes into
-a same-directory private file below `cache/packages`, synchronizes and seals it
-`0400` as defense-in-depth read-only mode, and makes that exact path the sole
-verifier input while signed objects stream directly into permanent CAS. It
-then hard-links that staged inode under the verifier-produced digest name
-without replacement and independently hashes the opened canonical final inode.
-A preexisting digest name is reused only when it is itself one sealed regular
-file with the exact verified size and digest. The staging name and an
-inode-bound publication guard remain owned through the
-conversion-row commit together with the exact read-only final file descriptor
-used for that one canonical hash. Every later binding compares the pathname to
-that held descriptor's regular-file device, inode, size, and sealed mode before
-bookkeeping and inside the conversion transaction. Digest names are append-only
-during the running service: request failure retires only its private staging
-name, and any future reclamation of unreferenced digest artifacts must run as
-exclusive stopped-runtime garbage collection. This avoids a conditional-unlink
-race with concurrent reuse or replacement. Portable regular-file permissions
-do not defend against an arbitrary writer already holding the same service
-principal's authority; that principal also controls Remi's database, keys, and
-CAS and is outside this boundary. Consequently the cold phase order is
-`complete_archive_copy`, `independent_transport_reopen`, then
-`complete_archive_hash`; each byte counter covers its exact full-archive pass,
-while `ccs_output_bytes_hashed` records the fused authoring hash.
-
-The exact pre-fusion production-XFS comparison anchor is protected workflow
-run `33282246922`: cold end-to-end was 246.678 seconds. Its correct #755 target
-boundary is the internal `independent_transport_reopen` at 38.282 seconds plus
-the old `durable_cas_ingestion` pass at 17.974 seconds, or 56.256 seconds. The
-39.100-second `immediate_converter_reopen` and the 40.099-second post-conversion
-output reopen are outside that target. Exact bindings, counters, formulas, and
-measurement caveats live in [performance evidence](../performance/README.md).
-
-The first successful repetition must be `cold`. Every later successful
-repetition must be an exact `hot` hit with no conversion-core work. Failures
-remain typed evidence rather than being relabeled or silently retried. The
-first failure terminates the repetition sequence, including a failure in the
-independent persisted-output reopen after conversion succeeds. A conversion
-failure carries zero unexecuted views; the distinct independent-output-reopen
-failure retains the completed conversion's cache state, timing, and executed
-views while omitting the output proof that could not be authenticated. Missing
-timing or contradictory cache/view evidence is a fatal harness-contract defect,
-not a valid repetition failure. The terminal failure is validated, atomically
-published, and independently reopened before the command reports its nonzero
-outcome.
-Schema-v6 validation rejects inconsistent authority, reopen evidence,
-iteration, cache-state, timing, or output proof before atomically publishing
-the report, then deserializes and compares the durable report before success.
-The validator binds `end_to_end` to the timing total, recomputes
-`conversion_core` from its owned phases, requires each independent complete
-reopen/hash byte count to equal the CCS size, and requires every hot output
-identity and byte geometry to equal the cold result. A commit-worthy
-baseline uses a clean exact source commit, preserves the complete JSON report,
-and compares identical authority, subject, parsed source, host/filesystem
-geometry, and signed-object-set identities while retaining each run's exact
-source commit and binary digest. Whole CCS and transport wrapper identities are
-exact within each cold/hot pair; their timestamped signatures make them
-time-varying across separately executed conversions. The recorded counters are
-regression evidence; they do not weaken conversion verification or storage
-authority. Performance baselines and measured optimizations live in
-[performance evidence](../performance/README.md).
-
-A successful command also atomically publishes
-`conversion-benchmark-public-v6.json`. This strict sidecar binds the exact raw
-schema-v8 bytes by size and SHA-256 and carries the complete safe authority,
-setup, process, VFS, phase, work, view, and output-proof evidence without
-rounding. It omits the executable path, every storage-root path and device ID,
-and the free-form explanation attached to skipped phases. Failed or dirty-source
-reports never receive a public sidecar. Both files are create-only, mode 0600,
-atomically and durably published, strictly reopened, and value-compared before
-success; the raw report remains the local diagnostic authority.
-
-`.github/workflows/remi-conversion-benchmark.yml` is the sole production
-adapter. It binds an exact successful protected deployment and accepts one
-explicit registered profile-revision digest so before-and-after binaries can
-be compared against identical retained authority even after the current
-candidate advances. It authenticates source bytes before and after transport,
-serializes against deployment, and invokes the fixed root-owned helper. The
-helper runs exactly one cold and one hot iteration on XFS while Remi is
-trap-backed stopped, then restores liveness. Only the public sidecar and its
-deployment/source bindings leave the host; workflow validation requires two
-successful repetitions, exact requested subject identity, clean deployed
-source and binary identity, and XFS for every retained root role.
-
-The isolated harness exercises local verified-CAS durability separately from
-cloud publication. `r2_write_through` is therefore recorded as skipped with a
-typed reason; the command has no R2 credentials or destination arguments.
-Cloud durability performance requires a separate benchmark against an
-explicitly isolated R2 prefix.
+Benchmark setup, isolation, report schemas, counters, comparison rules, and
+production-adapter requirements live in [performance evidence](../performance/README.md).
 
 ## Chunk Garbage Collection
 

@@ -3,6 +3,35 @@
 use super::*;
 use crate::generation::metadata::GENERATION_FORMAT;
 
+fn image_builder_with_tools(
+    work_dir: &Path,
+    format: ImageFormat,
+    tools: ImageTools,
+) -> ImageBuilder {
+    ImageBuilder {
+        work_dir: work_dir.to_path_buf(),
+        config: BootstrapConfig::new(),
+        sysroot: work_dir.join("sysroot"),
+        output: work_dir.join("output.iso"),
+        format,
+        size: ImageSize::from_str("1G").unwrap(),
+        tools,
+        log: String::new(),
+    }
+}
+
+fn image_tools_with_mkfs(mkfs_fat: Option<PathBuf>) -> ImageTools {
+    ImageTools {
+        dd: PathBuf::from("/bin/dd"),
+        mkfs_fat,
+        qemu_img: None,
+        xorriso: Some(PathBuf::from("/usr/bin/xorriso")),
+        mksquashfs: Some(PathBuf::from("/usr/bin/mksquashfs")),
+        systemd_repart: None,
+        ukify: None,
+    }
+}
+
 #[test]
 fn test_image_format_from_str() {
     assert_eq!(ImageFormat::from_str("raw").unwrap(), ImageFormat::Raw);
@@ -266,16 +295,8 @@ fn test_build_raw_rejects_missing_efi_boot_artifacts() {
     fs::create_dir_all(sysroot.join("boot")).unwrap();
     fs::write(sysroot.join("boot/vmlinuz"), b"kernel").unwrap();
 
-    let config = BootstrapConfig::new();
-    let mut builder = ImageBuilder::new(
-        tmp.path(),
-        &config,
-        &sysroot,
-        tmp.path().join("out.raw"),
-        ImageFormat::Raw,
-        ImageSize::from_str("1G").unwrap(),
-    )
-    .unwrap();
+    let mut builder =
+        image_builder_with_tools(tmp.path(), ImageFormat::Raw, image_tools_with_mkfs(None));
 
     let err = builder.build_raw().unwrap_err();
     assert!(err.to_string().contains("EFI binary not found"));
@@ -318,4 +339,43 @@ fn test_raw_qcow2_formats_require_systemd_repart() {
 
     let err = tools.check_for_format(ImageFormat::Raw).unwrap_err();
     assert!(err.to_string().contains("systemd-repart"));
+}
+
+#[test]
+fn iso_format_requires_mkfs_fat() {
+    let tools = image_tools_with_mkfs(None);
+
+    let err = tools.check_for_format(ImageFormat::Iso).unwrap_err();
+
+    assert!(matches!(err, ImageError::ToolNotFound(_)));
+    assert!(err.to_string().contains("mkfs.fat"));
+}
+
+#[cfg(unix)]
+#[test]
+fn efi_image_reports_mkfs_failure_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let mkfs_fat = tmp.path().join("mkfs.fat");
+    fs::write(
+        &mkfs_fat,
+        "#!/bin/sh\necho 'deliberate formatter failure' >&2\nexit 23\n",
+    )
+    .unwrap();
+    fs::set_permissions(&mkfs_fat, fs::Permissions::from_mode(0o755)).unwrap();
+    let builder = image_builder_with_tools(
+        tmp.path(),
+        ImageFormat::Iso,
+        image_tools_with_mkfs(Some(mkfs_fat)),
+    );
+    let output = tmp.path().join("efi.img");
+
+    let err = builder.create_efi_image(&output).unwrap_err();
+
+    assert!(matches!(err, ImageError::CreationFailed(_)));
+    assert!(
+        err.to_string().contains("deliberate formatter failure"),
+        "{err}"
+    );
 }

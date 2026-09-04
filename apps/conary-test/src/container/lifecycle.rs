@@ -5,19 +5,19 @@ use async_trait::async_trait;
 use bollard::Docker;
 use bollard::container::LogOutput;
 use bollard::exec::{CreateExecOptions, StartExecOptions, StartExecResults};
-use bollard::models::{BuildInfo, ContainerCreateBody, HostConfig};
+use bollard::models::{ContainerCreateBody, HostConfig};
 use bollard::query_parameters::{
     BuildImageOptions, DownloadFromContainerOptions, KillContainerOptions, ListImagesOptions,
     LogsOptions, RemoveContainerOptions, StopContainerOptions, UploadToContainerOptions,
 };
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use std::collections::HashMap;
 use std::io::Read as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
@@ -25,57 +25,15 @@ use super::backend::{
     ContainerBackend, ContainerConfig, ContainerId, ContainerInspection, ExecResult, ImageInfo,
     VolumeMount,
 };
+use super::build_output::consume_build_stream;
+use super::exec_pid::ExecPid;
 use super::exec_supervisor;
-
-const BUILD_OUTPUT_TAIL_BYTES: usize = 32 * 1024;
-
-#[derive(Default)]
-struct BuildOutputTail {
-    output: String,
-    omitted_bytes: usize,
-}
-
-impl BuildOutputTail {
-    fn push(&mut self, chunk: &str) {
-        self.output.push_str(chunk);
-        if self.output.len() <= BUILD_OUTPUT_TAIL_BYTES {
-            return;
-        }
-
-        let mut drain_through = self.output.len() - BUILD_OUTPUT_TAIL_BYTES;
-        while !self.output.is_char_boundary(drain_through) {
-            drain_through += 1;
-        }
-        self.output.drain(..drain_through);
-        self.omitted_bytes += drain_through;
-    }
-
-    fn failure(&self, summary: impl std::fmt::Display) -> String {
-        let retained = self.output.trim_end();
-        if retained.is_empty() {
-            return summary.to_string();
-        }
-
-        let omission = if self.omitted_bytes == 0 {
-            String::new()
-        } else {
-            format!(
-                "[... {} earlier Docker build output bytes omitted ...]\n",
-                self.omitted_bytes
-            )
-        };
-        format!(
-            "{summary}\nDocker build output tail ({BUILD_OUTPUT_TAIL_BYTES}-byte limit):\n{omission}{retained}"
-        )
-    }
-}
 
 struct RunningExec {
     container_id: ContainerId,
     receiver: Option<mpsc::Receiver<String>>,
     result_rx: Option<oneshot::Receiver<ExecResult>>,
-    pid: Arc<Mutex<Option<u64>>>,
-    pid_ready: Arc<Notify>,
+    pid: Arc<ExecPid>,
 }
 
 /// Container backend powered by bollard (Docker/Podman API).
@@ -295,38 +253,6 @@ impl BollardBackend {
             "timed-out exec cleanup failed ({cleanup_error}); killed container {container_id} to guarantee termination"
         )
     }
-
-    async fn consume_build_stream<S>(mut stream: S) -> Result<()>
-    where
-        S: Stream<Item = std::result::Result<BuildInfo, bollard::errors::Error>> + Unpin,
-    {
-        let mut output_tail = BuildOutputTail::default();
-
-        while let Some(result) = stream.next().await {
-            match result {
-                Ok(info) => {
-                    if let Some(stream_msg) = &info.stream {
-                        debug!(target: "build", "{}", stream_msg.trim_end());
-                        output_tail.push(stream_msg);
-                    }
-                    if let Some(detail) = &info.error_detail {
-                        let msg = detail.message.as_deref().unwrap_or("unknown error");
-                        bail!(
-                            "{}",
-                            output_tail.failure(format_args!("image build failed: {msg}"))
-                        );
-                    }
-                }
-                Err(error) => {
-                    let context =
-                        output_tail.failure(format_args!("image build stream error: {error}"));
-                    return Err(error).context(context);
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[async_trait]
@@ -367,7 +293,7 @@ impl ContainerBackend for BollardBackend {
             Some(HashMap::new()),
             Some(bollard::body_full(Bytes::from(tar_bytes))),
         );
-        Self::consume_build_stream(stream).await?;
+        consume_build_stream(stream).await?;
 
         debug!("image built: {tag}");
         Ok(tag.to_string())
@@ -524,10 +450,8 @@ impl ContainerBackend for BollardBackend {
         let container_id = id.clone();
         let (tx, rx) = mpsc::channel(128);
         let (result_tx, result_rx) = oneshot::channel();
-        let pid = Arc::new(Mutex::new(None));
-        let pid_ready = Arc::new(Notify::new());
+        let pid = Arc::new(ExecPid::default());
         let pid_for_task = Arc::clone(&pid);
-        let pid_ready_for_task = Arc::clone(&pid_ready);
         let exec_id_for_task = exec_id.clone();
 
         tokio::spawn(async move {
@@ -554,8 +478,7 @@ impl ContainerBackend for BollardBackend {
                                         .strip_prefix("__CONARY_TEST_PID__=")
                                         .and_then(|pid_text| pid_text.parse::<u64>().ok())
                                     {
-                                        *pid_for_task.lock().await = Some(value);
-                                        pid_ready_for_task.notify_waiters();
+                                        pid_for_task.publish(value).await;
                                         continue;
                                     }
                                     if tx.send(line).await.is_err() {
@@ -583,8 +506,7 @@ impl ContainerBackend for BollardBackend {
                         .strip_prefix("__CONARY_TEST_PID__=")
                         .and_then(|pid_text| pid_text.parse::<u64>().ok())
                     {
-                        *pid_for_task.lock().await = Some(value);
-                        pid_ready_for_task.notify_waiters();
+                        pid_for_task.publish(value).await;
                     } else {
                         let _ = tx.send(stdout_buffer.clone()).await;
                     }
@@ -604,7 +526,7 @@ impl ContainerBackend for BollardBackend {
                     stdout: stdout.replace(
                         &format!(
                             "__CONARY_TEST_PID__={}\n",
-                            pid_for_task.lock().await.unwrap_or_default()
+                            pid_for_task.current().await.unwrap_or_default()
                         ),
                         "",
                     ),
@@ -632,7 +554,6 @@ impl ContainerBackend for BollardBackend {
                 receiver: Some(rx),
                 result_rx: Some(result_rx),
                 pid,
-                pid_ready,
             },
         );
 
@@ -683,26 +604,19 @@ impl ContainerBackend for BollardBackend {
     }
 
     async fn kill_exec(&self, exec_id: &str, signal: &str) -> Result<()> {
-        let (container_id, pid, pid_ready) = {
+        let (container_id, pid) = {
             let running_execs = self.running_execs.lock().await;
             let running = running_execs
                 .get(exec_id)
                 .with_context(|| format!("unknown exec id: {exec_id}"))?;
-            (
-                running.container_id.clone(),
-                Arc::clone(&running.pid),
-                Arc::clone(&running.pid_ready),
-            )
+            (running.container_id.clone(), Arc::clone(&running.pid))
         };
 
-        if pid.lock().await.is_none() {
-            pid_ready.notified().await;
-        }
         let target_pid = pid
-            .lock()
+            .prepare_wait()
             .await
-            .as_ref()
-            .copied()
+            .resolve()
+            .await
             .with_context(|| format!("exec pid not available for {exec_id}"))?;
 
         let signal_name = Self::normalize_signal_name(signal);
@@ -904,10 +818,7 @@ impl ContainerBackend for BollardBackend {
 
 #[cfg(test)]
 mod tests {
-    use super::{BUILD_OUTPUT_TAIL_BYTES, BollardBackend};
-    use bollard::errors::Error;
-    use bollard::models::{BuildInfo, ErrorDetail};
-    use futures::stream;
+    use super::BollardBackend;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -943,65 +854,6 @@ mod tests {
         assert_eq!(BollardBackend::normalize_signal_name("SIGKILL"), "KILL");
         assert_eq!(BollardBackend::normalize_signal_name("SIGTERM"), "TERM");
         assert_eq!(BollardBackend::normalize_signal_name("KILL"), "KILL");
-    }
-
-    #[tokio::test]
-    async fn build_error_retains_only_the_bounded_output_tail() {
-        let discarded_line = "old package-manager output that should be discarded\n";
-        let old_output = format!(
-            "discard-this-prefix\n{}",
-            discarded_line.repeat(BUILD_OUTPUT_TAIL_BYTES / discarded_line.len() + 2)
-        );
-        let useful_output = "error: failed retrieving file 'core.db' from mirror.example\n";
-        let build_stream = stream::iter(vec![
-            Ok(BuildInfo {
-                stream: Some(old_output),
-                ..Default::default()
-            }),
-            Ok(BuildInfo {
-                stream: Some(useful_output.to_string()),
-                ..Default::default()
-            }),
-            Ok(BuildInfo {
-                error_detail: Some(ErrorDetail {
-                    message: Some("process exited with status 1".to_string()),
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }),
-        ]);
-
-        let error = BollardBackend::consume_build_stream(build_stream)
-            .await
-            .expect_err("build should fail");
-        let diagnostic = error.to_string();
-
-        assert!(diagnostic.contains("process exited with status 1"));
-        assert!(diagnostic.contains(useful_output.trim_end()));
-        assert!(diagnostic.contains("earlier Docker build output bytes omitted"));
-        assert!(!diagnostic.contains("discard-this-prefix"));
-        assert!(diagnostic.len() < BUILD_OUTPUT_TAIL_BYTES + 512);
-    }
-
-    #[tokio::test]
-    async fn stream_error_includes_preceding_build_output() {
-        let build_stream = stream::iter(vec![
-            Ok(BuildInfo {
-                stream: Some("pacman: failed to synchronize all databases\n".to_string()),
-                ..Default::default()
-            }),
-            Err(Error::DockerStreamError {
-                error: "connection reset".to_string(),
-            }),
-        ]);
-
-        let error = BollardBackend::consume_build_stream(build_stream)
-            .await
-            .expect_err("stream should fail");
-        let diagnostic = error.to_string();
-
-        assert!(diagnostic.contains("Docker stream error: connection reset"));
-        assert!(diagnostic.contains("pacman: failed to synchronize all databases"));
     }
 
     #[tokio::test]

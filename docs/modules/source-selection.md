@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 60
-summary: Document distinct package-variant selection and host-architecture assertions, profile-bound RPM, Debian, and Arch admission, scheme-owned Conary and Eopkg machine matching, libc-independent host identity, profile-owned package ABI and ALPM token authority, typed profile support tiers, target architectures, and complete membership, signed Remi universe and canonical-map authority, exact parser-input projection reuse across authenticated-root churn, coherent native inventory adoption, opaque native source identity, exact native trust takeover, capability-driven targets, bounded dependency acquisition, and lifecycle handoff
+revision: 63
+summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
 # Source Selection Module (conary-core/src/repository/ + conary-core/src/model/)
@@ -76,7 +76,7 @@ ecosystem with other sources without becoming interchangeable authorities.
 Strict dependency resolution rejects a transitive candidate until one exact
 transaction source identity is established.
 
-`SystemAffinity` is a measured summary of exact installed-package provenance.
+`SystemAffinity` is a measured summary of installed-package provenance.
 It is deliberately not an input to eligibility, candidate ranking, canonical
 equivalence, update selection, or any other mutation decision. It exists for
 informational display and to estimate how many installed packages a requested
@@ -96,12 +96,12 @@ requires the declared profile's package format to match the repository parser.
 Remi
 sync and package fetches translate the stored public ID to the profile-owned
 route slug. Remi sync verifies the endpoint-wide signed universe, downloads
-only missing digest-addressed catalogs, and replays each configured exact
+only missing digest-addressed catalogs, and replays each configured
 profile directly into one private immutable resolution index. One final fenced
 transaction activates the complete index and its universe-bound canonical map.
 Object transfer bounds each request and interval without body progress; it does
 not impose a fixed wall-clock ceiling on a healthy multi-gigabyte stream.
-Interrupted bodies use bounded retries and resume from exact retained bytes
+Interrupted bodies use bounded retries and resume from retained bytes
 when the server supports ranges. A complete-operation deadline belongs to the
 caller. Private replay creates resolution indexes only after bulk row transfer;
 the append-only candidate must retain a zero-page freelist and remains
@@ -114,11 +114,10 @@ fetches whole-distribution JSON nor retains distribution-sized package or
 relation vectors in Rust. Persisted Remi package identity requires the exact
 public ID; route slugs and generic `rpm`/`deb`/`arch` format labels are never
 accepted as source-identity aliases. Native repository sync instead consumes
-the exact persisted native source policy described below. A configured public
+the persisted native source policy described below. A configured public
 profile remains an optional feed preset during W10 and is copied into native
 package rows when present; it is not required for repository identity or
-refresh authority. The superseded
-`data/distros.toml` catalog was deleted in M4d.
+refresh authority. The superseded distro catalog is absent.
 
 Host-native admission derives `NativeMachineIdentityV1` only from compile-time
 machine facts: `target_arch`, pointer width, endianness, and `target_abi` for
@@ -199,7 +198,7 @@ authority.
 
 `conary system init` enrolls the release-tracked universe root and creates or
 reconciles each Conary-owned Remi repository and its `repository_package_keys`
-rows in the same transaction. An explicit `conary repo add` for the exact
+rows in the same transaction. An explicit `conary repo add` for the
 canonical origin/profile pair enrolls both authorities transactionally. Neither
 the package-key nor metadata-root option can override release-tracked canonical
 authority.
@@ -246,7 +245,7 @@ The current schema permits one implementation for each
 `canonical_id`/public-profile pair and rejects every other authority string.
 One source package may intentionally implement multiple canonical identities;
 reverse lookup of that package name is therefore ambiguous unless the caller
-also supplies the canonical identity or exact profile. AppStream may attach one
+also supplies the canonical identity or selected profile. AppStream may attach one
 globally unique application ID to an already-authorized mapping. Repology and
 AppStream caches cannot create mappings, choose packages, or resolve conflicts.
 
@@ -257,7 +256,7 @@ requires:
 - a monotonic content `revision`
 - the persisted rebuild timestamp as `generated_at` (`null` only for the empty
   revision-zero map)
-- each canonical name's exact `kind`, optional `category`, and exact
+- each canonical name's `kind`, optional `category`, and
   public-profile-to-package map
 
 The browsing response remains checksum-bound, but Conary synchronization does
@@ -287,7 +286,7 @@ upstream preserves are retained as uninterpreted evidence and refused by
 authoritative discovery.
 
 This layer is not trust, enrollment, persistence, or enablement authority. It
-does not invoke a native manager or read a native database. The exact upstream
+does not invoke a native manager or read a native database. The upstream
 pins, grammar inventory, and consumer boundary are recorded in
 [`docs/specs/native-repository-declarations.md`](../specs/native-repository-declarations.md).
 
@@ -296,7 +295,7 @@ pins, grammar inventory, and consumer boundary are recorded in
 `repository/declarations/trust_import/` consumes discovered declarations and
 reads only their explicit local key material below the same selected root. Its
 strict JSON preview retains native declaration identity, enabled state, source
-locations, exact certificate fingerprints, and separate Debian Release, RPM
+locations, certificate fingerprints, and separate Debian Release, RPM
 metadata, RPM package, ALPM database, and ALPM package roles. An exact RPM
 metalink can authenticate metadata but never substitutes for package-signing
 authority.
@@ -324,7 +323,7 @@ After declaration and trust-import planning, a native RPM, Debian, or ALPM
 repository is enrolled with an exact source identity, a distinct repository
 identity, a typed release/channel/rolling stream, and one closed update mode.
 `RepositorySourcePolicy` is normalized in `repository_source_policies` and may
-be scoped to one repository or shared by an exact repository group. Each
+be scoped to one repository or shared by a repository group. Each
 repository retains its own enabled state, priority, parser selectors, content
 URL, ownership, and optional member pin. Authenticated roots are transient
 refresh inputs; immutable source catalogs own their revision identity.
@@ -341,7 +340,7 @@ so an endpoint, parser selector, or metadata trust-root change requires
 explicit `repo add --replace` re-enrollment.
 
 Native parsers stream package projections through `RepositorySnapshotSink`
-together with the SHA-256 of the exact authenticated top-level bytes: ALPM's
+together with the SHA-256 of the authenticated top-level bytes: ALPM's
 served compressed database, Debian's verified cleartext Release payload, or
 RPM's authenticated `repomd.xml`. Distribution-sized children are downloaded
 to private files, hashed and sized before parsing, then decoded one record at a
@@ -364,29 +363,29 @@ Remi applies the same enrolled source, stream, parser, and trust decisions but
 does not publish activated package metadata into its operational SQLite
 database. Each accepted authenticated source becomes a strict immutable
 `SourceSnapshotV1` plus standalone catalog. One deterministic
-`ProfileRevisionV2` binds the exact ordered members, typed roles, precedence,
+`ProfileRevisionV2` binds the ordered members, typed roles, precedence,
 required state, and composed package
 catalog for the public profile. Candidate construction is private; durable
 content-addressed publication precedes one fenced active-pointer transaction.
-An exact normalized projection cache can bypass native parsing only when the
+A matching normalized projection cache can bypass native parsing only when the
 stream binding, every authenticated child role/path/digest/size, every typed
 root-derived parser bound, parser projection version, and catalog schema all
 match. The freshly authenticated top-level root remains bound into the new
 immutable source manifest, but wrapper-only signature or timestamp churn does
 not change normalized catalog bytes. Cache hits materialize the independently
-reopened exact catalog artifact without row replay; cache contents never replace
+reopened catalog artifact without row replay; cache contents never replace
 the immutable source manifest or active profile pointer as authority.
 Catalog source/profile/repository IDs remain bounded printable ASCII. Typed
 native capability names preserve exact upstream UTF-8, including non-ASCII
 RPM provides and significant surrounding whitespace in file/path capabilities;
 non-path names remain trimmed and control-free.
 
-Private refresh, proof, and prewarm selection maps one exact profile ID to its
+Private refresh, proof, and prewarm selection maps one profile ID to its
 fenced active or explicitly selected candidate revision. Public serving adds a
 separate required step: one active signed universe snapshot names the complete
-public profile set and each exact revision, and `CatalogAuthority` reopens only
+public profile set and each revision, and `CatalogAuthority` reopens only
 those selected revisions. Sparse, detail, search, statistics, package lookup,
-download, and request-triggered conversion retain that exact selection for
+download, and request-triggered conversion retain that selection for
 their work. An active profile pointer alone grants no public authority.
 Repository names, insertion or fetch completion order, route slugs, candidate
 catalog contents, and operational package rows cannot select a source member or
@@ -421,7 +420,7 @@ The supported chains are:
 - Debian: a pinned Release certificate verifies the clearsigned `InRelease`,
   or the exact `Release` plus `Release.gpg` fallback. The signed Release
   SHA-256 and size authenticate the selected compressed `Packages` index; each
-  package stanza's exact SHA-256 and size authenticate its `.deb`.
+  package stanza's SHA-256 and size authenticate its `.deb`.
 - RPM: repository metadata and packages have distinct authorities. Either a
   detached OpenPGP signature or an exact HTTPS metalink identity authenticates
   `repomd.xml`; its SHA-256 and size authenticate `primary.xml` and, by the
@@ -430,7 +429,7 @@ The supported chains are:
   bytes; filelists supplies complete package file ownership; and an
   independently pinned package certificate verifies the RPM's embedded OpenPGP
   signature.
-- Arch: one exact keyring source supplies the pinned master certificates,
+- Arch: one configured keyring source supplies the pinned master certificates,
   their certifications, packager certificates, and the companion
   `<keyring>-revoked` disabled-key list. An explicit threshold says how many
   distinct pinned masters must certify a packager key; the hosted Arch feeds
@@ -446,7 +445,7 @@ ALPM signature trust is not a pinned-certificate check, so it does not use the
 same verifier as Debian and RPM. `ArchTrustSnapshot`
 (`trust/openpgp/arch/snapshot.rs`) is the typed equivalent of a keyring
 populated by `pacman-key --populate`: pinned master authority, certified
-packager certificates with the exact certifying master set, subkey bindings,
+packager certificates with the certifying master set, subkey bindings,
 revocation and expiry, disabled-key state, and one explicit trust-snapshot
 time. `trust/openpgp/arch/verify.rs` evaluates a package or database signature
 against that snapshot and reports pacman's own result classes
@@ -531,7 +530,7 @@ selects and emits package-owned `<file>` records in `primary.xml`, and its
 [`STATE_FILE` parser](https://github.com/rpm-software-management/createrepo_c/blob/5cf41fe5d703901d78078ed18c67ab667e446c1a/src/xml_parser_primary.c#L428-L445)
 reads them independently of `rpm:provides`. Conary preserves every such signed
 record as an unversioned typed file provider with `source-derived-file`
-provenance on the exact package. The projection is owned by
+provenance on the package. The projection is owned by
 `repository/parsers/fedora/provides.rs`. It does not reimplement createrepo's
 path-selection rule or infer providers from package names, payload guesses, or
 a curated path list. The provenance names the source format only: the
@@ -578,7 +577,7 @@ Fedora 44 `Everything/x86_64` measures that cost exactly (repomd revision
 rows to 10,074,782 and the synced SQLite database from 0.61 GB to 3.90 GB. The
 829 MB decompressed document and repository-sized join maps are never
 materialized: verified compressed files stream under the ceiling the signed
-`<open-size>` declares, and exact total pkgid membership is proven by indexed
+`<open-size>` declares, and complete pkgid membership is proven by indexed
 candidate state.
 
 Dropping the duplicated path from file provenance is measured on that same
@@ -631,7 +630,7 @@ generators' own documentation:
 - pacman `a6f7467d`
   [`lib/libalpm/signing.c`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/lib/libalpm/signing.c#L521-L719)
   for the GPGME status/validity mapping and
-  [`scripts/pacman-key.sh.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/scripts/pacman-key.sh.in)
+  [upstream `pacman-key.sh.in`](https://gitlab.archlinux.org/pacman/pacman/-/blob/a6f7467d8c7c4d7e9cc846884e74c0ab7215c48d/scripts/pacman-key.sh.in)
   for keyring population, local signing, ownertrust, and disabled keys
 - GnuPG `gnupg-2.4.9` `g10/getkey.c`, `g10/sig-check.c`, and `g10/trustdb.c`
   for the reference-time, expiry, revocation, and web-of-trust semantics that
@@ -675,13 +674,13 @@ exact native identity remains tied, produce a typed ambiguity. Repository
 names, cache iteration order, and external discovery metadata never break that
 tie.
 
-Remi composes each activated immutable profile before serving it. Higher exact
+Remi composes each activated immutable profile before serving it. Higher
 member precedence selects provenance only when two members carry the same
 native package identity and their payload and authoritative logical records are
 identical; disagreement is a typed publication conflict. Debian distribution
 and component are authenticated source-pocket provenance, exposed as
 `DebianSourcePocketV1`, rather than source-independent package semantics. An
-exact artifact may therefore collapse across security and updates pockets while
+artifact may therefore collapse across security and updates pockets while
 the selected higher-precedence record retains its typed pocket and member
 origin. Intrinsic Debian metadata, payload identity, providers, dependencies,
 conflicts, and replacements must still agree. Every distinct native version,
@@ -706,9 +705,9 @@ Debian, or Arch artifact is selected, its typed package-manager lifecycle ABI is
 part of that artifact's identity and is not reinterpreted by repository source
 identity or a target distribution label.
 
-The lifecycle bundle records the exact source format, distro, release,
+The lifecycle bundle records the source format, distro, release,
 architecture, and native version scheme. Packages with source lifecycle
-programs carry those programs and their exact source ABI into the Conary-owned
+programs carry those programs and their source ABI into the Conary-owned
 runtime; packages without them carry no invented hooks. Source selection
 cannot change either fact.
 
@@ -758,15 +757,15 @@ missing or changed path is reported as drift rather than becoming new
 authority. Legacy APT declarations without `Signed-By` can proceed only when
 the enrollment manifest binds exact primary fingerprints to native global
 keyring bytes below the selected root; the keyring files then join the owned,
-rollback-safe projection set. The exact contract is
-[`native-repository-takeover.md`](../specs/native-repository-takeover.md).
+rollback-safe projection set. The contract is
+[the native repository takeover specification](../specs/native-repository-takeover.md).
 
 After takeover, repository declarations and trust roots installed by a package
 participate in the package's selected-root and SQLite transaction. CCS carries
 the signed desired-state intent; direct native installation derives the same
-intent from exact package payload grammars before mutation. Update, removal,
+intent from package payload grammars before mutation. Update, removal,
 explicit retention, shared ownership, and rollback follow
-[`package-repository-enrollment.md`](../specs/package-repository-enrollment.md).
+[the package repository enrollment specification](../specs/package-repository-enrollment.md).
 The completed filesystem is never scanned for repository-looking files.
 
 `conary system adopt <pkg> --dry-run` builds the same package-specific plan
@@ -802,7 +801,7 @@ SHA-256 artifact identity. Cached RPM, Debian, Arch, and eopkg artifacts are
 reverified with their ecosystem-specific package authority before reuse. The
 parser identity and every adopted payload node,
 resolved owner, content digest, symlink, hardlink topology edge, and explicit
-directory must match before the canonical native converter runs.
+directory must match before the native converter runs.
 
 Conversion does not transfer ownership of the currently adopted trove. It
 publishes a separately installable signed CCS under the Conary runtime root and
@@ -841,7 +840,7 @@ root exactly once. Package claims bind to that one path-indexed capture rather
 than rereading their declared file lists. The scanner reports paths examined,
 unique regular inodes, and content streams; every hardlinked inode is read into
 CAS once, and its global typed topology is retained even when different native
-packages own different links. Shared directories retain every exact package
+packages own different links. Shared directories retain every package
 owner, and unowned content is classified during the same traversal. The scan
 captures each walked node through a bounded pointwise-stable descriptor window,
 then derives global hardlink topology from the captured snapshots. It
@@ -854,13 +853,13 @@ directory are explicit normalized exclusions under both their lexical and
 resolved paths, so path aliases cannot make the CAS or database inputs to their
 own capture. A runtime root resolving to `/` fails closed.
 
-Persisted package file anchors and payload claims partition that exact scan.
+Persisted package file anchors and payload claims partition that scan.
 Package-owned paths retain their owner and claim graph while their materialized
 node/content authority is reconciled to the one global scan, preserving xattrs
 and hardlinks even when an inode group crosses ownership boundaries. Every
 remaining path belongs to one synthetic `CapturedRoot` trove. That source is a
 generation input but never substitutes for package install, update, remove, or
-native-manager authority. A repeated full adoption recognizes the same exact
+native-manager authority. A repeated full adoption recognizes the same
 partition without accumulating another captured-root owner. Track-only native
 troves are privately CAS-backed and promoted to `AdoptedFull` in the same
 full-adoption transaction.
@@ -887,7 +886,7 @@ Install uses the shared effective policy and then layers root-only request
 scope such as `--repo` or `--from` on top of it. `--from` accepts only an
 exact lexically valid source identity and does not consult the named feed
 catalog. A named feed ID may additionally enable canonical-name projection;
-unknown identities use exact package names. Exact-name selection
+unknown identities use literal package names. Literal-name selection
 and SAT ordering both respect the effective source-selection settings.
 
 ### Update
@@ -898,7 +897,7 @@ Ordinary update is exact-source only: it may select a newer native version from
 the installed repository or exact public profile, but it never infers a distro
 migration. Repology status cannot switch the source. Moving an installation
 from one distro profile to another is an explicit replatform plan with separate
-preview, exact target rows, and confirmation.
+preview, selected target rows, and confirmation.
 
 Update also enforces the limited-preview ownership boundary:
 
@@ -924,7 +923,7 @@ on packages, ownership convergence, and explicit replatform actions;
 repository enrollment and request-scoped selection remain source authority.
 
 `model apply --dry-run` resolves the complete incoming package set, downloads
-and authenticates its exact artifacts, and runs the same read-only batch
+and authenticates its artifacts, and runs the same read-only batch
 ordering and relation planning that apply consumes. It stops before
 selected-root materialization, selected-root-relative payload normalization,
 lifecycle execution, CAS storage, or database mutation, and returns the same
@@ -946,7 +945,7 @@ candidate.
 Each transaction tracks:
 
 - target repository metadata
-- exact-version install route availability
+- pinned-version install route availability
 - architecture compatibility
 - unresolved target dependencies
 - whether remove, install, and metadata legs are ready
@@ -985,7 +984,7 @@ explicit scoped install, update, or replatform operation.
 - `crates/conary-core/src/repository/supported_profiles/` for configured feed
   IDs, route slugs, parser flavor, and source version scheme
 - `crates/conary-core/src/canonical/exchange.rs`,
-  `canonical/rules.rs`, and `db/models/canonical.rs` for exact canonical-map
+  `canonical/rules.rs`, and `db/models/canonical.rs` for canonical-map
   exchange, local contract parsing, and typed persistence authority
 - `crates/conary-core/src/model/parser/source_policy.rs` for `[system]` parsing
   and precedence; `model/parser.rs` owns the aggregate model and validation
@@ -1005,9 +1004,8 @@ explicit scoped install, update, or replatform operation.
   package and captured-root projection into immutable and mutable manifests
 - `apps/conary/src/commands/update/mod.rs` for update module routing
 - `apps/conary/src/commands/update/package.rs` for single-package update
-  execution, delta/full update handling, and lifecycle execution preflight
-- `apps/conary/src/commands/update/resolution.rs` for exact-source update selection
-  preview and replatform update context
+  execution, exact-source resolution context, delta/full update handling, and
+  lifecycle execution preflight
 - `apps/conary/src/commands/update/selection.rs` for exact-source update
   candidate behavior
 - `apps/conary/src/commands/update/adopted_authority.rs` for adopted-update

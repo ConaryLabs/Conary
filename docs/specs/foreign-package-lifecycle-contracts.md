@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-29
-revision: 50
+last_updated: 2026-09-03
+revision: 52
 summary: Define source-independent lifecycle, exact adopted-artifact conversion, source-authority handoff, manifest-scoped Remi catalog resources, generation activation, and configuration transactions for RPM, Debian, Arch, and eopkg packages
 ---
 
@@ -12,7 +12,7 @@ documented lifecycle ABIs around arbitrary program bodies. Conary models those
 ABIs directly; it does not infer lifecycle meaning from program text or
 delegate execution to the source package manager.
 
-[`source-package-authority.md`](source-package-authority.md) owns the upstream
+[the source-package authority specification](source-package-authority.md) owns the upstream
 package identity, provision, payload-record, and config-declaration models plus
 their fallible projection into this lifecycle and transaction contract. This
 document remains the owner of event order, arguments, installed config state,
@@ -21,7 +21,7 @@ and selected-root execution.
 Repository declarations and signing roots installed by a package are a
 separate typed lifecycle effect. Their signed desired state, ownership, atomic
 install/update/remove behavior, and rollback contract are defined by
-[`package-repository-enrollment.md`](package-repository-enrollment.md). They
+[the package repository enrollment specification](package-repository-enrollment.md). They
 are planned from authenticated package payloads before mutation and are never
 inferred by scraping a completed root or classifying script text.
 
@@ -271,7 +271,7 @@ and message. It does not synthesize an exit-code or stderr column absent from
 `ScriptletFailureOutcome`; `conary system history` is the read surface.
 Security-policy and boot-runtime requests also retain the exact invoked path,
 canonical path, and executable SHA-256 observed inside that selected root.
-Current-only database schema revision 55 retains the tagged
+Current-only database schema revision 56 retains the tagged
 systemd/OpenRC/SELinux/AppArmor and boot-runtime mutation union, durable
 repository synchronization fencing, and exact profile-revision conversion
 pins, artifact-level Remi conversion proof, and per-revision proof bindings
@@ -925,7 +925,7 @@ universe.
 
 A promised path is a path a package owns without shipping content for it
 (RPM `%ghost`; `source-promised-path` in
-[`source-package-authority.md`](source-package-authority.md)). Dependency
+[the source-package authority specification](source-package-authority.md)). Dependency
 resolution admits it as a provider, so a transaction can certify a dependency
 edge against a path no payload record creates.
 
@@ -1701,7 +1701,7 @@ Current ownership:
   `packages/arch/install_script.rs`, and `packages/arch/alpm_hook.rs`;
 - eopkg archive, installed-state, and configuration extraction:
   `crates/conary-core/src/packages/eopkg/`; its pinned upstream mapping is
-  [`eopkg-source-abi.md`](eopkg-source-abi.md);
+  [the Eopkg source ABI specification](eopkg-source-abi.md);
 - durable CCS bundle: `crates/conary-core/src/ccs/native_lifecycle.rs`;
 - typed planner: `crates/conary-core/src/ccs/native_transaction.rs` with
   RPM, Debian, Arch, and eopkg ownership modules under `ccs/native_transaction/`;

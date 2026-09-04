@@ -158,7 +158,7 @@ pub(super) fn select_update_candidate(
                 if !candidate
                     .repository
                     .security_advisory_support
-                    .is_supported()
+                    .authorizes_security_advisories()
                 {
                     return Ok(UpdateCandidateSelection::SecurityMetadataUnavailable(
                         SecurityMetadataUnavailable {
@@ -232,8 +232,9 @@ pub(super) fn render_security_update_marker(package: &RepositoryPackage) -> Stri
             .as_deref()
             .map(str::trim)
         {
-            Some("trusted") => format!("trusted source: {source}"),
-            Some(trust) if !trust.is_empty() => format!("{trust} source: {source}"),
+            Some(claim) if !claim.is_empty() => {
+                format!("source: {source} (feed trust claim: {claim})")
+            }
             _ => format!("source: {source}"),
         };
         parts.push(source_label);
@@ -709,7 +710,10 @@ mod tests {
         assert!(marker.contains("FEDORA-2026-0001"), "{marker}");
         assert!(marker.contains("CVE-2026-0001,CVE-2026-0002"), "{marker}");
         assert!(marker.contains("fixed: 3.2.1-1.fc44"), "{marker}");
-        assert!(marker.contains("trusted source: conary-json"), "{marker}");
+        assert!(
+            marker.contains("source: conary-json (feed trust claim: trusted)"),
+            "{marker}"
+        );
     }
 
     #[test]

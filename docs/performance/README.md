@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-31
-revision: 17
-summary: Record commit-bound reproducible performance evidence, exact command resource metrics, production-XFS Remi comparison anchors, and measured optimization results including one-pass CCS payload preparation and parallel CCS emission and authenticated reopen
+last_updated: 2026-09-03
+revision: 18
+summary: Define Remi benchmark methodology and record commit-bound performance evidence, command resource metrics, comparison anchors, and measured optimization results
 ---
 
 # Performance evidence
@@ -33,52 +33,205 @@ passing the label. Network bytes, CAS work, SQLite statements, durability
 calls, complete-root scans, and internal phase timing remain separate typed
 counters rather than estimates derived from elapsed time.
 
-Schema v8 records the exact CCS compression geometry: tar-stream input bytes,
-compression workers, fixed block bytes, block count, and the checked buffering
-ceiling. The sole current carrier is canonical fixed-block MGZIP; ordinary
-single-member gzip is retired and existing pre-alpha CCS artifacts require
-rebuild. Fixed ordered blocks make carrier bytes independent of worker
-scheduling and allow authenticated reopen to decode them in parallel. Remi
-shares one live archive-CPU authority sized from detected host or cgroup logical
-parallelism and capped by the canonical CCS worker budget. Final emission and
-authenticated reopen each lease the currently idle authority, so a lone phase
-may use the complete CPU allowance while competing archive phases queue instead
-of oversubscribing it. No environment variable, configured job ceiling,
-compatibility decoder, or filesystem-specific backend selects representation.
+## Remi Conversion Benchmark Methodology
 
-The current Remi conversion schema-v8 contract treats internal signed-archive
-authentication and permanent verified-CAS admission as one fused physical
-pass. Its full elapsed time is recorded once in the `timing.phases` entry named
-`independent_transport_reopen`; `durable_cas_ingestion` is skipped because
-there is no later object-source pass solely for CAS insertion. The
-archive-authentication and CAS incoming-byte counters describe the same shared
-object SHA-256 pass and must not be summed. Cold isolated evidence requires
-every signed object byte to be persistently written once. A hot repetition's
-conversion `timing.work` is all zero, while its separate benchmark output proof
-still reads and authenticates the persisted CCS after `end_to_end` returns.
-Required chunk-reconstruction validation remains inside the independent signed-
-archive verification boundaries; fusion removes only the later CAS-source pass.
-The reopen record also binds exact decode workers, decoded blocks and bytes,
-fixed block bytes, and the checked ordered-buffer ceiling. Those counters must
-match the authored tar-stream geometry before a report is accepted.
+The command invocation and subject-selection contract remain in
+[the Remi module guide](../modules/remi.md#conversion-benchmark-evidence).
 
-Two current reopen fields must not be conflated:
+`--work-root` must name a new directory outside the live Remi storage root.
+The Remi service and every other one-shot runtime owner must be stopped. The
+command acquires the existing runtime root's exclusive kernel lock before it
+snapshots the operational SQLite database and retains that lock through strict
+reopen of the durable report. This keeps activation and catalog garbage
+collection from changing the registered catalog set during the run. It clears runtime
+conversion/cache state in that copy, stages the admitted source artifact, and
+places every mutation below the work root. Deployed catalogs, signing keys, and
+the source database remain read-only authorities; the benchmark cannot warm or
+otherwise mutate live conversion state. Use a distinct new work root for every
+subject and revision being compared.
 
-- `timing.phases[phase=independent_transport_reopen]` is service-owned storage
-  verification and contributes to `end_to_end`. It consumes the typed pending
-  conversion and is the sole internal direct verified-CAS finalizer.
-- `output.independent_transport_reopen_ms` is the benchmark's post-conversion
-  proof. It contributes to outer repetition process wall time, but not to
-  `conversion_core` or `end_to_end`. The output proof's separate complete CCS
-  hash has the same boundary.
+The strict `conversion-benchmark-v8.json` report records the exact binary path
+and digest, source commit and dirty state, Remi and host identity, CPU and
+memory, and the device, filesystem, and block size for every authority and
+scratch root. It pins each profile and source resource, catalog artifact,
+logical digest, portable-manifest digest and size, and exact chunk geometry as
+well as the benchmark subject.
 
-Schema v8 retains the schema-v4 deletion of the former converter-owned
-`immediate_converter_reopen` phase and both
-`immediate_converter_reopen_*` inferred counters. The converter now returns an
-explicitly pending artifact; Remi verifies it once under the profile targets
-authority directly into permanent CAS before transport or persistence. Local
-install and cook select their own single explicit verifier. The retired pass
-is not retained as a zero-duration or skipped phase.
+Before conversion repetitions, `setup.prepare`, `setup.profile`,
+`setup.source`, and `setup.finalize` are separately bounded, non-overlapping
+setup phases. Evidence assembly between probes is excluded rather than charged
+to the next phase.
+The profile and source records separately expose `reopen` and required
+authority-`query` work; query VFS counters are checked deltas from the owning
+reader at the end of its reopen. VFS snapshot extraction is included in the
+phase it describes. Each phase records process wall/user/system
+time, RSS endpoints and process-lifetime peak, faults, logical bytes and
+syscalls from `/proc/self/io`, storage bytes, context switches, and endpoint
+thread occupancy. Cancelled-write bytes are a signed phase delta, so a counter
+regression is retained rather than rejected. Each catalog record also names
+exact verification-pass
+evidence and authenticated-VFS read/chunk/cache work. Schema-v6 validation requires exactly one
+compact portable-manifest validation, one stored-binding check, demanded VFS
+authentication with no integrity failure, and zero complete userspace catalog
+hash, SQLite integrity scan, or logical replay. The chosen chunk size, count,
+and proof size must agree exactly with catalog geometry.
+
+Each repetition separates `conversion_core` from `end_to_end`, records the same
+process resource counters, and retains phase timings and deterministic work
+counters. Successful cold evidence independently reopens the signed transport
+and hashes the complete CCS archive; the report records the CCS, transport,
+and canonical signed-object-set identities and byte counts.
+
+Schema v6 retains exact native payload amplification evidence. The
+`native_payload_spool_file_reopens` counter records each successful physical
+reopen after spooling, including an open of a zero-length file, while
+`native_payload_spool_bytes_reread` records bytes actually read through those
+reopens. For a cold RPM conversion, validation requires declared bytes to
+equal spooled bytes and both reopen counters to be zero. The RPM decoder pairs
+the exact `FILEDIGESTALGO` with every `FILEDIGESTS` value and produces typed,
+algorithm-tagged evidence during its bounded decode/spool copy. Code 8 shares
+the content SHA-256 state, so `native_payload_bytes_hashed` is exactly one
+times spooled bytes; every other supported file-digest algorithm runs one
+concurrent declared-digest state, so it is exactly two times spooled bytes.
+Additive CPIO CRC work is excluded from that cryptographic counter.
+
+Schema v6 hard-cuts the former split payload-reference derivation and payload-
+object emission paths. One `payload_derivation_and_object_staging` phase opens
+each regular content owner once, validates its whole-content identity, derives
+canonical chunk identities where required, and writes each unique staged
+object once. Its counters separately record source opens/bytes, zero source
+reopens/rereads, chunk-identity and whole-content SHA-256 input, their checked
+aggregate, unique writes, deduplicated occurrences/bytes, and zero canonical
+staging rereads or durability calls. The retired phases, nested temporary-
+staging timing, and second-pass/temp-incoming-hash fields are absent rather than
+reported as zero. Prepared layouts and the exact unique object census must
+match final v3 authority before signing.
+
+The two current reopen timers have different owners and boundaries. The
+`timing.phases` entry named `independent_transport_reopen` consumes the
+converter's typed pending artifact, verifies it under the exact profile targets
+key, and streams its signed objects into permanent CAS. It remains inside the
+`end_to_end` view and is the sole internal verification/finalization boundary.
+`output.independent_transport_reopen_ms` is instead a benchmark-only proof
+performed after the end-to-end conversion call. It is inside the outer
+repetition process envelope but outside both views, and it is never credited as
+a conversion optimization. The adjacent
+`output.independent_complete_archive_hash_ms` is also post-conversion proof.
+
+The internal independent transport reopen streams signed object bytes directly
+into the permanent verified-CAS batch. The current schema-v8 contract
+attributes that fused wall time once to `independent_transport_reopen` and
+records `durable_cas_ingestion` as skipped with the exact reason
+`fused into independent transport reopen; no post-verification object pass`.
+The `independent_transport_reopen_object_bytes_hashed` and
+`cas_incoming_bytes_hashed` counters therefore describe the same physical hash
+pass and must agree with the signed object byte count; they are not additive.
+An isolated cold benchmark starts with an empty application CAS, so its
+missing-object bytes are written once behind one staged-data and one
+canonical-name barrier. A hot repetition has zero conversion `timing.work`,
+but the benchmark still performs its separate output proof; outer process wall
+time is therefore not hot service latency.
+
+CCS archive emission uses one portable Rust canonical MGZIP representation with
+fixed ordered 1 MiB DEFLATE blocks. Authenticated reopen validates every exact
+header, encoded-size bound, DEFLATE completion, decoded-size footer, and CRC,
+returns decoded bytes in carrier order, and rejects ordinary gzip, malformed or
+short blocks, and trailing bytes. Reordered or substituted valid blocks cannot
+survive the canonical tar layout plus signed object authority. Remi derives one
+shared bounded archive-CPU capacity from logical parallelism; emission and
+reopen lease that capacity without oversubscription. The raw and public records
+carry exact encode and decode workers, blocks, bytes, and checked buffer
+ceilings. Existing pre-alpha single-member CCS artifacts require rebuild; no
+compatibility reader remains.
+
+Schema v8 retains the schema-v4 hard cut that removed the former
+converter-owned immediate reopen and its inferred work fields entirely; it is
+not represented by a zero-duration or skipped compatibility phase. Foreign
+conversion now returns a typed pending artifact. Remi storage consumes that
+value and is the only code that can hand a verified conversion to transport
+construction and persistence. A signature, archive, object, or
+reconstructed-layout failure therefore still terminates before transport,
+chunk bookkeeping, or conversion rows become authoritative.
+The writer hashes every compressed output byte beneath its MGZIP write and
+binds that identity into the pending value. Remi first copies those bytes into
+a same-directory private file below `cache/packages`, synchronizes and seals it
+`0400` as defense-in-depth read-only mode, and makes that exact path the sole
+verifier input while signed objects stream directly into permanent CAS. It
+then hard-links that staged inode under the verifier-produced digest name
+without replacement and independently hashes the opened canonical final inode.
+A preexisting digest name is reused only when it is itself one sealed regular
+file with the exact verified size and digest. The staging name and an
+inode-bound publication guard remain owned through the
+conversion-row commit together with the exact read-only final file descriptor
+used for that one canonical hash. Every later binding compares the pathname to
+that held descriptor's regular-file device, inode, size, and sealed mode before
+bookkeeping and inside the conversion transaction. Digest names are append-only
+during the running service: request failure retires only its private staging
+name, and any future reclamation of unreferenced digest artifacts must run as
+exclusive stopped-runtime garbage collection. This avoids a conditional-unlink
+race with concurrent reuse or replacement. Portable regular-file permissions
+do not defend against an arbitrary writer already holding the same service
+principal's authority; that principal also controls Remi's database, keys, and
+CAS and is outside this boundary. Consequently the cold phase order is
+`complete_archive_copy`, `independent_transport_reopen`, then
+`complete_archive_hash`; each byte counter covers its exact full-archive pass,
+while `ccs_output_bytes_hashed` records the fused authoring hash.
+
+The first successful repetition must be `cold`. Every later successful
+repetition must be an exact `hot` hit with no conversion-core work. Failures
+remain typed evidence rather than being relabeled or silently retried. The
+first failure terminates the repetition sequence, including a failure in the
+independent persisted-output reopen after conversion succeeds. A conversion
+failure carries zero unexecuted views; the distinct independent-output-reopen
+failure retains the completed conversion's cache state, timing, and executed
+views while omitting the output proof that could not be authenticated. Missing
+timing or contradictory cache/view evidence is a fatal harness-contract defect,
+not a valid repetition failure. The terminal failure is validated, atomically
+published, and independently reopened before the command reports its nonzero
+outcome.
+Schema-v6 validation rejects inconsistent authority, reopen evidence,
+iteration, cache-state, timing, or output proof before atomically publishing
+the report, then deserializes and compares the durable report before success.
+The validator binds `end_to_end` to the timing total, recomputes
+`conversion_core` from its owned phases, requires each independent complete
+reopen/hash byte count to equal the CCS size, and requires every hot output
+identity and byte geometry to equal the cold result. A commit-worthy
+baseline uses a clean exact source commit, preserves the complete JSON report,
+and compares identical authority, subject, parsed source, host/filesystem
+geometry, and signed-object-set identities while retaining each run's exact
+source commit and binary digest. Whole CCS and transport wrapper identities are
+exact within each cold/hot pair; their timestamped signatures make them
+time-varying across separately executed conversions. The recorded counters are
+regression evidence; they do not weaken conversion verification or storage
+authority. Recorded baselines and measured optimizations follow below.
+
+A successful command also atomically publishes
+`conversion-benchmark-public-v6.json`. This strict sidecar binds the exact raw
+schema-v8 bytes by size and SHA-256 and carries the complete safe authority,
+setup, process, VFS, phase, work, view, and output-proof evidence without
+rounding. It omits the executable path, every storage-root path and device ID,
+and the free-form explanation attached to skipped phases. Failed or dirty-source
+reports never receive a public sidecar. Both files are create-only, mode 0600,
+atomically and durably published, strictly reopened, and value-compared before
+success; the raw report remains the local diagnostic authority.
+
+`.github/workflows/remi-conversion-benchmark.yml` is the sole production
+adapter. It binds an exact successful protected deployment and accepts one
+explicit registered profile-revision digest so before-and-after binaries can
+be compared against identical retained authority even after the current
+candidate advances. It authenticates source bytes before and after transport,
+serializes against deployment, and invokes the fixed root-owned helper. The
+helper runs exactly one cold and one hot iteration on XFS while Remi is
+trap-backed stopped, then restores liveness. Only the public sidecar and its
+deployment/source bindings leave the host; workflow validation requires two
+successful repetitions, exact requested subject identity, clean deployed
+source and binary identity, and XFS for every retained root role.
+
+The isolated harness exercises local verified-CAS durability separately from
+cloud publication. `r2_write_through` is therefore recorded as skipped with a
+typed reason; the command has no R2 credentials or destination arguments.
+Cloud durability performance requires a separate benchmark against an
+explicitly isolated R2 prefix.
 
 ## Remi direct verified-CAS pre-change anchor: 2026-08-30
 

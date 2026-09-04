@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-03
-revision: 91
-summary: Non-secret infrastructure, trusted-main compiler seeding, agent operations, release, bulk-cached and timed build-once exact-main Remi candidates, exact workflow-owned deployment policy across older candidate checkouts, typed startup/deployment refresh coalescing, bounded persistent deployment transport, constant-time coherent typed deployment baselines, channel-separated causal zero-catalog-scan deployment completion, deployment-serialized network-free exact native-oracle input export, merged-descendant producer-bound selective native-oracle lanes and same-export assembly, protected pinned stopped-runtime resolution surveys, protected production-XFS schema-v8 one-pass conversion benchmarking with path-free typed failure evidence, and current remote development tooling
+revision: 93
+summary: Document non-secret CI, release, deployment, hosting, agent-operation, and production evidence workflows; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
 # Infrastructure Overview
@@ -15,7 +15,7 @@ summary: Non-secret infrastructure, trusted-main compiler seeding, agent operati
   of the public client distro support matrix, which is Fedora 44, Ubuntu 26.04
   LTS, and Arch Linux for the limited preview. The destructive host procedure,
   storage contract, recovery boundary, and completion proof live in
-  [`remi-host-rebuild.md`](remi-host-rebuild.md).
+  [the Remi host rebuild runbook](remi-host-rebuild.md).
 - Forge remote validation and Forge-local staging deployment are decommissioned.
   The old VPS runner did not expose `/dev/kvm`, and no replacement Forge host
   or conary-test deployment path is supported.
@@ -23,7 +23,7 @@ summary: Non-secret infrastructure, trusted-main compiler seeding, agent operati
   evidence comes from `scripts/local-qemu-validation.sh` on a local
   development machine with `/dev/kvm`.
 - Sensitive usernames, credentials, or workstation-only shortcuts belong in the
-  ignored `docs/operations/LOCAL_ACCESS.md`, not in tracked docs.
+  ignored `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> not in tracked docs.
 
 ## Agent Operations And MCP
 
@@ -80,7 +80,7 @@ workflow.
 ### Remi
 
 - Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
-- Use the normal admin account (`peter@ssh.conary.io`) plus passwordless,
+- Use the normal admin account (`<admin>@ssh.conary.io`) plus passwordless,
   least-privilege `sudo`; root SSH login is not part of the supported deploy
   path.
 - Exclude `target/`, `.git/`, and `.worktrees/`
@@ -90,13 +90,13 @@ workflow.
   Conary release artifacts and performing recoverable Remi service transitions.
 - Normal Remi binary replacement is driven by GitHub Actions
   `release-build` -> `deploy-and-verify`. The workflow stages the built bundle
-  and exact-tag repository manifest on the host, atomically self-updates the
+  and tag-bound repository manifest on the host, atomically self-updates the
   helper by SHA-256, then calls
   `/usr/local/sbin/conary-remi-deploy deploy-remi`.
 - A bounded pre-release hard-cut sequence that explicitly forbids an
   intermediate release uses `deploy-remi-candidate` instead. Its required
   full commit SHA must already be an ancestor of `origin/main`; the protected
-  production environment builds that exact tree, records the binary digest,
+  production environment builds that tree, records the binary digest,
   and uses the same recoverable helper and source manifest. Dispatch must choose
   either `private-candidates` or `active-repopulation` completion. It creates no
   tag or release and is not a path for deploying an unmerged pull-request head.
@@ -117,14 +117,14 @@ workflow.
 - Candidate deployment retains exactly one final typed inspection instead of
   emitting every incomplete poll. Private-candidate mode also retains the
   pre-transition inspection used as its fencing baseline. The workflow runs
-  that versioned read-only command from the exact staged binary after checking
+  that versioned read-only command from the staged binary after checking
   its SHA-256, so a new baseline schema does not depend on the previously
   installed binary. The baseline reads current schema, configured repository,
   candidate-pointer, exact run-member, and latest-refresh rows only. It does
   not open signing material, immutable catalogs, package rows, conversions, or
   universe state. Its two-second budget and zero catalog opens/bytes are
   fail-closed workflow predicates, and its output records wall/CPU/RSS, SQLite
-  statement and logical page-read work, and exact serialized bytes.
+  statement and logical page-read work, and serialized bytes.
 - A baseline may contain an absent candidate only as a null identity plus the
   exact latest fenced refresh diagnosis. This is evidence of what the new
   binary must recover, not candidate completion; half-present identities,
@@ -137,7 +137,7 @@ workflow.
   `github.workflow_sha` whose workflow definition is executing, not from the
   deliberately older candidate checkout. It requires that workflow authority
   to be merged into `origin/main`. The job binds the final inspection to the
-  exact merged candidate commit, built binary
+  merged candidate commit, built binary
   SHA-256, completion mode, and post-transition timestamp, uploads those
   public-sanitized JSON artifacts, and writes a concise typed summary even when
   completion fails. It does not expose service logs, generic shell access,
@@ -149,7 +149,7 @@ workflow.
   It also retains every accepted repository-refresh generation with exact
   scope, producer force policy, start/finish time, coalescing disposition,
   aggregate state, and successful/failed profile sets. Candidate completion is
-  bounded by one of those exact generations rather than inferred from elapsed
+  bounded by one of those generations rather than inferred from elapsed
   workflow time.
   Inspection JSON is accepted only from stdout and structurally validated
   before final ingress; stderr diagnostics are never spliced into the typed
@@ -178,7 +178,7 @@ workflow.
   compatibility boundary: a same-revision binary rollback restores config and
   repository authority while retaining the compatible live database, so an
   ordinary deploy performs zero complete database copies. Retired schemas are
-  not migrated in place and retain their exact recoverable files. The helper
+  not migrated in place and retain their recoverable files. The helper
   stops Remi before preparation,
   and the candidate independently enforces that quiescence: prepare acquires
   the same kernel-backed canonical runtime-root lock as the server before its
@@ -189,7 +189,7 @@ workflow.
   authority. `deployment inspect` is read-only evidence and does not establish
   quiescence. Before invoking the root-run candidate, the helper creates the
   lock file as `conary:conary` mode 0600, or verifies an existing plain file has
-  that exact access contract, so first deployment cannot strand a root-owned
+  that access contract, so first deployment cannot strand a root-owned
   lock that the `User=conary` service cannot open.
 - The helper creates `/conary/repository-keys` as a `conary:conary` mode-0700
   durable authority root before candidate preparation. The candidate
@@ -210,10 +210,10 @@ workflow.
   immutable bundle and fenced repository bindings were reopened and
   revalidated. A same-schema deployment requires every Fedora, Ubuntu, and
   Arch fencing epoch to be strictly newer than its recorded baseline. A hard
-  schema transition starts a new fencing authority, so its positive fresh
+  schema transition starts a new fence, so its positive fresh
   epochs are not ordered against the retired database. Both paths require each
   accepted terminal candidate run to match its candidate, finish after the
-  recorded binary transition, and fall within an exact refresh generation that
+  recorded binary transition, and fall within a refresh generation that
   names that profile as successful. If the new process's startup all-profile
   refresh finishes after the floor with a complete zero-skip batch, the queued
   forced request consumes that retained result and performs no second source
@@ -227,12 +227,12 @@ workflow.
   `active-repopulation` polls
   `inspect-remi --require-repopulated` and requires all configured public
   profiles to have populated active immutable catalogs, a complete signing role
-  set, a fresh signed universe naming the exact same profile revisions, and at
+  set, a fresh signed universe naming the same profile revisions, and at
   least one validated converted artifact pinned to every current revision.
   Mutable `repository_packages` rows are not evidence for either mode;
   dispatch, a preexisting candidate, or a green liveness probe alone is not
   deployment proof.
-- Exact production native-oracle inputs use the root-owned helper operation
+- Production native-oracle inputs use the root-owned helper operation
   `export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256>
   <arch-sha256>`. The helper fixes canonical public-profile order, invokes the
   typed `remi native-oracle-input` command as the service user, retains the
@@ -275,12 +275,12 @@ workflow.
   clean checkout before building and recording both producer binary digests.
 - The optional `lanes` input to `produce-remi-native-oracles` defaults to
   `fedora-44,ubuntu-26.04,arch` and accepts only a non-empty duplicate-free
-  subset of those exact comma-separated names. Selected lanes run in this
+  subset of those comma-separated names. Selected lanes run in this
   dispatch; assembly retrieves an unselected lane only from the newest
   successful same-export strict artifact, verifies the GitHub archive digest,
   and still requires one bound artifact for every canonical lane.
 - The protected `produce-remi-native-oracles` workflow consumes only one
-  successful exact export run. Its production-environment authorization
+  successful export run. Its production-environment authorization
   independently reopens the exported transport and schema-3 deployment
   inspection, requires canonical Fedora, Ubuntu, and Arch candidate order, and
   requires the artifact-owned deployed commit to remain merged into `main`.
@@ -310,7 +310,7 @@ workflow.
   when each is a merged descendant and all schema/implementation pins match;
   missing lanes, digest drift, and survey substitution fail closed.
 - The protected `survey-remi-resolution` workflow consumes one successful
-  `produce-remi-native-oracles` run and resolves its exact export and deployment
+  `produce-remi-native-oracles` run and resolves its export and deployment
   runs from its canonical assembled three-lane evidence. The oracle run head
   must equal the survey's own exact current protected-main operator commit, so
   a historical producer rerun is not admissible. It independently
@@ -363,7 +363,7 @@ workflow.
   independently enforces the complete typed Rust survey schemas, retention and
   evidence accounting with the fixed 5,000-record and 64-MiB limits, fixed
   profile ecosystem plus `conary-sat` projection-2 candidate producer, and
-  exact comparison coverage of the complete zero-failure candidate root set.
+  comparison coverage of the complete zero-failure candidate root set.
   Every retained mismatch root, identity, and candidate outcome must occur in
   that candidate survey. Remi's bounded command outcome supplies the helper's
   per-profile counts, histograms, and comparison candidate-manifest digest, so
@@ -387,7 +387,7 @@ workflow.
   authenticated artifact ZIP is removed after extraction and each extracted
   lane member is removed after it enters the transport. The workflow has no refresh,
   conversion, proof, promotion, activation, or publication authority.
-- Exact production conversion measurements use the protected
+- Production conversion measurements use the protected
   `remi-conversion-benchmark` workflow. Dispatch names one successful
   `deploy-remi-candidate` run, a public profile, an immutable package key, and
   an exact registered profile revision, and the exact size and SHA-256 of a
@@ -420,7 +420,7 @@ workflow.
   identities and preexisting transports fail closed.
 - The complete schema-v8 report remains mode 0600 on the production host. The
   authenticated caller receives only `conversion-benchmark-public-v6.json`: a
-  strict Rust-produced projection that binds the exact raw-report byte count
+  strict Rust-produced projection that binds the raw-report byte count
   and SHA-256, preserves authority, timing, process, VFS, work, and output
   counters, and removes binary paths, root paths and device IDs, free-form
   failure text, and skipped-phase explanations. The workflow independently
@@ -435,7 +435,7 @@ workflow.
   The conversion-core predicate additionally requires one source open per
   regular content owner, zero payload-source reopens/reread bytes, aggregate
   payload crypto input equal to chunk-identity plus whole-content SHA-256
-  input, one write per unique signed object, exact deduplicated bytes, and zero
+  input, one write per unique signed object, deduplicated bytes, and zero
   staging canonical rereads or durability calls. Schema v8 additionally
   requires canonical fixed-block encode/decode geometry and the exact checked
   buffering ceilings for the reported worker allocations.
@@ -449,7 +449,7 @@ workflow.
   service-restoration outcome. The workflow validates that envelope, binds it
   to the exact deployment, workflow, binary, profile, revision, package, and
   source identities, and may retain only that path-free JSON record. The
-  `/work` preflight uses exact path-free leaves: `work-root-type` requires a
+  `/work` preflight uses path-free leaves: `work-root-type` requires a
   plain directory; `work-root-owner` requires the control identity;
   `work-root-mode` rejects group- or world-writable access;
   `work-root-resolution` covers canonical resolution; `work-root-separation`
@@ -462,15 +462,8 @@ workflow.
   unknown envelopes fail closed with an unproven service outcome. Private
   stderr, its digest and size, and any free-form Remi failure text are deleted
   without entering Actions logs or artifacts.
-- The bounded one-shot production `/work` owner repair succeeded in protected
-  run `33282179559`, and exact conversion baseline run `33282246922`
-  subsequently passed the repaired `/work` preflight. Protected retirement run
-  `33284695296` then installed and verified the exact merged-main command-free
-  helper with SHA-256
-  `65a374327e4c4037e364bfb19b2f9a5293f989a367a3014d5bdcb3a1b9eb6352`,
-  `root:root` ownership, mode `0755`, and a successful `verify-access` result;
-  its strict evidence also proved the old repair command unavailable. Both
-  temporary workflows, their policy checks, and their tests are removed. No
+- The temporary owner-repair and retirement workflows, their policy checks,
+  and their tests are removed. No
   dispatchable owner-repair or retirement surface remains. Future owner drift
   is a fail-closed `work-root-owner` benchmark failure and requires a new
   issue-backed, reviewed operation.
@@ -500,14 +493,14 @@ workflow.
   authenticated SSH staging under `/tmp`. It accepts only a plain basename and
   regular file, enforces Remi's 8 GiB limit, verifies the caller-pinned digest
   before publication, and creates an immutable `/conary/test-artifacts/`
-  target atomically. Repeating the exact publication is idempotent; a
+  target atomically. Repeating the publication is idempotent; a
   same-name, different-digest replacement fails closed.
 - Bootstrap or repair deploy access once from an existing privileged shell with
   `sudo scripts/install-remi-deploy-access.sh`. It installs
   `deploy/remi-deploy-helper.sh` to `/usr/local/sbin/conary-remi-deploy`,
   installs `deploy/sudoers/remi` to `/etc/sudoers.d/remi`, and validates the
   sudoers file with `visudo -cf`.
-- After bootstrap, `ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
+- After bootstrap, `ssh <admin>@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'`
   should succeed without prompting for a password. This operation verifies
   root execution and the installed Remi configuration only; it deliberately
   works before the first Remi binary or service start so a clean host does not
@@ -515,15 +508,15 @@ workflow.
 - `scripts/rebuild-remi.sh` is retired for production deploys. It now fails
   closed and points operators back to the GitHub release/deploy flow and the
   root-owned helper.
-- Host-local credential files such as ignored `deploy/.credentials.toml` are not
+- Host-local credential files such as ignored `deploy/.credentials.toml` <!-- repo-path: local --> are not
   canonical deployment instructions; tracked operations docs and deploy helpers
   are the source of truth.
 - The public frontends currently share the Remi host but deploy as two separate
   static sites. `deploy/deploy-sites.sh` builds locally, stages the build output
-  under `/tmp` on `peter@ssh.conary.io`, then asks
+  under `/tmp` on `<admin>@ssh.conary.io`, then asks
   `/usr/local/sbin/conary-remi-deploy deploy-site` to publish it into
   `/conary/site/` for `conary.io` or `/conary/web/` for `remi.conary.io`.
-- Post-release public-frontend updates deploy from the exact `main` commit
+- Post-release public-frontend updates deploy from the selected `main` commit
   selected by the manually dispatched `deploy-site` workflow. Its required
   `target` choice publishes `site`, `packages`, or `both` through the
   repository-held production key. The workflow runs the relevant frontend
@@ -549,171 +542,6 @@ workflow.
   the 2026-07-16 production repair passed that simulation and restored public
   health for all three certificate names.
 
-#### Remi Remote Development Workbench
-
-The Remi host may also carry an isolated multi-project development workbench,
-but that workbench is not part of the production service contract. Use the
-unprivileged `dev` account for all interactive development. Keep production
-service paths such as `/conary/web`, `/conary/site`, `/conary/releases`, and
-systemd-owned Remi state out of development workflows. `conary` remains the
-dedicated non-login service identity; do not recreate the retired
-`conary-dev` or `signed-dev` interactive accounts.
-
-When rebuilding the workbench from a privileged Remi shell, the non-secret
-baseline is:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y build-essential git clang mold nodejs npm fd-find ripgrep gh bubblewrap tmux mosh
-sudo useradd -m -d /data/dev/home -s /bin/bash dev
-sudo install -d -o dev -g dev /data/dev/src
-sudo install -d -o dev -g dev /data/dev/cache/cargo /data/dev/cache/rustup /data/dev/cache/npm /data/dev/cache/target
-sudo loginctl enable-linger dev
-```
-
-After the account exists, clone repositories as `dev` under `/data/dev/src`,
-set `CARGO_HOME`, `RUSTUP_HOME`, npm cache, and target cache paths under
-`/data/dev/cache`, install Rust through rustup, and install
-the assistant CLIs without version pinning:
-
-```bash
-rustup toolchain install 1.98.0 --profile default
-rustup default 1.98.0
-npm install -g @openai/codex @anthropic-ai/claude-code
-```
-
-Google agent work uses the supported Antigravity CLI through `agy`. Install it
-from Google's current
-[Antigravity distribution](https://antigravity.google/download), authenticate
-interactively, and verify it with `agy --version`; do not add a second Google
-CLI compatibility path to the repository. Workspace guidance for Antigravity
-lives in `.agents/rules/conary.md` and routes back to the shared `AGENTS.md`
-contract.
-
-After Codex authentication, bootstrap its managed app-server for durable remote
-control and automatic CLI updates:
-
-```bash
-codex app-server daemon bootstrap --remote-control
-codex remote-control start --json
-codex app-server daemon version
-```
-
-The upstream pid-backed daemon and updater survive logout but not a host reboot.
-Install `deploy/systemd/codex-app-server-bootstrap.service` into `dev`'s user
-manager so the idempotent upstream bootstrap runs at every boot:
-
-```bash
-runtime_dir="/run/user/$(id -u dev)"
-sudo install -d -o dev -g dev -m 0755 \
-  /data/dev/home/.config/systemd/user/default.target.wants \
-  /data/dev/home/.local/libexec
-sudo install -o dev -g dev -m 0755 \
-  deploy/hetzner/codex-app-server-reconcile.sh \
-  /data/dev/home/.local/libexec/codex-app-server-reconcile
-sudo install -o dev -g dev -m 0644 \
-  deploy/systemd/codex-app-server-bootstrap.service \
-  /data/dev/home/.config/systemd/user/codex-app-server-bootstrap.service
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" \
-  systemctl --user enable --now codex-app-server-bootstrap.service
-```
-
-The preflight reconciles PID records left across a host reboot against both the
-live PID and its recorded process start time. It removes only stale records,
-preserves matching live processes, and rejects malformed state rather than
-guessing. This is required because Codex 0.149.1 otherwise fails bootstrap on a
-previous-boot PID record instead of repairing it. The unit retries after a
-failed reconciliation/start so a process-exit race cannot strand Remote
-Control until the next reboot.
-
-The upstream defect and deterministic reboot evidence are tracked in
-[`openai/codex#35295`](https://github.com/openai/codex/issues/35295). Remove the
-preflight only after the installed Codex release reconciles both absent and
-start-time-mismatched PID records itself and that behavior passes the reboot
-gate.
-
-`loginctl enable-linger dev` is part of the baseline above and is required for
-the user manager to start without an interactive login. After a host reboot,
-verify the unit is active, both managed Codex processes are owned by `dev`'s
-user manager, and `codex remote-control start --json` reports `connected`
-before treating Remote as recovered.
-
-Register the clean Conary, Nomos, and The Mortal Estate checkout roots as Codex
-projects through the running app-server's experimental project API. Project
-registration is explicit; do not create dummy model turns merely to seed recent
-working directories. Pair trusted clients with a short-lived
-`codex remote-control pair` code and verify the project list from the paired
-client. The rpm-rs fork remains a pinned Conary dependency while its upstream
-work is pending, but it is not a Remi development project or persistent
-checkout.
-
-Claude Code Remote Control is directory-scoped rather than backed by a global
-project registry. Authenticate `dev` with a full-scope `claude.ai` subscription
-login, then run `claude` interactively once in each project root to accept the
-workspace trust gate. Before enabling the unattended services, run
-`claude remote-control` interactively in one trusted project and accept the
-one-time `Enable Remote Control?` account consent. A headless process can remain
-alive without registering a remote session while that consent is pending, so a
-healthy systemd process is not sufficient proof. Install the tracked template
-and enable one named server instance per supported project:
-
-```bash
-runtime_dir="/run/user/$(id -u dev)"
-sudo install -d -o dev -g dev -m 0755 \
-  /data/dev/home/.config/systemd/user/default.target.wants
-sudo install -o dev -g dev -m 0644 \
-  deploy/systemd/claude-remote-control@.service \
-  /data/dev/home/.config/systemd/user/claude-remote-control@.service
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user daemon-reload
-sudo -H -u dev env XDG_RUNTIME_DIR="$runtime_dir" systemctl --user enable --now \
-  claude-remote-control@Conary.service \
-  claude-remote-control@nomos.service \
-  claude-remote-control@the-mortal-estate.service
-```
-
-Each instance uses Claude's worktree spawn mode so concurrent on-demand
-sessions do not edit the same checkout, with a four-session capacity per
-project. The pre-created session remains in the clean project root. Verify all
-three services are active, each project owns a fresh
-`~/.claude/projects/<project>/bridge-pointer.json`, and `Remi Conary`,
-`Remi nomos`, and `Remi the-mortal-estate` appear in `claude.ai/code` from a
-separate client before treating the remote workbench as recovered.
-
-Native Claude Code installations download updates in the background, but a new
-version takes effect only when the process next starts. A host reboot starts the
-template instances from the current binary. To apply an update sooner, finish
-or detach active Remote Control work and explicitly restart the three service
-instances; do not interrupt active sessions from an automatic update hook.
-
-The durable interactive entry point is a `dev` wrapper in
-`/data/dev/home/.local/bin/dev`. It should attach to a selected project tmux
-session under `/data/dev/src`, creating the session when absent.
-Install `/usr/local/bin/dev` as a root-owned symlink or wrapper only after the
-user-owned script exists. Enable tmux history and mouse support in the
-`dev` home directory rather than relying on workstation defaults.
-
-Use `ssh.conary.io` for SSH transport. Workstation-specific aliases such as
-`remi-dev`, `remi-work`, or mosh wrappers belong in the ignored
-`docs/operations/LOCAL_ACCESS.md`; do not commit private key paths, access
-tokens, recent-session history, or assistant cache directories. It is fine to
-copy minimal assistant auth/config after reviewing it, but do not copy local
-conversation history or package build artifacts wholesale. The remote Codex
-GitHub MCP token, when present, belongs in a private env file such as
-`/data/dev/home/.config/codex/env`; Cloudflare MCP login remains an
-interactive `codex mcp login cloudflare-api` step unless a future tracked helper
-defines a safer bootstrap.
-
-After a laptop rebuild, restore the SSH private key locally, recreate the
-ignored SSH aliases from `docs/operations/LOCAL_ACCESS.md`, install `mosh` if
-the workstation should use it, and connect with the tmux-attaching alias. If the
-remote workbench itself is lost, rebuild the host packages, account, cache
-directories, rustup toolchain, assistant CLIs, and `dev` wrapper before copying
-any private auth material.
-
-Do not overwrite the live Remi binary while `remi.service` is still running the
-old process. That can fail with `Text file busy`.
-
 ## Release Flow
 
 - GitHub Actions is the only long-term CI/CD control plane.
@@ -723,13 +551,13 @@ old process. That can fail with `Text file busy`.
   GitHub release. All members inherit `publish = false`; there is no parallel
   crates.io release track.
 - Run `./scripts/release.sh suite --dry-run` to inspect the next version, or
-  pass an exact decision as `--target MAJOR.MINOR.PATCH`. The target must be an
+  pass a version decision as `--target MAJOR.MINOR.PATCH`. The target must be an
   increasing `MAJOR.MINOR.PATCH` version for the complete suite.
 - Run `./scripts/release.sh suite --prepare-only --target VERSION` on the
   issue-linked release branch. Preparation updates the root version, inherited
   workspace lock state, Conary native/CCS packaging, generated man page, and
   suite changelog, but creates no commit or tag.
-- After exact-head CI and review complete, merge the preparation PR and prove
+- After head-bound CI and review complete, merge the preparation PR and prove
   local `main`, `origin/main`, and remote `main` agree. Only then create the
   annotated `vMAJOR.MINOR.PATCH` tag at that reviewed commit and push it. The
   active `Protect suite tags` ruleset permits creation of `v*` tags but rejects
@@ -740,7 +568,7 @@ old process. That can fail with `Text file busy`.
   correct the cause in an issue-linked reviewed commit, prepare a strictly
   higher suite version, and create a new tag. Never move or reuse the failed
   tag.
-- Product-prefixed tags remain immutable historical evidence for their exact
+- Product-prefixed tags remain immutable historical evidence for their
   trees. They are not current baselines, version inputs, or workflow routes.
 - `release-build` constructs all four products from the exact suite tag,
   serializes their deployment modes in one schema-v1 metadata document with a
@@ -823,7 +651,7 @@ old process. That can fail with `Text file busy`.
 ## Contributor Notes
 
 - Prefer the tracked docs for stable roles and workflows, and keep local-only
-  access details in `docs/operations/LOCAL_ACCESS.md`, using
+  access details in `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> using
   [`docs/operations/LOCAL_ACCESS.example.md`](LOCAL_ACCESS.example.md) as the
   starting template
 - For suite layout, phase selection, and manifest-run behavior, use

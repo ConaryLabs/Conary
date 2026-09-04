@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-02
-revision: 20
+last_updated: 2026-09-03
+revision: 21
 summary: Lean vendor-neutral assistant routing into canonical Conary owners, task-sized proof packets, and a shared compiler cache with isolated worktree targets
 ---
 
@@ -94,7 +94,7 @@ stay in ignored local files.
 
 - Use one primary issue and one issue-linked branch for each non-trivial slice;
   follow `CONTRIBUTING.md` for linkage and merge semantics.
-- Host-local container names, mount paths, and retained diagnostic inputs for native-feature proof belong in ignored `docs/operations/LOCAL_ACCESS.md`, never in tracked docs.
+- Host-local container names, mount paths, and retained diagnostic inputs for native-feature proof belong in ignored `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> never in tracked docs.
 - Prefer structured Conary operation surfaces over ad hoc SSH or curl when the
   typed MCP, HTTP, or CLI contract covers the workflow.
 - `crates/conary-agent-contract` owns operation vocabulary. MCP code adapts it.

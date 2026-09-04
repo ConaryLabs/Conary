@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 2
+last_updated: 2026-09-03
+revision: 3
 summary: Pin the lossless APT, DNF5, libzypp, and ALPM native repository declaration grammars, selected-root discovery boundary, and trust-planning handoff
 ---
 
@@ -86,7 +86,7 @@ The declaration types are deliberately not `RepositoryTrustPolicy`, persisted
 repository rows, or enabled sync inputs. Issue #379 adds the next read-only
 handoff: exact declarations plus selected-root key material produce an
 importable, ambiguous, or unsupported trust preview under
-[`native-repository-trust-import.md`](native-repository-trust-import.md).
+[the native repository trust-import specification](native-repository-trust-import.md).
 Follow/pin policy, persistence, and apply remain later explicit boundaries.
 Distro names, file presence, URLs, extensions, guessed defaults, and diagnostic
 text cannot bridge them.

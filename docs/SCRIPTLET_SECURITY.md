@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-20
-revision: 25
+last_updated: 2026-09-03
+revision: 26
 summary: Define exact source-ABI lifecycle authority, selected-root execution, and generation-scoped activation
 ---
 
@@ -11,8 +11,8 @@ signed CCS packages define them as part of the package transaction. It does
 not decide lifecycle behavior from shell text, distro names, risk scores, or a
 human-review queue.
 
-The normative source-format contracts are in
-[`foreign-package-lifecycle-contracts.md`](specs/foreign-package-lifecycle-contracts.md).
+The normative source-format contracts are in the
+[foreign package lifecycle specification](specs/foreign-package-lifecycle-contracts.md).
 This document owns the execution and security boundary around those contracts.
 
 ## Non-Negotiable Invariants

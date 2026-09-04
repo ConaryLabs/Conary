@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-27
-revision: 61
-summary: Document trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-09-04
+revision: 65
+summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -336,10 +336,6 @@ cargo run -p conary-test -- bootstrap smoke --json
 `bootstrap smoke` may build images, start containers, and write conary-test
 result files through the normal runner. It is not package publishing, does not
 publish fixtures, and does not require cloud credentials.
-
-Remote Forge control-plane validation and conary-test deployment are
-decommissioned. Use the local QEMU/KVM gate for temporary release evidence;
-there is no replacement Forge rollout path.
 
 Do not describe local evidence as hosted CI. Any QEMU release evidence must
 name the absolute run date, distro, suite name, and pass/fail/skip/cancel
@@ -835,12 +831,14 @@ Focused Goal 3 security advisory pipeline proof:
 
 - `cargo run -p conary-test -- run --suite phase4-security-advisory-pipeline --distro fedora44 --phase 4`
 
-The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture,
-serves JSON repository metadata with a trusted `security_advisory_source`,
-proves an `unknown` source refuses before mutation, then syncs the same
-repository as `--security-advisories supported` and verifies persisted severity,
-CVE, advisory ID, fixed version, and source-trust metadata before
-`conary update --security` applies the trusted fix.
+The `phase4-security-advisory-pipeline` manifest builds a v1/v2 native fixture
+and serves JSON repository metadata with a feed-authored
+`security_advisory_source`. Feed `trust` and `source_trust` strings are
+diagnostic only. The suite proves an `unknown` local source refuses before
+mutation, then syncs the same repository after the operator authorizes it with
+`--security-advisories supported`. It verifies persisted severity, CVE,
+advisory ID, fixed version, and feed trust-claim metadata before
+`conary update --security` applies the locally authorized fix.
 
 Fresh Goal 3 evidence from May 19, 2026:
 
@@ -895,15 +893,11 @@ available. Review the generated bundle before attaching it. It does not copy
 
 ### Available Distros
 
-| Distro | Container | Base | `build_context` |
-|--------|-----------|------|-----------------|
-| `fedora44` | `Containerfile.fedora44` | Fedora 44 | `static-binary` |
-| `ubuntu-26.04` | `Containerfile.ubuntu-26.04` | Ubuntu 26.04 LTS | `static-binary` |
-| `arch` | `Containerfile.arch` | Arch Linux (rolling) | `static-binary` |
-| `artix` | `Containerfile.artix` | Artix Linux (rolling, OpenRC) | `static-binary` |
-| `linux-mint-22.3` | `Containerfile.debian-derivative` | Linux Mint 22.3 release-owned root | `static-binary` |
-| `pop-os-24.04` | `Containerfile.debian-derivative` | Pop!_OS 24.04 release-owned root | `static-binary` |
-| `solus` | QEMU artifact | Solus 4.9 updated to current Polaris | `static-binary` |
+The current distro and image inventory is owned by
+`apps/conary/tests/integration/remi/config.toml` and its sibling `containers/`
+directory; this includes CachyOS and openSUSE Tumbleweed alongside the public,
+derivative, and QEMU lanes. Run `cargo run -p conary-test -- list` to validate
+the manifest inventory instead of copying another table here.
 
 `build_context` is a required typed distro capability in `config.toml` that
 selects which Conary binary an image receives. Distro names do not select this
@@ -1142,7 +1136,7 @@ configuration once issue #354 wires it into local runs:
 ## Results
 
 Test results are written as JSON under
-`apps/conary/tests/integration/remi/results/`, using filenames such as
+`apps/conary/tests/integration/remi/results/`, <!-- repo-path: generated --> using filenames such as
 `<distro>-phase<N>.json`:
 
 ```json

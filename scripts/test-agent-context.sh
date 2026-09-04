@@ -370,6 +370,11 @@ make_validate_repo "$vr"
 sed -i 's/^\*\*Focused proof:\*\* `true`; `echo alpha-focused`\.$/**Focused proof:** run the alpha tests by hand./' "$vr/map.md"
 run_validate_expect_fail "$vr" "Focused proof has no backticked command"
 
+vr="$tmp/validate-start-here-cap"
+make_validate_repo "$vr"
+sed -i 's|^`docs/alpha.md`\.$|`a/alpha.rs`; `a/alpha.rs`; `a/alpha.rs`; `a/alpha.rs`; `a/alpha.rs`; `a/alpha.rs`; `a/alpha.rs`; `docs/alpha.md`.|' "$vr/map.md"
+run_validate_expect_fail "$vr" "Start here has 9 entries (maximum 8)"
+
 # --- --run focused|gate: executes card commands, fail-fast ---
 
 run_out="$("$script" --feature alpha --run focused --map "$fixture_map")"

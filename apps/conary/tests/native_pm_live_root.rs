@@ -815,7 +815,7 @@ fn security_update_with_unknown_advisory_support_refuses_before_mutation() {
 }
 
 #[test]
-fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
+fn security_update_syncs_locally_authorized_json_advisory_and_applies_fix() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().to_path_buf();
     let db_path = temp.path().join("conary.db");
@@ -896,7 +896,7 @@ fn security_update_syncs_trusted_json_advisory_and_applies_fix() {
     assert!(combined.contains("TEST-2026-0001"), "{combined}");
     assert!(combined.contains("CVE-2026-0001"), "{combined}");
     assert!(
-        combined.contains("trusted source: conary-json"),
+        combined.contains("source: conary-json (feed trust claim: trusted)"),
         "{combined}"
     );
     assert_eq!(installed_versions(&db_path), vec!["2.0.0".to_string()]);

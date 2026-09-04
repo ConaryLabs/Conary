@@ -128,12 +128,13 @@ EOF
 # Native parity oracle
 
 The supported-profile registry is the sole target-architecture authority.
+`ProfileArchitectureMismatch` rejects an architecture outside the profile authority.
 EOF
 
     cat > "$root/docs/modules/remi.md" <<'EOF'
 # Remi
 
-`ProfileArchitectureMismatch` rejects an architecture outside the profile authority.
+Detailed parity behavior lives in the native parity oracle specification.
 EOF
 
     cat > "$root/docs/ARCHITECTURE.md" <<'EOF'
@@ -157,6 +158,7 @@ The source package format defines the package ABI.
 If a package install fails, capture the command, distro, package name, Conary version, and refusal text.
 Use `conary system adopt --refresh` to refresh adoption tracking.
 Inspect the latest immutable GitHub release.
+An intentionally hypothetical path such as `docs/future-example.md` is marked inline. <!-- repo-path: hypothetical -->
 
 ## Release Channels
 
@@ -197,9 +199,6 @@ EOF
 # Roadmap
 
 The cross-distro package-installation preview is active.
-Remote Forge validation and conary-test deployment are decommissioned.
-The 2026-07-31 Group O QEMU run is dated local evidence.
-The 2026-07-31 Group P QEMU run is dated local evidence.
 The current milestone is the first external tester loop.
 See the [detailed development roadmap](docs/roadmaps/development-roadmap.md).
 See the [machine-readable launch status](docs/roadmaps/launch-status.json).
@@ -210,9 +209,6 @@ EOF
 
 The first external tester milestone is the current product milestone.
 W7.5 Signed Universe And Launch Gate requires zero exclusions.
-Remote Forge validation and conary-test deployment are decommissioned.
-The 2026-07-31 Group O QEMU run is dated local evidence.
-The 2026-07-31 Group P QEMU run is dated local evidence.
 EOF
 
     cat > "$root/docs/roadmaps/launch-status.json" <<'EOF'
@@ -248,12 +244,6 @@ EOF
 }
 EOF
 
-    cat > "$root/docs/roadmaps/external-tester-milestone.md" <<'EOF'
-# External Tester Milestone
-
-The publication gate for synchronized suite `v0.10.1` is complete.
-EOF
-
     cat > "$root/docs/operations/external-tester-outreach.md" <<'EOF'
 ---
 last_updated: 2026-07-25
@@ -275,9 +265,6 @@ EOF
     cat > "$root/docs/INTEGRATION-TESTING.md" <<'EOF'
 # Integration Testing
 
-Remote Forge control-plane validation and conary-test deployment are decommissioned; there is no replacement Forge rollout path.
-Current Group O QEMU export evidence from 2026-07-31 is local evidence.
-Current Group P ISO export evidence from 2026-07-31 is local evidence.
 EOF
 
     cat > "$root/docs/operations/release-artifact-matrix.md" <<'EOF'
@@ -665,10 +652,6 @@ break_detailed_roadmap_milestone() {
     sed -i '/first external tester milestone/d' "$1/docs/roadmaps/development-roadmap.md"
 }
 
-break_tracker_release_version() {
-    sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/roadmaps/external-tester-milestone.md"
-}
-
 break_outreach_release_version() {
     sed -i 's/v0.10.1/v0.9.2/g' "$1/docs/operations/external-tester-outreach.md"
 }
@@ -680,18 +663,6 @@ break_outreach_target_state() {
 break_unassigned_outreach_candidate_version() {
     sed -i 's/target_release: v0.11.0/target_release: unassigned/' "$1/docs/operations/external-tester-outreach.md"
     printf '\nNo new release is assigned.\n' >> "$1/docs/operations/external-tester-outreach.md"
-}
-
-break_detailed_forge_retirement_evidence() {
-    sed -i '/Remote Forge validation/d' "$1/docs/roadmaps/development-roadmap.md"
-}
-
-break_detailed_group_o_evidence() {
-    sed -i '/Group O/d' "$1/docs/roadmaps/development-roadmap.md"
-}
-
-break_detailed_group_p_evidence() {
-    sed -i '/Group P/d' "$1/docs/roadmaps/development-roadmap.md"
 }
 
 break_release_doc_version() {
@@ -841,6 +812,14 @@ break_frontmatter_revision() {
     sed -i '/^revision:/d' "$1/docs/ARCHITECTURE.md"
 }
 
+break_frontmatter_summary_budget() {
+    sed -i 's/^summary:.*/summary: one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight twenty-nine thirty thirty-one thirty-two thirty-three thirty-four thirty-five thirty-six thirty-seven thirty-eight thirty-nine forty forty-one/' "$1/docs/ARCHITECTURE.md"
+}
+
+break_backticked_repo_path() {
+    printf '\nSee `docs/missing-guide.md`.\n' >> "$1/README.md"
+}
+
 break_retired_google_entrypoint() {
     printf '# Retired Google agent entrypoint\n' > "$1/GEMINI.md"
 }
@@ -868,13 +847,9 @@ expect_failure "stable core API claim" break_core_api_claim 'stable.*conary-core
 expect_failure "preview status drift" break_preview_status 'early preview warning'
 expect_failure "missing detailed roadmap link" break_root_roadmap_link 'detailed.*roadmap'
 expect_failure "missing external tester milestone" break_detailed_roadmap_milestone 'first external tester milestone'
-expect_failure "tracker release version drift" break_tracker_release_version 'stale conary release reference|completed publication gate'
 expect_failure "outreach release version drift" break_outreach_release_version 'current-release baseline|outside current/target contract'
 expect_failure "outreach target state" break_outreach_target_state 'exact vMAJOR.MINOR.PATCH tag or unassigned'
 expect_failure "unassigned outreach candidate version" break_unassigned_outreach_candidate_version 'outside current/target contract|outside retained current release'
-expect_failure "missing Forge deployment retirement evidence" break_detailed_forge_retirement_evidence 'Forge deployment retirement wording'
-expect_failure "missing detailed Group O evidence" break_detailed_group_o_evidence 'dated Group O evidence'
-expect_failure "missing detailed Group P evidence" break_detailed_group_p_evidence 'dated Group P evidence'
 expect_failure "release doc version drift" break_release_doc_version 'stale conary release reference'
 expect_failure "README release channel drift" break_readme_release_channel 'hard-codes a public release version|derived published-release channel'
 expect_failure "security release version drift" break_security_release_version 'hard-codes a public release version|derived supported-release row'
@@ -906,6 +881,8 @@ expect_failure "retired plan directory" break_retired_plan_directory 'neutral la
 expect_failure "retired design directory" break_retired_design_directory 'neutral layout.*retired design/plan path'
 expect_failure "missing live documentation directory" break_live_doc_location_claim 'names missing live documentation directory'
 expect_failure "missing frontmatter revision" break_frontmatter_revision 'frontmatter requires a positive integer revision'
+expect_failure "frontmatter summary budget" break_frontmatter_summary_budget 'frontmatter summary exceeds 40 words: 41'
+expect_failure "missing backticked repository path" break_backticked_repo_path 'names missing repository path: docs/missing-guide.md'
 expect_failure "retired Google agent entrypoint" break_retired_google_entrypoint 'retired Google agent entrypoint'
 expect_failure "assistant context budget" break_assistant_context_budget 'assistant context line budget'
 

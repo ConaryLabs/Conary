@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-27
-revision: 2
+last_updated: 2026-09-03
+revision: 3
 summary: Destructive Remi origin rebuild, recovery, storage, and shared-ingress verification procedure
 ---
 
@@ -136,7 +136,7 @@ stable identifiers. `findmnt --verify --verbose` must pass before reboot.
 
 The rebuilt host has three human/service boundaries:
 
-- `peter`: administrator with key-only SSH and passwordless sudo
+- `<admin>`: administrator with key-only SSH and passwordless sudo
 - `dev`: the sole interactive development account
 - `conary`: non-login service account for Remi and production-owned paths
 - `conary-web`: traversal-only system group containing `conary` and Ubuntu's
@@ -171,7 +171,7 @@ visibility from a separate Claude client; an active process alone does not
 prove Remote Control registration.
 
 Disable password SSH authentication and direct root SSH after verifying a fresh
-`peter` login and `sudo -n true`. Verify `dev` through a fresh login rather than
+administrator login and `sudo -n true`. Verify `dev` through a fresh login rather than
 only through `sudo -u dev`.
 
 ## Selective restore and service recovery

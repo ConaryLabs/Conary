@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-08-11
-revision: 7
+last_updated: 2026-09-03
+revision: 8
 summary: Define lossless RPM, Debian, ALPM, eopkg, and CCS package authority plus explicit consumer projections
 ---
 
@@ -27,9 +27,9 @@ retain format-specific authority directly. The retired `PackageMetadata`,
 
 This specification owns package identity, dependency/provision authority,
 payload and configuration declarations, and their consumer boundaries.
-[`foreign-package-lifecycle-contracts.md`](foreign-package-lifecycle-contracts.md)
+[The foreign package lifecycle specification](foreign-package-lifecycle-contracts.md)
 continues to own lifecycle event order, arguments, configuration transactions,
-and selected-root execution. [`ccs-format-v3.md`](ccs-format-v3.md) describes
+and selected-root execution. [The CCS v3 format specification](ccs-format-v3.md) describes
 the current signed CCS v3 envelope.
 
 ## Governing Rule
