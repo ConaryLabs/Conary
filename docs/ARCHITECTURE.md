@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 65
+revision: 66
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -505,11 +505,24 @@ Generation-aware package mutation
   validated manifests + carrier capabilities + CAS -> exact state/security projection -> staged ESP/rootfs
 ```
 
-The initramfs mounts the composefs generation with `verity_check=1` by
-default. An unverified mount is permitted only when the kernel command line
-contains the exact opt-out `conary.verity=off`; boot prints a console warning
-before mounting without fs-verity. `conary.verity=on` is the explicit verified
-form, and any other value fails generation activation before the mount.
+The single boot verification policy owner is conary-core's
+`generation::verity_policy::VerityPolicy`. Absence or exact `conary.verity=on`
+requires a verified composefs mount; only exact `conary.verity=off` permits an
+unverified mount and prints a console warning. The last occurrence wins, with
+presence tracked separately: an empty or otherwise invalid final value fails
+activation. A failed verified mount is fatal and is never retried without
+verification. Recovery rejects generation metadata lacking the fs-verity flag
+or EROFS verity digest with a typed error under the verified policy.
+
+The deployed-system `deploy/dracut` hook invokes `conary system generation
+recover`, which consumes this Rust policy before repair, artifact scanning or
+mount reuse. The `packaging/dracut/90conary` generator and bootstrap-generated
+`/init` cannot execute conary before switch_root: neither image installs the
+binary. Both use the same shell adapter, tested against the Rust policy for
+argument precedence, rejection, mount options and downgrade warnings. These
+are execution adapters, not independent policy owners. Consolidating all three
+initramfs implementations and their tool inventories is tracked in
+[#863](https://github.com/FieldmouseWorks/Conary/issues/863).
 
 ### Generation Lifecycle
 

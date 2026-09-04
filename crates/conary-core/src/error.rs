@@ -230,6 +230,10 @@ pub enum Error {
     #[error("Recovery failed: {0}")]
     RecoveryFailed(String),
 
+    /// Invalid boot verification policy or missing generation verification evidence.
+    #[error(transparent)]
+    BootVerity(#[from] crate::generation::verity_policy::VerityPolicyError),
+
     /// Operation timed out
     #[error("Timeout: {0}")]
     TimeoutError(String),

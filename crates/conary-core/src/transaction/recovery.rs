@@ -4,6 +4,7 @@ use super::TransactionEngine;
 use crate::Result;
 use crate::db::models::{GenerationPublication, SystemState};
 use crate::generation::artifact::{GenerationArtifact, load_generation_artifact_with_verified_cas};
+use crate::generation::verity_policy::VerityPolicy;
 use rusqlite::Connection;
 use std::path::Path;
 
@@ -31,17 +32,41 @@ impl TransactionEngine {
     ///
     /// This replaces the old journal-based roll-forward/roll-back recovery.
     pub fn recover(&self, conn: &Connection) -> Result<()> {
-        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedGenerationOnly)
+        self.recover_with_policy(
+            conn,
+            RecoveryScanPolicy::SelectedGenerationOnly,
+            &VerityPolicy::Verified,
+        )
     }
 
     /// Recover the selected boot generation, allowing the explicit recovery
     /// command to promote the latest valid artifact when `/conary/current` is
     /// missing or invalid.
     pub fn recover_boot_selection(&self, conn: &Connection) -> Result<()> {
-        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedOrLatestArtifact)
+        let cmdline = std::fs::read_to_string("/proc/cmdline")?;
+        self.recover_boot_selection_with_verity(conn, &VerityPolicy::from_kernel_cmdline(&cmdline))
     }
 
-    fn recover_with_policy(&self, conn: &Connection, policy: RecoveryScanPolicy) -> Result<()> {
+    fn recover_boot_selection_with_verity(
+        &self,
+        conn: &Connection,
+        verity: &VerityPolicy,
+    ) -> Result<()> {
+        // Validate before DB inspection, repair, scanning or mount reuse. An
+        // invalid command line is not a damaged artifact that can be bypassed.
+        verity.requires_verification()?;
+        if let Some(warning) = verity.warning() {
+            eprintln!("{warning}");
+        }
+        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedOrLatestArtifact, verity)
+    }
+
+    fn recover_with_policy(
+        &self,
+        conn: &Connection,
+        policy: RecoveryScanPolicy,
+        verity: &VerityPolicy,
+    ) -> Result<()> {
         use crate::generation::mount::current_generation;
 
         let pending_debt = pending_publication_debt(conn)?;
@@ -71,7 +96,8 @@ impl TransactionEngine {
                         return mark_generation_state_active_if_present(conn, current_num);
                     }
 
-                    let (required_verity, expected_digest) = artifact_mount_policy(&artifact);
+                    let (required_verity, expected_digest) =
+                        verity.mount_requirements(&artifact.metadata)?;
                     let is_mounted = crate::generation::mount::is_generation_mounted(
                         &self.config.mount_point,
                         &artifact.erofs_path,
@@ -92,7 +118,7 @@ impl TransactionEngine {
                         "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return self.mount_artifact_and_link(conn, current_num, &artifact);
+                    return self.mount_artifact_and_link(conn, current_num, &artifact, verity);
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -103,10 +129,10 @@ impl TransactionEngine {
                 }
             }
 
-            return self.rebuild_or_scan(conn, Some(current_num), policy);
+            return self.rebuild_or_scan(conn, Some(current_num), policy, verity);
         }
 
-        self.rebuild_or_scan(conn, None, policy)
+        self.rebuild_or_scan(conn, None, policy, verity)
     }
 
     fn rebuild_or_scan(
@@ -114,6 +140,7 @@ impl TransactionEngine {
         conn: &Connection,
         selected_generation: Option<i64>,
         policy: RecoveryScanPolicy,
+        verity: &VerityPolicy,
     ) -> Result<()> {
         if let Some(expected) = selected_generation {
             tracing::info!(
@@ -137,7 +164,7 @@ impl TransactionEngine {
                         );
                         return mark_generation_state_active_if_present(conn, expected);
                     }
-                    return self.mount_artifact_and_link(conn, expected, &artifact);
+                    return self.mount_artifact_and_link(conn, expected, &artifact, verity);
                 }
                 Err(e) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
@@ -171,7 +198,7 @@ impl TransactionEngine {
                 "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_artifact_and_link(conn, gen_num, &artifact);
+            return self.mount_artifact_and_link(conn, gen_num, &artifact, verity);
         }
 
         Err(crate::Error::RecoveryFailed(
@@ -192,8 +219,9 @@ impl TransactionEngine {
         conn: &Connection,
         gen_num: i64,
         artifact: &GenerationArtifact,
+        verity: &VerityPolicy,
     ) -> Result<()> {
-        let (requested_verity, digest) = artifact_mount_policy(artifact);
+        let (requested_verity, digest) = verity.mount_requirements(&artifact.metadata)?;
 
         let _mount_outcome =
             crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
@@ -318,22 +346,122 @@ fn load_generation_artifact_for_number(gen_num: i64, gen_dir: &Path) -> Result<G
     Ok(artifact)
 }
 
-fn artifact_mount_policy(artifact: &GenerationArtifact) -> (bool, Option<String>) {
-    let requested_verity =
-        artifact.metadata.fsverity_enabled && artifact.metadata.erofs_verity_digest.is_some();
-    let digest = if requested_verity {
-        artifact.metadata.erofs_verity_digest.clone()
-    } else {
-        None
-    };
-    (requested_verity, digest)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::models::GenerationPublicationStatus;
+    use crate::generation::verity_policy::VerityPolicyError;
     use tempfile::TempDir;
+
+    fn recovery_fixture() -> (TempDir, Connection, TransactionEngine, GenerationArtifact) {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let db_path = root.join("conary.db");
+        crate::db::init(&db_path).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+        let engine = TransactionEngine::new(super::super::TransactionConfig::new(root)).unwrap();
+        crate::transaction::tests::write_valid_generation_artifact(root, 1);
+        let artifact = load_generation_artifact_for_number(1, &root.join("generations/1")).unwrap();
+        (tmp, conn, engine, artifact)
+    }
+
+    #[test]
+    fn absent_and_on_reject_plain_selected_or_scanned_generation() {
+        for cmdline in [
+            "quiet",
+            "conary.verity=on",
+            "conary.verity=off conary.verity=on",
+        ] {
+            for selected in [false, true] {
+                let (tmp, conn, engine, _) = recovery_fixture();
+                if selected {
+                    crate::generation::mount::update_current_symlink(tmp.path(), 1).unwrap();
+                }
+                let error = engine
+                    .recover_boot_selection_with_verity(
+                        &conn,
+                        &VerityPolicy::from_kernel_cmdline(cmdline),
+                    )
+                    .unwrap_err();
+                assert!(
+                    matches!(
+                        error,
+                        crate::Error::BootVerity(VerityPolicyError::MissingGenerationVerity {
+                            generation: 1
+                        })
+                    ),
+                    "{error}"
+                );
+                assert_eq!(tmp.path().join("current").exists(), selected);
+            }
+        }
+    }
+
+    #[test]
+    fn verified_recovery_requires_both_verity_flag_and_digest() {
+        let (_tmp, _conn, _engine, mut artifact) = recovery_fixture();
+        let policy = VerityPolicy::from_kernel_cmdline("conary.verity=on");
+        for (enabled, digest) in [(false, Some("abc")), (true, None), (true, Some(""))] {
+            artifact.metadata.fsverity_enabled = enabled;
+            artifact.metadata.erofs_verity_digest = digest.map(str::to_owned);
+            assert_eq!(
+                policy.mount_requirements(&artifact.metadata),
+                Err(VerityPolicyError::MissingGenerationVerity { generation: 1 })
+            );
+        }
+        artifact.metadata.fsverity_enabled = true;
+        artifact.metadata.erofs_verity_digest = Some("abc".into());
+        assert_eq!(
+            policy.mount_requirements(&artifact.metadata),
+            Ok((true, Some("abc".into())))
+        );
+    }
+
+    #[test]
+    fn explicit_off_warns_and_requests_plain_mount_regardless_of_metadata() {
+        let (_tmp, _conn, _engine, mut artifact) = recovery_fixture();
+        let policy = VerityPolicy::from_kernel_cmdline("conary.verity=on conary.verity=off");
+        assert_eq!(
+            policy.mount_requirements(&artifact.metadata),
+            Ok((false, None))
+        );
+        artifact.metadata.fsverity_enabled = true;
+        artifact.metadata.erofs_verity_digest = Some("abc".into());
+        assert_eq!(
+            policy.mount_requirements(&artifact.metadata),
+            Ok((false, None))
+        );
+        assert!(
+            policy
+                .warning()
+                .unwrap()
+                .contains("disables composefs fs-verity verification")
+        );
+    }
+
+    #[test]
+    fn invalid_or_empty_policy_fails_before_db_repair_scan_or_mount() {
+        let tmp = TempDir::new().unwrap();
+        let engine =
+            TransactionEngine::new(super::super::TransactionConfig::new(tmp.path())).unwrap();
+        // No schema: any recovery DB access before policy validation would fail
+        // with a database error instead of the typed invalid-argument error.
+        let conn = Connection::open_in_memory().unwrap();
+        for value in ["", "invalid", "OFF"] {
+            let policy = VerityPolicy::from_kernel_cmdline(&format!(
+                "conary.verity=off conary.verity={value}"
+            ));
+            let error = engine
+                .recover_boot_selection_with_verity(&conn, &policy)
+                .unwrap_err();
+            assert!(matches!(
+                error,
+                crate::Error::BootVerity(VerityPolicyError::InvalidArgument { value: actual })
+                    if actual == value
+            ));
+            assert!(!tmp.path().join("current").exists());
+        }
+    }
 
     #[test]
     fn pending_publication_debt_reads_recoverable_rows() {

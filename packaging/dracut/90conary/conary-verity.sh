@@ -1,5 +1,7 @@
 # packaging/dracut/90conary/conary-verity.sh
-# Shared composefs verification policy for every Conary-owned initramfs.
+# Binary-free adapter for generation::verity_policy::VerityPolicy in conary-core.
+# Packaging and bootstrap initramfs images contain no conary executable. Rust
+# conformance tests bind this adapter to that owner until consolidation (#863).
 # shellcheck shell=sh
 
 conary_read_verity() {

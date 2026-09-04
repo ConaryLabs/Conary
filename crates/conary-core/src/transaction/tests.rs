@@ -12,7 +12,7 @@ use crate::generation::metadata::{
 use crate::generation::test_support::write_root_manifests_with_objects;
 use tempfile::TempDir;
 
-fn write_valid_generation_artifact(root: &Path, generation: i64) {
+pub(super) fn write_valid_generation_artifact(root: &Path, generation: i64) {
     let generations_dir = root.join("generations");
     let generation_dir = generations_dir.join(generation.to_string());
     let objects_dir = root.join("objects");

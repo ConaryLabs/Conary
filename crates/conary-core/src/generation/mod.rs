@@ -14,6 +14,7 @@ pub mod gc;
 pub mod metadata;
 pub mod mount;
 pub mod root_manifest;
+pub mod verity_policy;
 
 #[cfg(feature = "composefs-rs")]
 pub mod composefs_rs_eval;
