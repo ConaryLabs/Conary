@@ -195,12 +195,7 @@ impl NativeResolutionOracleV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 {
-            return Err(Error::ConfigError(format!(
-                "native resolution oracle schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V3
-            )));
-        }
+        require_current_resolution_schema(self.schema_version)?;
         validate_identity(&self.profile, "native resolution profile")?;
         validate_sha256(
             &self.profile_revision_sha256,
@@ -249,6 +244,20 @@ impl NativeResolutionOracleV1 {
             Error::ParseError(format!("serialize native resolution manifest: {error}"))
         })?;
         Ok(crate::hash::sha256(&bytes))
+    }
+}
+
+/// Shared schema fence for in-memory validation and stored-bundle inspection.
+pub(super) fn require_current_resolution_schema(found: u32) -> Result<()> {
+    match found {
+        NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 => Ok(()),
+        1..NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 => Err(Error::ResolutionBundleRebuildRequired {
+            found,
+            current: NATIVE_RESOLUTION_ORACLE_SCHEMA_V3,
+        }),
+        _ => Err(Error::ConfigError(format!(
+            "native resolution oracle schema {found} is unsupported; expected {NATIVE_RESOLUTION_ORACLE_SCHEMA_V3}"
+        ))),
     }
 }
 

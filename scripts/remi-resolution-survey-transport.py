@@ -504,6 +504,7 @@ def validate_lane(
     )
     if not isinstance(package_value, dict) or not isinstance(resolution_value, dict):
         fail(f"{profile} oracle manifest must be an object")
+    require_envelope_schema(resolution_value, 3, "native resolution bundle")
     if (
         exact_u32(package_value.get("schema_version"), f"{profile} package schema_version") != 1
         or package_value.get("profile") != profile
@@ -2220,6 +2221,7 @@ def load_input_package_manifests(
             resolution = decode_json(
                 resolution_bytes, f"{profile_name} resolution manifest"
             )
+            require_envelope_schema(resolution, 3, "native resolution bundle")
             if canonical_json(resolution) != resolution_bytes:
                 fail(f"{profile_name} resolution manifest is not canonical JSON")
             resolution = exact_object(

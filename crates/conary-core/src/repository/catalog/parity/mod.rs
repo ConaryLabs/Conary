@@ -112,8 +112,9 @@ pub use resolution_contract::{
 };
 pub use resolution_io::{
     NATIVE_RESOLUTION_MANIFEST_FILE_NAME, NATIVE_RESOLUTION_ROOT_FILE_NAME,
-    NativeResolutionOracleReader, NativeResolutionOracleWriter,
-    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+    NativeResolutionBundleState, NativeResolutionOracleReader, NativeResolutionOracleWriter,
+    inspect_native_resolution_oracle_bundle, verify_native_resolution_oracle_bundle,
+    write_native_resolution_oracle_manifest,
 };
 #[cfg(test)]
 pub(crate) use resolution_parallel::resolution_test_capacity;

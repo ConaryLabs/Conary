@@ -135,7 +135,7 @@ else:
         "profile": profile["profile"],
         "profile_logical_digest_sha256": "b" * 64,
         "profile_revision_sha256": revision_sha,
-        "schema_version": 3,
+        "schema_version": int(os.environ.get("FAKE_RESOLUTION_SCHEMA", "3")),
     }
 (output / "manifest.json").write_bytes(canonical(manifest))
 '''
@@ -225,6 +225,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         producer_commit: str = PRODUCER_COMMIT,
         strict_failure: bool = False,
         evidence_byte_limit: int = 33554432,
+        resolution_schema: int = 3,
     ) -> subprocess.CompletedProcess[str]:
         ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
         package = self.root / f"conary-{ecosystem}-oracle"
@@ -259,8 +260,23 @@ class NativeOracleLaneTests(unittest.TestCase):
                 **os.environ,
                 "FAKE_STRICT_FAIL": "1" if strict_failure else "0",
                 "FAKE_EVIDENCE_BYTE_LIMIT": str(evidence_byte_limit),
+                "FAKE_RESOLUTION_SCHEMA": str(resolution_schema),
             },
         )
+
+    def assert_retired_resolution(self, found: int) -> None:
+        result = self.run_lane(resolution_schema=found)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        state = json.loads(result.stderr)
+        self.assertEqual(state["reason"], "schema_rebuild_required")
+        self.assertEqual(state["found_schema"], found)
+        self.assertEqual(state["current_schema"], 3)
+
+    def test_retired_resolution_schema_one_requires_rebuild(self) -> None:
+        self.assert_retired_resolution(1)
+
+    def test_retired_resolution_schema_two_requires_rebuild(self) -> None:
+        self.assert_retired_resolution(2)
 
     def test_produces_exact_package_and_resolution_evidence(self) -> None:
         result = self.run_lane()

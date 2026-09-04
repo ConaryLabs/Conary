@@ -79,6 +79,12 @@ pub enum Error {
         supported_revision: i32,
     },
 
+    /// Retired resolution evidence is non-authority and must be regenerated.
+    #[error(
+        "Native resolution bundle schema rebuild required: found {found}, current {current}; regenerate native or candidate resolution evidence"
+    )]
+    ResolutionBundleRebuildRequired { found: u32, current: u32 },
+
     /// Missing ID on model object (required for update/query operations)
     #[error("Missing ID: {0}")]
     MissingId(String),

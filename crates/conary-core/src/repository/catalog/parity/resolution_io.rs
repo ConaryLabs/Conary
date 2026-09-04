@@ -16,7 +16,7 @@ use super::io::NativeParityOracleReader;
 use super::resolution_contract::{
     NativeResolutionArtifactV1, NativeResolutionCountsV1, NativeResolutionOracleV1,
     NativeResolutionOutcomeV1, NativeResolutionPolicyV1, NativeResolutionRootV1,
-    native_requirement_group_sha256,
+    native_requirement_group_sha256, require_current_resolution_schema,
 };
 use crate::error::{Error, Result};
 use crate::repository::dependency_model::RepositoryRequirementKind;
@@ -358,6 +358,34 @@ pub fn verify_native_resolution_oracle_bundle(
     profile: &ProfileRevisionV2,
     package_oracle: &NativeParityOracleReader,
 ) -> Result<NativeResolutionOracleReader> {
+    inspect_native_resolution_oracle_bundle(directory, profile, package_oracle)?.into_current()
+}
+
+/// Read-only authority inspection, following profile/universe schema fencing.
+/// An obsolete bundle is never deserialized using the current nested contract.
+pub enum NativeResolutionBundleState {
+    Current(Box<NativeResolutionOracleReader>),
+    ObsoleteSchema { found: u32, current: u32 },
+}
+
+impl NativeResolutionBundleState {
+    /// Strict consumers propagate a typed rebuild request, never malformed-input
+    /// classification or compatibility authority. Anyhow contexts retain this type.
+    pub fn into_current(self) -> Result<NativeResolutionOracleReader> {
+        match self {
+            Self::Current(reader) => Ok(*reader),
+            Self::ObsoleteSchema { found, current } => {
+                Err(Error::ResolutionBundleRebuildRequired { found, current })
+            }
+        }
+    }
+}
+
+pub fn inspect_native_resolution_oracle_bundle(
+    directory: impl AsRef<Path>,
+    profile: &ProfileRevisionV2,
+    package_oracle: &NativeParityOracleReader,
+) -> Result<NativeResolutionBundleState> {
     let directory = directory.as_ref();
     verify_exact_directory(directory)?;
     let manifest_path = directory.join(NATIVE_RESOLUTION_MANIFEST_FILE_NAME);
@@ -372,6 +400,23 @@ pub fn verify_native_resolution_oracle_bundle(
         )));
     }
     let bytes = fs::read(&manifest_path)?;
+    #[derive(serde::Deserialize)]
+    struct SchemaHeader {
+        schema_version: u32,
+    }
+    // Deserialize only the envelope first. Typed serde fields reject absent,
+    // duplicate, negative, fractional, string, and out-of-range schema values.
+    let header: SchemaHeader = serde_json::from_slice(&bytes).map_err(|error| {
+        Error::ConfigError(format!(
+            "invalid native resolution schema envelope: {error}"
+        ))
+    })?;
+    match require_current_resolution_schema(header.schema_version) {
+        Err(Error::ResolutionBundleRebuildRequired { found, current }) => {
+            return Ok(NativeResolutionBundleState::ObsoleteSchema { found, current });
+        }
+        result => result?,
+    }
     let manifest: NativeResolutionOracleV1 = serde_json::from_slice(&bytes).map_err(|error| {
         Error::ParseError(format!(
             "parse native resolution manifest {}: {error}",
@@ -394,7 +439,7 @@ pub fn verify_native_resolution_oracle_bundle(
     )?;
     reader.verify_contents()?;
     reader.verify_package_oracle(package_oracle)?;
-    Ok(reader)
+    Ok(NativeResolutionBundleState::Current(Box::new(reader)))
 }
 
 fn validate_package_references(

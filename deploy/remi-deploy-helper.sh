@@ -1033,7 +1033,9 @@ survey_validate_unpacked_oracles() {
             --arg package_manifest_sha256 "$package_manifest_sha256" \
             --arg artifact_sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
             --argjson artifact_size "$(stat -c '%s' "$resolution_artifact")" '
-            .schema_version == 3
+            (if .schema_version == 1 or .schema_version == 2 then
+              error("schema_rebuild_required: obsolete native resolution bundle; rebuild required as schema 3")
+              else .schema_version == 3 end)
             and .profile == $profile
             and .profile_revision_sha256 == $revision
             and .package_oracle_manifest_sha256 == $package_manifest_sha256

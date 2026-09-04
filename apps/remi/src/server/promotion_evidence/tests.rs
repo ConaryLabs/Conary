@@ -357,6 +357,33 @@ fn complete_promotion_evidence_reopens_and_binds_every_public_candidate() {
             .contains("unsupported Remi promotion evidence schema 1")
     );
 
+    for (kind, directory) in [
+        ("native", &proof_fixtures[0].input.native_resolution_dir),
+        (
+            "candidate",
+            &proof_fixtures[0].input.candidate_resolution_dir,
+        ),
+    ] {
+        let path = directory.join("manifest.json");
+        let current = fs::read(&path).unwrap();
+        for found in [1, 2] {
+            fs::write(&path, format!("{{\"schema_version\":{found}}}")).unwrap();
+            let retired_config = RemiPromotionEvidenceConfig {
+                output_path: evidence_dir
+                    .path()
+                    .join(format!("retired-{kind}-{found}.json")),
+                ..config.clone()
+            };
+            let error = produce_remi_promotion_evidence(&retired_config, &canonical)
+                .expect_err("retired resolution evidence must require rebuild");
+            assert!(matches!(error.downcast_ref::<conary_core::Error>(),
+                Some(conary_core::Error::ResolutionBundleRebuildRequired { found: actual, current: 3 }) if *actual == found));
+            assert!(format!("{error:#}").contains("schema rebuild required"));
+            assert!(!retired_config.output_path.exists());
+        }
+        fs::write(path, current).unwrap();
+    }
+
     let stale_crawl_path = evidence_dir.path().join("stale-crawl.json");
     let mut stale_crawl = crawl.clone();
     let stale_revision_sha256 = "9".repeat(64);

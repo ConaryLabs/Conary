@@ -19,6 +19,18 @@ from typing import Any
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
+
+
+class ResolutionBundleRebuildRequired(ValueError):
+    """Retired producer output is non-authority, never a malformed current bundle."""
+
+    def __init__(self, found: int):
+        self.state = {"status": "obsolete", "reason": "schema_rebuild_required",
+                      "envelope": "native resolution bundle", "found_schema": found,
+                      "current_schema": 3,
+                      "message": f"native resolution bundle schema {found} is obsolete; rebuild required as schema 3"}
+        super().__init__(self.state["message"])
+
 LANES = {
     "fedora-44": {
         "ecosystem": "rpm",
@@ -464,6 +476,12 @@ def oracle_evidence(
     if sorted(entry.name for entry in directory.iterdir()) != ["manifest.json", artifact_name]:
         raise ValueError(f"{label} entries are incomplete or unexpected")
     manifest, manifest_bytes = load_canonical(directory / "manifest.json", f"{label} manifest")
+    if required_schema == 3:
+        found = manifest.get("schema_version")
+        if type(found) is not int or found < 0 or found > 2**32 - 1:
+            raise ValueError(f"{label} schema must be an unsigned 32-bit integer")
+        if found in (1, 2):
+            raise ResolutionBundleRebuildRequired(found)
     artifact = plain_file(directory / artifact_name, f"{label} artifact")
     if manifest.get("schema_version") != required_schema:
         raise ValueError(f"{label} schema must be {required_schema}")
@@ -696,6 +714,9 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     try:
         evidence = produce(parse_arguments())
+    except ResolutionBundleRebuildRequired as error:
+        print(json.dumps(error.state, sort_keys=True, separators=(",", ":")), file=sys.stderr)
+        raise SystemExit(3) from error
     except (KeyError, OSError, TypeError, ValueError, RuntimeError, json.JSONDecodeError) as error:
         raise SystemExit(f"native-oracle lane production failed: {error}") from error
     json.dump(evidence, sys.stdout, sort_keys=True, separators=(",", ":"))

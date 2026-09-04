@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 74
+revision: 75
 status: active
 ---
 
@@ -424,6 +424,18 @@ solver diagnostics, rather than package semantics, authoritative.
 | apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
 | libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or native `check_conflicts` results that block every libalpm-authorized provider path reached from the exact root when preparation reports missing dependencies first. A conflict on a rejected provider alternative is not part of the required closure. |
 | Conary/Resolvo | A `ConflictEdge::Conflict` or `ConflictNode::Excluded` that remains on every viable exact-root provider path. Missing-first probing discharges exact persisted groups under one per-root budget: at most 64 re-solves and 30 seconds on a monotonic clock, including the probe's initial provider load. Loaded facts are reused across fresh SAT caches; limits never reset per iteration. Exhaustion is `HiddenConflictProbeBudgetExceeded { root, resolves, elapsed }` before classification, never an outcome. |
+
+Stored native and candidate resolution manifests are inspected before parsing
+current nested fields. `NativeResolutionBundleState::ObsoleteSchema { found,
+current }` classifies schemas 1 and 2 as non-authority requiring regeneration;
+schema 3 is current. Zero, future schemas, missing/duplicate/non-integer schema
+fields, and malformed current manifests remain invalid input. The shared strict
+reader returns `Error::ResolutionBundleRebuildRequired { found, current }` for
+obsolete bundles. Promotion proof/evidence preserve that type through context;
+the Remi CLI reports `resolution_bundle_rebuild_required`. Lane production,
+assembly, and survey transport also fence retired resolution bundles before
+nested validation (Python tools emit typed obsolete/rebuild JSON and exit 3).
+No schema number changes in this fix, and no compatibility reader is introduced.
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,

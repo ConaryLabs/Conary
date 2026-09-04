@@ -229,6 +229,23 @@ class NativeOracleAssemblyTests(unittest.TestCase):
         )
         self.assertEqual((self.root / "assembled.json").read_bytes(), canonical(assembled))
 
+    def test_resolution_bundle_schemas_are_fenced_before_nested_validation(self) -> None:
+        path = self.lanes_root / "fedora-44" / "resolution-oracle" / "manifest.json"
+        for found in (1, 2):
+            path.write_bytes(canonical({"schema_version": found}))
+            result = self.run_assembler()
+            self.assertEqual(result.returncode, 3, result.stderr)
+            state = json.loads(result.stderr)
+            self.assertEqual(state["reason"], "schema_rebuild_required")
+            self.assertEqual(state["found_schema"], found)
+            self.assertEqual(state["current_schema"], 3)
+            self.assertFalse((self.root / "assembled.json").exists())
+        for found in (0, 3, 4, True, 2.0, "2", None):
+            path.write_bytes(canonical({"schema_version": found}))
+            result = self.run_assembler()
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn("schema_rebuild_required", result.stderr)
+
     def test_rejects_different_export(self) -> None:
         evidence = self.evidence("arch")
         evidence["export_id"] = "slice6-other"

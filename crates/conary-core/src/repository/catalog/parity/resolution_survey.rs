@@ -392,6 +392,7 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::IoError(_) => Self::IoError,
             Error::InitError(_) => Self::InitError,
             Error::SchemaRebuildRequired { .. } => Self::SchemaRebuildRequired,
+            Error::ResolutionBundleRebuildRequired { .. } => Self::SchemaRebuildRequired,
             Error::MissingId(_) => Self::MissingId,
             Error::VersionParse(_) => Self::VersionParse,
             Error::VersionComparison(_) => Self::VersionComparison,

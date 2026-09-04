@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 168
+revision: 169
 summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
@@ -845,6 +845,14 @@ and outputs are typed `obsolete` / `schema_rebuild_required` non-authority befor
 nested validation and must be regenerated. Current envelopes with mismatched
 nested schemas remain invalid. This envelope cut leaves oracle bundles unchanged.
 Resolution schema 3 admits `not_installable { reason: conflicting_closure }`
+and is the only current resolution bundle schema. Shared bundle inspection
+classifies retained schema-1/2 native and candidate bundles as
+`NativeResolutionBundleState::ObsoleteSchema`; strict promotion proof/evidence
+readers preserve the typed `ResolutionBundleRebuildRequired` error through
+their context, and the CLI reports `resolution_bundle_rebuild_required`.
+Future or malformed schemas remain invalid. Regenerate obsolete evidence;
+no compatibility reader or additional schema bump is introduced.
+The conflicting-closure outcome applies
 when conflict, break, same-name, obsoletion, or exact-root displacement makes a
 root-reachable closure inconsistent. Conflict-class attribution dominates
 missing requirements. The RPM projection is schema 5; Debian, ALPM, Conary
