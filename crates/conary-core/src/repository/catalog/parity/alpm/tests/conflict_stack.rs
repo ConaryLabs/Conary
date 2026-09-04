@@ -14,6 +14,10 @@ enum Shape {
     ThreeDeep,
     Backtrack,
     Budget,
+    NewlyRelevantHealthy,
+    NewlyRelevantBlocked,
+    RelevantSiblingsBlocked,
+    RelevantSiblingsHealthy,
 }
 
 #[test]
@@ -41,6 +45,26 @@ fn exposed_question_budget_failure_never_classifies_the_root() {
     check_shape(Shape::Budget, 256);
 }
 
+#[test]
+fn visible_question_becomes_relevant_and_its_alternative_resolves() {
+    check_shape(Shape::NewlyRelevantHealthy, 3);
+}
+
+#[test]
+fn visible_question_becomes_relevant_and_all_alternatives_conflict() {
+    check_shape(Shape::NewlyRelevantBlocked, 3);
+}
+
+#[test]
+fn visible_question_is_explored_once_per_blocked_sibling_path() {
+    check_shape(Shape::RelevantSiblingsBlocked, 5);
+}
+
+#[test]
+fn visible_question_is_reexplored_on_a_healthy_sibling_path() {
+    check_shape(Shape::RelevantSiblingsHealthy, 5);
+}
+
 fn check_shape(shape: Shape, checks: u32) {
     let root_name = match shape {
         Shape::Healthy => "stack-healthy-root",
@@ -48,6 +72,10 @@ fn check_shape(shape: Shape, checks: u32) {
         Shape::ThreeDeep => "stack-deep-root",
         Shape::Backtrack => "stack-backtrack-root",
         Shape::Budget => "stack-budget-root",
+        Shape::NewlyRelevantHealthy => "stack-newly-relevant-healthy-root",
+        Shape::NewlyRelevantBlocked => "stack-newly-relevant-blocked-root",
+        Shape::RelevantSiblingsBlocked => "stack-relevant-siblings-blocked-root",
+        Shape::RelevantSiblingsHealthy => "stack-relevant-siblings-healthy-root",
     };
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("core.db");
@@ -63,19 +91,45 @@ fn check_shape(shape: Shape, checks: u32) {
         .map(|i| format!("{i:064x}"))
         .collect::<Vec<_>>();
     let conflict = [root_name];
+    let already_visible = matches!(
+        shape,
+        Shape::NewlyRelevantHealthy
+            | Shape::NewlyRelevantBlocked
+            | Shape::RelevantSiblingsBlocked
+            | Shape::RelevantSiblingsHealthy
+    );
     let mut root = PackageFixture::new(root_name, &checksums[0]);
-    root.depends = &["virtual-a"];
+    root.depends = if already_visible {
+        &["virtual-a", "virtual-b"]
+    } else {
+        &["virtual-a"]
+    };
     let mut a1 = PackageFixture::new("a1", &checksums[1]);
     a1.provides = &["virtual-a"];
     a1.conflicts = &conflict;
     let mut a2 = PackageFixture::new("a2", &checksums[2]);
     a2.provides = &["virtual-a"];
-    a2.depends = &["virtual-b"];
+    if !already_visible {
+        a2.depends = &["virtual-b"];
+    }
     let mut packages = vec![root, a1, a2];
     for (index, name) in b_names.iter().enumerate() {
         let mut provider = PackageFixture::new(name, &checksums[index + 3]);
         provider.provides = &["virtual-b"];
-        if index == 0 || matches!(shape, Shape::Blocked | Shape::Backtrack | Shape::Budget) {
+        if already_visible {
+            // Both questions are asked in the baseline, but only a1 conflicts
+            // with the root. B first becomes relevant after choosing a2/a3.
+            provider.conflicts = if index == 0 || matches!(shape, Shape::RelevantSiblingsBlocked) {
+                &["a2", "a3"]
+            } else if matches!(
+                shape,
+                Shape::NewlyRelevantBlocked | Shape::RelevantSiblingsHealthy
+            ) {
+                &["a2"]
+            } else {
+                &[]
+            };
+        } else if index == 0 || matches!(shape, Shape::Blocked | Shape::Backtrack | Shape::Budget) {
             provider.conflicts = &conflict;
         } else if matches!(shape, Shape::ThreeDeep) {
             provider.depends = &["virtual-c"];
@@ -90,7 +144,10 @@ fn check_shape(shape: Shape, checks: u32) {
         c2.provides = &["virtual-c"];
         packages.extend([c1, c2]);
     }
-    if matches!(shape, Shape::Backtrack) {
+    if matches!(
+        shape,
+        Shape::Backtrack | Shape::RelevantSiblingsBlocked | Shape::RelevantSiblingsHealthy
+    ) {
         let mut a3 = PackageFixture::new("a3", &checksums[b_count + 5]);
         a3.provides = &["virtual-a"];
         packages.push(a3);
@@ -123,13 +180,16 @@ fn check_shape(shape: Shape, checks: u32) {
     );
     let expected = match shape {
         Shape::Budget => None,
-        Shape::Blocked => Some(NativeResolutionOutcomeV1::NotInstallable {
-            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
-        }),
+        Shape::Blocked | Shape::NewlyRelevantBlocked | Shape::RelevantSiblingsBlocked => {
+            Some(NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+            })
+        }
         _ => {
             let names = match shape {
                 Shape::ThreeDeep => vec![root_name, "a2", "b002", "c2"],
                 Shape::Backtrack => vec![root_name, "a3"],
+                Shape::RelevantSiblingsHealthy => vec![root_name, "a3", "b002"],
                 _ => vec![root_name, "a2", "b002"],
             };
             let mut closure = names
@@ -215,7 +275,10 @@ fn check_shape(shape: Shape, checks: u32) {
     } else {
         assert_eq!(survey.counts.failed_roots, 0);
         assert!(survey.failures.is_empty());
-        if matches!(shape, Shape::Blocked) {
+        if matches!(
+            shape,
+            Shape::Blocked | Shape::NewlyRelevantBlocked | Shape::RelevantSiblingsBlocked
+        ) {
             let diagnostic = survey
                 .diagnostic_outcomes
                 .iter()
