@@ -31,10 +31,42 @@ EOF
 awk 'BEGIN { for (i = 1; i <= 150; i++) print "    // test line " i }'
 echo '}'
 } >> "$fixture_root/crates/fixture/src/inline_tests.rs"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod tests_at_cap {
+EOF
+awk 'BEGIN { for (i = 1; i <= 297; i++) print "    // test line " i }'
+echo '}'
+} > "$fixture_root/crates/fixture/src/inline_tests_at_cap.rs"
 write_lines "$fixture_root/crates/fixture/src/tests.rs" 1200
 write_lines "$fixture_root/crates/fixture/src/tests/helper.rs" 1200
 
 "$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+
+{
+awk 'BEGIN { for (i = 1; i <= 400; i++) print "// fixture line " i }'
+cat <<'EOF'
+#[cfg(test)]
+mod middle_tests {
+    const OPEN_BRACE: &str = "{";
+    // }
+}
+EOF
+awk 'BEGIN { for (i = 1; i <= 300; i++) print "// middle production line " i }'
+cat <<'EOF'
+#[cfg(test)] mod later_tests {
+    const CLOSE_BRACE: &str = r#"}"#;
+}
+EOF
+awk 'BEGIN { for (i = 1; i <= 301; i++) print "// trailing production line " i }'
+} > "$fixture_root/crates/fixture/src/production_after_inline.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/after-inline.out" 2>&1; then
+    echo "ERROR: production after an inline test module was not counted" >&2
+    exit 1
+fi
+grep -q 'production_after_inline.rs has 1001 non-test lines' "$fixture_root/after-inline.out"
+rm "$fixture_root/crates/fixture/src/production_after_inline.rs"
 
 write_lines "$fixture_root/crates/fixture/src/over_cap.rs" 1001
 if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/over.out" 2>&1; then
@@ -52,6 +84,25 @@ if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/st
     exit 1
 fi
 grep -q 'stale line-cap allowlist entry' "$fixture_root/stale.out"
+
+: > "$allowlist"
+{
+cat <<'EOF'
+#[cfg(test)]
+mod oversized_tests {
+EOF
+awk 'BEGIN { for (i = 1; i <= 298; i++) print "    // test line " i }'
+echo '}'
+} > "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/inline-size.out" 2>&1; then
+    echo "ERROR: oversized inline test module unexpectedly passed" >&2
+    exit 1
+fi
+grep -q 'inline #\[cfg(test)\] module at line 1 with 301 lines' "$fixture_root/inline-size.out"
+
+echo 'crates/fixture/src/oversized_inline_tests.rs #846' > "$allowlist"
+"$checker" --root "$fixture_root" --allowlist "$allowlist" >/dev/null
+rm "$fixture_root/crates/fixture/src/oversized_inline_tests.rs"
 
 : > "$allowlist"
 {

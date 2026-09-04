@@ -1238,10 +1238,10 @@ contributor guidance, and feature ownership routing.
 **Docs to update:** `AGENTS.md`; `CONTRIBUTING.md`;
 `docs/modules/feature-ownership.md`.
 
-**Safety notes:** the cap counts lines before the first inline
-`#[cfg(test)]` module, or the whole source file when none exists. Files named
-`tests.rs` and Rust files below a `tests/` directory are excluded. Every
-allowlist entry carries the issue that owns the remaining production
+**Safety notes:** the cap counts every line outside inline `#[cfg(test)]`
+modules and rejects inline test modules over 300 lines. Files named `tests.rs`
+and Rust files below a `tests/` directory are excluded. Every allowlist entry
+carries the issue that owns the remaining production or test-placement
 decomposition; stale entries fail the gate.
 
 ## Developer Build Environment

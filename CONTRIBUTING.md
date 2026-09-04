@@ -196,7 +196,7 @@ cargo test -p conaryd
   Do not hand-roll status prefixes.
 - **Clippy-clean**: All code must pass `cargo clippy --workspace --all-targets -- -D warnings`. Pedantic lints are encouraged.
 - **Unit-test placement**: Keep small tests in an inline `#[cfg(test)] mod tests`.
-  Once a Rust source file carries at least 300 inline unit-test lines, its unit
+  Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests belong in the sibling `<file>/tests.rs` behind `#[cfg(test)] mod tests;`.
   A new sibling extraction must reduce the parent, and its commit must state
   that reduction. Package-level integration tests remain under the package's
@@ -217,13 +217,13 @@ them focused: name the current responsibility, the module or helper that should
 own it, and the focused verification command that proves behavior is preserved
 or intentionally changed.
 
-`scripts/check-line-cap.sh` measures each Rust source file before its first
-inline `#[cfg(test)]` module, ignores sibling and package-level test files, and
-caps that non-test portion at 1,000 lines. Every checked-in exception names the
-issue that owns its decomposition. Add behavior to an over-cap file only through
-the ownership-based reorganization named by that issue. Thin registration,
-dispatch, and re-export wiring may remain in the large hub only through an
-issue-linked exception.
+`scripts/check-line-cap.sh` measures all lines outside inline `#[cfg(test)]`
+modules, ignores sibling and package-level test files, caps that non-test
+portion at 1,000 lines, and caps each inline test module at 300 lines. Every
+checked-in exception names the issue that owns its decomposition. Add behavior
+to an over-cap file only through the ownership-based reorganization named by
+that issue. Thin registration, dispatch, and re-export wiring may remain in the
+large hub only through an issue-linked exception.
 
 Large files are review signals. Use `scripts/line-count-report.sh` to refresh
 the current hotspot list when planning broad maintenance work. Do not split a

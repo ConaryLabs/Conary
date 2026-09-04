@@ -99,7 +99,7 @@ essential operation available only through ad hoc shell or free-form output.
   reason to retry until green.
 - `scripts/check-line-cap.sh` enforces a 1,000 non-test-line cap for Rust source
   files; each checked-in exception names the issue that owns its decomposition.
-  Once a Rust source file carries at least 300 inline unit-test lines, its unit
+  Once a Rust source file carries more than 300 inline unit-test lines, its unit
   tests live in a sibling `<file>/tests.rs`. A sibling extraction must reduce
   the parent, with that reduction stated in the commit. Thin dispatch,
   registration, and re-export wiring may remain in a large hub only through an
