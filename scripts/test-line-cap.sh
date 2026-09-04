@@ -195,6 +195,35 @@ fi
 grep -q 'external_tests.rs has 1001 non-test lines' "$fixture_root/external.out"
 
 rm "$fixture_root/crates/fixture/src/external_tests.rs"
+
+{
+    echo '#[cfg(any(test, not(unix)))]'
+    echo 'fn production_on_other_platforms() {'
+    awk 'BEGIN { for (i = 1; i <= 998; i++) print "    // production" }'
+    echo '}'
+} > "$fixture_root/crates/fixture/src/platform_production.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/platform.out" 2>&1; then
+    echo "ERROR: negated platform predicate hid production lines" >&2
+    exit 1
+fi
+grep -q 'platform_production.rs has 1001 non-test lines' "$fixture_root/platform.out"
+rm "$fixture_root/crates/fixture/src/platform_production.rs"
+
+{
+    echo 'fn production() {'
+    echo '    #[cfg(test)]'
+    echo '    {'
+    awk 'BEGIN { for (i = 1; i <= 298; i++) print "        // test block" }'
+    echo '    }'
+    echo '}'
+} > "$fixture_root/crates/fixture/src/test_block.rs"
+if "$checker" --root "$fixture_root" --allowlist "$allowlist" >"$fixture_root/test-block.out" 2>&1; then
+    echo "ERROR: oversized test-only block escaped the inline cap" >&2
+    exit 1
+fi
+grep -q 'test_block.rs has 301 inline test lines' "$fixture_root/test-block.out"
+rm "$fixture_root/crates/fixture/src/test_block.rs"
+
 cat <<'EOF' > "$fixture_root/crates/fixture/src/malformed.rs"
 fn malformed( {
 EOF

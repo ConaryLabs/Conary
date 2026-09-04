@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-04
-revision: 93
+revision: 94
 summary: Route each feature to its smallest start context, owned paths, focused proof, interaction gate, documentation owners, and safety constraints.
 ---
 
@@ -1241,9 +1241,11 @@ contributor guidance, and feature ownership routing.
 `docs/modules/feature-ownership.md`.
 
 **Safety notes:** the cap parses Rust syntax and treats an item as test-only
-when its `cfg` predicate is true with `test` set and false with `test` unset,
-holding other atoms true in both evaluations. Files with more than 300 total
-test-item lines fail. Files named `tests.rs` and Rust files below a `tests/`
+when its combined `cfg` predicates can hold with `test` set and cannot hold
+with `test` unset under any assignment of the other atoms. Attributed fields,
+statements, and expressions participate in the same span count as items.
+Files with more than 300 total test-only lines fail. Files named `tests.rs`
+and Rust files below a `tests/`
 directory are excluded. Every allowlist entry carries the open issue that owns
 the remaining production or test-placement decomposition; stale entries fail
 the gate. Canonical first-line Rust path comments must match their

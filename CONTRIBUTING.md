@@ -217,9 +217,11 @@ them focused: name the current responsibility, the module or helper that should
 own it, and the focused verification command that proves behavior is preserved
 or intentionally changed.
 
-`scripts/check-line-cap.sh` measures all lines outside items whose `cfg`
-predicate is test-only, ignores sibling and package-level test files, caps that
-non-test portion at 1,000 lines, and caps the total inline test-item spans in
+`scripts/check-line-cap.sh` measures all lines outside syntax nodes whose combined
+`cfg` predicates can hold with `test` enabled but cannot hold with it disabled
+under any assignment of other cfg atoms. Items, fields, statements, and
+expressions all participate. It ignores sibling and package-level test files, caps that
+non-test portion at 1,000 lines, and caps the total inline test-only spans in
 each file at 300 lines. Every checked-in exception names the open issue that
 owns its decomposition. Add behavior to an over-cap file only through the
 ownership-based reorganization named by that issue. Thin registration,

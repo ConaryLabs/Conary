@@ -282,10 +282,6 @@ jobs:
         run: command -v rg >/dev/null
       - name: Check docs truth invariants
         run: bash scripts/check-doc-truth.sh
-      - name: Check Rust non-test line cap
-        run: bash scripts/check-line-cap.sh
-      - name: Test Rust non-test line cap checker
-        run: bash scripts/test-line-cap.sh
       - name: Test docs truth checker
         run: bash scripts/test-doc-truth.sh
       - name: Test agent context tool
@@ -294,6 +290,32 @@ jobs:
         run: bash scripts/agent-context.sh --validate
       - name: Check support bundle privacy
         run: bash scripts/test-support-bundle.sh
+
+  line-cap:
+    name: line-cap
+    runs-on: ubuntu-latest
+    needs: gnu-compiler-cache
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Require exact compiler-cache seed
+        env:
+          PRIMER_RESULT: ${{ needs.gnu-compiler-cache.result }}
+        run: test "$PRIMER_RESULT" = success
+      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          compiler-cache: reader
+      - name: Check Rust non-test line cap
+        run: bash scripts/check-line-cap.sh
+      - name: Test Rust non-test line cap checker
+        run: bash scripts/test-line-cap.sh
+      - name: Test typed line counter
+        run: cargo test -p conary-xtask
+      - name: Retain line-cap compiler-cache evidence
+        if: ${{ always() }}
+        uses: ./.github/actions/summarize-rust-cache
+        with:
+          phase: pr-line-cap
 
   frontends:
     name: frontends

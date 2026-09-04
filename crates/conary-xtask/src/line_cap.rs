@@ -6,11 +6,11 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use syn::parse::Parser;
-use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
-use syn::{Attribute, ForeignItem, ImplItem, Item, Meta, Token, TraitItem};
+use syn::{Attribute, ForeignItem, ImplItem, Item, TraitItem};
+
+mod cfg;
 
 const PRODUCTION_LINE_LIMIT: usize = 1_000;
 const INLINE_TEST_LINE_LIMIT: usize = 300;
@@ -304,7 +304,7 @@ struct TestSpanVisitor {
 
 impl TestSpanVisitor {
     fn record(&mut self, attributes: &[Attribute], span: Span) -> bool {
-        if !attributes.iter().any(cfg_is_test_only) {
+        if !cfg::is_test_only(attributes) {
             return false;
         }
         let start = attributes
@@ -320,7 +320,83 @@ impl TestSpanVisitor {
     }
 }
 
+// Each of these typed nodes owns outer attributes and an exact syntax span.
+macro_rules! visit_attributed_nodes {
+    ($($method:ident: $node:ident),* $(,)?) => {$ (
+        fn $method(&mut self, node: &'ast syn::$node) {
+            if !self.record(&node.attrs, node.span()) {
+                visit::$method(self, node);
+            }
+        }
+    )*};
+}
+
 impl<'ast> Visit<'ast> for TestSpanVisitor {
+    visit_attributed_nodes! {
+        visit_field: Field,
+        visit_variant: Variant,
+        visit_local: Local,
+        visit_stmt_macro: StmtMacro,
+        visit_arm: Arm,
+        visit_field_value: FieldValue,
+        visit_expr_array: ExprArray,
+        visit_expr_assign: ExprAssign,
+        visit_expr_async: ExprAsync,
+        visit_expr_await: ExprAwait,
+        visit_expr_binary: ExprBinary,
+        visit_expr_block: ExprBlock,
+        visit_expr_break: ExprBreak,
+        visit_expr_call: ExprCall,
+        visit_expr_cast: ExprCast,
+        visit_expr_closure: ExprClosure,
+        visit_expr_const: ExprConst,
+        visit_expr_continue: ExprContinue,
+        visit_expr_field: ExprField,
+        visit_expr_for_loop: ExprForLoop,
+        visit_expr_group: ExprGroup,
+        visit_expr_if: ExprIf,
+        visit_expr_index: ExprIndex,
+        visit_expr_infer: ExprInfer,
+        visit_expr_let: ExprLet,
+        visit_expr_lit: ExprLit,
+        visit_expr_loop: ExprLoop,
+        visit_expr_macro: ExprMacro,
+        visit_expr_match: ExprMatch,
+        visit_expr_method_call: ExprMethodCall,
+        visit_expr_paren: ExprParen,
+        visit_expr_path: ExprPath,
+        visit_expr_range: ExprRange,
+        visit_expr_raw_addr: ExprRawAddr,
+        visit_expr_reference: ExprReference,
+        visit_expr_repeat: ExprRepeat,
+        visit_expr_return: ExprReturn,
+        visit_expr_struct: ExprStruct,
+        visit_expr_try: ExprTry,
+        visit_expr_try_block: ExprTryBlock,
+        visit_expr_tuple: ExprTuple,
+        visit_expr_unary: ExprUnary,
+        visit_expr_unsafe: ExprUnsafe,
+        visit_expr_while: ExprWhile,
+        visit_expr_yield: ExprYield,
+        visit_pat_ident: PatIdent,
+        visit_pat_or: PatOr,
+        visit_pat_paren: PatParen,
+        visit_pat_reference: PatReference,
+        visit_pat_rest: PatRest,
+        visit_pat_slice: PatSlice,
+        visit_pat_struct: PatStruct,
+        visit_pat_tuple: PatTuple,
+        visit_pat_tuple_struct: PatTupleStruct,
+        visit_pat_type: PatType,
+        visit_pat_wild: PatWild,
+        visit_field_pat: FieldPat,
+        visit_receiver: Receiver,
+        visit_variadic: Variadic,
+        visit_type_param: TypeParam,
+        visit_const_param: ConstParam,
+        visit_lifetime_param: LifetimeParam,
+    }
+
     fn visit_item(&mut self, item: &'ast Item) {
         if self.record(item_attributes(item), item.span()) {
             return;
@@ -405,53 +481,6 @@ fn foreign_item_attributes(item: &ForeignItem) -> &[Attribute] {
     }
 }
 
-fn cfg_is_test_only(attribute: &Attribute) -> bool {
-    let Meta::List(cfg) = &attribute.meta else {
-        return false;
-    };
-    if !cfg.path.is_ident("cfg") {
-        return false;
-    }
-    let Ok(predicate) = syn::parse2::<Meta>(cfg.tokens.clone()) else {
-        return false;
-    };
-    evaluate_cfg(&predicate, true) && !evaluate_cfg(&predicate, false)
-}
-
-fn evaluate_cfg(predicate: &Meta, test: bool) -> bool {
-    match predicate {
-        Meta::Path(path) => {
-            if path.is_ident("test") {
-                test
-            } else {
-                true
-            }
-        }
-        Meta::NameValue(_) => true,
-        Meta::List(list) if list.path.is_ident("all") => parse_cfg_children(list)
-            .is_some_and(|children| children.iter().all(|child| evaluate_cfg(child, test))),
-        Meta::List(list) if list.path.is_ident("any") => parse_cfg_children(list)
-            .is_some_and(|children| children.iter().any(|child| evaluate_cfg(child, test))),
-        Meta::List(list) if list.path.is_ident("not") => {
-            let Some(children) = parse_cfg_children(list) else {
-                return true;
-            };
-            if children.len() == 1 {
-                !evaluate_cfg(&children[0], test)
-            } else {
-                true
-            }
-        }
-        Meta::List(_) => true,
-    }
-}
-
-fn parse_cfg_children(list: &syn::MetaList) -> Option<Punctuated<Meta, Token![,]>> {
-    Punctuated::<Meta, Token![,]>::parse_terminated
-        .parse2(list.tokens.clone())
-        .ok()
-}
-
 fn union_spans(mut spans: Vec<LineSpan>) -> Vec<LineSpan> {
     spans.sort_by_key(|span| (span.start, span.end));
     let mut union: Vec<LineSpan> = Vec::new();
@@ -533,6 +562,64 @@ fn nested_production() {}
                 total_lines: 10,
                 production_lines: 6,
                 inline_test_lines: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn cfg_symbols_preserve_negation_and_repeated_atom_identity() {
+        for (predicate, test_only) in [
+            ("any(test, not(unix))", false),
+            ("all(test, not(unix))", true),
+            ("any(test, all(unix, not(unix)))", true),
+            ("all(test, unix, not(unix))", false),
+            ("any(test, not(feature = \"x\"))", false),
+            ("all(test, not(feature = \"x\"))", true),
+        ] {
+            let source = format!("#[cfg({predicate})]\nfn example() {{}}\n");
+            assert_eq!(
+                analyze_source(&source).unwrap().inline_test_lines,
+                if test_only { 2 } else { 0 },
+                "{predicate}"
+            );
+        }
+        let source = "#[cfg(any(test, unix))]\n#[cfg(any(test, not(unix)))]\nfn helper() {}\n";
+        assert_eq!(analyze_source(source).unwrap().inline_test_lines, 3);
+    }
+
+    #[test]
+    fn counts_fields_statements_and_expressions_as_test_regions() {
+        let source = r#"struct Example {
+    #[cfg(test)]
+    helper: usize,
+}
+fn example() {
+    #[cfg(test)]
+    let helper = 1;
+    #[cfg(test)]
+    {
+        #[cfg(test)]
+        let nested = 2;
+    }
+    #[cfg(test)]
+    assert!(true);
+    let value = Example {
+        #[cfg(test)]
+        helper: 3,
+    };
+}
+enum Choice {
+    #[cfg(test)]
+    Test,
+    Production,
+}
+"#;
+        assert_eq!(
+            analyze_source(source).unwrap(),
+            FileMetrics {
+                total_lines: 24,
+                production_lines: 9,
+                inline_test_lines: 15,
             }
         );
     }
