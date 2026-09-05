@@ -122,6 +122,23 @@ sed -i '/check-release-license-contents.sh rpm /d' "$root/.github/workflows/rele
 expect_failure "release-build without the rpm contents proof" "$root"
 
 make_fixture "$root"
+sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh rpm |\1run: "# disabled" # bash scripts/check-release-license-contents.sh rpm |' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build rpm proof commented out inside the step" "$root"
+
+make_fixture "$root"
+python3 - "$root/.github/workflows/release-build.yml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+needle = "run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb"
+assert needle in text
+# Move the proof into dead text: a YAML comment line that still contains the command.
+text = text.replace(needle, "run: 'true'\n        # " + needle, 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_failure "release-build deb proof present only as a YAML comment" "$root"
+
+make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"
 expect_failure "PKGBUILD missing the Apache install" "$root"
 
