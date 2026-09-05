@@ -2,6 +2,7 @@
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
 	import TerminalFrame from '$lib/components/TerminalFrame.svelte';
+	import { commandRisk } from '$lib/command-risk';
 	import { previewRelease, project } from '$lib/preview-release';
 
 	const pinned = previewRelease.testerPinAssigned;
@@ -33,7 +34,7 @@
 				<li>Match Fedora 44, Ubuntu 26.04 LTS, or Arch Linux on x86_64.</li>
 				<li>Read every script and command before running it.</li>
 				<li>Use <code>--dry-run</code> wherever a command offers it.</li>
-				<li>Commands that change packages, files, or generation state need <code>--yes</code>; repository sync, adoption, and self-update change state without it.</li>
+				<li>{commandRisk.rule} <a href="#confirmation">Which commands is which.</a></li>
 				<li>Expect failures, and report them.</li>
 				<li>Nothing here is a daily driver.</li>
 			</ul>
@@ -72,6 +73,46 @@
 						See the launch gates <span aria-hidden="true">↗</span>
 					</a>
 				</div>
+			</section>
+
+			<section class="confirmation" id="confirmation" aria-labelledby="confirmation-title">
+				<p class="eyebrow">Confirmation rule</p>
+				<h2 id="confirmation-title">When <code>--yes</code> is required, and when it is not.</h2>
+				<p>
+					{commandRisk.rule} The list below is transcribed from
+					<a href={commandRisk.sourceUrl}><code>{commandRisk.source}</code></a>, the
+					policy that enforces it; the absence of a <code>--yes</code> flag never means a
+					command is read-only.
+				</p>
+				<details class="risk-list">
+					<summary>The complete list, by policy class</summary>
+					<dl>
+						<div>
+							<dt>Require <code>--yes</code> outside <code>--dry-run</code></dt>
+							<dd><ul>{#each commandRisk.requiresYes as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
+							<dt>Active-host mutations with the apply intent built in (no flag exists)</dt>
+							<dd><ul>{#each commandRisk.builtInIntent as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
+							<dt>Change Conary's database without confirmation</dt>
+							<dd><ul>{#each commandRisk.databaseWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
+							<dt>Change local state without confirmation</dt>
+							<dd><ul>{#each commandRisk.localStateWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
+							<dt>Classed read-only or non-host, but write artifacts</dt>
+							<dd><ul>{#each commandRisk.artifactWritingWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
+							<dt>Boot continuation authorized by the generation artifact, not a flag</dt>
+							<dd><ul>{#each commandRisk.bootActivation as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+					</dl>
+				</details>
 			</section>
 
 			<section class="install-step" id="bootstrap">
@@ -207,8 +248,9 @@
 						<h2>Optionally, let Conary see what the host already has</h2>
 						<p>
 							Adoption records packages that stay owned by dnf, apt, or pacman. It transfers
-							nothing, and it changes Conary's database without a <code>--yes</code>, so
-							run the dry-run first. Unadoption removes the tracking and deletes no files.
+							nothing, and the risk policy lets it change Conary's database without a
+							<code>--yes</code>, so run the dry-run first. Unadoption removes the tracking
+							and deletes no files.
 						</p>
 					</div>
 				</div>
@@ -381,6 +423,74 @@
 	.status-panel > p:not(.eyebrow) {
 		max-width: 70ch;
 		color: var(--color-mist);
+	}
+
+	.confirmation {
+		scroll-margin-top: 7rem;
+		padding-bottom: clamp(2.5rem, 6vw, 4rem);
+		margin-bottom: clamp(2.5rem, 6vw, 4rem);
+		border-bottom: 1px solid var(--color-border);
+	}
+
+	.confirmation h2 {
+		margin-bottom: 0.65rem;
+		font-size: var(--step-sub);
+	}
+
+	.confirmation > p {
+		max-width: 70ch;
+		margin: 0;
+		color: var(--color-mist);
+	}
+
+	.risk-list {
+		margin-top: 1rem;
+		padding: 1rem 1.1rem;
+		border: 1px solid var(--color-border);
+		background: rgb(16 29 48 / 45%);
+	}
+
+	.risk-list summary {
+		color: var(--color-cyan);
+		cursor: pointer;
+		font-family: var(--font-mono);
+		font-size: 0.8rem;
+	}
+
+	.risk-list dl {
+		margin: 1rem 0 0;
+	}
+
+	.risk-list dl > div {
+		padding: 0.85rem 0;
+		border-top: 1px solid var(--color-border);
+	}
+
+	.risk-list dt {
+		margin-bottom: 0.5rem;
+		color: var(--color-ivory);
+		font-size: 0.9rem;
+		font-weight: 600;
+	}
+
+	.risk-list dd {
+		margin: 0;
+	}
+
+	.risk-list ul {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+		gap: 0.25rem 1.25rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	.risk-list li {
+		color: var(--color-mist);
+		font-family: var(--font-mono);
+		font-size: 0.78rem;
+		line-height: 1.5;
 	}
 
 	.install-step {

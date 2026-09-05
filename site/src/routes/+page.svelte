@@ -2,6 +2,7 @@
 	import BoundaryDiagram from '$lib/components/BoundaryDiagram.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
 	import TerminalFrame from '$lib/components/TerminalFrame.svelte';
+	import { commandRisk } from '$lib/command-risk';
 	import { previewRelease, project } from '$lib/preview-release';
 </script>
 
@@ -209,10 +210,9 @@
 			<p class="section-copy">
 				Pick a source whose package format differs from the host. Every dry-run shows the
 				package's typed lifecycle, dependencies, payload, and required host capabilities
-				before anything is mutated. Commands that change packages, files, or generation
-				state require an explicit <code>--yes</code>; repository sync, adoption, and
-				self-update change state without it, so the absence of the flag never means
-				read-only.
+				before anything is mutated. {commandRisk.rule} The
+				<a href="/install/#confirmation">complete list</a> is derived from
+				<code>{commandRisk.source}</code>.
 			</p>
 
 			<div class="authority-summary">
