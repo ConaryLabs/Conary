@@ -71,23 +71,27 @@ bash ./install-conary-preview.sh
 bash ./install-conary-preview.sh --apply --yes
 ```
 
-The native package runs `conary system init` on install, which creates the
-root-owned database and seeds the Remi repository definitions.
-
 ### Runnable today
 
-A local RPM, DEB, or Arch artifact installs on any supported host, whichever
-format the host is native to. Dry-run first, then apply, inspect, and remove:
+The native package runs `conary system init`, which records host capabilities
+and Remi feed definitions but no installed-package providers, and
+`apps/conary/src/commands/install/dep_resolution.rs` resolves dependencies
+only from Conary's persisted provider graph or repository metadata. So adopt
+the host's installed packages first; they become the dependency source for a
+local artifact:
 
 ```bash
-sudo conary install ./package.rpm --dry-run
-sudo conary install ./package.deb --dry-run
-sudo conary install ./package.pkg.tar.zst --dry-run
-sudo conary install ./package.deb --yes
-sudo conary list
+sudo conary system adopt --system --dry-run
+sudo conary system adopt --system
+sudo conary install ./package.rpm --dry-run   # .deb and .pkg.tar.zst work the same way
+sudo conary install ./package.rpm --yes
 sudo conary list <name> --info
 sudo conary remove <name> --yes
+sudo conary system unadopt --all --yes
 ```
+
+The artifact's dependencies must be satisfied by the adopted packages; with
+no active public universe there is nothing else to resolve them from.
 
 ### Paused: the Remi-backed tester loop
 
@@ -111,22 +115,6 @@ sudo conary list htop --info
 sudo conary query depends htop
 sudo conary update htop --dry-run
 sudo conary remove htop --yes
-```
-
-Preflight validates the package's declared capabilities against the target
-before the requested package mutates anything. An unsupported declaration
-fails there; there is no capability-approval bypass. Missing dependencies are
-installed as their own changeset before that preflight, so a capability
-failure can leave them in place
-([#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
-
-To test reversible adoption of packages the host's native package manager
-already owns:
-
-```bash
-sudo conary system adopt --system --dry-run
-sudo conary system adopt --system
-sudo conary system unadopt --all --yes
 ```
 
 Commands that change packages, files, generation state, or native authority
