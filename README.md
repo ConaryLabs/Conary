@@ -72,9 +72,35 @@ bash ./install-conary-preview.sh --apply --yes
 ```
 
 The native package runs `conary system init` on install, which creates the
-root-owned database and seeds the Remi repository definitions but does not
-download their metadata. Sync first, then pick a source whose package format
-differs from the host and run the bounded loop:
+root-owned database and seeds the Remi repository definitions.
+
+### Runnable today
+
+A local RPM, DEB, or Arch artifact installs on any supported host, whichever
+format the host is native to. Dry-run first, then apply, inspect, and remove:
+
+```bash
+sudo conary install ./package.rpm --dry-run
+sudo conary install ./package.deb --dry-run
+sudo conary install ./package.pkg.tar.zst --dry-run
+sudo conary install ./package.deb --yes
+sudo conary list
+sudo conary list <name> --info
+sudo conary remove <name> --yes
+```
+
+### Paused: the Remi-backed tester loop
+
+The bounded cross-distro loop that installs a repository package from another
+distribution's feed is owned by the
+[agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) and is
+paused. It is not runnable on a fresh install today: no complete
+Fedora/Ubuntu/Arch universe is active, so Remi refuses package reads until
+[#598](https://github.com/FieldmouseWorks/Conary/issues/598) activates one
+(see the Remi row of
+[docs/roadmaps/development-roadmap.md](docs/roadmaps/development-roadmap.md)),
+and [launch status](docs/roadmaps/launch-status.json) has not pinned a tester
+release. Once both change, the loop is:
 
 ```bash
 sudo conary repo sync  # every enabled Remi feed; they are named remi-<profile>
@@ -85,14 +111,6 @@ sudo conary list htop --info
 sudo conary query depends htop
 sudo conary update htop --dry-run
 sudo conary remove htop --yes
-```
-
-A local RPM, DEB, or Arch artifact works on any supported host:
-
-```bash
-sudo conary install ./package.rpm --dry-run
-sudo conary install ./package.deb --dry-run
-sudo conary install ./package.pkg.tar.zst --dry-run
 ```
 
 Preflight validates the package's declared capabilities against the target
@@ -136,7 +154,9 @@ packaging and platform surface.
   artifacts through typed native lifecycle, dependency, payload, and
   configuration contracts.
 - Native package adoption and non-destructive unadoption.
-- CCS packages and Remi-converted packages with Conary as package authority.
+- CCS packages, and Remi-converted packages from a
+  [self-hosted Remi](docs/guides/self-hosted-remi.md) or, once #598 activates
+  it, the public universe, with Conary as package authority.
 - Atomic per-changeset transactions, transaction history, and
   rollback-oriented state tracking. A complete install with missing
   dependencies is two changesets, not one
