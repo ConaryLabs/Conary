@@ -130,7 +130,7 @@ python3 - "$root/.github/workflows/release-build.yml" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-needle = "run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb"
+needle = "run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb LICENSE-MIT LICENSE-APACHE"
 assert needle in text
 # Move the proof into dead text: a YAML comment line that still contains the command.
 text = text.replace(needle, "run: 'true'\n        # " + needle, 1)
@@ -147,13 +147,13 @@ python3 - "$root/.github/workflows/release-build.yml" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-needle = "        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst\n"
+needle = "        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst LICENSE-MIT LICENSE-APACHE\n"
 assert needle in text
 # Execute the arch proof, but from the deb job instead of its owner.
 text = text.replace(needle, "        run: 'true'\n", 1)
-deb = "        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb\n"
+deb = "        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb LICENSE-MIT LICENSE-APACHE\n"
 assert deb in text
-text = text.replace(deb, deb + "      - name: Misplaced arch proof\n        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst\n", 1)
+text = text.replace(deb, deb + "      - name: Misplaced arch proof\n        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst LICENSE-MIT LICENSE-APACHE\n", 1)
 open(path, "w", encoding="utf-8").write(text)
 PY
 expect_failure "release-build arch proof executed by the wrong job" "$root"
@@ -173,6 +173,14 @@ expect_failure "release-build deb proof followed by a masking command" "$root"
 make_fixture "$root"
 sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh arch |\1shell: bash {0}\n\1run: bash scripts/check-release-license-contents.sh arch |' "$root/.github/workflows/release-build.yml"
 expect_failure "release-build arch proof under a shell without errexit" "$root"
+
+make_fixture "$root"
+sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh rpm \(.*\)$|\1run: \|\n\1  exit 0\n\1  bash scripts/check-release-license-contents.sh rpm \2|' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build rpm proof unreachable after an earlier exit" "$root"
+
+make_fixture "$root"
+printf '\nFiles: apps/remi/*\nCopyright: 2024-2026 Conary Contributors\nLicense: MIT\n' >> "$root/packaging/deb/debian/copyright"
+expect_failure "duplicate Remi Debian paragraph with a conflicting license" "$root"
 
 make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"

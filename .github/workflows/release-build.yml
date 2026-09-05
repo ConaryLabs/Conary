@@ -263,7 +263,7 @@ jobs:
       - name: Require license texts inside the CCS package
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary
+        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary LICENSE-MIT LICENSE-APACHE
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -323,7 +323,7 @@ jobs:
       - name: Build RPM
         run: bash packaging/rpm/build.sh
       - name: Require license texts inside the RPM
-        run: bash scripts/check-release-license-contents.sh rpm packaging/rpm/output/*.rpm
+        run: bash scripts/check-release-license-contents.sh rpm packaging/rpm/output/*.rpm LICENSE-MIT LICENSE-APACHE
       - name: Upload RPM artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -380,7 +380,7 @@ jobs:
       - name: Build DEB
         run: bash packaging/deb/build.sh
       - name: Require license texts inside the DEB
-        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb
+        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb LICENSE-MIT LICENSE-APACHE
       - name: Upload DEB artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -434,7 +434,7 @@ jobs:
       - name: Build Arch package
         run: runuser -u builder -- bash packaging/arch/build.sh
       - name: Require license texts inside the Arch package
-        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst
+        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst LICENSE-MIT LICENSE-APACHE
       - name: Upload Arch artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -948,7 +948,6 @@ jobs:
           copy_exact LICENSE-MIT LICENSE-MIT
           copy_exact LICENSE-APACHE LICENSE-APACHE
           copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi
-          bash scripts/check-release-license-contents.sh suite suite-packages LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
 
           if [[ -s release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
             copy_exact \
@@ -1006,6 +1005,8 @@ jobs:
             sha256sum -- "${assets[@]}" > SHA256SUMS
             sha256sum -c SHA256SUMS
           )
+      - name: Require the license assets in the suite
+        run: bash scripts/check-release-license-contents.sh suite suite-packages LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
       - name: Upload synchronized suite bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

@@ -90,22 +90,28 @@ require_match packaging/arch/PKGBUILD "^license=\\('MIT' 'Apache-2\\.0'\\)$" 'PK
 require_match packaging/ccs/ccs.toml '^license = "MIT OR Apache-2\.0"$' 'ccs manifest license'
 # DEP-5 paragraphs are blank-line separated; the License field must be read
 # from the same paragraph as its Files field, never from elsewhere in the file.
-dep5_paragraph_license() {
+dep5_paragraph_licenses() {
+    # Every License field of every paragraph whose Files field equals the glob.
     local file="$1" files_glob="$2"
     awk -v files="Files: ${files_glob}" '
         /^$/ { in_paragraph = 0; next }
         $0 == files { in_paragraph = 1; next }
-        in_paragraph && /^License: / { sub(/^License: /, ""); print; exit }
+        in_paragraph && /^License: / { sub(/^License: /, ""); print }
     ' "$file"
 }
 require_dep5_license() {
-    local file="$1" files_glob="$2" expected="$3" actual
-    actual="$(dep5_paragraph_license "$file" "$files_glob")"
+    local file="$1" files_glob="$2" expected="$3" actual count
+    actual="$(dep5_paragraph_licenses "$file" "$files_glob")"
+    count="$(grep -c . <<<"$actual" || true)"
+    [[ "$count" -eq 1 ]] ||
+        fail "$file must have exactly one 'Files: $files_glob' paragraph with a License field (found $count)"
     [[ "$actual" == "$expected" ]] ||
         fail "$file paragraph 'Files: $files_glob' declares License '${actual:-<none>}', expected '$expected'"
 }
 require_dep5_license packaging/deb/debian/copyright '*' 'MIT or Apache-2.0'
 require_dep5_license packaging/deb/debian/copyright 'apps/remi/*' 'AGPL-3.0+'
+files_paragraphs="$(grep -c '^Files: ' packaging/deb/debian/copyright || true)"
+[[ "$files_paragraphs" -eq 2 ]] || fail "packaging/deb/debian/copyright must have exactly two Files paragraphs (found $files_paragraphs)"
 require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian copyright Apache text paragraph'
 require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright AGPL text paragraph'
 # Every package builder must install both texts, source and destination.
@@ -172,10 +178,13 @@ def executes(job_id, kind):
             continue
         if not shell_keeps_errexit(step):
             continue
-        for line in text.splitlines():
-            match = COMMAND.match(line)
-            if match and match.group("kind") == kind:
-                return True
+        # The entire live script must be the single proof command.
+        script_lines = [line for line in text.splitlines() if line.strip()]
+        if len(script_lines) != 1:
+            continue
+        match = COMMAND.match(script_lines[0])
+        if match and match.group("kind") == kind:
+            return True
     return False
 missing = []
 for kind, jobs in owners.items():

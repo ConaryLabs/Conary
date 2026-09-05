@@ -5,10 +5,10 @@
 # Runs inside the job that built the artifact, with that ecosystem's native
 # listing tool, so the proof is over packaged contents rather than recipe text.
 #
-#   check-release-license-contents.sh rpm <file.rpm>
-#   check-release-license-contents.sh deb <file.deb>
-#   check-release-license-contents.sh arch <file.pkg.tar.zst>
-#   check-release-license-contents.sh ccs <file.ccs> <conary-binary>
+#   check-release-license-contents.sh rpm <file.rpm> <LICENSE-MIT> <LICENSE-APACHE>
+#   check-release-license-contents.sh deb <file.deb> <LICENSE-MIT> <LICENSE-APACHE>
+#   check-release-license-contents.sh arch <file.pkg.tar.zst> <LICENSE-MIT> <LICENSE-APACHE>
+#   check-release-license-contents.sh ccs <file.ccs> <conary-binary> <LICENSE-MIT> <LICENSE-APACHE>
 #   check-release-license-contents.sh remi-tar <remi-<version>-linux-x64.tar.gz> [<agpl-text>]
 #   check-release-license-contents.sh client-tar <product-<version>-linux-x64.tar.gz> <LICENSE-MIT> <LICENSE-APACHE>
 #   check-release-license-contents.sh suite <suite-packages-dir> <LICENSE-MIT> <LICENSE-APACHE> <remi-agpl-text>
@@ -50,25 +50,49 @@ require_entries() {
 
 case "$kind" in
     rpm)
-        command -v rpm >/dev/null || fail "rpm is required to list $artifact"
-        listing="$(rpm -qlp "$artifact")"
-        require_entries "$listing" "/${client_license_dir}/LICENSE-MIT" "/${client_license_dir}/LICENSE-APACHE"
+        mit_text="${3:-}"; apache_text="${4:-}"
+        [[ -n "$mit_text" && -n "$apache_text" ]] || fail "rpm needs the MIT and Apache texts as the third and fourth arguments"
+        command -v rpm2cpio >/dev/null && command -v cpio >/dev/null || fail "rpm2cpio and cpio are required to extract $artifact"
+        for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
+            member="${pair%%:*}"; reference="${pair#*:}"
+            # cpio member names may carry a leading "./" (rpm2cpio) or not.
+            actual="$(rpm2cpio "$artifact" | cpio -i --quiet --to-stdout "*${client_license_dir}/${member}" 2>/dev/null | sha256sum | cut -d ' ' -f 1)"
+            [[ "$actual" == "$(sha256_of "$reference")" ]] || fail "rpm artifact $artifact member /${client_license_dir}/${member} is missing or differs from $reference"
+        done
         ;;
     deb)
-        command -v dpkg-deb >/dev/null || fail "dpkg-deb is required to list $artifact"
-        listing="$(dpkg-deb -c "$artifact" | awk '{ print $6 }')"
-        require_entries "$listing" "./${client_doc_dir}/LICENSE-MIT" "./${client_doc_dir}/LICENSE-APACHE"
+        mit_text="${3:-}"; apache_text="${4:-}"
+        [[ -n "$mit_text" && -n "$apache_text" ]] || fail "deb needs the MIT and Apache texts as the third and fourth arguments"
+        command -v dpkg-deb >/dev/null || fail "dpkg-deb is required to extract $artifact"
+        for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
+            member="${pair%%:*}"; reference="${pair#*:}"
+            actual="$(dpkg-deb --fsys-tarfile "$artifact" | tar -xO "./${client_doc_dir}/${member}" 2>/dev/null | sha256sum | cut -d ' ' -f 1)"
+            [[ "$actual" == "$(sha256_of "$reference")" ]] || fail "deb artifact $artifact member ./${client_doc_dir}/${member} is missing or differs from $reference"
+        done
         ;;
     arch)
-        listing="$(tar --zstd -tf "$artifact")"
-        require_entries "$listing" "${client_license_dir}/LICENSE-MIT" "${client_license_dir}/LICENSE-APACHE"
+        mit_text="${3:-}"; apache_text="${4:-}"
+        [[ -n "$mit_text" && -n "$apache_text" ]] || fail "arch needs the MIT and Apache texts as the third and fourth arguments"
+        for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
+            member="${pair%%:*}"; reference="${pair#*:}"
+            actual="$(tar --zstd -xOf "$artifact" "${client_license_dir}/${member}" 2>/dev/null | sha256sum | cut -d ' ' -f 1)"
+            [[ "$actual" == "$(sha256_of "$reference")" ]] || fail "arch artifact $artifact member ${client_license_dir}/${member} is missing or differs from $reference"
+        done
         ;;
     ccs)
-        conary="${3:-}"
-        [[ -n "$conary" && -x "$conary" ]] || fail "ccs listing needs an executable conary binary as the third argument"
+        # CCS payloads are content-addressed objects; the package's own
+        # verification proves object integrity, and the file listing proves
+        # each license path is present with exactly the reference byte size.
+        conary="${3:-}"; mit_text="${4:-}"; apache_text="${5:-}"
+        [[ -n "$conary" && -x "$conary" && -n "$mit_text" && -n "$apache_text" ]] || fail "ccs needs the conary binary and the MIT and Apache texts as arguments"
+        "$conary" ccs verify "$artifact" >/dev/null || fail "ccs artifact $artifact fails its own verification"
         listing="$("$conary" ccs inspect --files "$artifact")"
-        for entry in "/${client_license_dir}/LICENSE-MIT" "/${client_license_dir}/LICENSE-APACHE"; do
-            grep -Fq -- "$entry" <<<"$listing" || fail "ccs artifact $artifact does not contain $entry"
+        for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
+            member="${pair%%:*}"; reference="${pair#*:}"
+            expected_size="$(wc -c < "$reference")"
+            line="$(grep -F -- "/${client_license_dir}/${member}" <<<"$listing" | head -n 1)"
+            [[ -n "$line" ]] || fail "ccs artifact $artifact does not contain /${client_license_dir}/${member}"
+            grep -Eq -- "(^|[[:space:]])${expected_size}([[:space:]]|$)" <<<"$line" || fail "ccs artifact $artifact member /${client_license_dir}/${member} does not report the reference size ${expected_size}: $line"
         done
         ;;
     remi-tar)

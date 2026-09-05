@@ -31,67 +31,85 @@ expect_fail() {
     fi
 }
 
-# --- deb: real dpkg-deb archives ---
+# --- deb: real dpkg-deb archives with the real texts ---
 make_deb() {
-    local root="$1" out="$2"
-    shift 2
+    local root="$1" out="$2" mit="$3" apache="$4"
     rm -rf "$root"
     mkdir -p "$root/DEBIAN" "$root/usr/share/doc/conary"
     printf 'Package: conary\nVersion: 1.0\nArchitecture: all\nMaintainer: t <t@t>\nDescription: fixture\n' > "$root/DEBIAN/control"
-    local name
-    for name in "$@"; do printf 'x\n' > "$root/usr/share/doc/conary/$name"; done
+    [[ -z "$mit" ]] || cp "$mit" "$root/usr/share/doc/conary/LICENSE-MIT"
+    [[ -z "$apache" ]] || cp "$apache" "$root/usr/share/doc/conary/LICENSE-APACHE"
     dpkg-deb --root-owner-group --build "$root" "$out" >/dev/null
 }
+head -c 2000 LICENSE-APACHE > "$tmp/truncated-apache"
 make_deb "$tmp/deb-ok" "$tmp/ok.deb" LICENSE-MIT LICENSE-APACHE
-expect_pass "deb with both texts" deb "$tmp/ok.deb"
-make_deb "$tmp/deb-bad" "$tmp/bad.deb" LICENSE-APACHE
-expect_fail "deb missing LICENSE-MIT" deb "$tmp/bad.deb"
+expect_pass "deb with both exact texts" deb "$tmp/ok.deb" LICENSE-MIT LICENSE-APACHE
+make_deb "$tmp/deb-missing" "$tmp/missing.deb" "" LICENSE-APACHE
+expect_fail "deb missing LICENSE-MIT" deb "$tmp/missing.deb" LICENSE-MIT LICENSE-APACHE
+make_deb "$tmp/deb-trunc" "$tmp/trunc.deb" LICENSE-MIT "$tmp/truncated-apache"
+expect_fail "deb with a truncated Apache text" deb "$tmp/trunc.deb" LICENSE-MIT LICENSE-APACHE
 
 # --- arch: real zstd tarballs ---
 make_arch() {
-    local root="$1" out="$2"
-    shift 2
+    local root="$1" out="$2" mit="$3" apache="$4"
     rm -rf "$root"
     mkdir -p "$root/usr/share/licenses/conary"
     printf 'pkgname = conary\n' > "$root/.PKGINFO"
-    local name
-    for name in "$@"; do printf 'x\n' > "$root/usr/share/licenses/conary/$name"; done
+    [[ -z "$mit" ]] || cp "$mit" "$root/usr/share/licenses/conary/LICENSE-MIT"
+    [[ -z "$apache" ]] || cp "$apache" "$root/usr/share/licenses/conary/LICENSE-APACHE"
     tar --zstd -cf "$out" -C "$root" .PKGINFO usr
 }
 make_arch "$tmp/arch-ok" "$tmp/ok.pkg.tar.zst" LICENSE-MIT LICENSE-APACHE
-expect_pass "arch with both texts" arch "$tmp/ok.pkg.tar.zst"
-make_arch "$tmp/arch-bad" "$tmp/bad.pkg.tar.zst" LICENSE-MIT
-expect_fail "arch missing LICENSE-APACHE" arch "$tmp/bad.pkg.tar.zst"
+expect_pass "arch with both exact texts" arch "$tmp/ok.pkg.tar.zst" LICENSE-MIT LICENSE-APACHE
+make_arch "$tmp/arch-missing" "$tmp/missing.pkg.tar.zst" LICENSE-MIT ""
+expect_fail "arch missing LICENSE-APACHE" arch "$tmp/missing.pkg.tar.zst" LICENSE-MIT LICENSE-APACHE
+make_arch "$tmp/arch-trunc" "$tmp/trunc.pkg.tar.zst" LICENSE-MIT "$tmp/truncated-apache"
+expect_fail "arch with a truncated Apache text" arch "$tmp/trunc.pkg.tar.zst" LICENSE-MIT LICENSE-APACHE
 
-# --- rpm: the rpm listing tool is shimmed; the rest of the kernel is real ---
+# --- rpm: rpm2cpio is shimmed to emit a real cpio archive; cpio is real ---
 mkdir -p "$tmp/bin"
-cat > "$tmp/bin/rpm" <<'SH'
+cat > "$tmp/bin/rpm2cpio" <<'SH'
 #!/usr/bin/env bash
-[[ "$1" == "-qlp" ]] || exit 2
-cat "${2}.listing"
+cat "${1}.cpio"
 SH
-chmod +x "$tmp/bin/rpm"
-printf 'x' > "$tmp/ok.rpm"
-printf '/usr/bin/conary\n/usr/share/licenses/conary/LICENSE-MIT\n/usr/share/licenses/conary/LICENSE-APACHE\n' > "$tmp/ok.rpm.listing"
-PATH="$tmp/bin:$PATH" expect_pass "rpm with both texts" rpm "$tmp/ok.rpm"
-printf 'x' > "$tmp/bad.rpm"
-printf '/usr/bin/conary\n/usr/share/licenses/conary/LICENSE-APACHE\n' > "$tmp/bad.rpm.listing"
-PATH="$tmp/bin:$PATH" expect_fail "rpm missing LICENSE-MIT" rpm "$tmp/bad.rpm"
+chmod +x "$tmp/bin/rpm2cpio"
+make_rpm_cpio() {
+    local root="$1" out="$2" mit="$3" apache="$4"
+    rm -rf "$root"
+    mkdir -p "$root/usr/share/licenses/conary" "$root/usr/bin"
+    printf 'x' > "$root/usr/bin/conary"
+    [[ -z "$mit" ]] || cp "$mit" "$root/usr/share/licenses/conary/LICENSE-MIT"
+    [[ -z "$apache" ]] || cp "$apache" "$root/usr/share/licenses/conary/LICENSE-APACHE"
+    printf 'x' > "$out"
+    ( cd "$root" && find . -type f | cpio -o --quiet -H newc > "$out.cpio" )
+}
+make_rpm_cpio "$tmp/rpm-ok" "$tmp/ok.rpm" LICENSE-MIT LICENSE-APACHE
+PATH="$tmp/bin:$PATH" expect_pass "rpm with both exact texts" rpm "$tmp/ok.rpm" LICENSE-MIT LICENSE-APACHE
+make_rpm_cpio "$tmp/rpm-missing" "$tmp/missing.rpm" "" LICENSE-APACHE
+PATH="$tmp/bin:$PATH" expect_fail "rpm missing LICENSE-MIT" rpm "$tmp/missing.rpm" LICENSE-MIT LICENSE-APACHE
+make_rpm_cpio "$tmp/rpm-trunc" "$tmp/trunc.rpm" LICENSE-MIT "$tmp/truncated-apache"
+PATH="$tmp/bin:$PATH" expect_fail "rpm with a truncated Apache text" rpm "$tmp/trunc.rpm" LICENSE-MIT LICENSE-APACHE
 
-# --- ccs: the conary inspector is shimmed ---
+# --- ccs: the conary inspector and verifier are shimmed; sizes must match ---
+mit_size="$(wc -c < LICENSE-MIT)"; apache_size="$(wc -c < LICENSE-APACHE)"
 cat > "$tmp/bin/conary" <<'SH'
 #!/usr/bin/env bash
-[[ "$1 $2 $3" == "ccs inspect --files" ]] || exit 2
-printf 'Files (3):\n\n'
-cat "${4}.listing"
+case "$1 $2" in
+  "ccs verify") [[ -f "${3}.verify-ok" ]] ;;
+  "ccs inspect") printf 'Files (3):\n\n'; cat "${4}.listing" ;;
+  *) exit 2 ;;
+esac
 SH
 chmod +x "$tmp/bin/conary"
-printf 'x' > "$tmp/ok.ccs"
-printf '  /usr/bin/conary\n  /usr/share/licenses/conary/LICENSE-MIT\n  /usr/share/licenses/conary/LICENSE-APACHE\n' > "$tmp/ok.ccs.listing"
-expect_pass "ccs with both texts" ccs "$tmp/ok.ccs" "$tmp/bin/conary"
-printf 'x' > "$tmp/bad.ccs"
-printf '  /usr/bin/conary\n  /usr/share/licenses/conary/LICENSE-MIT\n' > "$tmp/bad.ccs.listing"
-expect_fail "ccs missing LICENSE-APACHE" ccs "$tmp/bad.ccs" "$tmp/bin/conary"
+printf 'x' > "$tmp/ok.ccs"; : > "$tmp/ok.ccs.verify-ok"
+printf -- '-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-MIT\n-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-APACHE\n' "$mit_size" "$apache_size" > "$tmp/ok.ccs.listing"
+expect_pass "ccs with both texts at the reference sizes" ccs "$tmp/ok.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
+printf 'x' > "$tmp/short.ccs"; : > "$tmp/short.ccs.verify-ok"
+printf -- '-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-MIT\n-rw-r--r-- 2000 /usr/share/licenses/conary/LICENSE-APACHE\n' "$mit_size" > "$tmp/short.ccs.listing"
+expect_fail "ccs with a wrong-size Apache text" ccs "$tmp/short.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
+printf 'x' > "$tmp/unverified.ccs"
+cp "$tmp/ok.ccs.listing" "$tmp/unverified.ccs.listing"
+expect_fail "ccs that fails its own verification" ccs "$tmp/unverified.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
 
 # --- remi tarball: exact members and exact AGPL text ---
 mkdir -p "$tmp/remi"
