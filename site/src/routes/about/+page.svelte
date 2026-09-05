@@ -1,7 +1,7 @@
 <script lang="ts">
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
-	import { project } from '$lib/preview-release';
+	import { previewRelease, project } from '$lib/preview-release';
 </script>
 
 <PageMeta
@@ -90,9 +90,16 @@
 			</p>
 			<p>
 				It is a single-maintainer project, which is why the verification layer carries the
-				weight a team's review would otherwise carry: cross-distro proof runs on real Fedora,
-				Ubuntu, and Arch machines rather than mocks, and a documentation-truth check fails CI
-				when the README, the roadmap, or this site claims something the code does not do.
+				weight a team's review would otherwise carry. The integration harness runs the RPM,
+				DEB, Arch, and CCS pipeline inside Fedora 44, Ubuntu 26.04, and Arch containers
+				against a one-package fixture repository served from the harness's own loopback
+				server: the native package managers and package payloads inside those containers
+				are real, the repository is not. The only clean-host proof is the release artifact
+				proof, which installs the published packages into clean base images of the three
+				distributions through the signed bootstrap and is recorded in the
+				<a href={previewRelease.matrixUrl}>release matrix</a>. A documentation-truth check
+				fails CI when the README, the roadmap, or this site claims something the code does
+				not do.
 			</p>
 			<div id="licensing" class="licensing">
 				<p class="eyebrow">Licensing</p>

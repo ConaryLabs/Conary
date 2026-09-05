@@ -13,7 +13,7 @@
 <PageIntro
 	eyebrow="Capability map"
 	title="What works, what is early, and what is not there yet."
-	description="Every capability below carries the label the roadmap gives it, not the one marketing would prefer. Proven means exercised by the integration harness on the current tree across Fedora 44, Ubuntu 26.04 LTS, and Arch Linux."
+	description="Every capability below carries the label the roadmap gives it, not the one marketing would prefer. Proven means exercised by the integration harness on the current tree inside Fedora 44, Ubuntu 26.04 LTS, and Arch Linux containers."
 />
 
 <nav class="category-index" aria-label="Feature maturity groups">
@@ -34,9 +34,10 @@
 				<span class="category-status preview">proven · three hosts</span>
 				<h2 class="category-title">The cross-distro package loop</h2>
 				<p>
-					Exercised by the integration harness on all three supported hosts; the
-					ordinary-package gate passed on the tree after {previewRelease.tag} was cut. That
-					release is immutable install-and-bootstrap evidence and predates this proof. Still
+					Exercised by the integration harness inside containers for all three supported
+					distributions, against a harness-served fixture repository; the ordinary-package
+					gate passed on the tree after {previewRelease.tag} was cut. That release is
+					immutable install-and-bootstrap evidence and predates this proof. Still
 					pre-alpha: proven means it ran, not that it is safe on a machine you rely on.
 				</p>
 			</div>

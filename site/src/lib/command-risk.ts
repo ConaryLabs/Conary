@@ -100,15 +100,25 @@ export const commandRisk = {
 
 	/**
 	 * Classed read-only or non-host by the policy even though they write
-	 * artifacts (images, signatures, keys, exports, caches, build trees).
+	 * artifacts (images, signatures, keys, lock files, SBOMs, exports, caches,
+	 * build outputs) or publish to a remote. The policy file does not say which
+	 * read-only arms write; this group comes from the output arguments and
+	 * behaviour of each command definition under `apps/conary/src/cli/`.
 	 */
 	artifactWritingWithoutConfirmation: [
 		'conary system generation export',
+		'conary model lock',
+		'conary sbom',
+		'conary system sbom',
 		'conary ccs sign',
 		'conary ccs keygen',
 		'conary ccs export',
 		'conary provenance export',
 		'conary trust keygen',
+		'conary profile generate',
+		'conary profile publish',
+		'conary derive build',
+		'conary derivation build',
 		'conary cache populate',
 		'conary bootstrap (every subcommand except seed --from-adopted)',
 		'conary export'
