@@ -7,8 +7,13 @@ Files: *
 Copyright: 2024-2026 Conary Contributors
 License: MIT or Apache-2.0
 Comment: The Conary client and its library crates are dual-licensed; choose
- either license. The Remi server is not part of this package and is licensed
- under AGPL-3.0-or-later in the upstream tree at apps/remi/LICENSE.
+ either license. The Remi server under apps/remi is declared separately below.
+
+Files: apps/remi/*
+Copyright: 2024-2026 Conary Contributors
+License: AGPL-3.0+
+Comment: The Remi server is not shipped in this package; its sources are part
+ of the represented upstream tree.
 
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -232,3 +237,21 @@ License: Apache-2.0
     WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
     See the License for the specific language governing permissions and
     limitations under the License.
+
+License: AGPL-3.0+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU Affero General Public License as published
+ by the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU Affero General Public License for more details.
+ .
+ You should have received a copy of the GNU Affero General Public License
+ along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU Affero General Public
+ License version 3 can be found in "/usr/share/common-licenses/AGPL-3";
+ the upstream tree carries it at apps/remi/LICENSE.

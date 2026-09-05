@@ -74,6 +74,19 @@ cp "$root/LICENSE-MIT" "$root/LICENSE"
 expect_failure "bare LICENSE file" "$root"
 
 make_fixture "$root"
+# Corrupt the Apache text below its heading: the first lines still match.
+sed -i '120,140d' "$root/LICENSE-APACHE"
+expect_failure "truncated Apache text" "$root"
+
+make_fixture "$root"
+sed -i 's/Version 3, 19 November 2007/Version 3, 19 November 2008/' "$root/apps/remi/LICENSE"
+expect_failure "altered AGPL text" "$root"
+
+make_fixture "$root"
+sed -i '/^Files: apps\/remi\/\*$/,/^$/d' "$root/packaging/deb/debian/copyright"
+expect_failure "missing Remi Debian stanza" "$root"
+
+make_fixture "$root"
 sed -i 's/^License:        MIT OR Apache-2.0$/License:        MIT/' "$root/packaging/rpm/conary.spec"
 expect_failure "rpm License drift" "$root"
 

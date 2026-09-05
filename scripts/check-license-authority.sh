@@ -38,15 +38,22 @@ while IFS=$'\t' read -r name license; do
         fail "package $name declares license '$license'; the decision is '$expected'"
 done < <(jq -r '.packages[] | [.name, (.license // "")] | @tsv' <<<"$metadata")
 
-require_first_line() {
+# Exact pinned texts: the repository's MIT file (with its copyright line), the
+# canonical Apache-2.0 text, and the canonical AGPL-3.0 text. Any edit to a
+# license file must update its digest here in the same change.
+license_mit_sha256='3681cd22a07cf6ae3dbadde8a04fde421b28f30c9c378e8031874ab95025cd83'
+license_apache_sha256='cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'
+license_agpl_sha256='0d96a4ff68ad6d4b6f1f30f713b18d5184912ba8dd389f86aa7710db079abcb0'
+
+require_exact_text() {
     local file="$1" expected="$2" actual
     [[ -f "$file" && ! -L "$file" ]] || fail "license text $file is missing"
-    actual="$(sed -n '/[^[:space:]]/{s/^[[:space:]]*//;s/[[:space:]]*$//;p;q}' "$file")"
-    [[ "$actual" == "$expected" ]] || fail "$file first line is '$actual', expected '$expected'"
+    actual="$(sha256sum "$file" | cut -d ' ' -f 1)"
+    [[ "$actual" == "$expected" ]] || fail "$file sha256 is $actual, expected $expected"
 }
-require_first_line LICENSE-MIT 'MIT License'
-require_first_line LICENSE-APACHE 'Apache License'
-require_first_line apps/remi/LICENSE 'GNU AFFERO GENERAL PUBLIC LICENSE'
+require_exact_text LICENSE-MIT "$license_mit_sha256"
+require_exact_text LICENSE-APACHE "$license_apache_sha256"
+require_exact_text apps/remi/LICENSE "$license_agpl_sha256"
 [[ ! -e LICENSE ]] || fail "a bare LICENSE file would shadow the dual-license files; remove it"
 
 require_match() {
@@ -61,6 +68,8 @@ require_match packaging/arch/PKGBUILD "^license=\\('MIT' 'Apache-2\\.0'\\)$" 'PK
 require_match packaging/ccs/ccs.toml '^license = "MIT OR Apache-2\.0"$' 'ccs manifest license'
 require_match packaging/deb/debian/copyright '^License: MIT or Apache-2\.0$' 'debian copyright Files stanza'
 require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian copyright Apache text'
+require_match packaging/deb/debian/copyright '^Files: apps/remi/\*$' 'debian copyright Remi stanza'
+require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright Remi AGPL license'
 require_match packaging/ccs/build.sh 'LICENSE-APACHE' 'ccs bundle Apache license install'
 require_match .github/workflows/release-build.yml 'apps/remi" LICENSE' 'remi tarball AGPL text'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
