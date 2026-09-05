@@ -3020,27 +3020,32 @@ def verify_recovery(args: argparse.Namespace) -> None:
         bound_input = manifest["input_manifest_sha256"]
         if bound_input is not None and bound_input != input_sha256:
             fail("survey recovery differs from authenticated input manifest")
-        seen: set[str] = set()
+        included: set[str] = set()
+        withheld: set[str] = set()
         entries = []
         for item in manifest["files"]:
             item = exact_object(item, {"path", "size", "sha256"}, "survey recovery file")
             name = item["path"]
-            if not isinstance(name, str) or name not in allowed or name in seen:
+            if not isinstance(name, str) or name not in allowed or name in included:
                 fail("survey recovery file is unsafe or repeated")
-            seen.add(name)
+            included.add(name)
             exact_nonnegative_int(item["size"], "survey recovery file size")
             require_sha256(item["sha256"], "survey recovery file digest")
             entries.append(item)
         for item in manifest["withheld"]:
             item = exact_object(item, {"path", "reason"}, "withheld recovery file")
-            if not isinstance(item["path"], str) or item["path"] not in allowed or item["path"] in seen or item["reason"] != "private_host_path":
+            if (
+                not isinstance(item["path"], str) or item["path"] not in allowed
+                or item["path"] in included or item["path"] in withheld
+                or item["reason"] != "private_host_path"
+            ):
                 fail("survey recovery withheld file is unsafe or repeated")
-            seen.add(item["path"])
-        if manifest["availability"] == "not_retained" and (seen or bound_input is not None):
+            withheld.add(item["path"])
+        if manifest["availability"] == "not_retained" and (included or withheld or bound_input is not None):
             fail("unretained survey recovery claims retained evidence")
         if [member.name for member in members] != ["recovery.json", *[item["path"] for item in entries]]:
             fail("survey recovery members disagree with its manifest")
-        if (bound_input is not None) != ("input-manifest.json" in seen):
+        if (bound_input is not None) != ("input-manifest.json" in included):
             fail("survey recovery input binding lacks its retained manifest")
         if args.output.exists():
             fail("survey recovery destination already exists")

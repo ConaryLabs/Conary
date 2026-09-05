@@ -1811,7 +1811,7 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
             [[ ! -d "$unpacked/survey-output" ]]
         fi
         local mutation broken
-        for mutation in digest input_binding extra_member; do
+        for mutation in digest input_binding withheld_input extra_member; do
             broken="${tmpdir}/${survey_id}-${mutation}.tar"
             python3 - "$recovery" "$broken" "$mutation" <<'PYRECOVERY'
 import io
@@ -1820,6 +1820,8 @@ import sys
 import tarfile
 with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as target:
     for member in source:
+        if sys.argv[3] == 'withheld_input' and member.name == 'input-manifest.json':
+            continue
         data = source.extractfile(member).read()
         if member.name == 'recovery.json':
             value = json.loads(data)
@@ -1827,6 +1829,10 @@ with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as targ
                 value['files'][0]['sha256'] = '0' * 64
             elif sys.argv[3] == 'input_binding':
                 value['input_manifest_sha256'] = '0' * 64
+            elif sys.argv[3] == 'withheld_input':
+                assert value['input_manifest_sha256'] is not None
+                value['files'] = [item for item in value['files'] if item['path'] != 'input-manifest.json']
+                value['withheld'].append({'path': 'input-manifest.json', 'reason': 'private_host_path'})
             data = json.dumps(value).encode()
             member.size = len(data)
         target.addfile(member, io.BytesIO(data))
@@ -1835,11 +1841,17 @@ with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as targ
         extra.size = 2
         target.addfile(extra, io.BytesIO(b'{}'))
 PYRECOVERY
-            expect_fail "recovery rejects $mutation" \
-                python3 scripts/remi-resolution-survey-transport.py verify-recovery \
+            if python3 scripts/remi-resolution-survey-transport.py verify-recovery \
                 --survey-id "$survey_id" --export-id "$export_id" \
                 --input-evidence "$fake_root/survey-input-verification.json" \
-                --transport "$broken" --output "${tmpdir}/recovery-must-not-publish-${name}-${mutation}"
+                --transport "$broken" --output "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" \
+                > /dev/null 2>"${tmpdir}/recovery-${name}-${mutation}.stderr"; then
+                fail "recovery rejects $mutation unexpectedly succeeded"
+            fi
+            if [[ "$mutation" == withheld_input ]]; then
+                grep -Fq 'survey recovery input binding lacks its retained manifest' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            fi
             [[ ! -e "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" ]]
         done
         expect_fail "recovery cannot substitute for a verified survey" \
