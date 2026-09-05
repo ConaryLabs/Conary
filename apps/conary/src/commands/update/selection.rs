@@ -178,7 +178,7 @@ pub(super) fn select_update_candidate(
         return Ok(UpdateCandidateSelection::NoEligibleUpdate);
     }
 
-    let selected = PackageSelector::select_best_with_options(conn, eligible, &options)?;
+    let selected = PackageSelector::select_best_with_options(eligible, &options)?;
 
     Ok(UpdateCandidateSelection::Selected(Box::new(
         SelectedUpdateCandidate {
