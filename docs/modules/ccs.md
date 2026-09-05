@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 74
+last_updated: 2026-09-05
+revision: 75
 summary: Convert foreign packages through lossless source authority, decode-pass typed native digest evidence, one-pass authenticated payload layout derivation and object staging, atomic exact archive emission, typed pending-to-verified finalization, batched permanent-CAS durability, and typed native relation, lifecycle, and export contracts
 ---
 
@@ -9,6 +9,18 @@ summary: Convert foreign packages through lossless source authority, decode-pass
 Conary's native package format. Handles building, signing, policy enforcement,
 declarative hooks, foreign package conversion, native package export, and OCI
 export.
+
+## Inspection And Command Reports
+
+Core inspection, authoring, verification, and native export return typed facts
+through `UntrustedPackageInspection`, `BuildResult`, `VerifiedCcsArchive`, and
+`LossReport`. OCI export returns `OciExportReport` with the written archive
+path, package names, and layer size. These reports do not print to a terminal.
+
+CLI presentation belongs to `apps/conary/src/commands/ccs/inspect/render.rs`,
+`apps/conary/src/commands/ccs/build/render.rs`, and the owning verification and
+export commands. Inspection JSON is a CLI projection of untrusted facts;
+rendering does not grant package trust or mutation authority.
 
 ## Data Flow: Package Build
 

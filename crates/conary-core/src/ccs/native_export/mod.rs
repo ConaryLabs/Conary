@@ -79,22 +79,6 @@ impl LossReport {
     pub fn add_dependency_note(&mut self, note: &str) {
         self.dependency_notes.push(note.to_string());
     }
-
-    pub fn print_summary(&self, format_name: &str) {
-        if self.is_empty() {
-            return;
-        }
-        println!("  Conversion notes for {format_name}:");
-        for note in &self.unsupported_features {
-            println!("    [UNSUPPORTED] {note}");
-        }
-        for note in &self.hook_notes {
-            println!("    [HOOK] {note}");
-        }
-        for note in &self.dependency_notes {
-            println!("    [DEPENDENCY] {note}");
-        }
-    }
 }
 
 #[derive(Debug)]

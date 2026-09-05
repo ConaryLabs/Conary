@@ -5,8 +5,10 @@
 //! Commands for inspecting package contents and verifying signatures.
 
 use anyhow::{Context, Result};
-use conary_core::ccs::{TrustPolicy, UntrustedPackageInspection, inspector, verify};
+use conary_core::ccs::{TrustPolicy, UntrustedPackageInspection, verify};
 use std::path::Path;
+
+mod render;
 
 /// Inspect a CCS package
 pub fn cmd_ccs_inspect(
@@ -28,24 +30,24 @@ pub fn cmd_ccs_inspect(
 
     // Output in requested format
     if format == "json" {
-        inspector::print_json(&pkg, show_files, show_hooks, show_deps)?;
+        render::print_json(&pkg, show_files, show_hooks, show_deps)?;
     } else {
         // Human-readable output
-        inspector::print_summary(&pkg);
+        render::print_summary(&pkg);
 
         if show_files {
             println!();
-            inspector::print_files(&pkg);
+            render::print_files(&pkg);
         }
 
         if show_hooks {
             println!();
-            inspector::print_hooks(&pkg);
+            render::print_hooks(&pkg);
         }
 
         if show_deps {
             println!();
-            inspector::print_dependencies(&pkg);
+            render::print_dependencies(&pkg);
         }
     }
 
@@ -77,7 +79,28 @@ pub fn cmd_ccs_verify(package: &str, policy_path: Option<String>) -> Result<()> 
     let result = verify::verify_package(path, &policy).context("Verification failed")?;
 
     // Print results
-    verify::print_result(&result);
+    crate::ui::row(
+        crate::ui::Status::Ok,
+        &[&format!(
+            "{} v{}",
+            result.package_name(),
+            result.package_version()
+        )],
+    );
+    let signature = result
+        .signature()
+        .key_id
+        .as_deref()
+        .map(|id| format!("Signature: valid key={id}"))
+        .unwrap_or_else(|| "Signature: valid".to_string());
+    crate::ui::row(crate::ui::Status::Ok, &[&signature]);
+    crate::ui::row(
+        crate::ui::Status::Ok,
+        &[&format!(
+            "Content: {} files verified",
+            result.files_checked()
+        )],
+    );
 
     Ok(())
 }

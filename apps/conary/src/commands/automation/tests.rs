@@ -274,3 +274,81 @@ hostname = "demo"
     assert!(updated.contains("check_interval = \"8h\""));
     assert!(updated.contains("[system]"));
 }
+
+#[tokio::test]
+async fn automation_conflicting_checks_apply_in_check_order_on_repeated_runs() {
+    use conary_core::automation::{
+        InstalledPackageRef,
+        action::{orphan_cleanup_action, package_update_action},
+        check::CheckResults,
+    };
+
+    let (_tmp, db_path) = setup_command_test_db();
+    let conn = crate::commands::open_db(&db_path).unwrap();
+    for run in 0..32 {
+        conn.execute("DELETE FROM automation_history", []).unwrap();
+        let mut remove = orphan_cleanup_action(
+            &[InstalledPackageRef {
+                name: "demo".into(),
+                version: Some("1".into()),
+                architecture: None,
+            }],
+            &["demo".into()],
+        );
+        let mut update = package_update_action("demo", "1", "2", None);
+        // ID order deliberately disagrees with the order of the two checks.
+        remove.id = "z-remove".into();
+        update.id = "a-update".into();
+        let checks = CheckResults {
+            orphans: vec![remove],
+            updates: vec![update],
+            ..Default::default()
+        };
+        let ordered: Vec<_> = checks.all_actions().into_iter().cloned().collect();
+        let mut manager = AutomationManager::new(AutomationConfig::default());
+        for action in &ordered {
+            manager.register_action(action.clone());
+        }
+        assert_eq!(manager.pending_actions()[0].id, "a-update");
+        let selected = actions_for_decision(&ordered, &SummaryResponse::ApplyAll);
+        let mut installed_version = Some("1".to_string());
+        let mut applied_order = Vec::new();
+        let result = execute_actions_with(&conn, &selected, |op| {
+            match op {
+                PlannedOp::Remove { package, .. } => {
+                    assert_eq!(package, "demo");
+                    assert_eq!(installed_version.take().as_deref(), Some("1"));
+                    applied_order.push("remove");
+                }
+                PlannedOp::Install {
+                    package, version, ..
+                } => {
+                    assert_eq!(package, "demo");
+                    assert!(
+                        installed_version.is_none(),
+                        "update must follow orphan removal"
+                    );
+                    installed_version = version;
+                    applied_order.push("install");
+                }
+                PlannedOp::Restore { .. } => panic!("unexpected repair action"),
+            }
+            std::future::ready(Ok(()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(result, (2, 0, 0), "run {run}");
+        assert_eq!(applied_order, ["remove", "install"], "run {run}");
+        assert_eq!(installed_version.as_deref(), Some("2"), "run {run}");
+        let history = conn
+            .prepare(
+                "SELECT action_id FROM automation_history WHERE status = 'applied' ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(history, ["z-remove", "a-update"], "run {run}");
+    }
+}

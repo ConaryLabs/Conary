@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-07-29
-revision: 13
-summary: Route exact EROFS bootstrap generation and carrier security through the shared payload manifest
+last_updated: 2026-09-05
+revision: 14
+summary: Route bootstrap generation through shared payload authority and render typed derivation debug-shell reports in the CLI
 ---
 
 # Bootstrap Module (conary-core/src/bootstrap/)
@@ -19,6 +19,12 @@ The CLI-facing bootstrap commands live under `apps/conary/src/commands/bootstrap
 phase-build commands, image generation, bootstrap-run orchestration,
 run-record state transitions, generation artifact writing, seed commands,
 convergence checks, and cleanup.
+
+The derivation executor reports `DebugShellEvent` values synchronously while
+the failed build environment is retained. `run.rs` supplies the CLI renderer
+for failure paths and shell-entry guidance; library-only callers receive
+tracing diagnostics by default. Reporting preserves the original build error,
+TTY check, shell lifecycle, and environment cleanup.
 
 ## Data Flow: Bootstrap Pipeline
 

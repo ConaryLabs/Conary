@@ -35,8 +35,9 @@ struct Arguments {
 }
 
 fn main() {
+    conary_bootstrap::init_cli_tracing("warn");
     if let Err(error) = run(Arguments::parse()) {
-        eprintln!("conary-debian-oracle: {error:#}");
+        tracing::error!("conary-debian-oracle: {error:#}");
         std::process::exit(1);
     }
 }

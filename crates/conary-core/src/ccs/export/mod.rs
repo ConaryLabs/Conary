@@ -50,7 +50,7 @@ pub fn export(
     packages: &[String],
     output: &Path,
     trust_policy: &crate::ccs::verify::TrustPolicy,
-) -> Result<()> {
+) -> Result<oci::OciExportReport> {
     match format {
         ExportFormat::Oci => oci::export_oci(packages, output, trust_policy),
     }
