@@ -102,6 +102,22 @@ sed -i 's#install -Dpm 0644 LICENSE-MIT debian/conary/usr/share/doc/conary/LICEN
 expect_failure "debian rules installing a bare LICENSE" "$root"
 
 make_fixture "$root"
+sed -i '/LICENSE-MIT/d' "$root/packaging/ccs/build.sh"
+expect_failure "ccs bundle missing the MIT install" "$root"
+
+make_fixture "$root"
+sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"
+expect_failure "PKGBUILD missing the Apache install" "$root"
+
+make_fixture "$root"
+sed -i '/install -Dm644 LICENSE-MIT/d' "$root/packaging/arch/PKGBUILD"
+expect_failure "PKGBUILD missing the MIT install" "$root"
+
+make_fixture "$root"
+sed -i '/install -Dpm 0644 LICENSE-APACHE %{buildroot}/d' "$root/packaging/rpm/conary.spec"
+expect_failure "rpm spec missing the Apache install" "$root"
+
+make_fixture "$root"
 sed -i 's/^License:        MIT OR Apache-2.0$/License:        MIT/' "$root/packaging/rpm/conary.spec"
 expect_failure "rpm License drift" "$root"
 
