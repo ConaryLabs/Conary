@@ -1,22 +1,31 @@
 <script lang="ts">
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
+	import { previewRelease, project } from '$lib/preview-release';
 
 	const routes = [
 		{
 			label: 'security',
 			tone: 'urgent',
 			title: 'Report a security issue',
-			body: 'Use a private GitHub security advisory. Do not open a public issue for a vulnerability — a public issue discloses it the moment you file it.',
-			href: 'https://github.com/ConaryLabs/Conary/security/advisories/new',
+			body: 'Use a private GitHub security advisory. Do not open a public issue for a vulnerability — a public issue discloses it the moment you file it. The security policy lists what a useful report contains.',
+			href: project.securityAdvisoryUrl,
 			action: 'Open a private advisory'
+		},
+		{
+			label: 'preview run',
+			tone: 'normal',
+			title: 'Report a preview run',
+			body: 'Tried the bounded loop on a disposable host? Use the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, source package format, and where it stopped. Runs that simply worked count too.',
+			href: previewRelease.feedbackUrl,
+			action: 'Open pre-alpha feedback'
 		},
 		{
 			label: 'bug',
 			tone: 'normal',
 			title: 'Report a bug',
 			body: 'Include the command you ran, your distribution and architecture, the package name, the Conary version, the source package format, and the exact error. A failure that cannot be reproduced cannot be fixed.',
-			href: 'https://github.com/ConaryLabs/Conary/issues/new/choose',
+			href: project.newIssueUrl,
 			action: 'Open an issue'
 		},
 		{
@@ -24,7 +33,7 @@
 			tone: 'normal',
 			title: 'Request a capability',
 			body: 'Describe the package or workflow that does not work today rather than the implementation you have in mind. A missing capability model is an engineering defect worth filing precisely.',
-			href: 'https://github.com/ConaryLabs/Conary/issues/new/choose',
+			href: project.newIssueUrl,
 			action: 'Open an issue'
 		},
 		{
@@ -32,7 +41,7 @@
 			tone: 'normal',
 			title: 'Ask a question',
 			body: 'Questions about how Conary behaves, what is supported today, or whether an approach makes sense belong in Discussions, where the answer stays searchable for the next person.',
-			href: 'https://github.com/ConaryLabs/Conary/discussions',
+			href: project.discussionsUrl,
 			action: 'Open a discussion'
 		}
 	];
@@ -40,14 +49,14 @@
 
 <PageMeta
 	title="Contact — Conary"
-	description="Where to send a Conary bug report, security advisory, question, or anything else."
+	description="Where to send a Conary bug report, preview-run report, security advisory, question, or anything else."
 	path="/contact/"
 />
 
 <PageIntro
 	eyebrow="Contact"
 	title="Where to send it."
-	description="Bugs, questions, and capability requests go to GitHub so the answers stay public and searchable. Security issues have a private path. Anything else reaches the maintainer directly."
+	description="Bugs, questions, preview reports, and capability requests go to GitHub so the answers stay public and searchable. Security issues have a private path. Anything else reaches the maintainer directly."
 />
 
 <section class="section contact-section">
@@ -72,16 +81,16 @@
 				<p class="eyebrow">Everything else</p>
 				<h2>Reach the maintainer</h2>
 				<p>
-					Conary is built by one person. Anything that does not fit above —
-					packaging a project, running Conary somewhere unusual, press, or working
-					together — goes straight to the inbox.
+					Conary is a {project.orgName} project built by one person. Anything that does not
+					fit above — packaging a project, running Conary somewhere unusual, press, or
+					working together — goes straight to the inbox.
 				</p>
 				<p class="direct-availability">
 					Available for remote engineering work, contract or employed: Rust systems,
 					backend services, and Linux tooling. Open to relocating to Europe.
 				</p>
 			</div>
-			<a class="btn btn-primary direct-mail" href="mailto:peter@conary.io">peter@conary.io</a>
+			<a class="btn btn-primary direct-mail" href={`mailto:${project.maintainerEmail}`}>{project.maintainerEmail}</a>
 		</div>
 	</div>
 </section>
@@ -111,7 +120,7 @@
 		padding-top: 0.3rem;
 		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.7rem;
+		font-size: var(--text-label);
 		letter-spacing: 0.1em;
 		text-transform: uppercase;
 	}

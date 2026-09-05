@@ -11,15 +11,15 @@ const pages = [
 	},
 	{
 		file: 'features/index.html',
-		title: 'Product vision and features — Conary',
+		title: 'Features and maturity — Conary',
 		canonical: 'https://conary.io/features/',
-		marker: 'The package manager is only the beginning.'
+		marker: 'What works, what is early, and what is not there yet.'
 	},
 	{
 		file: 'install/index.html',
-		title: 'Conary tester release status — Conary',
+		title: 'Install the Conary pre-alpha — Conary',
 		canonical: 'https://conary.io/install/',
-		marker: 'W7 passed; the public universe and synchronized release remain.'
+		marker: 'Install the preview on a host you can afford to break.'
 	},
 	{
 		file: 'compare/index.html',
@@ -66,6 +66,8 @@ for (const page of pages) {
 	if (count(html, /<link rel="canonical"/g) !== 1) fail(`${page.file}: expected exactly one canonical link`);
 	if (count(html, /<meta property="og:title"/g) !== 1) fail(`${page.file}: expected exactly one Open Graph title`);
 	if (count(html, /<meta name="twitter:title"/g) !== 1) fail(`${page.file}: expected exactly one Twitter title`);
+	if (!html.includes('aria-label="Project status"')) fail(`${page.file}: missing pre-alpha status strip`);
+	if (html.includes('github.com/ConaryLabs/')) fail(`${page.file}: links to the retired ConaryLabs organization`);
 }
 
 const notFoundUrl = new URL('404.html', buildRoot);

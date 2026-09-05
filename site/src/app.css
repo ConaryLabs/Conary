@@ -13,6 +13,12 @@
 	   display sizes. */
 	--track-display: -0.025em;
 	--track-hero: -0.032em;
+
+	/* Smallest sizes used for mono labels and captions. Anything below ~11.5px
+	   fails casual readability on a dark field, so labels never go under
+	   --text-label and captions never under --text-caption. */
+	--text-label: 0.74rem;
+	--text-caption: 0.82rem;
 }
 
 *,
@@ -156,7 +162,7 @@ pre {
 .eyebrow {
 	margin-bottom: 1rem;
 	font-family: var(--font-mono);
-	font-size: 0.75rem;
+	font-size: 0.78rem;
 	font-weight: 500;
 	letter-spacing: 0.12em;
 	line-height: 1.4;
