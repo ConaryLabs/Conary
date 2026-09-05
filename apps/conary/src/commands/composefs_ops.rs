@@ -12,6 +12,7 @@
 //!    the backing filesystem supports fs-verity
 //! 4. `update_current_symlink` -- point `/conary/current` at the next-boot generation
 
+use conary_core::generation::builder::BootRoot;
 use std::path::PathBuf;
 
 use rusqlite::Connection;
@@ -43,15 +44,15 @@ fn runtime_root_for_db_path(db_path: &str) -> ConaryRuntimeRoot {
     ConaryRuntimeRoot::from_db_path(PathBuf::from(db_path))
 }
 
-fn boot_root_for_generation_build(runtime_root: &ConaryRuntimeRoot) -> PathBuf {
+fn boot_root_for_generation_build(runtime_root: &ConaryRuntimeRoot) -> BootRoot {
     if crate::test_hooks::get().skip_generation_mount() {
         let test_boot = runtime_root.root().join("boot");
         if test_boot.is_dir() {
-            return test_boot;
+            return BootRoot::Staged(test_boot);
         }
     }
 
-    PathBuf::from("/boot")
+    BootRoot::Host
 }
 
 #[derive(Debug)]

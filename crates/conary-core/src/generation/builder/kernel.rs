@@ -173,9 +173,11 @@ pub(super) fn system_root_for_boot_root(boot_root: &Path) -> crate::Result<PathB
             boot_root.display()
         ))
     })?;
-    if boot_root != Path::new("/boot") && system_root == Path::new("/") {
+    // Only staged roots reach this reader; the live system is BootRoot::Host,
+    // which resolves through the generation sysroot instead.
+    if system_root == Path::new("/") {
         return Err(crate::Error::InvalidPath(format!(
-            "custom generation boot root {} resolves to the live system /boot",
+            "staged generation boot root {} resolves to the live system /boot",
             boot_root.display()
         )));
     }

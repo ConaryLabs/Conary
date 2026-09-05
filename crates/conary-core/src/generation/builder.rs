@@ -8,6 +8,7 @@
 mod activation;
 mod boot_assets;
 mod boot_reuse;
+mod boot_root;
 mod carrier_capabilities;
 mod cas;
 mod create;
@@ -23,6 +24,7 @@ mod sysroot;
 pub(crate) mod test_support;
 
 pub use activation::GenerationActivation;
+pub use boot_root::BootRoot;
 pub use create::{
     build_generation_from_captured_root_with_boot_root_and_activation, build_generation_from_db,
     build_generation_from_db_with_activation, build_generation_from_db_with_boot_root,

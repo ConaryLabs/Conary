@@ -6,6 +6,7 @@ use super::super::initramfs::{
 use super::super::runtime_inputs;
 use super::*;
 use crate::filesystem::CasStore;
+use crate::generation::builder::BootRoot;
 use crate::generation::root_manifest::{
     GENERATION_ROOT_MANIFEST_VERSION, GenerationRootEntry, GenerationRootManifest,
     MutableStateManifest,
@@ -217,7 +218,7 @@ fn generation_boot_asset_resolution_materializes_default_boot_from_cas_inputs() 
     let sources = resolve_generation_boot_asset_sources_with_tools(
         &mut runtime_inputs,
         &generations_root,
-        Path::new("/boot"),
+        &BootRoot::Host,
         &fake_dracut,
         &fake_depmod,
         &fake_cpio,
@@ -294,7 +295,7 @@ fn generation_boot_asset_resolution_retains_exact_depmod_output_in_manifest_and_
     let _sources = resolve_generation_boot_asset_sources_with_tools(
         &mut runtime_inputs,
         &generations_root,
-        Path::new("/boot"),
+        &BootRoot::Host,
         &fake_dracut,
         &fake_depmod,
         &fake_cpio,
@@ -367,7 +368,7 @@ fn generation_boot_asset_resolution_regenerates_conary_initramfs_from_materializ
     let sources = resolve_generation_boot_asset_sources_with_tools(
         &mut runtime_inputs,
         &generations_root,
-        Path::new("/boot"),
+        &BootRoot::Host,
         &fake_dracut,
         &fake_depmod,
         &fake_cpio,
@@ -427,7 +428,7 @@ fn generation_boot_assets_stage_systemd_boot_binary_when_the_sysroot_has_no_esp(
     let sources = resolve_generation_boot_asset_sources_with_tools(
         &mut runtime_inputs,
         &generations_root,
-        Path::new("/boot"),
+        &BootRoot::Host,
         &fake_dracut,
         &fake_depmod,
         &fake_cpio,

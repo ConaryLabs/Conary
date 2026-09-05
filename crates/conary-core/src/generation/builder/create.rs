@@ -1,5 +1,6 @@
 // crates/conary-core/src/generation/builder/create.rs
 
+use super::boot_root::BootRoot;
 use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
@@ -103,7 +104,7 @@ pub fn build_generation_from_db_with_activation(
         conn,
         generations_root,
         summary,
-        Path::new("/boot"),
+        &BootRoot::Host,
         activation,
     )
 }
@@ -112,7 +113,7 @@ pub fn build_generation_from_db_with_boot_root(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,
-    boot_root: &Path,
+    boot_root: &BootRoot,
 ) -> crate::Result<(i64, BuildResult)> {
     build_generation_from_db_with_boot_root_and_activation(
         conn,
@@ -127,7 +128,7 @@ pub fn build_generation_from_db_with_boot_root_and_activation(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,
-    boot_root: &Path,
+    boot_root: &BootRoot,
     activation: GenerationActivation,
 ) -> crate::Result<(i64, BuildResult)> {
     let troves = Trove::list_all(conn)?;
@@ -159,7 +160,7 @@ pub fn build_generation_from_captured_root_with_boot_root_and_activation(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,
-    boot_root: &Path,
+    boot_root: &BootRoot,
     activation: GenerationActivation,
     captured: CapturedSelectedRoot,
 ) -> crate::Result<(i64, BuildResult)> {
@@ -191,7 +192,7 @@ fn build_generation_from_runtime_inputs(
     conn: &rusqlite::Connection,
     generations_root: &Path,
     summary: &str,
-    boot_root: &Path,
+    boot_root: &BootRoot,
     activation: GenerationActivation,
     troves: Vec<Trove>,
     mut runtime_inputs: runtime_inputs::RuntimeGenerationInputs,
@@ -468,7 +469,7 @@ mod tests {
             &conn,
             &generations_root,
             "runtime artifact test",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
         let gen_dir = generations_root.join(generation.to_string());
@@ -553,7 +554,7 @@ mod tests {
             &conn,
             &generations_root,
             "runtime artifact test",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
         let gen_dir = generations_root.join(generation.to_string());
@@ -598,7 +599,7 @@ mod tests {
             &conn,
             &generations_root,
             "wrong-sized runtime CAS object",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap_err()
         .to_string();
@@ -617,7 +618,7 @@ mod tests {
             &conn,
             &generations_root,
             "missing runtime CAS object",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap_err()
         .to_string();
@@ -666,7 +667,7 @@ mod tests {
             &conn,
             &generations_root,
             "runtime artifact test",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap_err()
         .to_string();
