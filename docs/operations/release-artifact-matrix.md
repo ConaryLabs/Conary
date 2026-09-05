@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 31
-summary: Preserve full nightly identity across Cargo, native packages, CCS, installation, and release proof with ecosystem-owned ordering
+revision: 32
+summary: Resume nightly publication and exact-release proof through typed recovery states; retain whole immutable nightly releases for fourteen days
 ---
 
 # Release Artifact Matrix
@@ -131,8 +131,39 @@ metadata. Cargo and CCS retain the full SemVer version throughout. All four
 binaries report the full suite version; the preview installer's health check
 and `release-artifact-proof` require that exact identity, including the date.
 
-The nightly workflow deletes nightly GitHub release records older than 14
-days. It never deletes their protected tags. A nightly is automated validation
+The nightly workflow uses `scripts/nightly-release.py` to resolve the selected
+commit's state. Tag existence alone is never completion. The step summary
+records schema-versioned JSON with `state`, `outcome`, tag, commit, and release ID.
+
+| State | Outcome | Action |
+| --- | --- | --- |
+| `no_tag` | `build` | Create the annotated tag, build, publish, then prove |
+| `tag_without_release` | `build` | Reuse the existing tag, build, publish, then prove |
+| `draft_release` | `build` | Resume the draft publication and run proof |
+| `published_without_proof` | `proof` | Run `release-artifact-proof` only; never replace published assets |
+| `proved` | `skipped` | No build or proof work needed |
+
+The aggregate `release-artifact-proof` job emits a versioned Actions receipt
+only after all native lifecycle jobs succeed. Its artifact name binds the
+immutable release ID, peeled commit, and run attempt. Recovery accepts it only
+from the nightly or artifact-proof workflow on reviewed `main`, with a successful
+terminal proof job in that exact attempt and receipt timestamps within that job.
+An absent, expired, failed, stale, or differently bound receipt causes proof to
+run again. This receipt represents the existing native artifact-proof scope,
+not additional real-mount or production proof. Reusable release invocations
+are detected from typed nightly channel/tag inputs, never the caller event name.
+
+All releases, including nightly prereleases, remain immutable. Retention deletes
+whole published nightly prerelease records older than 14 days, including their
+assets; it never deletes individual assets or protected tags. GitHub explicitly
+permits [deleting a whole immutable release](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases#what-immutable-releases-protect).
+Immutability is repository-wide and has no per-release opt-out. A rejected
+DELETE fails with typed `retention_delete_failed`, `release_id`, and `api_status`
+(the HTTP status, or `transport_error` when no HTTP response was received).
+Successful deletion records `release_deleted` and status 204. Drafts, stable
+releases, and releases exactly at the 14-day boundary are retained.
+
+A nightly is automated validation
 evidence and is not a production candidate: it does not deploy Conary, Remi,
 conaryd, or conary-test, and it does not become external-tester authority.
 

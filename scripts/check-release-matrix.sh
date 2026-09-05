@@ -15,6 +15,8 @@ workspace_manifest="Cargo.toml"
 release_matrix_script="scripts/release-matrix.sh"
 release_build=".github/workflows/release-build.yml"
 nightly_release=".github/workflows/nightly-release.yml"
+nightly_policy="scripts/nightly-release.py"
+nightly_policy_tests="scripts/test-nightly-release.py"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 site_deploy_workflow=".github/workflows/deploy-site.yml"
 candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
@@ -256,6 +258,8 @@ required_files=(
     "$release_matrix_script"
     "$release_build"
     "$nightly_release"
+    "$nightly_policy"
+    "$nightly_policy_tests"
     "$deploy_workflow"
     "$site_deploy_workflow"
     "$candidate_build_workflow"
@@ -437,19 +441,25 @@ done
 require_job_match "$release_build" workspace-validation "uses: \\./workflow-authority/\\.github/actions/setup-rust-workspace[\\s\\S]*components: clippy,rustfmt[\\s\\S]*toolchain: ${workspace_rust_pattern}" 'release workspace validation exact Rust toolchain'
 
 require_match "$release_build" 'workflow_call:[\s\S]*tag_name:[\s\S]*type: string[\s\S]*channel:[\s\S]*type: string' 'typed reusable release channel inputs'
-require_job_match "$release_build" prepare 'workflow_call is live only for the nightly channel[\s\S]*"\$channel" == "\$requested_channel"' 'reusable release build nightly channel gate'
+require_job_match "$release_build" prepare 'if \[\[ "\$CALL_CHANNEL" == "nightly" && -n "\$CALL_TAG_NAME" \]\]; then[\s\S]*"\$channel" == "\$requested_channel"' 'reusable release build nightly channel gate'
+forbid_job_match "$release_build" prepare 'GITHUB_EVENT_NAME[^\n]*workflow_call' 'caller-event reusable invocation detection'
 require_job_match "$release_build" bundle-suite 'if \[\[ "\$CHANNEL" == "nightly" \]\]; then[\s\S]*release_flags\+=\(--prerelease\)[\s\S]*gh release create "\$TAG_NAME"[\s\S]*"\$\{release_flags\[@\]\}"' 'nightly publication prerelease flag'
 require_job_match "$release_build" bundle-suite 'previous_nightly=[\s\S]*refs/tags/v\*-nightly\.\*[\s\S]*previous_tag_name="\$previous_nightly"' 'nightly notes previous-tag boundary'
 require_job_match "$release_build" prove-nightly-release 'channel == '\''nightly'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name:' 'nightly terminal release-artifact proof'
 require_match "$nightly_release" "cron: '30 6 \\* \\* \\*'" 'nightly release schedule'
 require_match "$nightly_release" 'permissions:[\s\S]*actions: read[\s\S]*contents: write' 'nightly GitHub API permissions'
 require_job_match "$nightly_release" select-green-main 'actions/workflows/merge-validation\.yml/runs[\s\S]*branch=main[\s\S]*status=success[\s\S]*release\.sh suite --dry-run[\s\S]*Next version' 'nightly newest green-main selection and stable-base resolution'
-require_job_match "$nightly_release" select-green-main 'outcome=skipped[\s\S]*git/tags[\s\S]*git/refs[\s\S]*outcome=created' 'nightly typed skip and annotated REST tag creation'
-require_job_match "$nightly_release" build-and-publish 'outcome == '\''created'\''[\s\S]*uses: \./\.github/workflows/release-build\.yml[\s\S]*channel: nightly' 'nightly channel-gated live build'
-require_job_match "$nightly_release" retain-nightly-releases "date -u -d '14 days ago'" 'nightly release retention'
-require_job_match "$nightly_release" retain-nightly-releases 'tag_name \| test\([\s\S]*nightly[\s\S]*published_at' 'nightly typed release selection'
-require_job_match "$nightly_release" retain-nightly-releases '--method DELETE[\s\S]*releases/\$\{release_id\}' 'nightly release-only deletion'
-forbid_job_match "$nightly_release" retain-nightly-releases '--method DELETE[\s\S]*(git/refs|tags/)' 'nightly tag deletion'
+require_job_match "$nightly_release" select-green-main 'nightly-release\.py resolve --tag "\$tag_name" --commit "\$commit_sha"[\s\S]*"\$state" == "no_tag"[\s\S]*git/tags[\s\S]*git/refs' 'nightly typed recovery and annotated REST tag creation'
+require_job_match "$nightly_release" build-and-publish 'outcome == '\''build'\''[\s\S]*uses: \./\.github/workflows/release-build\.yml[\s\S]*channel: nightly' 'nightly channel-gated live build'
+require_job_match "$nightly_release" prove-existing-release 'outcome == '\''proof'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml' 'published nightly proof-only recovery'
+require_job_match "$nightly_release" retain-nightly-releases 'python3 scripts/nightly-release\.py retain' 'nightly release retention owner'
+require_match "$nightly_policy" 'cutoff = now - timedelta\(days=14\)' 'nightly release retention'
+require_match "$nightly_policy" 'tag_metadata\(tag\)\["channel"\] != "nightly"[\s\S]*release\.get\("draft"\) is not False or release\.get\("prerelease"\) is not True[\s\S]*published >= cutoff' 'nightly typed release selection'
+require_match "$nightly_policy" 'api\.request\("DELETE", f"releases/\{release_id\}"\)[\s\S]*status != 204:[\s\S]*Failure\("retention_delete_failed", release_id=release_id, api_status=status\)' 'nightly typed release-only deletion'
+forbid_match "$nightly_policy" '"DELETE", [^\n]*(git/refs|tags/|assets/)' 'nightly tag or individual asset deletion'
+require_match "$nightly_policy" 'class State\(str, Enum\):[\s\S]*NO_TAG = "no_tag"[\s\S]*TAG_WITHOUT_RELEASE = "tag_without_release"[\s\S]*DRAFT_RELEASE = "draft_release"[\s\S]*PUBLISHED_WITHOUT_PROOF = "published_without_proof"[\s\S]*PROVED = "proved"' 'nightly recovery state vocabulary'
+require_match "$nightly_policy" 'State\.PROVED if has_proof\(api, release, commit\) else State\.PUBLISHED_WITHOUT_PROOF' 'nightly skip requires successful proof'
+require_job_match "$artifact_proof_workflow" release-artifact-proof 'MATRIX_RESULT[\s\S]*nightly-release\.py receipt[\s\S]*actions/upload-artifact@[\s\S]*name: \$\{\{ steps\.receipt\.outputs\.name \}\}' 'successful nightly terminal proof receipt'
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'

@@ -21,12 +21,22 @@ jobs:
       commit_sha: ${{ steps.nightly.outputs.commit_sha }}
       tag_name: ${{ steps.nightly.outputs.tag_name }}
       outcome: ${{ steps.nightly.outputs.outcome }}
+      state: ${{ steps.nightly.outputs.state }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/nightly-release.py
+            scripts/release-matrix.sh
+          sparse-checkout-cone-mode: false
       - name: Resolve and tag the newest green main commit
         id: nightly
         shell: bash
@@ -72,53 +82,46 @@ jobs:
           tag_name="v${version}"
           ./scripts/release-matrix.sh validate-version "$version" nightly >/dev/null
 
-          while IFS= read -r existing_tag; do
-            [[ -n "$existing_tag" ]] || continue
-            if [[ "$(git rev-parse "refs/tags/${existing_tag}^{}")" == "$commit_sha" ]]; then
-              echo "outcome=skipped" >> "$GITHUB_OUTPUT"
-              echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-              echo "tag_name=${existing_tag}" >> "$GITHUB_OUTPUT"
-              echo "Nightly ${existing_tag} already peels to ${commit_sha}; skipping." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-          done < <(git tag --list 'v*-nightly.*')
+          resolved="$(python3 workflow-authority/scripts/nightly-release.py resolve --tag "$tag_name" --commit "$commit_sha")"
+          state="$(jq -r '.state' <<< "$resolved")"
+          tag_name="$(jq -r '.tag_name' <<< "$resolved")"
+          outcome="$(jq -r '.outcome' <<< "$resolved")"
 
-          if git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
-            echo "nightly tag ${tag_name} already exists for a different commit" >&2
-            exit 1
-          fi
-
-          tag_object="$(
+          if [[ "$state" == "no_tag" ]]; then
+            tag_object="$(
+              gh api --method POST \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/${GITHUB_REPOSITORY}/git/tags" \
+                -f tag="$tag_name" \
+                -f message="Conary ${tag_name} automated nightly pre-release" \
+                -f object="$commit_sha" \
+                -f type=commit \
+                --jq '.sha'
+            )"
+            [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "GitHub did not return an annotated tag object" >&2
+              exit 1
+            }
             gh api --method POST \
               -H 'Accept: application/vnd.github+json' \
               -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/${GITHUB_REPOSITORY}/git/tags" \
-              -f tag="$tag_name" \
-              -f message="Conary ${tag_name} automated nightly pre-release" \
-              -f object="$commit_sha" \
-              -f type=commit \
-              --jq '.sha'
-          )"
-          [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "GitHub did not return an annotated tag object" >&2
-            exit 1
-          }
-          gh api --method POST \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2026-03-10' \
-            "repos/${GITHUB_REPOSITORY}/git/refs" \
-            -f ref="refs/tags/${tag_name}" \
-            -f sha="$tag_object" >/dev/null
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${tag_name}" \
+              -f sha="$tag_object" >/dev/null
 
-          echo "outcome=created" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+          echo "outcome=${outcome}" >> "$GITHUB_OUTPUT"
           echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
-          echo "Created annotated nightly tag ${tag_name} at ${commit_sha}." >> "$GITHUB_STEP_SUMMARY"
+          echo "$resolved" >> "$GITHUB_STEP_SUMMARY"
 
   build-and-publish:
     name: build-and-publish
     needs: select-green-main
-    if: ${{ needs.select-green-main.outputs.outcome == 'created' }}
+    if: ${{ needs.select-green-main.outputs.outcome == 'build' }}
     permissions:
       contents: write
     uses: ./.github/workflows/release-build.yml
@@ -127,14 +130,27 @@ jobs:
       channel: nightly
     secrets: inherit
 
+  prove-existing-release:
+    name: prove-existing-release
+    needs: select-green-main
+    if: ${{ needs.select-green-main.outputs.outcome == 'proof' }}
+    uses: ./.github/workflows/release-artifact-proof.yml
+    with:
+      tag_name: ${{ needs.select-green-main.outputs.tag_name }}
+    secrets: inherit
+
   retain-nightly-releases:
     name: retain-nightly-releases
-    needs: [select-green-main, build-and-publish]
+    needs: [select-green-main, build-and-publish, prove-existing-release]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
       - name: Delete nightly releases older than 14 days
         shell: bash
         env:
@@ -142,24 +158,4 @@ jobs:
         run: |
           set -euo pipefail
 
-          cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
-          release_ids="$(
-            gh api --method GET --paginate --slurp \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-              | jq -r --arg cutoff "$cutoff" '
-                  .[][]
-                  | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.[0-9]{8}$"))
-                  | select(.published_at != null and .published_at < $cutoff)
-                  | .id
-                '
-          )"
-
-          while IFS= read -r release_id; do
-            [[ -n "$release_id" ]] || continue
-            gh api --method DELETE \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
-          done <<< "$release_ids"
+          python3 scripts/nightly-release.py retain

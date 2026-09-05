@@ -118,7 +118,7 @@ set -euo pipefail
 printf '%q ' "$@" >> "$MOCK_INSTALL_LOG"
 printf '\n' >> "$MOCK_INSTALL_LOG"
 [[ "${MOCK_INSTALL_FAIL:-0}" != 1 ]] || exit 42
-: > "$MOCK_INSTALLED_STATE"
+printf '%s\n' "${MOCK_POST_INSTALL_VERSION:-$MOCK_VERSION}" > "$MOCK_INSTALLED_STATE"
 EOF
 
 cat > "${mock_bin}/conary" <<'EOF'
@@ -126,7 +126,7 @@ cat > "${mock_bin}/conary" <<'EOF'
 set -euo pipefail
 [[ -f "$MOCK_INSTALLED_STATE" ]] || exit 1
 case "${1:-}" in
-    --version) printf 'conary %s\n' "$MOCK_VERSION" ;;
+    --version) printf 'conary %s\n' "$(cat "$MOCK_INSTALLED_STATE")" ;;
     repo)
         [[ "${2:-}" == list ]]
         [[ "${MOCK_HEALTH_FAIL:-0}" != 1 ]]
@@ -162,6 +162,7 @@ run_installer() {
             MOCK_INSTALL_LOG="$install_log" \
             MOCK_INSTALLED_STATE="$installed_state" \
             MOCK_VERSION="$version" \
+            MOCK_POST_INSTALL_VERSION="${MOCK_POST_INSTALL_VERSION:-$version}" \
             MOCK_UNAME="${MOCK_UNAME:-x86_64}" \
             MOCK_INSTALL_FAIL="${MOCK_INSTALL_FAIL:-0}" \
             MOCK_HEALTH_FAIL="${MOCK_HEALTH_FAIL:-0}" \
@@ -309,5 +310,22 @@ rm -f -- "$install_log" "$installed_state"
 run_installer "$fedora_os" --apply --yes
 [[ "$status" -eq 0 ]] || fail "nightly apply failed: $output"
 assert_contains "$output" "Conary ${version} is installed"
+
+for previous in 9.8.8 9.8.8-nightly.20260227; do
+    printf '%s\n' "$previous" > "$installed_state"
+    rm -f -- "$install_log"
+    run_installer "$fedora_os" --apply --yes
+    [[ "$status" -eq 0 && -s "$install_log" ]] || fail "$previous must upgrade to the requested full nightly: $output"
+    [[ "$(cat "$installed_state")" == "$version" ]] || fail "nightly installation lost full version"
+done
+rm -f -- "$install_log"
+run_installer "$fedora_os" --apply --yes
+[[ "$status" -eq 0 && ! -e "$install_log" ]] || fail "same nightly must skip its transaction: $output"
+assert_contains "$output" 'Exact Conary release is already installed'
+
+printf '%s\n' 9.8.8 > "$installed_state"
+MOCK_POST_INSTALL_VERSION=9.8.8 run_installer "$fedora_os" --apply --yes
+[[ "$status" -ne 0 ]] || fail "stable binary must fail nightly post-install health check"
+assert_contains "$output" 'installed Conary version health check failed'
 
 printf 'release bootstrap installer tests passed\n'

@@ -69,7 +69,7 @@ jobs:
           set -euo pipefail
 
           # Reusable workflows inherit the caller's event (schedule/dispatch).
-          if [[ "$CALL_CHANNEL" == "nightly" ]]; then
+          if [[ "$CALL_CHANNEL" == "nightly" && -n "$CALL_TAG_NAME" ]]; then
             tag_name="$CALL_TAG_NAME"
             dry_run="false"
             requested_channel="$CALL_CHANNEL"
@@ -77,10 +77,6 @@ jobs:
             tag_name="$DISPATCH_TAG_NAME"
             dry_run="${DISPATCH_DRY_RUN:-true}"
             requested_channel="${DISPATCH_CHANNEL:-stable}"
-          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_call" ]]; then
-            tag_name="$CALL_TAG_NAME"
-            dry_run="false"
-            requested_channel="$CALL_CHANNEL"
           else
             tag_name="${GITHUB_REF#refs/tags/}"
             dry_run="false"
@@ -91,8 +87,8 @@ jobs:
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_call" && "$requested_channel" != "nightly" ]]; then
-            echo "workflow_call is live only for the nightly channel" >&2
+          if [[ "$CALL_CHANNEL" == "nightly" && -z "$CALL_TAG_NAME" ]]; then
+            echo "nightly reusable inputs require an exact tag_name" >&2
             exit 1
           fi
 

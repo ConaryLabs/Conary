@@ -318,6 +318,7 @@ if [[ "$apply" != true ]]; then
     exit 0
 fi
 
+# Both checks bind the full signed suite version, including the nightly date.
 if command -v conary >/dev/null 2>&1 && [[ "$(conary --version 2>/dev/null || true)" == "conary ${suite_version}" ]]; then
     printf 'Exact Conary release is already installed; skipping the package transaction.\n'
 else

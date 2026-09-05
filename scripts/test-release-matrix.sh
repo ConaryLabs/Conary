@@ -114,118 +114,7 @@ license = "MIT"
 publish = false
 EOF
 
-    printf 'fn test_nightly_version_grammar() {
-    local output status version
-
-    output="$(run_matrix resolve-tag v1.2.3-nightly.20260228 --format shell)"
-    assert_contains "$output" "channel=nightly" "nightly tag should resolve to the nightly channel"
-    assert_contains "$output" "stable_version=1.2.3" "nightly tag should expose its stable base"
-
-    for version in \
-        1.2.3-nightly.20260230 \
-        1.2.3-nightly \
-        1.2.3-nightly.20260228.extra; do
-        set +e
-        output="$(run_matrix validate-version "$version" nightly 2>&1)"
-        status=$?
-        set -e
-        [[ "$status" -ne 0 ]] || fail "invalid nightly version unexpectedly passed: $version"
-        assert_contains "$output" "invalid release version" "invalid nightly grammar should fail clearly"
-    done
-}
-
-test_release_channel_resolution() {
-    assert_eq stable "$(run_matrix version-channel 1.2.3)" "stable channel resolution"
-    assert_eq nightly "$(run_matrix version-channel 1.2.3-nightly.20260228)" "nightly channel resolution"
-    assert_eq 1.2.3 "$(run_matrix stable-version 1.2.3-nightly.20260228)" "nightly stable-base resolution"
-}
-
-test_reusable_nightly_inherits_caller_event() {
-    local preamble event output status
-    preamble="$(sed -n '/^          # Reusable workflows/,/^          mkdir -p release-metadata/p' \
-        "$REPO_ROOT/.github/workflows/release-build.yml" | sed '$d;s/^          //')"
-    [[ -n "$preamble" ]] || fail "release channel preamble missing"
-    for event in schedule workflow_dispatch; do
-        output="$(GITHUB_EVENT_NAME="$event" CALL_CHANNEL=nightly \
-            CALL_TAG_NAME=v0.17.0-nightly.20260905 \
-            bash -eu -c "$preamble"$'\nprintf "%s %s %s" "$tag_name" "$dry_run" "$requested_channel"')"
-        assert_eq 'v0.17.0-nightly.20260905 false nightly' "$output" "reusable nightly $event must be live"
-    done
-    output="$(GITHUB_EVENT_NAME=workflow_dispatch CALL_CHANNEL=stable \
-        DISPATCH_TAG_NAME=v0.17.0 DISPATCH_DRY_RUN=true DISPATCH_CHANNEL=stable \
-        bash -eu -c "$preamble"$'\nprintf "%s %s %s" "$tag_name" "$dry_run" "$requested_channel"')"
-    assert_eq 'v0.17.0 true stable' "$output" "stable dispatch remains dry-run"
-    set +e
-    output="$(GITHUB_EVENT_NAME=workflow_dispatch CALL_CHANNEL=stable \
-        DISPATCH_TAG_NAME=v0.17.0 DISPATCH_DRY_RUN=false DISPATCH_CHANNEL=stable \
-        bash -eu -c "$preamble" 2>&1)"
-    status=$?
-    set -e
-    [[ "$status" -ne 0 ]] || fail "stable live dispatch accepted"
-    assert_contains "$output" 'workflow_dispatch is dry-run only' "stable dispatch guard"
-}
-
-test_nightly_assertion_does_not_rewrite_stable_authority() {
-    local repo before after head version=0.8.0-nightly.20260228
-
-    repo="$(create_release_fixture)"
-    tag_head "$repo" "v0.7.0"
-    commit_change "$repo" "apps/conary-test/changes.txt" "feat(test): prepare nightly authority"
-    head="$(git -C "$repo" rev-parse HEAD)"
-    if run_repo_matrix "$repo" assert-owned-version suite "$version" >/dev/null 2>&1; then
-        fail "nightly must reject colliding stable authority"
-    fi
-    run_release "$repo" suite --prepare-only --target "$version" >/dev/null
-
-    before="$(git -C "$repo" diff HEAD -- \
-        Cargo.toml \
-        packaging/rpm/conary.spec \
-        packaging/arch/PKGBUILD \
-        packaging/deb/debian/changelog \
-        packaging/ccs/ccs.toml)"
-    run_repo_matrix "$repo" assert-owned-version suite "$version"
-    after="$(git -C "$repo" diff HEAD -- \
-        Cargo.toml \
-        packaging/rpm/conary.spec \
-        packaging/arch/PKGBUILD \
-        packaging/deb/debian/changelog \
-        packaging/ccs/ccs.toml)"
-
-    [[ -n "$before" ]] || fail "nightly preparation must change runner authorities"
-    assert_eq "$before" "$after" "nightly assertion must be read-only"
-    assert_eq "$head" "$(git -C "$repo" rev-parse HEAD)" "nightly preparation must not commit"
-    assert_eq v0.7.0 "$(git -C "$repo" tag --list)" "nightly preparation must not create tags"
-    assert_contains "$(git -C "$repo" show HEAD:Cargo.toml)" 'version = "0.7.0"' "committed authority stays unchanged"
-    assert_eq "$version" "$(run_repo_matrix "$repo" workspace-version)" "binary authority is the full nightly"
-    assert_contains "$(< "$repo/packaging/rpm/conary.spec")" 'Version:        0.8.0~nightly.20260228' "RPM authority"
-    assert_contains "$(< "$repo/packaging/arch/PKGBUILD")" 'pkgver=0.8.0nightly20260228' "Arch authority"
-    assert_contains "$(< "$repo/packaging/deb/debian/changelog")" 'conary (0.8.0~nightly.20260228-1)' "Debian authority"
-    assert_contains "$(< "$repo/packaging/ccs/ccs.toml")" 'version = "0.8.0-nightly.20260228"' "CCS authority"
-}
-
-test_render_version_ordering() {
-    local target expected version=0.17.0-nightly.20260905
-    for target in cargo rpm deb arch ccs tag; do
-        case "$target" in
-            cargo|ccs|tag) expected="$version" ;;
-            rpm|deb) expected=0.17.0~nightly.20260905 ;;
-            arch) expected=0.17.0nightly20260905 ;;
-        esac
-        assert_eq "$expected" "$(run_matrix render-version "$version" "$target")" "$target exact nightly rendering"
-        assert_eq 0.17.0 "$(run_matrix render-version 0.17.0 "$target")" "$target stable rendering"
-    done
-    if run_matrix render-version "$version" unknown >/dev/null 2>&1; then
-        fail "unknown rendering target accepted"
-    fi
-    # Real Debian comparator; RPM/pacman expectations are pinned in the matrix
-    # documentation. Never substitute a home-grown version comparator.
-    dpkg --compare-versions '0.17.0~nightly.20260905' lt '0.17.0'
-    if command -v vercmp >/dev/null 2>&1; then
-        assert_eq -1 "$(vercmp 0.17.0nightly20260905 0.17.0)" "pacman nightly precedes stable"
-    fi
-}
-
-main() {}\n' > "$repo/apps/conary/build.rs"
+    printf 'fn main() {}\n' > "$repo/apps/conary/build.rs"
     printf '.TH conary 1 "" "conary 0.7.0"\n' > "$repo/apps/conary/man/conary.1"
     printf '# release fixture lockfile\n' > "$repo/Cargo.lock"
     printf '/apps/conary/man/\n' > "$repo/.gitignore"
@@ -836,6 +725,17 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ("test_nightly_channel_gate", "replace", ".github/workflows/nightly-release.yml", "      channel: nightly", "      channel: stable", "nightly channel-gated live build"),
+    ("test_nightly_prerelease_flag", "replace", ".github/workflows/release-build.yml", "              release_flags+=(--prerelease)", "              release_flags+=(--latest)", "nightly publication prerelease flag"),
+    ("test_nightly_retention_window", "replace", "scripts/nightly-release.py", "cutoff = now - timedelta(days=14)", "cutoff = now - timedelta(days=30)", "nightly release retention"),
+    ("test_nightly_retention_rejected_delete", "replace", "scripts/nightly-release.py", "if status != 204:", "if False:", "nightly typed release-only deletion"),
+    ("test_nightly_published_proof_only", "replace", ".github/workflows/nightly-release.yml", "outputs.outcome == 'proof'", "outputs.outcome == 'build'", "published nightly proof-only recovery"),
+    ("test_nightly_tag_not_completion", "replace", "scripts/nightly-release.py", "State.PROVED if has_proof(api, release, commit) else State.PUBLISHED_WITHOUT_PROOF", "State.PROVED", "nightly skip requires successful proof"),
+    ("test_nightly_call_inputs", "replace", ".github/workflows/release-build.yml", "if [[ \"$CALL_CHANNEL\" == \"nightly\" && -n \"$CALL_TAG_NAME\" ]]; then", "if [[ \"${GITHUB_EVENT_NAME}\" == \"workflow_call\" ]]; then", "reusable release build nightly channel gate"),
+    ("test_full_nightly_preparation", "replace", ".github/workflows/release-build.yml", "--prepare-only --target \"$version\"", "--prepare-only --target \"$stable_version\"", "all release preparations must use the full suite version"),
+    ("test_full_nightly_binary_identity", "replace", ".github/workflows/release-build.yml", "${product} ${VERSION}", "${product} ${STABLE_VERSION}", "stable-base nightly identity collision"),
+    ("test_full_nightly_installer_identity", "replace", "site/static/install-conary-preview.sh", "conary ${suite_version}", "conary ${suite_version%%-nightly.*}", "installer stripped nightly identity"),
+    ("test_nightly_receipt_gate", "replace", ".github/workflows/release-artifact-proof.yml", "nightly-release.py receipt", "nightly-release.py resolve", "successful nightly terminal proof receipt"),
     ('test_check_release_matrix_rejects_loose_native_oracle_common_digest', 'replace', 'scripts/native_oracle_common.py', 'SHA256.fullmatch(value)', 'SHA256.match(value)', 'native-oracle common strict canonical JSON, digest, and plain-path validation'),
     ('test_check_release_matrix_rejects_aliased_conversion_benchmark_authority', 'replace', '.github/workflows/remi-conversion-benchmark.yml', 'concurrency:', 'concurrency: &shared_concurrency', 'forbidden YAML anchors or aliases'),
     ('test_check_release_matrix_rejects_all_profile_retry', 'replace', '.github/workflows/deploy-remi-candidate.yml', 'refresh?force=true&profile=${profile}', 'refresh?force=true', 'retries only exact failed public profiles'),
@@ -1626,12 +1526,12 @@ test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/release-build.yml" \
-        '        uses: ./.github/actions/setup-exact-ownership-tests' \
+        '        uses: ./workflow-authority/.github/actions/setup-exact-ownership-tests' \
         '        run: echo "namespace setup delayed"'
     replace_fixture_text_once \
         "$repo/.github/workflows/release-build.yml" \
         '        run: cargo test --workspace --exclude conary-test --verbose' \
-        $'        run: cargo test --workspace --exclude conary-test --verbose\n      - name: Delayed exact ownership setup\n        uses: ./.github/actions/setup-exact-ownership-tests'
+        $'        run: cargo test --workspace --exclude conary-test --verbose\n      - name: Delayed exact ownership setup\n        uses: ./workflow-authority/.github/actions/setup-exact-ownership-tests'
 
     assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
 }
@@ -1743,6 +1643,117 @@ PY
     done
 }
 
+
+test_nightly_version_grammar() {
+    local output status version
+
+    output="$(run_matrix resolve-tag v1.2.3-nightly.20260228 --format shell)"
+    assert_contains "$output" "channel=nightly" "nightly tag should resolve to the nightly channel"
+    assert_contains "$output" "stable_version=1.2.3" "nightly tag should expose its stable base"
+
+    for version in \
+        1.2.3-nightly.20260230 \
+        1.2.3-nightly \
+        1.2.3-nightly.20260228.extra; do
+        set +e
+        output="$(run_matrix validate-version "$version" nightly 2>&1)"
+        status=$?
+        set -e
+        [[ "$status" -ne 0 ]] || fail "invalid nightly version unexpectedly passed: $version"
+        assert_contains "$output" "invalid release version" "invalid nightly grammar should fail clearly"
+    done
+}
+
+test_release_channel_resolution() {
+    assert_eq stable "$(run_matrix version-channel 1.2.3)" "stable channel resolution"
+    assert_eq nightly "$(run_matrix version-channel 1.2.3-nightly.20260228)" "nightly channel resolution"
+    assert_eq 1.2.3 "$(run_matrix stable-version 1.2.3-nightly.20260228)" "nightly stable-base resolution"
+}
+
+test_reusable_nightly_inherits_caller_event() {
+    local preamble event output status
+    preamble="$(sed -n '/^          # Reusable workflows/,/^          mkdir -p release-metadata/p' \
+        "$REPO_ROOT/.github/workflows/release-build.yml" | sed '$d;s/^          //')"
+    [[ -n "$preamble" ]] || fail "release channel preamble missing"
+    for event in schedule workflow_dispatch; do
+        output="$(GITHUB_EVENT_NAME="$event" CALL_CHANNEL=nightly \
+            CALL_TAG_NAME=v0.17.0-nightly.20260905 \
+            bash -eu -c "$preamble"$'\nprintf "%s %s %s" "$tag_name" "$dry_run" "$requested_channel"')"
+        assert_eq 'v0.17.0-nightly.20260905 false nightly' "$output" "reusable nightly $event must be live"
+    done
+    output="$(GITHUB_EVENT_NAME=workflow_dispatch CALL_CHANNEL=stable \
+        DISPATCH_TAG_NAME=v0.17.0 DISPATCH_DRY_RUN=true DISPATCH_CHANNEL=stable \
+        bash -eu -c "$preamble"$'\nprintf "%s %s %s" "$tag_name" "$dry_run" "$requested_channel"')"
+    assert_eq 'v0.17.0 true stable' "$output" "stable dispatch remains dry-run"
+    set +e
+    output="$(GITHUB_EVENT_NAME=workflow_dispatch CALL_CHANNEL=stable \
+        DISPATCH_TAG_NAME=v0.17.0 DISPATCH_DRY_RUN=false DISPATCH_CHANNEL=stable \
+        bash -eu -c "$preamble" 2>&1)"
+    status=$?
+    set -e
+    [[ "$status" -ne 0 ]] || fail "stable live dispatch accepted"
+    assert_contains "$output" 'workflow_dispatch is dry-run only' "stable dispatch guard"
+}
+
+test_nightly_assertion_does_not_rewrite_stable_authority() {
+    local repo before after head version=0.8.0-nightly.20260228
+
+    repo="$(create_release_fixture)"
+    tag_head "$repo" "v0.7.0"
+    commit_change "$repo" "apps/conary-test/changes.txt" "feat(test): prepare nightly authority"
+    head="$(git -C "$repo" rev-parse HEAD)"
+    if run_repo_matrix "$repo" assert-owned-version suite "$version" >/dev/null 2>&1; then
+        fail "nightly must reject colliding stable authority"
+    fi
+    run_release "$repo" suite --prepare-only --target "$version" >/dev/null
+
+    before="$(git -C "$repo" diff HEAD -- \
+        Cargo.toml \
+        packaging/rpm/conary.spec \
+        packaging/arch/PKGBUILD \
+        packaging/deb/debian/changelog \
+        packaging/ccs/ccs.toml)"
+    run_repo_matrix "$repo" assert-owned-version suite "$version"
+    after="$(git -C "$repo" diff HEAD -- \
+        Cargo.toml \
+        packaging/rpm/conary.spec \
+        packaging/arch/PKGBUILD \
+        packaging/deb/debian/changelog \
+        packaging/ccs/ccs.toml)"
+
+    [[ -n "$before" ]] || fail "nightly preparation must change runner authorities"
+    assert_eq "$before" "$after" "nightly assertion must be read-only"
+    assert_eq "$head" "$(git -C "$repo" rev-parse HEAD)" "nightly preparation must not commit"
+    assert_eq v0.7.0 "$(git -C "$repo" tag --list)" "nightly preparation must not create tags"
+    assert_contains "$(git -C "$repo" show HEAD:Cargo.toml)" 'version = "0.7.0"' "committed authority stays unchanged"
+    assert_eq "$version" "$(run_repo_matrix "$repo" workspace-version)" "binary authority is the full nightly"
+    assert_contains "$(< "$repo/packaging/rpm/conary.spec")" 'Version:        0.8.0~nightly.20260228' "RPM authority"
+    assert_contains "$(< "$repo/packaging/arch/PKGBUILD")" 'pkgver=0.8.0nightly20260228' "Arch authority"
+    assert_contains "$(< "$repo/packaging/deb/debian/changelog")" 'conary (0.8.0~nightly.20260228-1)' "Debian authority"
+    assert_contains "$(< "$repo/packaging/ccs/ccs.toml")" 'version = "0.8.0-nightly.20260228"' "CCS authority"
+}
+
+test_render_version_ordering() {
+    local target expected version=0.17.0-nightly.20260905
+    for target in cargo rpm deb arch ccs tag; do
+        case "$target" in
+            cargo|ccs|tag) expected="$version" ;;
+            rpm|deb) expected=0.17.0~nightly.20260905 ;;
+            arch) expected=0.17.0nightly20260905 ;;
+        esac
+        assert_eq "$expected" "$(run_matrix render-version "$version" "$target")" "$target exact nightly rendering"
+        assert_eq 0.17.0 "$(run_matrix render-version 0.17.0 "$target")" "$target stable rendering"
+    done
+    if run_matrix render-version "$version" unknown >/dev/null 2>&1; then
+        fail "unknown rendering target accepted"
+    fi
+    # Real Debian comparator; RPM/pacman expectations are pinned in the matrix
+    # documentation. Never substitute a home-grown version comparator.
+    dpkg --compare-versions '0.17.0~nightly.20260905' lt '0.17.0'
+    if command -v vercmp >/dev/null 2>&1; then
+        assert_eq -1 "$(vercmp 0.17.0nightly20260905 0.17.0)" "pacman nightly precedes stable"
+    fi
+}
 
 main() {
     local -a tests=(
@@ -2012,6 +2023,7 @@ main() {
         printf 'ok - %s\n' "$test_name"
     done
 
+    python3 "$REPO_ROOT/scripts/test-nightly-release.py"
     run_release_policy_mutation_cases
 }
 

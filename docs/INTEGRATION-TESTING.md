@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 66
+revision: 67
 summary: Document typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
@@ -1230,7 +1230,7 @@ image remains owned by that image's native bootstrap.
 |----------|---------|---------|
 | `pr-gate` | Pull request + manual dispatch | Unit/static gates plus the focused eight-distro native lifecycle matrix and authentic derivative APT proof |
 | `merge-validation` | Every push to `main` + manual dispatch | Trusted on-merge smoke validation plus default-branch GNU and native-matrix compiler seeding |
-| `nightly-release` | Daily at 06:30 UTC + manual dispatch | Publish and prove a retained prerelease from the newest merge-validated `main` commit; never deploy it |
+| `nightly-release` | Daily at 06:30 UTC + manual dispatch | Resume publication or re-prove an immutable nightly from green `main`; retain whole releases for 14 days, never delete tags or deploy |
 | `release-artifact-proof` | Conary deployment + manual dispatch | Install each published native package and run the three-distro Cartesian lifecycle with those exact bytes |
 | `scheduled-ops` | Nightly/scheduled + manual dispatch | Deep validation, health checks, and scheduled operational audits |
 
