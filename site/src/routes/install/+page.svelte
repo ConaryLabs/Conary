@@ -38,7 +38,7 @@
 				<li>Use a VM, a snapshot, or a host you do not need.</li>
 				<li>Match Fedora 44, Ubuntu 26.04 LTS, or Arch Linux on x86_64.</li>
 				<li>Read every script and command before running it.</li>
-				<li>Use <code>--dry-run</code> wherever a command offers it.</li>
+				<li>Use <code>--dry-run</code> wherever a command offers it; one known exception that still writes is listed with the confirmation rule.</li>
 				<li>{commandRisk.rule} <a href="#confirmation">Which commands is which.</a></li>
 				<li>Expect failures, and report them.</li>
 				<li>Nothing here is a daily driver.</li>
@@ -132,6 +132,10 @@
 							<dd><ul>{#each commandRisk.databaseWritingReadOnlyClassified as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>
+							<dt>Known dry-run defect, tracked in <a href={commandRisk.dryRunIssueUrl}>{commandRisk.dryRunIssue}</a>: writes despite <code>--dry-run</code></dt>
+							<dd><ul>{#each commandRisk.dryRunKnownMutations as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
 							<dt>Boot continuation authorized by the generation artifact, not a flag</dt>
 							<dd><ul>{#each commandRisk.bootActivation as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
@@ -149,7 +153,10 @@
 							the Ed25519 signature against the embedded release key before it reads any
 							selection field, picks the one package for this host, downloads it, and checks
 							its size and SHA-256 against the signed manifest. Without <code>--apply</code>
-							it only prints the plan.
+							it only prints the plan. <code>--manifest-url</code> binds the run to
+							{previewRelease.tag}, the release this page authorizes; without it the script
+							follows <code>releases/latest</code>, which can be a newer release than the one
+							the release matrix and launch-status name.
 						</p>
 					</div>
 				</div>
@@ -157,7 +164,8 @@
 				<TerminalFrame title="download, inspect, preview">
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">curl --proto '=https' --tlsv1.2 -fLO {previewRelease.bootstrapScriptUrl}</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">less install-conary-preview.sh</span></span>
-					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh</span></span>
+					<span class="terminal-line"><span class="terminal-command">manifest="{previewRelease.bootstrapManifestUrl}"</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh --manifest-url "$manifest"</span></span>
 				</TerminalFrame>
 
 				<div class="boundary-note step-note">
@@ -188,7 +196,8 @@
 				</div>
 
 				<TerminalFrame title="live mutation">
-					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh --apply --yes</span></span>
+					<span class="terminal-line"><span class="terminal-command">manifest="{previewRelease.bootstrapManifestUrl}"</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">bash ./install-conary-preview.sh --manifest-url "$manifest" --apply --yes</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">conary --version</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary repo list</span></span>
 				</TerminalFrame>

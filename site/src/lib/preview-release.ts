@@ -76,5 +76,12 @@ export const previewRelease = {
 	announcementClaim: launchStatus.announcement_claim,
 	testerGuideUrl: `${mainBlobUrl}/docs/guides/agent-assisted-tester-loop.md`,
 	feedbackUrl: `${repoUrl}/issues/new?template=pre_alpha_feedback.md`,
-	bootstrapScriptUrl: 'https://conary.io/install-conary-preview.sh'
+	bootstrapScriptUrl: 'https://conary.io/install-conary-preview.sh',
+	/**
+	 * The signed bootstrap manifest for exactly this release. The script's
+	 * default follows releases/latest; the site always passes this URL so the
+	 * install it shows is bound to the tag the release matrix and launch-status
+	 * authorize, not to whatever was published most recently.
+	 */
+	bootstrapManifestUrl: `${repoUrl}/releases/download/${tag}/conary-bootstrap-v1.manifest`
 } as const;

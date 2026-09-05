@@ -218,7 +218,7 @@
 			<p class="section-copy">
 				Pick a source whose package format differs from the host. Every dry-run shows the
 				package's typed lifecycle, dependencies, payload, and required host capabilities
-				before anything is mutated. {commandRisk.rule} The
+				before any package transaction is applied. {commandRisk.rule} The
 				<a href="/install/#confirmation">policy classes and known exceptions</a> are
 				derived from <code>{commandRisk.source}</code>.
 			</p>
@@ -252,8 +252,8 @@
 				</p>
 			{:else}
 				<!-- The live loop is owned by the tester guide; until that guide is active
-				     the homepage shows only the non-mutating inspection commands. -->
-				<TerminalFrame title="inspection only · tester loop inactive">
+				     the homepage shows only dry-run and read commands. -->
+				<TerminalFrame title="dry-run only · tester loop inactive">
 					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --dry-run</span></span>
@@ -261,8 +261,11 @@
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update --dry-run</span></span>
 				</TerminalFrame>
 				<p class="evidence-note">
-					Dry-run inspection only. The live install, update, and remove loop is owned by
-					the tester guide, which is
+					Dry runs plan and print without applying a package transaction, with one known
+					client defect: if the named package is already installed as a dependency,
+					<code>install --dry-run</code> records it as explicitly installed before honouring
+					the flag (<a href={commandRisk.dryRunIssueUrl}>{commandRisk.dryRunIssue}</a>).
+					The live install, update, and remove loop is owned by the tester guide, which is
 					{#if previewRelease.testerAssigned}still paused even though {previewRelease.tag} is assigned{:else}paused until a release is pinned{/if};
 					the <a href="/install/#tester-loop">install page</a> keeps its retained commands
 					folded away. No output is shown because it varies by host.

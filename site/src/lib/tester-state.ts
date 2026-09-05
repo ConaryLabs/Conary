@@ -1,3 +1,5 @@
+import { FAILSAFE_SCHEMA, YAMLException, load } from 'js-yaml';
+
 /**
  * External tester state, derived from two typed inputs and nothing else.
  *
@@ -6,13 +8,17 @@
  * 2. `docs/guides/agent-assisted-tester-loop.md` YAML frontmatter: the tester
  *    guide is the loop's execution authority, and only two of its keys are
  *    read:
- *    - `status`: exactly `paused` or `active`. Any other value fails the build.
- *    - `tester_release`: an exact `vMAJOR.MINOR.PATCH` tag. Required when
+ *    - `status`: exactly the scalar string `paused` or `active`. Any other
+ *      value, including a nested mapping, a sequence, or a folded block, fails
+ *      the build.
+ *    - `tester_release`: exactly a `vMAJOR.MINOR.PATCH` scalar. Required when
  *      `status` is `active`; it must equal the published tag, and launch-status
  *      must itself assign tester authority.
  *
- * Body text is never consulted. These functions are pure so the fail-closed
- * branches can be proven with fixture strings.
+ * The frontmatter is parsed as YAML (js-yaml, failsafe schema, so every scalar
+ * stays a string) and must be a single mapping; the parser rejects duplicated
+ * keys in any spelling. Body text is never consulted. These functions are pure
+ * so the fail-closed branches can be proven with fixture strings.
  */
 
 export type TesterGuideStatus = 'paused' | 'active' | 'unknown';
@@ -27,31 +33,38 @@ export type TesterState = 'unassigned' | 'assigned_guide_paused' | 'assigned_gui
 const EXACT_TAG = /^v\d+\.\d+\.\d+$/;
 
 /**
- * Parse the frontmatter block as a flat YAML mapping of `key: value` lines.
- * A key that appears more than once makes the mapping invalid; the parser
- * never silently picks the first or last occurrence.
+ * Parse the frontmatter block as one YAML mapping. Duplicated keys, in any
+ * YAML spelling, and anything that is not a mapping are rejected; the parser
+ * never silently picks a first or last occurrence.
  */
-function readFrontmatterMapping(block: string): Map<string, string> {
-	const mapping = new Map<string, string>();
-	for (const line of block.split(/\r?\n/)) {
-		const entry = line.match(/^([A-Za-z_][A-Za-z0-9_]*):(.*)$/);
-		if (!entry) continue;
-		const [, key, rawValue] = entry;
-		if (mapping.has(key)) throw new Error(`tester guide: duplicate frontmatter key: ${key}`);
-		mapping.set(key, rawValue);
+function readFrontmatterMapping(block: string): Record<string, unknown> {
+	let document: unknown;
+	try {
+		document = load(block, { schema: FAILSAFE_SCHEMA });
+	} catch (error) {
+		if (error instanceof YAMLException && /duplicated mapping key/.test(error.reason)) {
+			throw new Error(`tester guide: duplicate frontmatter key (${error.reason})`);
+		}
+		const reason = error instanceof YAMLException ? error.reason : String(error);
+		throw new Error(`tester guide: malformed frontmatter YAML (${reason})`);
 	}
-	return mapping;
+	if (document === null || typeof document !== 'object' || Array.isArray(document)) {
+		throw new Error('tester guide: frontmatter is not a YAML mapping');
+	}
+	return document as Record<string, unknown>;
 }
 
 /**
  * Read the guide's typed pin from its raw Markdown.
  *
  * Throws on every contradictory combination so a build cannot expose the loop
- * by accident: a missing frontmatter block, any frontmatter key that appears
- * more than once (with the same or conflicting values), a status other than
- * exactly `paused`/`active`, a malformed `tester_release`, an active guide
- * with no release, an active guide whose release differs from the published
- * tag, or an active guide while launch-status assigns no tester authority.
+ * by accident: a missing frontmatter block, frontmatter that is not valid YAML
+ * or not a single mapping, any key that appears more than once in any YAML
+ * spelling (with the same or conflicting values), a `status` that is not
+ * exactly the scalar `paused`/`active`, a `tester_release` that is not an
+ * exact `v*` scalar, an active guide with no release, an active guide whose
+ * release differs from the published tag, or an active guide while
+ * launch-status assigns no tester authority.
  *
  * `status` is `unknown` only when the guide text is absent.
  */
@@ -67,17 +80,17 @@ export function readTesterGuidePin(
 
 	const mapping = readFrontmatterMapping(frontmatter[1]);
 
-	const statusValue = mapping.get('status');
-	if (statusValue !== ' paused' && statusValue !== ' active') {
+	const statusValue = mapping.status;
+	if (statusValue !== 'paused' && statusValue !== 'active') {
 		throw new Error('tester guide: status must be exactly paused or active');
 	}
-	const status = statusValue.trim() as TesterGuideStatus;
+	const status: TesterGuideStatus = statusValue;
 
-	const releaseValue = mapping.get('tester_release');
-	const release = releaseValue === undefined ? undefined : releaseValue.replace(/^ /, '');
-	if (release !== undefined && !EXACT_TAG.test(release)) {
-		throw new Error(`tester guide: tester_release is not an exact v* tag: ${release}`);
+	const releaseValue = mapping.tester_release;
+	if (releaseValue !== undefined && (typeof releaseValue !== 'string' || !EXACT_TAG.test(releaseValue))) {
+		throw new Error(`tester guide: tester_release is not an exact v* tag: ${String(releaseValue)}`);
 	}
+	const release = releaseValue as string | undefined;
 
 	if (status === 'active') {
 		if (release === undefined) throw new Error('tester guide: active but names no tester_release');

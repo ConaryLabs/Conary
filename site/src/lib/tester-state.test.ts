@@ -81,29 +81,88 @@ describe('readTesterGuidePin', () => {
 
 	it('fails closed on a duplicated status key, even with identical values', () => {
 		expect(() => readTesterGuidePin(guide('status: paused\nstatus: paused'), TAG, false)).toThrow(
-			/duplicate frontmatter key: status/
+			/duplicate frontmatter key/
 		);
 	});
 
 	it('fails closed on a duplicated tester_release key', () => {
 		const text = guide(`status: active\ntester_release: ${TAG}\ntester_release: ${TAG}`);
-		expect(() => readTesterGuidePin(text, TAG, true)).toThrow(/duplicate frontmatter key: tester_release/);
+		expect(() => readTesterGuidePin(text, TAG, true)).toThrow(/duplicate frontmatter key/);
 	});
 
 	it('never opens the loop on conflicting duplicate status values', () => {
 		const activeThenPaused = guide(`status: active\ntester_release: ${TAG}\nstatus: paused`);
 		expect(() => readTesterGuidePin(activeThenPaused, TAG, true)).toThrow(
-			/duplicate frontmatter key: status/
+			/duplicate frontmatter key/
 		);
 		const pausedThenActive = guide(`status: paused\nstatus: active\ntester_release: ${TAG}`);
 		expect(() => readTesterGuidePin(pausedThenActive, TAG, true)).toThrow(
-			/duplicate frontmatter key: status/
+			/duplicate frontmatter key/
 		);
 	});
 
 	it('fails closed on any other duplicated frontmatter key', () => {
 		expect(() => readTesterGuidePin(guide('revision: 18\nstatus: paused\nrevision: 19'), TAG, false)).toThrow(
-			/duplicate frontmatter key: revision/
+			/duplicate frontmatter key/
+		);
+	});
+
+	it('rejects a duplicated key spelled differently in YAML', () => {
+		const quotedThenBare = guide(`"status": paused\nstatus: active\ntester_release: ${TAG}`);
+		expect(() => readTesterGuidePin(quotedThenBare, TAG, true)).toThrow(/duplicate frontmatter key/);
+		const singleQuoted = guide(`status: paused\n'status': active\ntester_release: ${TAG}`);
+		expect(() => readTesterGuidePin(singleQuoted, TAG, true)).toThrow(/duplicate frontmatter key/);
+	});
+
+	it('accepts YAML-equivalent scalar spellings of the authority values', () => {
+		expect(readTesterGuidePin(guide('status: "paused"'), TAG, false)).toEqual({
+			status: 'paused',
+			release: undefined
+		});
+		expect(readTesterGuidePin(guide(`"status": active\ntester_release: '${TAG}'`), TAG, true)).toEqual({
+			status: 'active',
+			release: TAG
+		});
+	});
+
+	it('ignores YAML comments', () => {
+		const text = guide(`# resumed on 2026-09-05\nstatus: active # loop open\ntester_release: ${TAG}`);
+		expect(readTesterGuidePin(text, TAG, true)).toEqual({ status: 'active', release: TAG });
+	});
+
+	it('rejects folded or literal multi-line authority values', () => {
+		expect(() => readTesterGuidePin(guide(`status: >\n  active\ntester_release: ${TAG}`), TAG, true)).toThrow(
+			/status must be exactly paused or active/
+		);
+		expect(() => readTesterGuidePin(guide(`status: |\n  paused`), TAG, false)).toThrow(
+			/status must be exactly paused or active/
+		);
+		expect(() =>
+			readTesterGuidePin(guide(`status: active\ntester_release: >\n  ${TAG}`), TAG, true)
+		).toThrow(/not an exact v\* tag/);
+	});
+
+	it('rejects a nested mapping or a sequence under an authority key', () => {
+		expect(() => readTesterGuidePin(guide('status:\n  value: active'), TAG, true)).toThrow(
+			/status must be exactly paused or active/
+		);
+		expect(() => readTesterGuidePin(guide('status:\n  - active'), TAG, true)).toThrow(
+			/status must be exactly paused or active/
+		);
+		expect(() => readTesterGuidePin(guide(`status: active\ntester_release:\n  tag: ${TAG}`), TAG, true)).toThrow(
+			/not an exact v\* tag/
+		);
+		expect(() => readTesterGuidePin(guide(`status: active\ntester_release: [${TAG}]`), TAG, true)).toThrow(
+			/not an exact v\* tag/
+		);
+	});
+
+	it('rejects frontmatter that is not a mapping or not valid YAML', () => {
+		expect(() => readTesterGuidePin(guide('- status: paused'), TAG, false)).toThrow(
+			/frontmatter is not a YAML mapping/
+		);
+		expect(() => readTesterGuidePin(guide('status: [paused'), TAG, false)).toThrow(
+			/malformed frontmatter YAML/
 		);
 	});
 

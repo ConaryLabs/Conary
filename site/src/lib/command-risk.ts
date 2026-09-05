@@ -168,6 +168,18 @@ export const commandRisk = {
 	],
 
 	/**
+	 * Known dry-run defect (#922), example only: `--dry-run` is classed as
+	 * non-mutating, but `apps/conary/src/commands/install/command.rs` promotes
+	 * an already-installed dependency to explicit before reaching its dry-run
+	 * branch, so this form writes `troves.install_reason`.
+	 */
+	dryRunKnownMutations: [
+		'conary install <package already installed as a dependency> --dry-run'
+	],
+	dryRunIssue: '#922',
+	dryRunIssueUrl: 'https://github.com/FieldmouseWorks/Conary/issues/922',
+
+	/**
 	 * GenerationBootActivation: an internal boot continuation authorized by the
 	 * generation artifact and kernel command line, not by `--yes`.
 	 */
