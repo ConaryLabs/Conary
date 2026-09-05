@@ -2645,6 +2645,24 @@ test_check_release_matrix_rejects_unvalidated_native_oracle_survey() {
         "native-oracle lane writes and validates diagnostics survey before strict resolution"
 }
 
+test_check_release_matrix_rejects_omitted_survey_manifest_budget() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once "$repo/scripts/produce-native-oracle-lane.py" \
+        '        "evidence_byte_limit": survey["evidence_byte_limit"],' ''
+    assert_check_release_matrix_fails "$repo" \
+        "native-oracle sanitized survey retains its validated evidence byte limit"
+}
+
+test_check_release_matrix_rejects_unchecked_survey_manifest_budget() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once "$repo/.github/workflows/produce-remi-native-oracles.yml" \
+        '            .survey.evidence_byte_limit == 33554432 and' ''
+    assert_check_release_matrix_fails "$repo" \
+        "native-oracle workflow validates the sanitized survey evidence byte limit"
+}
+
 test_check_release_matrix_rejects_native_oracle_archive_digest_bypass() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3961,6 +3979,8 @@ main() {
         test_check_release_matrix_rejects_loose_resolution_survey_transport
         test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection
         test_check_release_matrix_rejects_unvalidated_native_oracle_survey
+        test_check_release_matrix_rejects_omitted_survey_manifest_budget
+        test_check_release_matrix_rejects_unchecked_survey_manifest_budget
         test_check_release_matrix_rejects_native_oracle_archive_digest_bypass
         test_check_release_matrix_rejects_unserialized_site_deployment
         test_check_release_matrix_rejects_unserialized_r2_durability

@@ -10,10 +10,12 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -271,6 +273,83 @@ class NativeOracleLaneTests(unittest.TestCase):
         self.assertEqual(state["reason"], "schema_rebuild_required")
         self.assertEqual(state["found_schema"], found)
         self.assertEqual(state["current_schema"], 3)
+
+    def validate_workflow_survey(self, profile: str) -> subprocess.CompletedProcess[str]:
+        # Execute the actual protected workflow step, including every jq predicate
+        # and ecosystem branch. A copied test predicate would conceal operator drift.
+        workflow = (REPO_ROOT / ".github/workflows/produce-remi-native-oracles.yml").read_text()
+        step = workflow.split("      - name: Require bound sanitized survey evidence\n")
+        self.assertEqual(len(step), 2)
+        block = step[1].split("      - name: Upload diagnostics-only native resolution survey\n")
+        self.assertEqual(len(block), 2)
+        body = block[0].split("        run: |\n")
+        self.assertEqual(len(body), 2)
+        command = textwrap.dedent(body[1])
+        self.assertNotIn("${{", command, "workflow run body needs explicit test bindings")
+        ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
+        # The workflow's runner layout differs from the test producer's destinations.
+        destination = self.root / f"native-oracle-survey-{profile}"
+        shutil.copytree(self.root / f"survey-{profile}", destination, dirs_exist_ok=True)
+        return subprocess.run(
+            ["bash", "-c", command], text=True, capture_output=True, check=False,
+            env={
+                **os.environ,
+                "RUNNER_TEMP": str(self.root),
+                "DEPLOYED_COMMIT": COMMIT,
+                "DEPLOYMENT_RUN_ID": "123",
+                "EXPORT_ID": "slice6-test",
+                "EXPORT_RUN_ID": "456",
+                "LANE_IMAGE": "example.invalid/native@sha256:" + "d" * 64,
+                "PACKAGE_PRODUCER": str(self.root / f"conary-{ecosystem}-oracle"),
+                "PROFILE": profile,
+                "PRODUCER_COMMIT": PRODUCER_COMMIT,
+                "RESOLUTION_PRODUCER": str(self.root / f"conary-{ecosystem}-resolution-oracle"),
+                "TRANSPORT_SHA256": "c" * 64,
+            },
+        )
+
+    def test_all_lane_surveys_pass_exact_workflow_validation(self) -> None:
+        for profile, architecture in (("fedora-44", "x86_64"), ("ubuntu-26.04", "amd64"), ("arch", "x86_64")):
+            with self.subTest(profile=profile):
+                result = self.run_lane(profile, architecture)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                result = self.validate_workflow_survey(profile)
+                self.assertEqual(result.returncode, 0, f"{profile} workflow rejected producer survey: {result.stderr}")
+
+    def test_workflow_rejects_sanitized_manifest_drift(self) -> None:
+        self.assertEqual(self.run_lane("arch").returncode, 0)
+        path = self.root / "survey-arch" / "manifest.json"
+        original = path.read_bytes()
+        for field, value in (
+            ("evidence_byte_limit", None), ("evidence_byte_limit", 16777216),
+            ("sha256", "0" * 64), ("size", 0),
+            ("implementation", {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 3, "version": "wrong"}),
+        ):
+            with self.subTest(field=field, value=value):
+                manifest = json.loads(original)
+                if value is None:
+                    del manifest["survey"][field]
+                else:
+                    manifest["survey"][field] = value
+                path.write_bytes(canonical(manifest))
+                self.assertNotEqual(self.validate_workflow_survey("arch").returncode, 0)
+        path.write_bytes(original)
+
+    def test_workflow_rejects_survey_count_drift_with_rebound_digest(self) -> None:
+        self.assertEqual(self.run_lane("arch").returncode, 0)
+        root = self.root / "survey-arch"
+        original = (root / "survey.json").read_bytes()
+        manifest = json.loads((root / "manifest.json").read_bytes())
+        for field, value in (("total_failures", 1), ("retained_diagnostic_outcomes", 5001), ("diagnostic_outcome_record_limit", 1)):
+            with self.subTest(field=field):
+                survey = json.loads(original)
+                survey[field] = value
+                data = canonical(survey)
+                (root / "survey.json").write_bytes(data)
+                manifest["survey"]["sha256"] = hashlib.sha256(data).hexdigest()
+                manifest["survey"]["size"] = len(data)
+                (root / "manifest.json").write_bytes(canonical(manifest))
+                self.assertNotEqual(self.validate_workflow_survey("arch").returncode, 0)
 
     def test_retired_resolution_schema_one_requires_rebuild(self) -> None:
         self.assert_retired_resolution(1)
