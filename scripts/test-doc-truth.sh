@@ -148,7 +148,7 @@ EOF
     cat > "$root/README.md" <<'EOF'
 # Conary
 
-[![Latest release](https://img.shields.io/github/v/release/ConaryLabs/Conary?label=release)](https://github.com/ConaryLabs/Conary/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/FieldmouseWorks/Conary?label=release)](https://github.com/FieldmouseWorks/Conary/releases/latest)
 
 Conary is still early. Expect failures.
 Use a VM or disposable host first.
@@ -165,7 +165,7 @@ An intentionally hypothetical path such as `docs/future-example.md` is marked in
 | Channel | Current state | Authority |
 | --- | --- | --- |
 | Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
-| Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
+| Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/FieldmouseWorks/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
 | Current external tester pin | **None** | See [launch status](docs/roadmaps/launch-status.json) |
 EOF
 
@@ -176,14 +176,14 @@ EOF
 
 | Version | Supported |
 | --- | --- |
-| [Latest immutable preview release](https://github.com/ConaryLabs/Conary/releases/latest) | Yes |
+| [Latest immutable preview release](https://github.com/FieldmouseWorks/Conary/releases/latest) | Yes |
 EOF
 
     cat > "$root/docs/guides/agent-assisted-tester-loop.md" <<'EOF'
 # Agent-Assisted Tester Loop
 
 Use only the pinned v0.10.1 release from
-https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1.
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.10.1.
 Fedora artifact: conary-0.10.1-1.fc44.x86_64.rpm.
 EOF
 
@@ -258,7 +258,7 @@ summary: Fixture postponed launch packet
 Do not publish until release readiness is repinned.
 The historical safety baseline is v0.10.1.
 The intended release is v0.11.0.
-https://github.com/ConaryLabs/Conary/releases/tag/v0.11.0
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.11.0
 - [ ] Publish immutable `v0.11.0`.
 EOF
 
@@ -274,8 +274,8 @@ Version `0.10.1` is the current immutable release authority.
 
 | Product | Source commit | Binary download or package URL | Required evidence |
 | --- | --- | --- | --- |
-| `conary` | `v0.10.1` | https://github.com/ConaryLabs/Conary/releases/tag/v0.10.1 | release-build green |
-| `remi` | `remi-v0.7.0` | https://github.com/ConaryLabs/Conary/releases/tag/remi-v0.7.0 | independent service release |
+| `conary` | `v0.10.1` | https://github.com/FieldmouseWorks/Conary/releases/tag/v0.10.1 | release-build green |
+| `remi` | `remi-v0.7.0` | https://github.com/FieldmouseWorks/Conary/releases/tag/remi-v0.7.0 | independent service release |
 EOF
 
     cat > "$root/site/src/routes/about/+page.svelte" <<'EOF'
@@ -670,11 +670,11 @@ break_release_doc_version() {
 }
 
 break_readme_release_channel() {
-    sed -i 's#github.com/ConaryLabs/Conary/releases/latest#github.com/ConaryLabs/Conary/releases/tag/v0.9.2#g' "$1/README.md"
+    sed -i 's#github.com/FieldmouseWorks/Conary/releases/latest#github.com/FieldmouseWorks/Conary/releases/tag/v0.9.2#g' "$1/README.md"
 }
 
 break_security_release_version() {
-    sed -i 's#github.com/ConaryLabs/Conary/releases/latest#github.com/ConaryLabs/Conary/releases/tag/v0.9.2#' "$1/SECURITY.md"
+    sed -i 's#github.com/FieldmouseWorks/Conary/releases/latest#github.com/FieldmouseWorks/Conary/releases/tag/v0.9.2#' "$1/SECURITY.md"
 }
 
 break_release_artifact_version() {

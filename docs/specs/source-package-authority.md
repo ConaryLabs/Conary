@@ -9,10 +9,10 @@ summary: Define lossless RPM, Debian, ALPM, eopkg, and CCS package authority plu
 ## Status And Scope
 
 This specification is the design authority for roadmap workstream W5 and
-[issue #108](https://github.com/ConaryLabs/Conary/issues/108). It defines the
+[issue #108](https://github.com/FieldmouseWorks/Conary/issues/108). It defines the
 hard-cut target implemented by issues
-[#104](https://github.com/ConaryLabs/Conary/issues/104) and
-[#105](https://github.com/ConaryLabs/Conary/issues/105). Issues #104 and #105
+[#104](https://github.com/FieldmouseWorks/Conary/issues/104) and
+[#105](https://github.com/FieldmouseWorks/Conary/issues/105). Issues #104 and #105
 have shipped the source-specific identity, provision, and configuration
 records, CCS v3 provenance, resolver distinction, provider and config
 persistence, and transaction projections. W5 is one complete hard cut.

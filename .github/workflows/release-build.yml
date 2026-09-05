@@ -982,7 +982,7 @@ jobs:
           Remi, conaryd, and conary-test. SBOM and provenance sidecars are not
           published yet.
 
-          Defects can be reported with the [pre-alpha tester feedback template](https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md).
+          Defects can be reported with the [pre-alpha tester feedback template](https://github.com/FieldmouseWorks/Conary/issues/new?template=pre_alpha_feedback.md).
 
           ## Changes
 

@@ -160,7 +160,7 @@ fn build_cyclonedx_bom(
         metadata: cyclonedx::Metadata {
             timestamp: Utc::now().to_rfc3339(),
             tools: vec![cyclonedx::Tool {
-                vendor: "ConaryLabs".to_string(),
+                vendor: "FieldmouseWorks".to_string(),
                 name: "conary".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
             }],

@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Conary Contributors <contributors@conary.io>
 Build-Depends: debhelper-compat (= 13), libssl-dev, liblzma-dev, libseccomp-dev, pkg-config, cmake, perl
 Standards-Version: 4.6.2
-Homepage: https://github.com/ConaryLabs/Conary
+Homepage: https://github.com/FieldmouseWorks/Conary
 
 Package: conary
 Architecture: amd64

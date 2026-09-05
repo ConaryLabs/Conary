@@ -21,7 +21,7 @@ and W7's ordinary-package gate has passed. The suite still predates the current
 signed-universe client protocol and is not pinned tester authority. Resume only
 after the canonical [launch status](../roadmaps/launch-status.json) assigns an
 exact tester release, this guide names that same release, and the
-[current release artifact matrix](https://github.com/ConaryLabs/Conary/blob/main/docs/operations/release-artifact-matrix.md)
+[current release artifact matrix](https://github.com/FieldmouseWorks/Conary/blob/main/docs/operations/release-artifact-matrix.md)
 still records that tag as published and independently verified.
 
 ## Copy-Paste Agent Prompt
@@ -39,7 +39,7 @@ release exists.
 I want you to help me run the Conary first external tester loop on this host.
 
 Read this guide first:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
 
 Goal: install, inspect, update-preview, and remove a package whose source
 format differs from this host's native package format with pinned Conary
@@ -51,7 +51,7 @@ Safety rules:
   host.
 - Confirm distro, architecture, kernel, and sudo before installing anything.
 - Use only the pinned v0.16.1 release from
-  https://github.com/ConaryLabs/Conary/releases/tag/v0.16.1 and confirm its
+  https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1 and confirm its
   release page provides the package for this host plus SHA256SUMS.
 - Verify SHA256SUMS for every downloaded artifact before installation.
 - Run dry-run commands before live commands when the loop provides both.
@@ -62,7 +62,7 @@ Safety rules:
 - Do not upload logs, bundles, private keys, tokens, shell history, raw
   environment dumps, or Conary databases.
 - At the end, draft a GitHub pre-alpha tester feedback issue using
-  https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md.
+  https://github.com/FieldmouseWorks/Conary/issues/new?template=pre_alpha_feedback.md.
 ```
 
 If the agent is running from a Conary checkout, the same guide is also at
@@ -124,13 +124,13 @@ cd "$HOME/conary-preview-v0.16.1"
 Download `SHA256SUMS` and the package for the current distro from:
 
 ```text
-https://github.com/ConaryLabs/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
 ```
 
 Use exactly one package. Fedora 44:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.16.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.16.1"
 curl -fLO "$base/SHA256SUMS"
 curl -fLO "$base/conary-0.16.1-1.fc44.x86_64.rpm"
 ```
@@ -138,7 +138,7 @@ curl -fLO "$base/conary-0.16.1-1.fc44.x86_64.rpm"
 Ubuntu 26.04 LTS:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.16.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.16.1"
 curl -fLO "$base/SHA256SUMS"
 curl -fLO "$base/conary_0.16.1-1_amd64.deb"
 ```
@@ -146,7 +146,7 @@ curl -fLO "$base/conary_0.16.1-1_amd64.deb"
 Arch Linux:
 
 ```bash
-base="https://github.com/ConaryLabs/Conary/releases/download/v0.16.1"
+base="https://github.com/FieldmouseWorks/Conary/releases/download/v0.16.1"
 curl -fLO "$base/SHA256SUMS"
 curl -fLO "$base/conary-0.16.1-1-x86_64.pkg.tar.zst"
 ```
@@ -241,7 +241,7 @@ During the run, capture:
 Open a pre-alpha tester feedback issue:
 
 ```text
-https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
+https://github.com/FieldmouseWorks/Conary/issues/new?template=pre_alpha_feedback.md
 ```
 
 Fill in:

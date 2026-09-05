@@ -1,7 +1,7 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: conary
 Upstream-Contact: Conary Contributors <contributors@conary.io>
-Source: https://github.com/ConaryLabs/Conary
+Source: https://github.com/FieldmouseWorks/Conary
 
 Files: *
 Copyright: 2024-2026 Conary Contributors

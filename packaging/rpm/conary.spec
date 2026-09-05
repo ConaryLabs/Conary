@@ -14,7 +14,7 @@ Release:        1%{?dist}
 Summary:        Early-preview Linux package manager with native-package adoption
 
 License:        MIT
-URL:            https://github.com/ConaryLabs/Conary
+URL:            https://github.com/FieldmouseWorks/Conary
 Source0:        %{crate}-%{version}.tar.gz
 Source1:        vendor.tar.gz
 

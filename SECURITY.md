@@ -6,7 +6,7 @@ If you discover a security vulnerability in Conary, **please do not open a publi
 
 Instead, use GitHub's private vulnerability-reporting form:
 
-1. Go to [https://github.com/ConaryLabs/Conary/security/advisories/new](https://github.com/ConaryLabs/Conary/security/advisories/new)
+1. Go to [https://github.com/FieldmouseWorks/Conary/security/advisories/new](https://github.com/FieldmouseWorks/Conary/security/advisories/new)
 2. Click **Report a vulnerability**
 3. Fill in the details of the vulnerability
 4. Submit the private report
@@ -36,7 +36,7 @@ We will coordinate disclosure with you. You will be credited in the advisory unl
 
 | Version | Supported |
 |---------|-----------|
-| [Latest immutable preview release](https://github.com/ConaryLabs/Conary/releases/latest) | Yes |
+| [Latest immutable preview release](https://github.com/FieldmouseWorks/Conary/releases/latest) | Yes |
 | Older preview releases | No |
 
 Only the latest release receives security updates. The basic package-manager

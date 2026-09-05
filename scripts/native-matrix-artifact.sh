@@ -12,6 +12,7 @@ BUILD_COMMAND="bash scripts/build-static-conary.sh --with-test-harness"
 CACHE_BACKEND="local-disk-bulk-v1"
 CACHE_NAMESPACE_PATTERN='^native-matrix-musl-local-v1-[0-9a-f]{64}$'
 CACHE_VERSION="0.16.0"
+EXPECTED_REPOSITORY="FieldmouseWorks/Conary"
 ARTIFACT_PATHS=(
     "$TARGET/$PROFILE/conary"
     "$TARGET/$PROFILE/conary-test"
@@ -323,7 +324,7 @@ verify_artifact() {
         --arg action "$(sha256_file .github/actions/build-static-conary/action.yml)" \
         --arg rust_toolchain "$(workspace_rust_version)" \
         --arg rustc_verbose_sha256 "$manifest_rustc_sha" \
-        --arg repository "${GITHUB_REPOSITORY:-ConaryLabs/Conary}" \
+        --arg repository "${GITHUB_REPOSITORY:-$EXPECTED_REPOSITORY}" \
         --arg event "$expected_event" \
         --argjson run_id "$expected_run_id" '
           .schema_version == 1

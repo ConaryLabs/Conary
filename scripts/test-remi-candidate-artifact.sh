@@ -96,7 +96,7 @@ package_once() {
     local output="$1"
     (
         cd "$fixture"
-        GITHUB_REPOSITORY=ConaryLabs/Conary \
+        GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         GITHUB_WORKFLOW=build-remi-candidate \
         GITHUB_EVENT_NAME=push \
         RUNNER_OS=Linux \
@@ -132,7 +132,7 @@ cmp "${tmpdir}/first-stable-manifest.json" "${tmpdir}/second-stable-manifest.jso
 
 (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push \
       >"${tmpdir}/verified.json"
 )
@@ -163,7 +163,7 @@ jq -e '
 rm "$second/remi-1.2.3-linux-x64"
 (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$second" "$commit" 1234 push \
       >/dev/null
 )
@@ -172,7 +172,7 @@ cp "$second/remi-1.2.3-linux-x64.tar.gz" "${tmpdir}/bundle-backup"
 printf '\ncorrupt\n' >>"$second/remi-1.2.3-linux-x64.tar.gz"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$second" "$commit" 1234 push
 ) >"${tmpdir}/bundle-tamper.out" 2>"${tmpdir}/bundle-tamper.err"; then
     fail "tampered downloaded bundle passed verification"
@@ -186,7 +186,7 @@ cp "$first/rustc-timings.tsv" "${tmpdir}/rustc-timings-backup"
 printf '999\t0\tforged\tbin\n' >>"$first/rustc-timings.tsv"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push
 ) >"${tmpdir}/compiler-timing-tamper.out" \
     2>"${tmpdir}/compiler-timing-tamper.err"; then
@@ -201,7 +201,7 @@ cp "$first/remi-1.2.3-linux-x64" "${tmpdir}/binary-backup"
 printf '\ncorrupt\n' >>"$first/remi-1.2.3-linux-x64"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push
 ) >"${tmpdir}/tamper.out" 2>"${tmpdir}/tamper.err"; then
     fail "tampered binary passed verification"
@@ -212,7 +212,7 @@ mv "${tmpdir}/binary-backup" "$first/remi-1.2.3-linux-x64"
 
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$first" \
         0000000000000000000000000000000000000000 1234 push
 ) >"${tmpdir}/commit.out" 2>"${tmpdir}/commit.err"; then
@@ -227,7 +227,7 @@ jq '.build.rustflags = "-C target-cpu=native"' \
 mv "${tmpdir}/manifest-mutated" "$first/remi-candidate-manifest.json"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
       scripts/remi-candidate-artifact.sh verify "$first" "$commit" 1234 push
 ) >"${tmpdir}/policy.out" 2>"${tmpdir}/policy.err"; then
     fail "artifact with mismatched build policy passed verification"
