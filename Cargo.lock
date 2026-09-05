@@ -1019,7 +1019,7 @@ checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
 
 [[package]]
 name = "conary"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1079,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "conary-agent-contract"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -1088,7 +1088,7 @@ dependencies = [
 
 [[package]]
 name = "conary-bootstrap"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "tokio",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "conary-core"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "alpm",
  "alpm-types",
@@ -1191,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "conary-mcp"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "conary-agent-contract",
  "rmcp",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "conary-test"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1233,7 +1233,7 @@ dependencies = [
 
 [[package]]
 name = "conary-xtask"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1242,7 +1242,7 @@ dependencies = [
 
 [[package]]
 name = "conaryd"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -5018,7 +5018,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "remi"
-version = "0.16.1"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "ar",
