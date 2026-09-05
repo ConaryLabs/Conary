@@ -4,6 +4,525 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.17.0] - 2026-09-05
+
+### Added
+- expose resolution worker evidence
+- protect production resolution surveys
+- run stopped Remi resolution surveys
+- authenticate resolution survey transports
+- orchestrate resolution surveys
+- survey resolution diagnostics
+- bind native-only architecture admission
+- survey native resolution failures
+- publish sanitized benchmark evidence
+- complete portable catalog authority
+- authenticate SQLite reads portably
+- add portable chunk authority
+- require portable catalog attestations
+- anchor durable verification
+- persist catalog physical attestations
+- export exact native oracle inputs (#602)
+- expose exact promotion proof operator (#588)
+- make promotion the sole atomic activation authority (#586)
+- independently reopen full-crawl CCS (#572)
+- add strict full-universe conversion crawl (#570)
+- produce Debian native resolution evidence (#568)
+- add strict Debian package oracle (#566)
+- add RPM resolution producer
+- produce RPM native parity evidence (#562)
+- produce ALPM resolution parity evidence (#559)
+- define native resolution parity evidence (#557)
+- produce ALPM native parity evidence (#555)
+- define native parity oracle artifacts (#553)
+- validate canonical candidate packages (#551)
+- declare complete profile universes (#549)
+- enroll canonical universe root
+- persist universe trust root
+- activate signed Remi universes
+- publish atomic signed universes
+- define signed Remi universe
+- finish immutable catalog authority
+- serve sparse reads from active catalogs
+- read readiness from active catalogs
+- page immutable catalog names
+- bind catalog readers to runtime sessions
+- recover crashed catalog reader pins
+- recover immutable catalog publications
+- collect unreachable catalog revisions
+- activate profile catalog refresh
+- hard-cut profile refresh runs
+- build immutable profile catalogs
+- register exact catalog resources
+- fence profile catalog activation
+- compose authenticated catalog revisions
+- publish immutable catalog bundles
+- build immutable catalog artifacts
+- define immutable catalog contracts
+- complete the W7 just-works corpus (#487)
+
+### Changed
+- deduplicate Remi deployment policy
+- centralize native oracle validation
+- remove impossible native projection branches
+- share typed native resolution production
+- consolidate counters and file validation
+- report package guidance and debug shell facts
+- trace binary failures and deny production printing
+- accept typed choices from the CLI prompt
+- render typed package reports in the CLI
+- type dpkg named-action dispatch
+- simplify the typed enhancement scheduling guard
+- remove final socket and test wrappers
+- extract survey contract tests for line cap
+- own native identity construction
+- make pipeline execution synchronous
+- make synchronous commands explicit
+- consolidate transaction helpers
+- standardize daemon logging
+- bind adapters to contract metadata
+- delete unwired daemon surfaces
+- delete dead command surfaces
+- make five no-await helpers synchronous
+- retire all twenty line-cap exceptions
+- extract server root tests
+- move catalog test support under tests
+- extract handler tests
+- extract conversion storage tests
+- extract admin refresh tests
+- extract federation router tests
+- isolate resolution evidence limits
+- isolate ALPM survey evidence
+- move large unit tests to sibling file
+- move large unit tests to sibling file
+- move large unit tests to sibling file
+- move large unit tests to sibling file
+- move large unit tests to sibling files
+- move large unit tests to sibling files
+- move large unit tests to sibling file
+- move large unit tests to sibling files
+- move large unit tests to sibling file
+- move large unit tests to sibling files
+- move large unit tests to sibling file
+- move large unit tests to sibling file
+- move large unit tests to sibling files
+- move large unit tests to sibling files
+- move large unit tests to sibling files
+- move large unit tests to sibling files
+- move large unit tests to sibling file
+- keep network policy out of locations
+- keep publication errors idiomatic
+- isolate public network policy
+- derive audit actions from matched routes
+- centralize private output validation
+- split runtime lifecycle ownership
+- extract Debian worker protocol
+- extract resolution wire errors
+- remove predicate admission checks
+- simplify Debian tuple classification
+- extract profile revision inspection
+- type prepared archive options
+- retire fsverity authority
+- isolate reopen verification
+- use one staging metrics API
+- box projection spool packages
+- separate source authority derivation
+- group source stage inputs
+- split incremental digest owner
+- stream native catalog ingestion
+- stream catalog candidate writes
+
+### Fixed
+- retain survey output across restore failures
+- resume existing nightly date before selecting green main
+- preflight nightly commit capability before tagging
+- validate nightly release notes boundaries
+- authorize native downgrades and ignore malformed discovery tags
+- retain surveys when strict publication fails
+- emit the pinned composefs verity option from the initramfs adapter
+- validate boot verity policy at the command entry point
+- report boot warnings through the CLI
+- scan for policy-eligible generation artifacts
+- finalize verity before mounting rebuilt images
+- preserve workflow actions after root checkout
+- close deployment review gaps
+- retain survey budget in sanitized lane evidence
+- preserve check order through user decisions
+- retain signing helper terminal output contract
+- decide boot-asset policy from a typed BootRoot
+- preserve every schema sync-run state
+- classify retired resolution bundles as rebuild state
+- prefilter terminal sync recovery history
+- detect Debian reachable sibling conflicts
+- fence unknown states before run recovery
+- label the authority budget census fields correctly
+- bound hidden conflict probing per root
+- retain cleanup through provenance persistence
+- validate enhancement status across rollback snapshots
+- retain activation column context on decode failure
+- propagate enhancement row decoding errors
+- persist provenance before recording typed trust
+- bind and validate owner vocabularies
+- centralize persisted sync run lifecycle
+- fence obsolete survey transport envelopes
+- replay answers and retain first missing fallback
+- call synchronous remove command
+- exempt bracketed data suffixes
+- route status output through ui
+- scope question exploration to the active path
+- descend through exposed native provider questions
+- enforce the fixed survey evidence limit
+- classify children under enclosing cfg constraints
+- classify file-level and conditional test gating exactly
+- trace native provider closure conflict reachability
+- enforce headers and expand conditional cfg
+- bind copied ALPM conflict parties by native identity
+- bound ALPM probes to native conflict-party choices
+- count standalone test annotations
+- reuse native ALPM satisfier selection in conflict probes
+- prepare CI Rust and close cfg counting gaps
+- preserve compatible provider paths
+- hard-cut survey diagnostics envelope
+- preserve usable conflict alternatives
+- enforce diagnostic outcome cap
+- hard-cut native lane evidence
+- hard-cut promotion evidence schema
+- recheck conflicts after missing prepare
+- preserve fatal survey evidence budget
+- stop capped survey evidence work
+- bound conflict survey outcomes
+- type RPM conflict evidence state
+- retain conflict outcome diagnostics
+- preserve transitive alternatives
+- ignore avoidable conflict targets
+- evaluate cfg polarity and renew owners
+- parse test spans with syn
+- count all production and inline tests
+- resolve hook binary after overrides
+- bound opened private input allocation
+- match allowlist path segments
+- bound public DNS resolution
+- swap search projections atomically
+- fence obsolete universe renewal
+- close publication authority review gaps
+- preserve obsolete profile upgrade fencing
+- gate dormant federation surfaces
+- classify obsolete universe publication
+- canonicalize unresolved group digests
+- close exec PID wakeup race
+- validate persisted output hashes
+- require EFI image formatting
+- require current resolution evidence schema
+- classify conflicting closures
+- admit workers from available memory
+- support large survey oracle members
+- version worker evidence bindings
+- preserve symlink destination semantics
+- bound available-worker result window
+- abort on Debian worker transport loss
+- consume survey lane staging
+- keep worker evidence outside bundles
+- stage survey oracles on evidence storage
+- terminate panicked workers deterministically
+- preserve typed bounded survey transport
+- decouple workers from caller capacity
+- replay authenticated native comparisons
+- preserve ordered worker contracts
+- stream candidate package bindings
+- support jq 1.6 survey summaries
+- bind reconstructed candidate manifests
+- emit bounded resolution summaries
+- stream resolution survey verification
+- stop after viable apt target
+- bind survey comparison roots
+- admit manifest-bound survey inputs
+- retain exact Debian probe root
+- reconcile apt probe broken state
+- close survey authority gaps
+- validate apt probe closure
+- preserve failures behind virtual providers
+- enforce fixed survey evidence limits
+- fence stale survey workflow authority
+- revalidate helper before installation
+- bind the survey candidate producer
+- refuse survey helper downgrades
+- preserve apt versioned virtual providers
+- use monotonic apt timeout guard
+- reject ambiguous survey JSON types
+- validate complete survey schemas
+- contain survey preflight failures
+- preserve apt solver execution failures
+- preserve mixed apt solver failures
+- project apt no-satisfying-candidate dependencies as unresolved
+- contain survey failure diagnostics
+- accept Remi survey finding status
+- carry Debian frontier selections
+- preserve complete survey diagnostics
+- reject Debian frontier conflicts
+- require Remi survey readiness
+- pin native oracle export trust
+- bound ordered result retention
+- install exact resolution survey helper
+- retain failed survey worker evidence
+- project Debian missing frontiers
+- seal resolution survey evidence
+- pin resolution survey host identity
+- reject unbound survey documents
+- validate unscoped architecture requests against the candidate scheme
+- separate package variant selection from host architecture assertion
+- classify obsolete universes on public reads
+- admit repository rows once at solvable load
+- bind admission to profile targets
+- enforce profile ABI in SAT matching
+- propagate unknown architecture tokens
+- retain candidate profile authority
+- preserve staged directory modes
+- separate host machine from package ABI
+- fence obsolete universe publication
+- supersede obsolete active universes
+- derive typed native host identity
+- retain ABI dimensions in machine architecture identity
+- derive architecture admission authority
+- classify obsolete active universes
+- rebuild obsolete profile revisions
+- validate current oracle schemas
+- bind resolution architecture to profile
+- keep pacman -U invocation exact
+- disable pacman download timeout in Arch image build
+- build native survey evidence lazily
+- bound native survey explanation projection
+- bound native resolution survey evidence
+- keep RPM survey evidence private and typed
+- confine RPM provider-policy tolerance to strict problems
+- keep root RPM conflicts fatal
+- project RPM edges under final strict visibility
+- project reachable RPM unresolved frontier
+- filter shadowed RPM provider edges
+- retain residual RPM conflict edges
+- preserve libsolv problem boundaries
+- project strict-priority RPM multilib failures
+- project strict RPM priority failures (#806)
+- canonicalize native RPM empty epochs
+- classify directory split-provides coverage
+- preserve nested RPM relation trees
+- resolve shadowed Debian roots
+- classify libsolv split provides
+- preserve atomic ALPM sonames
+- pin Bash for oracle containers
+- bind export to deployed candidate
+- report unusable composefs helpers
+- require executable composefs helper
+- preflight fallback overlay carrier
+- materialize when composefs is unavailable
+- reject noncanonical signing inputs
+- exhaust physical framing during inspection
+- validate parallel decode benchmark work
+- complete mgzip carrier hard cut
+- distinguish native gzip during detection
+- scope compression admission to archive
+- centralize compression budget
+- advance Tumbleweed image authority
+- validate current benchmark schemas
+- report conversion phases in execution order
+- align conversion benchmark phase order
+- bind verified conversion publication
+- repair proven benchmark work-root owner (#761)
+- pinpoint benchmark work-root layout drift
+- report exact benchmark work-root failures
+- retain typed benchmark failure evidence
+- structurally validate benchmark workflow
+- keep benchmark RSS evidence coherent
+- bind catalog deletion manifests
+- tolerate vanished benchmark tasks
+- collect retired catalog candidates
+- preserve catalog integrity evidence
+- harden catalog cache handoff
+- reopen benchmark durations exactly
+- preserve object liveness lock
+- validate WAL through one descriptor
+- retain CAS proof liveness
+- keep boot reuse staging compact
+- separate deployment inspection channels
+- consume isolated probe input
+- load policy from workflow authority
+- scope refresh fences to schema authority
+- ignore empty response frames
+- preserve cross-schema deploy baseline
+- allow exact catalog artifact aliases
+- pin oracle export inputs atomically
+- keep Remi deployment sessions alive (#687)
+- collect retained source metadata (#684)
+- accept typed incomplete Remi baseline (#678)
+- recover transient metadata body failures (#670)
+- retain native metadata authority
+- bind Debian metadata object path (#653)
+- bind crawl to durable config (#651)
+- separate Debian pocket provenance
+- canonicalize source empty epochs
+- bind public reads to signed universe
+- preserve shared ingress root
+- map Remi Rust tests through Podman (#633)
+- wait for runner listener startup (#631)
+- drain runner tree before replacement (#627)
+- collapse identical conffile authority
+- use runner service entrypoint
+- make listener audit restart-safe
+- restart runner into scoped profile
+- scope ownership namespaces to runner
+- audit runner KVM access via shell
+- pin Tumbleweed repository authority
+- honor RPM reverse weak context
+- parse Fedora metalink alternates exactly (#611)
+- expose causal profile refresh diagnostics (#604)
+- distinguish private candidate deployment readiness (#600)
+- admit native catalog growth (#597)
+- admit profile candidate growth (#596)
+- admit unknown metadata streams (#595)
+- remove Arch pairing spool (#593)
+- remove RPM audit spool (#592)
+- reserve signed metadata staging (#591)
+- reserve projection cache copies (#590)
+- reserve catalog finalization scratch (#589)
+- complete large universe sync (#547)
+- bound immutable readiness inspection
+- scope client index attachment
+- serialize exact catalog collection
+- release state lock before publication wait
+- tolerate absent profile gc namespace
+- renew publication leases
+- bound source bundle verification
+- stream high-cardinality relations
+- preserve long native refresh authority
+- preserve native unicode capabilities
+- harden streaming ingestion boundaries
+- fence deployment transitions (#530)
+- lock runtime root (#529)
+- fence sparse sync publication (#524)
+- sequence canonical bootstrap (#523)
+- coordinate repository database writers (#519)
+- retry terminal conversion jobs (#518)
+- persist boot runtime activation (#501)
+- restore Rust 1.98 Clippy gate (#503)
+- enforce third-party divergence inventory (#500)
+- unify public version authority (#498)
+
+### Security
+- bind deployed candidate digest
+- centralize recovery verity policy
+- redact production admin login
+- require explicit verity opt-out
+- pin production SSH host identity
+- forbid test hooks in artifacts
+- centralize test hook authority
+- validate every repository redirect
+- pin repository fetch addresses
+- use local advisory authority
+- root helper updates in protected main
+- reject stale oracle operators
+
+### Performance
+- walk each native lane once
+- index payload claims once per generation build
+- dispatch roots to available workers
+- bound resolution worker admission
+- parallelize resolution root walks
+- parallelize authenticated archive reopen
+- admit live compression capacity
+- parallelize bounded archive compression
+- fuse payload derivation and staging
+- fuse file digest into decode spool
+- finalize native conversion exactly once
+- verify converted CCS directly into permanent CAS (#755)
+- keep conversion spools ephemeral
+- batch verified object durability
+- measure ephemeral object staging
+- expose ephemeral staging work
+- make archive object staging ephemeral
+- reuse registered source readers
+- make exact hot work counters zero
+- enforce exact hot benchmark hits
+- measure native archive amplification
+- expose conversion pass amplification
+- restore offline conversion benchmark
+- cut serialized Conary iteration links (#740)
+- borrow verified CAS object set
+- reuse exact CAS presence proof
+- batch overlay durability at freeze
+- skip unused native state
+- cache payload claim reads
+- reuse verified CAS while seeding state
+- reuse unchanged boot assets
+- bulk-load supplemental provides
+- replay admitted projection spool
+- reuse exact durable source catalogs
+- use causal deployment proof
+- bound causal candidate inspection
+- coalesce deployment refresh work
+- hand off verified catalog readers
+- compact catalogs without copy-back
+- run source pipelines on bounded workers
+- reuse projections across root churn
+- reuse immutable relation proof
+- bulk-cache Remi candidate builds
+- seed compiler caches from main (#690)
+- reuse exact catalog verification proofs (#689)
+- build protected matrix artifacts once (#685)
+- reuse exact Remi deployment artifacts (#683)
+- bound Remi deployment baseline (#679)
+- share compiler cache across worktrees (#675)
+- bound same-schema Remi deploys (#674)
+- reuse exact profile revisions (#672)
+- stream profile relation replay (#669)
+- stream logical relation verification (#667)
+- reuse verified staging readers
+- materialize exact projection cache hits
+- index RPM filelists joins
+- bound signed universe index replay
+
+### Other
+- legal: package license texts only for trees that carry them
+- legal: run the packaged-license proofs only when the selected tree carries them
+- legal: prove CCS license texts by signed digest and license the Tier 2 recipe
+- legal: compare packaged license bytes and require single-command proof steps
+- legal: require the proof to be the complete command under errexit
+- legal: bind each packaged-contents proof to an executable step in its build job
+- legal: parse the release workflow as YAML for live license proofs
+- legal: parse the release workflow for live license proofs
+- legal: publish license texts with every standalone binary
+- legal: require unique license assignments and evaluate the PKGBUILD value
+- legal: prove license texts inside built artifacts and Remi bundles
+- legal: require both license installs from every package builder
+- legal: read each Debian copyright License from its own paragraph
+- legal: install both license texts from the Debian rules
+- legal: pin license texts by digest and declare Remi's Debian stanza
+- legal: license the client MIT OR Apache-2.0 and Remi AGPL-3.0-or-later
+- ops(remi): exclude the workflow-authority checkout from the workflow itself
+- ops(remi): ignore Python bytecode caches so candidate checkouts stay clean
+- ops(remi): fix the lane identity summary jq program
+- ci(arch): retry pinned archive package sync
+- ci(pr-gate): count Markdown as documentation only in documentation trees
+- ci(pr-gate): classify renames by source path
+- ci(pr-gate): skip native container matrices for no-runtime-impact changes
+- style(rust): normalize all workspace source headers
+- ops(remi): survey and reassemble native lanes
+- ops(remi): bind native oracle producers
+- ops(remi): produce pinned native oracles
+- ops(remi): protect native oracle export (#686)
+- ci: isolate hosted Ubuntu package bootstrap
+- ops(remi): require post-deploy candidate refresh
+- ci: isolate shell policy apt bootstrap
+- ci: retire Remi benchmark runner (#636)
+- ci(remi): add trusted benchmark runner
+- ops(remi): rebuild host on Ubuntu 26.04 (#608)
+- remi: retain refreshes as durable private candidates (#584)
+- remi: crawl exact registered candidates before activation (#582)
+- remi: bind complete promotion proof
+- remi: define promotion evidence contract
+- resolver: produce complete candidate resolution parity evidence (#578)
+- remi: reuse exact conversion proof across revisions (#576)
+- remi: prove static compatibility for every supported target (#574)
+- build: align workspace on Rust 1.98 (#512)
+
 ## [v0.16.1] - 2026-08-18
 
 ### Fixed
