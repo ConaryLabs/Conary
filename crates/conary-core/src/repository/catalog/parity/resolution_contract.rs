@@ -13,7 +13,7 @@ use crate::repository::architecture::{
 };
 use crate::repository::versioning::VersionScheme;
 
-pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V2: u32 = 2;
+pub const NATIVE_RESOLUTION_ORACLE_SCHEMA_V3: u32 = 3;
 
 /// The fixed solver policy whose output may become release evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,7 +180,7 @@ impl NativeResolutionOracleV1 {
             ));
         }
         let manifest = Self {
-            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V2,
+            schema_version: NATIVE_RESOLUTION_ORACLE_SCHEMA_V3,
             profile: profile.profile.clone(),
             profile_revision_sha256: profile.manifest_sha256()?,
             profile_logical_digest_sha256: profile.logical_digest_sha256.clone(),
@@ -195,12 +195,7 @@ impl NativeResolutionOracleV1 {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_ORACLE_SCHEMA_V2 {
-            return Err(Error::ConfigError(format!(
-                "native resolution oracle schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_ORACLE_SCHEMA_V2
-            )));
-        }
+        require_current_resolution_schema(self.schema_version)?;
         validate_identity(&self.profile, "native resolution profile")?;
         validate_sha256(
             &self.profile_revision_sha256,
@@ -252,6 +247,20 @@ impl NativeResolutionOracleV1 {
     }
 }
 
+/// Shared schema fence for in-memory validation and stored-bundle inspection.
+pub(super) fn require_current_resolution_schema(found: u32) -> Result<()> {
+    match found {
+        NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 => Ok(()),
+        1..NATIVE_RESOLUTION_ORACLE_SCHEMA_V3 => Err(Error::ResolutionBundleRebuildRequired {
+            found,
+            current: NATIVE_RESOLUTION_ORACLE_SCHEMA_V3,
+        }),
+        _ => Err(Error::ConfigError(format!(
+            "native resolution oracle schema {found} is unsupported; expected {NATIVE_RESOLUTION_ORACLE_SCHEMA_V3}"
+        ))),
+    }
+}
+
 /// One unresolved typed requirement reached while resolving an exact root.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -292,6 +301,7 @@ pub enum NativeResolutionOutcomeV1 {
 #[serde(rename_all = "snake_case")]
 pub enum NativeResolutionNotInstallableReasonV1 {
     ArchitectureExcluded,
+    ConflictingClosure,
 }
 
 /// One canonical row for every package in the bound package oracle.
@@ -348,9 +358,7 @@ impl NativeResolutionRootV1 {
                     previous = Some(dependency);
                 }
             }
-            NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            } => {}
+            NativeResolutionOutcomeV1::NotInstallable { .. } => {}
         }
         Ok(())
     }
@@ -359,7 +367,9 @@ impl NativeResolutionRootV1 {
 /// Canonical digest used to bind an unresolved solver result to the exact
 /// requirement group in the package-fact oracle.
 pub fn native_requirement_group_sha256(group: &CatalogRequirementGroupV1) -> Result<String> {
-    let bytes = crate::json::canonical_json(group).map_err(|error| {
+    let mut group = group.clone();
+    group.canonicalize()?;
+    let bytes = crate::json::canonical_json(&group).map_err(|error| {
         Error::ParseError(format!(
             "serialize native resolution requirement group: {error}"
         ))

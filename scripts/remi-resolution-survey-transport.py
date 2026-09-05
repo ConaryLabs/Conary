@@ -13,12 +13,17 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import sys
 import tarfile
 import tempfile
 from typing import Any, Iterator, NoReturn
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
+INPUT_MANIFEST_SCHEMA = 2
+INPUT_EVIDENCE_SCHEMA = 2
+OUTPUT_MANIFEST_SCHEMA = 3
+OUTPUT_EVIDENCE_SCHEMA = 3
 PROFILE_ARCHITECTURES = {
     "fedora-44": "x86_64",
     "ubuntu-26.04": "amd64",
@@ -41,7 +46,7 @@ RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
 MAX_SURVEY_DOCUMENTS = len(PUBLIC_PROFILES) * 4
 SURVEY_RECORD_LIMIT = 5_000
-SURVEY_EVIDENCE_BYTE_LIMIT = 64 * 1024 * 1024
+SURVEY_EVIDENCE_BYTE_LIMIT = 32 * 1024 * 1024
 ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT
 U32_MAX = 2**32 - 1
 U64_MAX = 2**64 - 1
@@ -72,6 +77,31 @@ MISMATCH_KINDS = (
 
 class ValidationError(ValueError):
     """An input or output differs from the reviewed transport contract."""
+
+
+class SchemaRebuildRequired(ValidationError):
+    """A recognized retired envelope is non-authority and must be rebuilt."""
+
+    def __init__(self, envelope: str, found: int, current: int):
+        self.evidence = {
+            "status": "obsolete",
+            "reason": "schema_rebuild_required",
+            "envelope": envelope,
+            "found_schema": found,
+            "current_schema": current,
+            "message": f"obsolete {envelope} schema {found}; rebuild as schema {current}",
+        }
+        super().__init__(self.evidence["message"])
+
+
+def require_envelope_schema(value: Any, current: int, label: str) -> None:
+    if not isinstance(value, dict):
+        fail(f"{label} must be an object")
+    version = exact_u32(value.get("schema_version"), f"{label} schema_version")
+    if 0 < version < current:
+        raise SchemaRebuildRequired(label, version, current)
+    if version != current:
+        fail(f"{label} schema {version} is unsupported; expected {current}")
 
 
 def fail(message: str) -> NoReturn:
@@ -404,7 +434,7 @@ def validate_lane(
         evidence["resolution_implementation"], f"{profile} resolution implementation"
     )
     if (
-        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 4
+        exact_u32(evidence["schema_version"], f"{profile} lane schema_version") != 5
         or evidence["artifact_type"] != "native-oracle-lane"
         or evidence["deployment_run_id"] != deployment_run_id
         or evidence["export_run_id"] != export_run_id
@@ -474,6 +504,7 @@ def validate_lane(
     )
     if not isinstance(package_value, dict) or not isinstance(resolution_value, dict):
         fail(f"{profile} oracle manifest must be an object")
+    require_envelope_schema(resolution_value, 3, "native resolution bundle")
     if (
         exact_u32(package_value.get("schema_version"), f"{profile} package schema_version") != 1
         or package_value.get("profile") != profile
@@ -481,7 +512,7 @@ def validate_lane(
         or exact_u32(
             resolution_value.get("schema_version"), f"{profile} resolution schema_version"
         )
-        != 2
+        != 3
         or resolution_value.get("profile") != profile
         or resolution_value.get("profile_revision_sha256") != candidate_sha256
         or resolution_value.get("policy", {}).get("architecture") != architecture
@@ -642,7 +673,7 @@ def build_input(args: argparse.Namespace) -> None:
     )
     assembled_lanes = assembly.get("lanes")
     if (
-        exact_u32(assembly["schema_version"], "oracle assembly schema_version") != 1
+        exact_u32(assembly["schema_version"], "oracle assembly schema_version") != 2
         or assembly["artifact_type"] != "native-oracle-three-lane-set"
         or not isinstance(assembled_lanes, list)
         or len(assembled_lanes) != len(PUBLIC_PROFILES)
@@ -790,7 +821,7 @@ def build_input(args: argparse.Namespace) -> None:
             {"path": name, "sha256": hash_file(path), "size": metadata.st_size}
         )
     manifest = {
-        "schema_version": 1,
+        "schema_version": INPUT_MANIFEST_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": {
@@ -829,7 +860,7 @@ def build_input(args: argparse.Namespace) -> None:
         manifest_path.unlink(missing_ok=True)
 
     evidence = {
-        "schema_version": 1,
+        "schema_version": INPUT_EVIDENCE_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "workflow_runs": manifest["workflow_runs"],
@@ -1241,7 +1272,7 @@ def validate_implementation(value: Any, profile: str, label: str) -> None:
     if (
         implementation["ecosystem"] != PROFILE_ECOSYSTEMS[profile]
         or implementation["name"] != "conary-sat"
-        or implementation["projection_schema"] != 2
+        or implementation["projection_schema"] != 3
     ):
         fail(f"{label} differs from the fixed Conary candidate producer")
 
@@ -1340,7 +1371,7 @@ def validate_native_outcome(value: Any, root_sha256: str, label: str) -> str:
             previous_key = key
     elif status == "not_installable":
         outcome = exact_object(value, {"status", "reason"}, label)
-        if outcome["reason"] != "architecture_excluded":
+        if outcome["reason"] not in ("architecture_excluded", "conflicting_closure"):
             fail(f"{label} not-installable reason is unsupported")
     else:
         fail(f"{label} has an unsupported outcome status")
@@ -1364,7 +1395,9 @@ def update_native_outcome_digest(digest: Any, outcome: dict[str, Any]) -> None:
             digest.update(canonical_json(value))
         digest.update(b'],"status":"unresolved"}')
     else:
-        digest.update(b'{"reason":"architecture_excluded","status":"not_installable"}')
+        digest.update(b'{"reason":')
+        digest.update(canonical_json(outcome["reason"]))
+        digest.update(b',"status":"not_installable"}')
 
 
 def native_outcome_sha256(outcome: dict[str, Any]) -> str:
@@ -1488,7 +1521,7 @@ def validate_candidate_survey(value: Any, profile: dict[str, Any], name: str) ->
     )
     architecture = profile["target_architecture"]
     if (
-        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 2
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"]
@@ -1694,7 +1727,7 @@ def reconstruct_candidate_manifest_sha256(
     ):
         fail(f"{name} candidate and package implementations disagree")
     candidate_manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "profile": candidate_survey["profile"],
         "profile_revision_sha256": candidate_survey["profile_revision_sha256"],
         "profile_logical_digest_sha256": package_manifest[
@@ -1733,7 +1766,7 @@ def validate_comparison_survey(
         name,
     )
     if (
-        exact_u32(survey["schema_version"], f"{name}.schema_version") != 1
+        exact_u32(survey["schema_version"], f"{name}.schema_version") != 2
         or survey["profile"] != profile["profile"]
         or survey["profile_revision_sha256"] != profile["profile_revision_sha256"]
         or survey["package_oracle_manifest_sha256"] != profile["package_oracle_manifest_sha256"]
@@ -1919,6 +1952,7 @@ def validate_input_evidence(
     path: Path, survey_id: str, export_id: str
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str, dict[str, Any]]:
     value, _ = load_json(path, "resolution-survey input verification", canonical=True)
+    require_envelope_schema(value, INPUT_EVIDENCE_SCHEMA, "survey input verification")
     evidence = exact_object(
         value,
         {
@@ -1937,8 +1971,7 @@ def validate_input_evidence(
         "resolution-survey input verification",
     )
     if (
-        exact_u32(evidence["schema_version"], "input evidence schema_version") != 1
-        or evidence["survey_id"] != survey_id
+        evidence["survey_id"] != survey_id
         or evidence["export_id"] != export_id
     ):
         fail("resolution-survey input verification request binding drifted")
@@ -2072,10 +2105,11 @@ def load_input_package_manifests(
         if manifest_member is None:
             fail("oracle transport has no manifest.json")
         manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
+        input_manifest = decode_json(manifest_bytes, "oracle transport manifest")
+        require_envelope_schema(input_manifest, INPUT_MANIFEST_SCHEMA, "survey input manifest")
         if (
             sha256_bytes(manifest_bytes) != expected_manifest_sha256
-            or canonical_json(decode_json(manifest_bytes, "oracle transport manifest"))
-            != manifest_bytes
+            or canonical_json(input_manifest) != manifest_bytes
         ):
             fail("oracle transport manifest differs from authenticated input evidence")
         expected_names = {"manifest.json"}
@@ -2187,6 +2221,7 @@ def load_input_package_manifests(
             resolution = decode_json(
                 resolution_bytes, f"{profile_name} resolution manifest"
             )
+            require_envelope_schema(resolution, 3, "native resolution bundle")
             if canonical_json(resolution) != resolution_bytes:
                 fail(f"{profile_name} resolution manifest is not canonical JSON")
             resolution = exact_object(
@@ -2209,7 +2244,7 @@ def load_input_package_manifests(
                     resolution["schema_version"],
                     f"{profile_name} resolution schema_version",
                 )
-                != 2
+                != 3
                 or resolution["profile"] != profile_name
                 or resolution["profile_revision_sha256"]
                 != profile["profile_revision_sha256"]
@@ -2594,6 +2629,7 @@ def verify_staged_output(
             fail("survey transport has no manifest.json")
         manifest_bytes = read_tar_member(archive, manifest_member, MAX_MANIFEST_BYTES)
         manifest = decode_json(manifest_bytes, "survey manifest")
+        require_envelope_schema(manifest, OUTPUT_MANIFEST_SCHEMA, "survey output manifest")
         if canonical_json(manifest) != manifest_bytes:
             fail("survey manifest is not canonical JSON")
         manifest = exact_object(
@@ -2610,8 +2646,7 @@ def verify_staged_output(
             "survey manifest",
         )
         if (
-            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 2
-            or manifest["survey_id"] != survey_id
+            manifest["survey_id"] != survey_id
             or manifest["export_id"] != export_id
         ):
             fail("survey manifest request binding drifted")
@@ -2935,7 +2970,7 @@ def verify_staged_output(
     forbid_private_paths(manifest, "survey manifest")
 
     evidence = {
-        "schema_version": 2,
+        "schema_version": OUTPUT_EVIDENCE_SCHEMA,
         "survey_id": survey_id,
         "export_id": export_id,
         "deployment": deployment,
@@ -3027,5 +3062,8 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except SchemaRebuildRequired as error:
+        print(canonical_json(error.evidence).decode(), file=sys.stderr)
+        raise SystemExit(3) from error
     except (OSError, tarfile.TarError, ValidationError) as error:
         raise SystemExit(f"Remi resolution-survey transport validation failed: {error}") from error

@@ -24,7 +24,7 @@ CONFIG = {
         "conary-rpm-oracle",
         "conary-rpm-resolution-oracle",
         {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 1, "version": "0.7.36"},
-        {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 4, "version": "0.7.36"},
+        {"ecosystem": "rpm", "name": "libsolv", "projection_schema": 5, "version": "0.7.36"},
     ),
     "ubuntu-26.04": (
         "amd64",
@@ -32,7 +32,7 @@ CONFIG = {
         "conary-debian-oracle",
         "conary-debian-resolution-oracle",
         {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 1, "version": "3.2.0"},
-        {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 2, "version": "3.2.0"},
+        {"ecosystem": "debian", "name": "apt-pkg", "projection_schema": 3, "version": "3.2.0"},
     ),
     "arch": (
         "x86_64",
@@ -40,7 +40,7 @@ CONFIG = {
         "conary-alpm-oracle",
         "conary-alpm-resolution-oracle",
         {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 1, "version": "15.0.0"},
-        {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 2, "version": "15.0.0"},
+        {"ecosystem": "alpm", "name": "libalpm", "projection_schema": 3, "version": "15.0.0"},
     ),
 }
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
@@ -132,7 +132,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
             "policy": {"architecture": architecture},
             "profile": profile,
             "profile_revision_sha256": profile_revision,
-            "schema_version": 2,
+            "schema_version": 3,
         }
         resolution_manifest_bytes = canonical(resolution_manifest)
         (resolution_root / "manifest.json").write_bytes(resolution_manifest_bytes)
@@ -162,7 +162,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
                 "artifact": {"counts": resolution_counts, "name": "roots.jsonl", "sha256": EMPTY_SHA256, "size": 0},
                 "implementation": resolution_impl,
                 "manifest_sha256": sha256(resolution_manifest_bytes),
-                "schema_version": 2,
+                "schema_version": 3,
             },
             "resolution_implementation": {
                 "memory_budget_bytes": 8589934592,
@@ -171,7 +171,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
                 "worker_load_milliseconds": [12, 13],
                 "workers": 2,
             },
-            "schema_version": 4,
+            "schema_version": 5,
             "target_architecture": architecture,
             "transport_sha256": TRANSPORT_SHA256,
         }
@@ -220,6 +220,7 @@ class NativeOracleAssemblyTests(unittest.TestCase):
         result = self.run_assembler()
         self.assertEqual(result.returncode, 0, result.stderr)
         assembled = json.loads(result.stdout)
+        self.assertEqual(assembled["schema_version"], 2)
         self.assertEqual(assembled["artifact_type"], "native-oracle-three-lane-set")
         self.assertEqual([lane["profile"] for lane in assembled["lanes"]], list(PROFILES))
         self.assertEqual(
@@ -227,6 +228,23 @@ class NativeOracleAssemblyTests(unittest.TestCase):
             [self.producer_one, self.producer_two, self.producer_one],
         )
         self.assertEqual((self.root / "assembled.json").read_bytes(), canonical(assembled))
+
+    def test_resolution_bundle_schemas_are_fenced_before_nested_validation(self) -> None:
+        path = self.lanes_root / "fedora-44" / "resolution-oracle" / "manifest.json"
+        for found in (1, 2):
+            path.write_bytes(canonical({"schema_version": found}))
+            result = self.run_assembler()
+            self.assertEqual(result.returncode, 3, result.stderr)
+            state = json.loads(result.stderr)
+            self.assertEqual(state["reason"], "schema_rebuild_required")
+            self.assertEqual(state["found_schema"], found)
+            self.assertEqual(state["current_schema"], 3)
+            self.assertFalse((self.root / "assembled.json").exists())
+        for found in (0, 3, 4, True, 2.0, "2", None):
+            path.write_bytes(canonical({"schema_version": found}))
+            result = self.run_assembler()
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn("schema_rebuild_required", result.stderr)
 
     def test_rejects_different_export(self) -> None:
         evidence = self.evidence("arch")
@@ -238,15 +256,15 @@ class NativeOracleAssemblyTests(unittest.TestCase):
 
     def test_rejects_obsolete_lane_evidence_schema(self) -> None:
         evidence = self.evidence("fedora-44")
-        evidence["schema_version"] = 3
+        evidence["schema_version"] = 4
         self.rewrite_evidence("fedora-44", evidence)
         result = self.run_assembler()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("fedora-44 lane binding drifted", result.stderr)
 
-    def test_rejects_schema_three_lane_without_worker_evidence(self) -> None:
+    def test_rejects_schema_four_lane_without_worker_evidence(self) -> None:
         evidence = self.evidence("fedora-44")
-        evidence["schema_version"] = 3
+        evidence["schema_version"] = 4
         del evidence["resolution_implementation"]
         self.rewrite_evidence("fedora-44", evidence)
         result = self.run_assembler()

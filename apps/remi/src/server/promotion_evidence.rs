@@ -10,7 +10,7 @@ use conary_core::canonical::{CanonicalMapSnapshot, validate_canonical_map_snapsh
 use conary_core::db::models::RemiCatalogPhysicalAttestation;
 use conary_core::repository::catalog::{
     CatalogPackageRecordV1, CatalogReader, NATIVE_PARITY_COMPARISON_SCHEMA_V1,
-    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2, NativeParityComparisonV1, NativeResolutionComparisonV1,
+    NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3, NativeParityComparisonV1, NativeResolutionComparisonV1,
     ProfileRevisionV2, compare_native_parity_oracle, compare_native_resolution_oracle,
     verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
     verify_registered_profile_catalog_bundle_complete,
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use super::conversion_crawl::{ConversionCrawlProfileV4, reopen_conversion_crawl};
 use super::universe_validation::validate_canonical_candidate;
 
-pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V1: u32 = 1;
+pub const REMI_PROMOTION_EVIDENCE_SCHEMA_V2: u32 = 2;
 const MAX_PROMOTION_EVIDENCE_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ pub struct RemiPromotionEvidenceV1 {
 impl RemiPromotionEvidenceV1 {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema_version == REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+            self.schema_version == REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
             "unsupported Remi promotion evidence schema {}",
             self.schema_version
         );
@@ -123,7 +123,7 @@ impl RemiPromotionProfileEvidenceV1 {
             "promotion package parity differs from its exact profile candidate"
         );
         ensure!(
-            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2
+            self.resolution_parity.schema_version == NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3
                 && self.resolution_parity.profile == self.profile
                 && self.resolution_parity.profile_revision_sha256 == self.profile_revision_sha256
                 && self.resolution_parity.package_oracle_manifest_sha256
@@ -170,7 +170,7 @@ pub fn produce_remi_promotion_evidence(
         )?);
     }
     let evidence = RemiPromotionEvidenceV1 {
-        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
         conversion_crawl_sha256,
         canonical_map: RemiPromotionCanonicalMapV1 {
             sha256: conary_core::hash::sha256(&canonical_map_bytes),

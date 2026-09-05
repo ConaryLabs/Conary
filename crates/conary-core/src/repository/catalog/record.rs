@@ -260,11 +260,7 @@ impl CatalogPackageRecordV1 {
         }
         canonicalize_provides(&mut self.provides)?;
         for group in &mut self.requirement_groups {
-            canonicalize_json_text(
-                &mut group.expression_json,
-                "catalog requirement group expression",
-            )?;
-            canonical_sort(&mut group.atoms)?;
+            group.canonicalize()?;
         }
         canonical_sort(&mut self.requirement_groups)
     }
@@ -468,6 +464,14 @@ impl CatalogProvideRecordV1 {
 }
 
 impl CatalogRequirementGroupV1 {
+    pub(in crate::repository) fn canonicalize(&mut self) -> Result<()> {
+        canonicalize_json_text(
+            &mut self.expression_json,
+            "catalog requirement group expression",
+        )?;
+        canonical_sort(&mut self.atoms)
+    }
+
     fn from_db(group: DbRequirementGroup, atoms: Vec<RepositoryRequirement>) -> Self {
         Self {
             kind: group.kind,

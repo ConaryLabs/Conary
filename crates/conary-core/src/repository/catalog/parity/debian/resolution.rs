@@ -31,13 +31,13 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
-    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
-    walk_ordered_parallel,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
-    NativeRootResolutionResult, RootOutcomeSink,
+    NativeRootResolutionResult, NativeRootResolutionSuccess, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
@@ -56,7 +56,7 @@ use crate::repository::catalog::parity::{
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for apt-pkg transaction selections and broken strong groups.
-pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2: u32 = 2;
+pub const DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
 const CREATE_INDEX: &str = "
 CREATE TABLE packages (
@@ -228,7 +228,7 @@ fn produce_debian_resolution(
         ecosystem: NativeParityEcosystemV1::Debian,
         name: "apt-pkg".to_string(),
         version: PINNED_APT_PKG_VERSION.to_string(),
-        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V2,
+        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -299,7 +299,7 @@ fn walk_resolution_roots(
     workers: ResolutionWorkerCount,
     worker_executable: Option<&Path>,
 ) -> Result<OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     if workers.get() == 1 {
         let started = std::time::Instant::now();
         let mut apt = AptResolution::open(solver_inputs, &policy.architecture)?;
@@ -312,7 +312,7 @@ fn walk_resolution_roots(
                 &package_index,
                 &projected,
                 policy,
-                sink.explanation_byte_limit(),
+                sink.explanation_limits(),
             );
             sink.root(&root, result)
         })?;
@@ -326,7 +326,7 @@ fn walk_resolution_roots(
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| {
             DebianResolutionProcess::spawn(
                 executable,
@@ -335,10 +335,10 @@ fn walk_resolution_roots(
                 &policy.architecture,
             )
         },
-        |worker, root, byte_limit| worker.resolve(root, byte_limit),
+        |worker, root, limits| worker.resolve(root, limits),
         |root, result| {
             sink.root(root, result?)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }
@@ -361,7 +361,7 @@ fn resolve_exact_root(
     package_index: &PackageResolutionIndexReader,
     root: &DebianResolutionRoot,
     policy: &NativeResolutionPolicyV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     let Some(root_architecture) = root.architecture.as_deref() else {
         return Err(NativeRootResolutionError::new(
@@ -380,9 +380,11 @@ fn resolve_exact_root(
     {
         Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
         Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
-            return Ok(NativeResolutionOutcomeV1::NotInstallable {
-                reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
-            });
+            return Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::NotInstallable {
+                    reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
+                },
+            ));
         }
         Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
             unreachable!("unknown admission decision returned from into_result")
@@ -414,22 +416,22 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
-                        debian_explanation(&native, explanation_byte_limit),
+                        debian_explanation(&native, explanation_limits.failure_bytes()),
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "apt-pkg closure for '{}' omits its exact root",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    debian_explanation(&native, explanation_byte_limit),
+                return Ok(NativeRootResolutionSuccess::explained(
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    },
+                    debian_explanation(&native, explanation_limits.diagnostic_outcome_bytes()),
                 ));
             }
-            Ok(NativeResolutionOutcomeV1::Resolved {
-                closure_package_keys_sha256: closure.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Resolved {
+                    closure_package_keys_sha256: closure.into_iter().collect(),
+                },
+            ))
         }
         AptResolutionOutcome::Unresolved(missing) => {
             let dependencies = missing
@@ -440,7 +442,7 @@ fn resolve_exact_root(
                     NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                        debian_explanation(&native, explanation_byte_limit),
+                        debian_explanation(&native, explanation_limits.failure_bytes()),
                     )
                 })?;
             if dependencies.is_empty() {
@@ -450,13 +452,21 @@ fn resolve_exact_root(
                         root.name
                     )),
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
-                    debian_explanation(&native, explanation_byte_limit),
+                    debian_explanation(&native, explanation_limits.failure_bytes()),
                 ));
             }
-            Ok(NativeResolutionOutcomeV1::Unresolved {
-                dependencies: dependencies.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Unresolved {
+                    dependencies: dependencies.into_iter().collect(),
+                },
+            ))
         }
+        AptResolutionOutcome::ConflictingClosure => Ok(NativeRootResolutionSuccess::explained(
+            NativeResolutionOutcomeV1::NotInstallable {
+                reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+            },
+            debian_explanation(&native, explanation_limits.diagnostic_outcome_bytes()),
+        )),
     }
 }
 
@@ -464,6 +474,9 @@ fn debian_explanation(
     outcome: &AptResolutionOutcome,
     byte_limit: u64,
 ) -> NativeResolutionSurveyNativeExplanationV1 {
+    if byte_limit == 0 {
+        return evidence_withheld();
+    }
     record_explanation_build();
     match outcome {
         AptResolutionOutcome::Resolved(source_packages) => {
@@ -531,6 +544,16 @@ fn debian_explanation(
                 missing.push(entry);
             }
             explanation
+        }
+        AptResolutionOutcome::ConflictingClosure => {
+            NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Conflicts {
+                    detail_unavailable_reason: Some(
+                        "apt_pkg_exposes_conflict_class_state_without_a_stable_rule_graph"
+                            .to_string(),
+                    ),
+                },
+            }
         }
     }
 }

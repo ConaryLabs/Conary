@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-03
-revision: 165
-summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, native parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
+last_updated: 2026-09-05
+revision: 169
+summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
 # Remi
@@ -811,12 +811,15 @@ result only when the export run used its own current-main operator
 revision. Callers cannot supply paths, profile order, conversion commands, or
 publication operations.
 
-The diagnostics survey binding is schema 2 and the strict per-ecosystem lane
-evidence is schema 4. Both require the resolution worker count, measured
-per-worker load times and RSS admission inputs. Schema-1 survey bindings and
-schema-3 lanes predate that scheduling evidence and are fenced as obsolete;
-operators must regenerate all three strict lanes once before retained-lane
-subset production can resume.
+The diagnostics survey binding is schema 3, the strict per-ecosystem lane
+evidence is schema 5, and the assembled three-lane set is schema 2. The lane
+schema embeds resolution schema 3; the assembled set binds those current lane
+summaries. Survey and lane evidence require the resolution worker count,
+measured per-worker load times and RSS admission inputs. Survey bindings
+through schema 2,
+bindings, strict lanes through schema 4, and schema-1 assembled sets are fenced
+as obsolete; operators must regenerate all three strict lanes once before
+retained-lane subset production can resume.
 
 ```text
 remi native-oracle-input \
@@ -836,6 +839,38 @@ That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
 schema hard cuts, bounded surveys, comparison rules, and production transport.
 Remi consumes only independently reopened artifacts bound to the selected
 private profile candidates; survey output never authorizes promotion.
+The survey input manifest and verification evidence use schema 2; the output
+manifest and verification evidence use schema 3. Retained older survey inputs
+and outputs are typed `obsolete` / `schema_rebuild_required` non-authority before
+nested validation and must be regenerated. Current envelopes with mismatched
+nested schemas remain invalid. This envelope cut leaves oracle bundles unchanged.
+Resolution schema 3 admits `not_installable { reason: conflicting_closure }`
+and is the only current resolution bundle schema. Shared bundle inspection
+classifies retained schema-1/2 native and candidate bundles as
+`NativeResolutionBundleState::ObsoleteSchema`; strict promotion proof/evidence
+readers preserve the typed `ResolutionBundleRebuildRequired` error through
+their context, and the CLI reports `resolution_bundle_rebuild_required`.
+Future or malformed schemas remain invalid. Regenerate obsolete evidence;
+no compatibility reader or additional schema bump is introduced.
+The conflicting-closure outcome applies
+when conflict, break, same-name, obsoletion, or exact-root displacement makes a
+root-reachable closure inconsistent. Conflict-class attribution dominates
+missing requirements. The RPM projection is schema 5; Debian, ALPM, Conary
+candidate, and comparison projections are schema 3. Every retained resolution,
+candidate, and comparison bundle from the superseded schemas must be rebuilt;
+the package oracle is unchanged. Native diagnostics surveys are schema 3 and
+retain up to 5,000 solver-native conflict outcomes in `diagnostic_outcomes`,
+with uncapped total and explicit retention/truncation counts, without
+inflating the failure count. Candidate-resolution and resolution-comparison
+surveys are schema 2 because they embed the outcome vocabulary. Native and
+candidate explanations use a 32 MiB retained-evidence budget; native survey
+documents remain capped at 64 MiB end to end.
+For ALPM missing-first failures, the producer explores every libalpm-authorized
+provider path and accepts conflict precedence only when native conflict checks
+block them all; a rejected provider alternative cannot taint a usable closure.
+The top-level Remi promotion-evidence envelope is schema 2 because it embeds
+resolution-comparison schema 3. Retained schema-1 promotion evidence is
+obsolete non-authority and must be rebuilt before activation.
 
 ### Initial Full-Universe Conversion Crawl
 

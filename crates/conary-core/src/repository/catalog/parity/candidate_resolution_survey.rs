@@ -24,7 +24,7 @@ use crate::repository::catalog::contract::{validate_identity, validate_sha256};
 use crate::resolver::identity::PackageIdentity;
 use crate::resolver::provider::ConaryProvider;
 
-pub const CONARY_RESOLUTION_SURVEY_SCHEMA_V1: u32 = 1;
+pub const CONARY_RESOLUTION_SURVEY_SCHEMA_V2: u32 = 2;
 pub const CONARY_RESOLUTION_SURVEY_FAILURE_LIMIT: usize = NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT;
 pub const CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT: u64 =
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT;
@@ -55,10 +55,10 @@ pub struct ConaryResolutionSurveyV1 {
 
 impl ConaryResolutionSurveyV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != CONARY_RESOLUTION_SURVEY_SCHEMA_V1 {
+        if self.schema_version != CONARY_RESOLUTION_SURVEY_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "Conary resolution survey schema {} is unsupported; expected {}",
-                self.schema_version, CONARY_RESOLUTION_SURVEY_SCHEMA_V1
+                self.schema_version, CONARY_RESOLUTION_SURVEY_SCHEMA_V2
             )));
         }
         validate_identity(&self.profile, "Conary resolution survey profile")?;
@@ -586,7 +586,7 @@ impl ConaryResolutionSurveyCollector {
         let retained_failures = self.failures.len() as u64;
         let total_failures = self.counts.failed_roots;
         let survey = ConaryResolutionSurveyV1 {
-            schema_version: CONARY_RESOLUTION_SURVEY_SCHEMA_V1,
+            schema_version: CONARY_RESOLUTION_SURVEY_SCHEMA_V2,
             profile: self.profile,
             profile_revision_sha256: self.profile_revision_sha256,
             package_oracle_manifest_sha256: self.package_oracle_manifest_sha256,
@@ -854,6 +854,47 @@ mod tests {
         );
         assert!(survey.truncated);
         assert_eq!(survey.counts.error_kinds[0].count, survey.total_failures);
+
+        let mut obsolete = survey.clone();
+        obsolete.schema_version = 1;
+        assert!(obsolete.validate().is_err());
+    }
+
+    #[test]
+    fn hidden_conflict_budget_is_a_counted_failure_never_an_outcome() {
+        let mut collector = collector(CONARY_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT);
+        collector
+            .root(
+                &root(0),
+                Err(Box::new(ConaryRootResolutionError {
+                    error: Error::HiddenConflictProbeBudgetExceeded {
+                        root: "package-00000".to_string(),
+                        resolves: 64,
+                        elapsed: std::time::Duration::from_millis(1234),
+                    },
+                    reason: ConaryResolutionSurveyErrorReasonV1::SolverFailed,
+                    explanation: None,
+                })),
+            )
+            .unwrap();
+        let survey = collector.finish().unwrap();
+        assert_eq!(survey.counts.failed_roots, 1);
+        assert_eq!(survey.total_failures, 1);
+        assert!(survey.outcomes.is_empty());
+        assert_eq!(
+            survey.counts.error_kinds[0].kind.error_variant,
+            NativeResolutionSurveyErrorVariantV1::Budget
+        );
+        assert_eq!(survey.counts.error_kinds[0].count, 1);
+        assert!(
+            survey.failures[0]
+                .error_message
+                .contains("64 re-solves; elapsed=1.234s")
+        );
+        let bytes = serde_json::to_vec(&survey).unwrap();
+        let reopened: ConaryResolutionSurveyV1 = serde_json::from_slice(&bytes).unwrap();
+        reopened.validate().unwrap();
+        assert_eq!(reopened, survey);
     }
 
     #[test]

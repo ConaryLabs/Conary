@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define producer-bound strict native parity lanes, selective same-export assembly, and deterministic bounded-parallel private collect-all native, candidate-resolution, and native/candidate comparison surveys for one complete immutable profile candidate
-last_updated: 2026-09-03
-revision: 55
+summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
+last_updated: 2026-09-05
+revision: 75
 status: active
 ---
 
@@ -84,7 +84,7 @@ authority from producer implementation provenance. A merged descendant may fix
 producer-only behavior without forcing a semantically identical Remi deploy
 and export, while the export continues to own every candidate, source,
 and metadata byte. Merged provenance alone grants no schema latitude: package
-schema 1, resolution schema 2, and every ecosystem implementation/projection
+schema 1, resolution schema 3, and every ecosystem implementation/projection
 pin remain mandatory. A three-lane set may contain different producer
 commits per lane only when each is a merged descendant of the same deployed
 commit and every lane passes those identical pins; each lane records its own
@@ -103,11 +103,14 @@ carry the export/deployment/producer/image/schema/implementation/binary-digest
 bindings, and remain diagnostics-only. Their type can never satisfy assembly,
 comparison, promotion, activation, or publication.
 
-Native-resolution survey binding evidence is schema 2, and strict native-oracle
-lane evidence is schema 4. Those versions add the required worker count,
+Native-resolution survey binding evidence is schema 3, strict native-oracle
+lane evidence is schema 5, and the assembled three-lane set is schema 2. The
+lane schema embeds resolution schema 3; the assembled-set schema binds those
+current lane summaries. The survey and lane versions also require the worker count,
 per-worker pool-load timings, measured worker RSS, and admitted memory budget.
-This is a hard cut: schema-1 survey bindings and schema-3 strict lanes are
-obsolete non-authority and must be regenerated. In particular, the first
+This is a hard cut: survey bindings through schema 2, strict lanes through schema 4,
+and schema-1 assembled sets are obsolete non-authority and must be regenerated.
+In particular, the first
 subset production after this cut must rebuild all three strict lanes before
 later subset runs may retain an unselected lane.
 
@@ -127,7 +130,7 @@ All three lane records must bind the same export run, export identity,
 transport digest, deployment run, deployed commit, and input manifest. Each
 producer commit must separately satisfy deployed-to-producer-to-`origin/main`
 ancestry. Mixed descendant producer commits are accepted as decided above;
-package schema 1, resolution schema 2, lane images, implementation versions,
+package schema 1, resolution schema 3, lane images, implementation versions,
 and projection schemas remain identical per lane contract. Different exports,
 non-descendants, unmerged producers, digest drift, missing or duplicate lanes,
 and survey substitution fail closed. The assembled evidence records each
@@ -340,8 +343,8 @@ cargo run -p conary-core --features native-debian-oracle \
 
 ## Dependency resolution evidence
 
-`NativeResolutionOracleV1` is the separate resolver-owned authority for complete
-dependency closure and unresolved dependencies. Its manifest binds the
+`NativeResolutionOracleV1` is the separate resolver-owned authority for each
+exact root's complete typed resolution outcome. Its manifest binds the
 `ProfileRevisionV2`, the `NativeParityOracleV1` manifest digest, the
 solver implementation and version, its projection schema, the target
 architecture, normalized counts, and the SHA-256 and size of `roots.jsonl`.
@@ -349,9 +352,9 @@ The resolution policy architecture must equal the bound profile revision's
 typed target architecture during manifest binding, comparison, and promotion
 proof validation.
 
-Schema 2 fixes the resolution policy rather than accepting solver flags or
-free-form policy: the installed state is empty, every package variant is
-requested as a root, only required and pre-required groups enter the
+Schema 3 fixes the resolution policy rather than accepting solver flags or
+free-form policy: the installed state is empty, every exact package variant is
+requested as its exact root, only required and pre-required groups enter the
 positive solve, optional and build groups are excluded, and provider choice
 uses native repository precedence. `architecture_admission: native_only`
 admits only equality of the complete source-derived machine identity and the
@@ -396,7 +399,43 @@ oracle. A row records exactly one outcome:
 - `not_installable { reason: architecture_excluded }`, when native-only policy
   excludes the exact root before Conary's SAT solver or a Debian/ALPM native
   solve is invoked, or when libsolv reports the matching exact-root
-  `SOLVER_RULE_PKG_NOT_INSTALLABLE` rule.
+  `SOLVER_RULE_PKG_NOT_INSTALLABLE` rule; or
+- `not_installable { reason: conflicting_closure }`, when the root-reachable
+  required closure contains a negative or exclusive relation that prevents
+  coexistence, or when an obsoletes transaction can complete only by
+  displacing the exact root. This outcome deliberately carries no evidence
+  set because the native solvers and Resolvo expose different evidence shapes;
+  full native evidence remains diagnostics-only survey material.
+
+Conflict-class failure dominates every other failed-state attribution. Each
+producer first looks for any negative or exclusive relation anywhere in the
+root-reachable failed closure. If found, including beside typed missing
+requirements, it emits `conflicting_closure`. Otherwise typed missing groups
+emit `unresolved` with the same exact edges as before. A failed solve with
+neither class remains a fatal producer error. Issue #814 records this decision:
+apt may hide a missing dependency below a conflict-rejected helper, libsolv may
+split missing and conflict facts across problems, and Resolvo may minimize its
+first graph to the missing edge. Missing-first precedence would therefore make
+solver diagnostics, rather than package semantics, authoritative.
+
+| Producer | Authoritative conflict-class mapping |
+| --- | --- |
+| libsolv | Any `PKG_CONFLICTS` (`0x105`), `PKG_SAME_NAME` (`0x106`), `PKG_OBSOLETES` (`0x107`), or implicit-obsoletes (`0x108`) rule in any failed problem; also a successful transaction that omits the exact root. Architecture-only `INFARCH` remains outside this class. |
+| apt-pkg | Any rejected `Conflicts`/`Breaks` relation or mutually incompatible selected target/version in the failed state. No-satisfying-candidate required groups remain typed missing only when no conflict-class fact exists. |
+| libalpm | A conflicting-dependencies or obsoletion result from transaction preparation, a prepared transaction that omits the exact root, or native `check_conflicts` results that block every libalpm-authorized provider path reached from the exact root when preparation reports missing dependencies first. A conflict on a rejected provider alternative is not part of the required closure. |
+| Conary/Resolvo | A `ConflictEdge::Conflict` or `ConflictNode::Excluded` that remains on every viable exact-root provider path. Missing-first probing discharges exact persisted groups under one per-root budget: at most 64 re-solves and 30 seconds on a monotonic clock, including the probe's initial provider load. Loaded facts are reused across fresh SAT caches; limits never reset per iteration. Exhaustion is `HiddenConflictProbeBudgetExceeded { root, resolves, elapsed }` before classification, never an outcome. |
+
+Stored native and candidate resolution manifests are inspected before parsing
+current nested fields. `NativeResolutionBundleState::ObsoleteSchema { found,
+current }` classifies schemas 1 and 2 as non-authority requiring regeneration;
+schema 3 is current. Zero, future schemas, missing/duplicate/non-integer schema
+fields, and malformed current manifests remain invalid input. The shared strict
+reader returns `Error::ResolutionBundleRebuildRequired { found, current }` for
+obsolete bundles. Promotion proof/evidence preserve that type through context;
+the Remi CLI reports `resolution_bundle_rebuild_required`. Lane production,
+assembly, and survey transport also fence retired resolution bundles before
+nested validation (Python tools emit typed obsolete/rebuild JSON and exit 3).
+No schema number changes in this fix, and no compatibility reader is introduced.
 
 The writer and reader retain one root outcome at a time. Complete reopen uses
 a private disk-backed membership index to prove that every closure reference,
@@ -410,13 +449,24 @@ Comparison applies the same profile, package oracle, architecture, and
 typed policy to native and Conary evidence. It merge-walks one root pair at a
 time and reports typed oracle-only root, candidate-only root, outcome,
 dependency-closure, unresolved-dependency, or not-installable-reason drift.
+Because `conflicting_closure` carries no evidence set, comparison checks only
+the outcome kind and exact not-installable reason for that outcome.
 Diagnostic strings and native solver error prose never establish the result.
 
-This schema is a hard cut. Resolution-oracle schema 1, RPM projection schema
-3, Conary candidate projection schema 1, Debian and ALPM projection schema 1,
-comparison schema 1, and survey schema 1 have no compatibility readers. Every
-retained native-resolution and Conary candidate bundle is invalid and must be
-regenerated before comparison or promotion proof.
+This schema is a hard cut. Resolution-oracle schemas through 2, RPM projection
+schemas through 4, Conary candidate, Debian, and ALPM projection schemas through
+2, and comparison schemas through 2 have no compatibility readers. Every
+retained native-resolution, Conary candidate, and resolution-comparison bundle
+is invalid and must be regenerated before comparison or promotion proof. The
+package oracle is unchanged. Native diagnostics surveys move to schema 3 so
+conflict-class outcomes can retain their solver-native evidence without
+reclassifying those roots as failures; older retained surveys are invalid.
+Candidate-resolution surveys move to schema 2 and resolution-comparison
+surveys move to schema 2 because both embed the expanded outcome vocabulary;
+their schema-1 artifacts are invalid and have no compatibility reader.
+The top-level Remi promotion-evidence envelope moves to schema 2 because it
+embeds resolution-comparison schema 3. Schema-1 promotion evidence is obsolete
+non-authority and must be rebuilt before promotion or activation.
 
 ### Diagnostics-only resolution survey
 
@@ -428,7 +478,7 @@ canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing
 path, and exits non-zero after writing when any root failed so unattended
 diagnostics cannot look successful.
 
-`NativeResolutionSurveyV1` schema 2 binds the profile identity and revision
+`NativeResolutionSurveyV1` schema 3 binds the profile identity and revision
 digest, package-oracle manifest digest, native implementation and projection
 schema, fixed resolution policy, and target architecture. Its counts record
 roots walked, resolved, unresolved, not-installable, and failed plus a canonical histogram
@@ -439,16 +489,36 @@ native explanation. The inventory retains at most 5,000 failure records while
 reporting the uncapped `total_failures`, retained count, limit, and explicit
 `truncated` state.
 
+`diagnostic_outcomes` separately retains at most 5,000
+`conflicting_closure` roots with their exact typed outcome and byte-bounded
+native explanation. The survey reports the uncapped total, retained count,
+record limit, and explicit truncation state. These records are successful
+outcomes, contribute to `not_installable_roots`, and never contribute to
+failure counts or the error histogram. No other successful outcome carries
+survey evidence. The explanation budget is shared with retained failure
+evidence and changes to explicit `withheld` records once exhausted. Retained
+explanations are capped at 32 MiB, reserving half of the lane's 64 MiB complete
+survey-document limit for root records and the canonical envelope. Rust
+validation and the lane reader both reject a document above that complete-file
+limit.
+
+The survey contract and writer live in
+`crates/conary-core/src/repository/catalog/parity/resolution_survey.rs`;
+their retention, hard-cut validation, and private-writer regressions live in the
+sibling `resolution_survey/tests.rs`.
+
 RPM explanations preserve every libsolv problem and every rule in that
 problem, including numeric and symbolic `SOLVER_RULE_*` type, native index,
 from/to package key plus name-EVR-architecture, dependency ID, and dependency
-text. Native-only provider admission removed the strict-priority multilib
-problem shape, so there is no residual solve without strict priority and no
-ancillary package-conflict or inferior-architecture tolerance. Either rule is
-fatal if it appears. Any native field that cannot safely be
-projected carries an explicit unavailability reason. Debian explanations retain
-the selected native package identities or typed missing requirements when
-apt-pkg returns them; an
+text. A resolved transaction that displaces its exact root instead preserves a
+typed `resolved` result and the complete native transaction package list,
+including an empty list. Native-only provider admission removed the strict-priority multilib
+problem shape, so there is no residual solve without strict priority.
+Conflict-class rules become ordinary `conflicting_closure` outcomes while
+architecture-only `INFARCH` remains outside that class. Any native field that
+cannot safely be projected carries an explicit unavailability reason. Debian
+explanations retain selected native package identities, conflict-class state,
+or typed missing requirements when apt-pkg returns them; an
 apt-pkg failure that exposes no typed result says so. ALPM explanations retain
 prepared package identities, typed missing requirements, and package-conflict
 records. The pinned Rust ALPM binding cannot safely dereference its
@@ -464,13 +534,17 @@ therefore cannot contaminate a later solve.
 Every strict and survey root walk is parallel behind one bounded,
 sequence-numbered sink. Input dispatch follows package-oracle order and only
 the parent/calling thread updates writers, collectors, histograms, record caps,
-or the 64 MiB explanation budget. The next sequence goes to the first available
+or the 32 MiB explanation budget. The next sequence goes to the first available
 worker, so an uneven solve cannot strand idle capacity behind a busy worker's
 private queue. Results may finish out of order, but the sink does not observe
 root `n + 1` before root `n`; strict mode stops dispatch after the first failing
 canonical root, drains workers, and returns that failure.
 Consequently worker scheduling cannot change `roots.jsonl`, manifest bytes or
 digests, survey JSON, counts, histograms, caps, or budget decisions.
+The sink publishes independent conflict-outcome and fatal-failure explanation
+allowances to workers. Reaching the 5,000 conflict-record cap suppresses later
+conflict explanation construction without consuming or hiding evidence still
+available to a later retained fatal failure.
 
 RPM and ALPM use threads with a private libsolv pool or libalpm handle and a
 private read-only SQLite index connection per worker. Conary workers likewise
@@ -542,7 +616,7 @@ their existing `--packages` and `--database` member inputs respectively.
 
 ### Candidate-resolution and comparison surveys
 
-`ConaryResolutionSurveyV1` schema 1 is the diagnostics-only Conary counterpart
+`ConaryResolutionSurveyV1` schema 2 is the diagnostics-only Conary counterpart
 to the native survey. It binds the profile revision, package-oracle
 manifest, `conary-sat` implementation and projection schema, native-only
 policy, and the profile's typed target architecture. The policy architecture,
@@ -561,12 +635,12 @@ They retain unresolved-node incoming edges with the requiring solvable and
 rendered requirement/version sets, conflict edges with both solvable
 identities and typed conflict kind, and excluded solvables with their typed
 provider reason. No `display_user_friendly` text is parsed. Explanations share
-the native survey's canonical-JSON accounting, 64 MiB budget,
+the native survey's canonical-JSON accounting, 32 MiB explanation budget,
 failure-record cap, first-exhaustion withholding rule, and independently
 validated count/truncation invariants. They are built only on a hard per-root
 failure.
 
-`NativeResolutionComparisonSurveyV1` schema 1 first reopens two complete,
+`NativeResolutionComparisonSurveyV1` schema 2 first reopens two complete,
 package-oracle-bound resolution bundles, then walks every root pair in
 canonical key order. Every retained mismatch records the root identity,
 typed mismatch kind, both complete outcomes, and the manifest SHA-256 that
@@ -645,15 +719,24 @@ at least one finding, polls `/health/ready` to a bounded successful result
 regardless of those findings, and returns only survey JSON
 and separate resolution-walk implementation JSON plus a digest, size,
 deployment, candidate, and oracle binding manifest. Survey transport manifest
-and verification evidence schema 2 bind every candidate/comparison survey to
+and verification evidence schema 3 bind every candidate/comparison survey to
 its implementation file; the independent reader validates the worker count,
 per-worker load-time vector, effective memory budget, and retained worker RSS
-allowance. The
+allowance. The input transport manifest and input verification evidence both
+use schema 2. These are #814 hard cuts: input envelopes move from 1 to 2 and
+output envelopes from 2 to 3. Readers classify retired envelopes before nested
+validation as typed `obsolete` / `schema_rebuild_required` non-authority with
+the found/current schemas and a rebuild message (the Python CLI exits 3).
+A current envelope containing mismatched nested schemas remains invalid input.
+All retained survey inputs and outputs must be regenerated; this envelope cut
+does not change or invalidate the current package or resolution oracle bundles.
+The
 workflow independently reopens that transport, enforces the complete typed Rust
 survey schemas and their cross-count, retention, evidence-budget, and mismatch
-relationships, including the fixed 5,000-record and 64-MiB evidence limits. It
+relationships, including the fixed 5,000-record, 32-MiB retained-evidence, and
+64-MiB native survey-document limits. It
 binds candidate implementation to the profile ecosystem, `conary-sat`, and
-projection schema 2. Comparison counts must cover the exact complete
+projection schema 3. Comparison counts must cover the exact complete
 zero-failure candidate root population, and every retained mismatch root,
 identity, and candidate outcome must come from that candidate survey. It then
 compares every authority binding with its authenticated input verification, and
@@ -709,9 +792,79 @@ local database with the target architecture and profile databases registered
 in precedence order. Prepared transaction packages become exact closure keys;
 typed libalpm missing-dependency records become exact requiring-package keys
 and canonical required-group digests. A non-native exact root becomes the
-typed architecture-excluded outcome before transaction setup. Conflicting
-transactions, ambiguous identities, unbound requirements, and unexpected
-native error classes fail the complete crawl. The public Arch profile's three
+typed architecture-excluded outcome before transaction setup. A conflicting
+dependency, obsoletion result, or prepared transaction that omits the exact
+root becomes `conflicting_closure`; missing dependencies become `unresolved`
+only when no conflict class exists. When preparation exposes missing first, the
+producer follows required dependencies depth-first in native dependency order,
+using `alpm_find_dbs_satisfier` (the same `resolvedep` implementation as native
+preparation), and checks that single default closure with libalpm. Satisfaction
+by already selected packages is also a native query. A satisfying literal is
+selected in registered database order; shadowed literals are never alternatives.
+
+Provider alternatives are considered only for dependencies whose selected
+provider's required closure **reaches** a party on either side of the reported
+conflict, including a transitively introduced party. After native conflict
+preparation, this is a graph walk over `alpm_trans_get_add()` plus the exact
+root. Each edge binds a required dependency to a satisfier within that chosen
+set using libalpm's own selected-package precedence (`alpm_find_satisfier`);
+unselected sync-database providers cannot change the graph. Relevance is read
+from each failed transaction before the next retry releases it. When preparation
+fails early with missing dependencies, before the native add set is populated, the
+fallback walks the selected provider's sync-database dependency closure with
+native database-precedence selection. This fallback requires an actually
+unpopulated add set (empty or containing only the root); a later missing result
+with a populated add set still uses the native chosen graph. Neither walk explores
+alternatives or adds transaction/conflict evaluations; retries remain inside the
+existing per-root check budget. Parties are bound by their native source database,
+name, and version, since libalpm copies package objects into conflict records. In native
+`ALPM_QUESTION_SELECT_PROVIDER` question order, the producer walks a stack of
+provider choices depth-first. It re-prepares the exact root with the stack's
+ancestor answers and one alternative for the current question, leaving unrelated
+dependencies at their native defaults. Only providers offered by that native
+question are eligible. A candidate is accepted only after native preparation
+and, for missing-first results, the native answer-replayed closure conflict check
+report no conflict. Every dependency lookup explicitly installs the same provider
+callback as preparation and replays all active answers, including nested choices;
+database precedence and eligible alternatives remain native authority.
+Successful preparation produces `resolved`. A conflict-free missing result is
+retained while remaining alternatives are checked: any prepared path wins;
+otherwise the first conflict-free missing result in depth-first native
+question/provider order becomes `unresolved`. Its original typed missing edges
+and exact selected-package bindings are saved together, so later transactions
+cannot replace or rebind that deterministic fallback. Budget exhaustion still
+fails before choosing any fallback. If a retry still conflicts,
+its own chosen set and reported parties determine relevance again. Relevant
+questions not yet explored on the current path are pushed onto the stack and
+their alternatives explored before backtracking to the previous question's next
+provider. Visibility alone never marks a question explored: a question seen but
+irrelevant in an ancestor failure remains searchable when a descendant failure
+first makes it relevant. The explored set is derived only from active stack
+answers that have actually been probed; an ancestor's question is not pushed
+again on that path. Backtracking discards the exhausted frame's answer and
+exploration state, so the question can be explored independently in a sibling
+branch if relevant there. Unrelated choices remain at native defaults rather
+than being combined into a global Cartesian product.
+The shim only replays native questions and reads native
+transaction state; libalpm performs every resolution and conflict decision.
+
+`PROVIDER_SEARCH_CHECK_LIMIT: u32 = 256` bounds each exact root's actual native
+evaluations: every `trans_prepare` and each additional missing-first
+`check_conflicts` consumes one check. Dependency/satisfier queries are not
+transaction/conflict evaluations. Before evaluation 257 the producer returns
+typed `ProviderSearchBudgetExceeded { root, checks: 256 }`. All stack depths share
+that budget, and exhaustion propagates before closure classification, never as
+a fallback to the baseline conflict. Only an exhausted question stack with all
+required checks completed can retain the baseline `conflicting_closure`.
+Strict production fails without publishing a complete bundle. Survey production
+records `provider_search_budget_exceeded` as the
+failure reason and error variant, with the exact root and completed check count
+in typed ALPM failure evidence, and continues to later roots. The budget and
+provider-answer callback are reset for each root. This is part of #814's
+current resolution/survey hard cut; the package oracle is unchanged.
+
+Ambiguous identities, unbound requirements,
+and unexpected native error classes fail the complete crawl. The public Arch profile's three
 authenticated database inputs are all `/os/x86_64`; their package rows are
 `x86_64` or architecture-independent `any` under the pinned lane.
 
@@ -755,11 +908,15 @@ become exact closure package keys. Typed libsolv problem-rule and dependency
 IDs become exact requiring-package keys and canonical required or pre-required
 group digests. An excluded exact root must carry libsolv's matching
 `SOLVER_RULE_PKG_NOT_INSTALLABLE` and becomes the typed architecture-excluded
-outcome; the same rule for an admitted root is fatal. A typed missing file requirement triggers an exact lookup in
-libsolv's independently reopened complete filelists and one re-solve before it
-may remain unresolved. `SOLVER_RULE_INFARCH`, package conflicts, unexpected
-rule classes, native identity ambiguity, and input or oracle drift fail the
-complete crawl. Diagnostic strings never establish an outcome.
+outcome; the same rule for an admitted root is fatal. A typed missing file
+requirement triggers an exact lookup in libsolv's independently reopened
+complete filelists and one re-solve before it may remain unresolved. Any
+`PKG_CONFLICTS`, `PKG_SAME_NAME`, `PKG_OBSOLETES`, or implicit-obsoletes rule
+in any failed problem, and any successful transaction that omits its exact
+root, becomes `conflicting_closure` before missing requirements are considered.
+Architecture-only `SOLVER_RULE_INFARCH`, unexpected rule classes, native
+identity ambiguity, and input or oracle drift fail the complete crawl.
+Diagnostic strings never establish an outcome.
 
 Invoke the resolver helper with the exact RPM package bundle produced above:
 
@@ -798,34 +955,39 @@ transaction; a lower authenticated version remains eligible only when the
 forced exact root cannot close with the candidate.
 Required and pre-required groups participate in resolution; weak groups do
 not. Successful native transactions become exact closure package keys. When
-the complete solver fails, the producer inspects the retained protected exact
-root in apt-pkg's post-solver dependency cache. A broken root-level required or
-pre-required group becomes typed missing evidence only when apt-pkg exposes no
-authenticated candidate version satisfying any alternative, as decided by
-`DepIterator::IsSatisfied`. This covers both an absent target name and a target
-name available only at incompatible versions. Every broken hard group retained
-on the root must meet that rule; a separate broken group with a satisfying
-candidate keeps the complete failure fatal. Each `AptMissingRequirement`
-carries the exact-root identity, relation kind, and parser-owned native
-dependency text; the Rust boundary binds that text to the exact package-oracle
-group recorded by the same Debian parser, without textual normalization.
+the complete solver fails, the producer inspects every selected broken package
+in apt-pkg's root-reachable post-solver dependency state. A rejected
+`Conflicts` or `Breaks` relation, or a selected version that cannot coexist
+with its required target, becomes `conflicting_closure`. Only when no such
+state exists does a required or pre-required group with no authenticated
+satisfying candidate become typed missing evidence. This covers pure missing
+chains, absent target names, and names available only at incompatible versions.
+Each `AptMissingRequirement` carries the exact requiring-package identity,
+relation kind, and parser-owned native dependency text; the Rust boundary binds
+that text to the exact package-oracle group recorded by the same Debian parser,
+without textual normalization.
+
+A failed apt marker may retain only one party of a transitive sibling conflict.
+The reachable-version fallback therefore reads apt's `Conflicts`/`Breaks`
+relations between every reachable pair in both directions, using native
+`AllTargets` matching, and seeds the required-group fixed point with those
+pairs rather than only relations against the exact root. The existing
+all-candidates-blocked propagation retains usable OR alternatives.
 
 Pinned apt-pkg 3.2.0 does not expose solver3's typed failure reason graph as a
 public API: solver state, work, trail, and clause registration are protected or
 private, `DependencySolver` is final, and its exported reason interface renders
-strings. Diagnostic text is not parsed into authority. Consequently a failure
-that cannot be attributed from a broken hard dependency on the retained exact
-root remains a fatal native solver classification. This includes transitive
-no-candidate dependencies as well as conflict-, break-, policy-, or
-version-coexistence failures. Solver timeout attribution uses a steady
+strings. Diagnostic text is not parsed into authority. A failure with neither
+root-reachable conflict-class state nor typed no-candidate requirements remains
+a fatal native solver classification. Solver timeout attribution uses a steady
 monotonic duration and always remains a fatal `NativeSolverFailed` survey
 record. A policy-excluded exact root becomes the typed
 architecture-excluded outcome before apt-pkg resolution. The
 Ubuntu 26.04 profile supplies only sixteen `binary-amd64` indexes; apt-pkg is
 likewise configured with only `APT::Architecture(s)=amd64`, while
 `Architecture: all` remains admitted.
-Conflicts, native identity ambiguity, unsupported profile cardinality, and
-input or package-oracle drift fail the complete crawl. Diagnostic strings never
+Native identity ambiguity, unsupported profile cardinality, and input or
+package-oracle drift fail the complete crawl. Diagnostic strings never
 establish an outcome.
 
 Invoke the resolver helper with the exact Debian package bundle produced
@@ -852,7 +1014,7 @@ executable and reads neither their databases nor Conary catalog rows.
 `produce_conary_resolution_candidate` is the candidate-side owner. It first
 independently reopens the exact package and native-resolution oracle bundles,
 requires the verified profile catalog to match every package-oracle fact, and
-requires the native oracle to use schema 2's exact target policy. It cannot
+requires the native oracle to use schema 3's exact target policy. It cannot
 resolve an unproved catalog or silently substitute another architecture.
 
 The producer replays the catalog into a private temporary current-schema
@@ -881,12 +1043,24 @@ qualifiers remain match-time semantics over already-admitted solvables.
 Successful SAT selections map back to a strictly ordered set of catalog
 package keys. An unsatisfiable dependency maps Resolvo's typed conflict graph
 back to the exact persisted required or pre-required group; diagnostic text is
-never parsed. Package conflict, a missing mapping, an untyped unsatisfiable
-result, or any selected identity outside the catalog is a hard crawl failure
-rather than an unresolved row.
+never parsed. Conflict or excluded nodes are checked first and map to
+`conflicting_closure`. For a minimized missing-first graph, the bounded typed
+probe described above discharges only its exact persisted missing groups and
+re-solves to enforce conflict dominance. `resolver/sat/hidden_conflict.rs` owns
+the shared attempt/deadline budget, checked before rebuilding a SAT cache and
+before accepting a result; Resolvo's cancellation callback observes the same
+deadline during solving. The provider is loaded once for the probe (in addition
+to the original exact-root load), and only compiled positive requirements are
+discharged between attempts. A conflict-free completion retains all discovered
+typed missing groups. Surveys retain exhaustion as a `budget` / `solver_failed`
+failure with the root, re-solve count, and elapsed duration in its diagnostic,
+using the existing failure contract; strict production propagates the concrete
+typed error. No persisted schema changes. A missing mapping, an untyped
+unsatisfiable result, or any selected identity outside the catalog remains a
+hard crawl failure.
 
 The producer writes one complete `NativeResolutionOracleV1` bundle using the
-`conary-sat` implementation identity and projection schema 2, durably closes
+`conary-sat` implementation identity and projection schema 3, durably closes
 it, independently reopens and cross-checks every package and group reference,
 and compares it with the pinned native bundle. Success therefore proves one
 canonical outcome for every exact catalog variant and returns the exact

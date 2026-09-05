@@ -11,10 +11,11 @@ use serde::{Deserialize, Serialize};
 use super::{PackageResolutionIndexReader, resolve_exact_root};
 use crate::error::{Error, Result};
 use crate::repository::catalog::parity::resolution_parallel::{
-    ResolutionWorkerCount, ResolutionWorkerRequest,
+    ResolutionExplanationLimits, ResolutionWorkerCount, ResolutionWorkerRequest,
 };
 use crate::repository::catalog::parity::resolution_root::{
     NativeResolutionWireErrorV1, NativeRootResolutionError, NativeRootResolutionResult,
+    NativeRootResolutionSuccess,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
@@ -31,7 +32,7 @@ use crate::repository::versioning::VersionScheme;
 #[serde(deny_unknown_fields)]
 struct DebianResolutionWorkerRequest {
     root: DebianResolutionRoot,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -64,6 +65,7 @@ enum DebianResolutionWorkerResponse {
     Ready,
     Outcome {
         outcome: NativeResolutionOutcomeV1,
+        explanation: Option<NativeResolutionSurveyNativeExplanationV1>,
     },
     Failure {
         error: NativeResolutionWireErrorV1,
@@ -120,11 +122,11 @@ impl DebianResolutionProcess {
     pub(super) fn resolve(
         &mut self,
         root: &NativeParityPackageV1,
-        explanation_byte_limit: u64,
+        explanation_limits: ResolutionExplanationLimits,
     ) -> Result<NativeRootResolutionResult> {
         let request = DebianResolutionWorkerRequest {
             root: root.into(),
-            explanation_byte_limit,
+            explanation_limits,
         };
         write_worker_message(&mut self.input, &request)?;
         classify_worker_response(read_worker_response(&mut self.output))
@@ -135,7 +137,13 @@ fn classify_worker_response(
     response: Result<DebianResolutionWorkerResponse>,
 ) -> Result<NativeRootResolutionResult> {
     match response? {
-        DebianResolutionWorkerResponse::Outcome { outcome } => Ok(Ok(outcome)),
+        DebianResolutionWorkerResponse::Outcome {
+            outcome,
+            explanation,
+        } => Ok(Ok(NativeRootResolutionSuccess {
+            outcome,
+            explanation,
+        })),
         DebianResolutionWorkerResponse::Failure {
             error,
             reason,
@@ -251,9 +259,12 @@ pub fn run_debian_resolution_worker(
             &package_index,
             &request.root,
             &policy,
-            request.explanation_byte_limit,
+            request.explanation_limits,
         ) {
-            Ok(outcome) => DebianResolutionWorkerResponse::Outcome { outcome },
+            Ok(success) => DebianResolutionWorkerResponse::Outcome {
+                outcome: success.outcome,
+                explanation: success.explanation,
+            },
             Err(failure) => {
                 let (error, reason, explanation) = (*failure).into_wire();
                 DebianResolutionWorkerResponse::Failure {

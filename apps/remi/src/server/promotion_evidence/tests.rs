@@ -340,11 +340,49 @@ fn complete_promotion_evidence_reopens_and_binds_every_public_candidate() {
         produce_remi_promotion_evidence(&config, &canonical).expect("produce promotion evidence");
     let reopened = reopen_remi_promotion_evidence(&output_path).expect("reopen promotion evidence");
     assert_eq!(reopened, produced);
+    assert_eq!(produced.schema_version, REMI_PROMOTION_EVIDENCE_SCHEMA_V2);
     assert_eq!(produced.profiles.len(), 3);
     assert_eq!(
         produced.conversion_crawl_sha256,
         conary_core::hash::sha256(&fs::read(crawl_path).unwrap())
     );
+    let mut retired = produced.clone();
+    retired.schema_version = 1;
+    let error = retired
+        .validate()
+        .expect_err("retired promotion evidence must require rebuild");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported Remi promotion evidence schema 1")
+    );
+
+    for (kind, directory) in [
+        ("native", &proof_fixtures[0].input.native_resolution_dir),
+        (
+            "candidate",
+            &proof_fixtures[0].input.candidate_resolution_dir,
+        ),
+    ] {
+        let path = directory.join("manifest.json");
+        let current = fs::read(&path).unwrap();
+        for found in [1, 2] {
+            fs::write(&path, format!("{{\"schema_version\":{found}}}")).unwrap();
+            let retired_config = RemiPromotionEvidenceConfig {
+                output_path: evidence_dir
+                    .path()
+                    .join(format!("retired-{kind}-{found}.json")),
+                ..config.clone()
+            };
+            let error = produce_remi_promotion_evidence(&retired_config, &canonical)
+                .expect_err("retired resolution evidence must require rebuild");
+            assert!(matches!(error.downcast_ref::<conary_core::Error>(),
+                Some(conary_core::Error::ResolutionBundleRebuildRequired { found: actual, current: 3 }) if *actual == found));
+            assert!(format!("{error:#}").contains("schema rebuild required"));
+            assert!(!retired_config.output_path.exists());
+        }
+        fs::write(path, current).unwrap();
+    }
 
     let stale_crawl_path = evidence_dir.path().join("stale-crawl.json");
     let mut stale_crawl = crawl.clone();
@@ -428,7 +466,7 @@ fn promotion_contract_rejects_incomplete_and_candidate_tier_profiles() {
         catalog_size: 1,
         package_parity: comparison,
         resolution_parity: NativeResolutionComparisonV1 {
-            schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
+            schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
             profile: "fedora-44".to_string(),
             profile_revision_sha256: "a".repeat(64),
             package_oracle_manifest_sha256: "b".repeat(64),
@@ -445,7 +483,7 @@ fn promotion_contract_rejects_incomplete_and_candidate_tier_profiles() {
         },
     };
     let mut evidence = RemiPromotionEvidenceV1 {
-        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+        schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
         conversion_crawl_sha256: "f".repeat(64),
         canonical_map: RemiPromotionCanonicalMapV1 {
             sha256: "1".repeat(64),

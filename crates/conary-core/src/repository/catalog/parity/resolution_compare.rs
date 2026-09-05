@@ -13,7 +13,7 @@ use super::resolution_contract::{
 use super::resolution_io::NativeResolutionOracleReader;
 use crate::error::Error as ConaryError;
 
-pub const NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2: u32 = 2;
+pub const NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -174,7 +174,7 @@ pub fn compare_native_resolution_oracle(
         .map_err(NativeResolutionComparisonError::Candidate)?;
 
     Ok(NativeResolutionComparisonV1 {
-        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
+        schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
         profile: profile.profile.clone(),
         profile_revision_sha256: profile
             .manifest_sha256()

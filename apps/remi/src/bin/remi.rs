@@ -403,7 +403,20 @@ fn main() {
 }
 
 fn report_top_level_error(err: &anyhow::Error) {
+    if let Some(message) = resolution_bundle_rebuild_message(err) {
+        eprintln!("{message}");
+        return;
+    }
     eprintln!("Error: {err:?}");
+}
+
+fn resolution_bundle_rebuild_message(err: &anyhow::Error) -> Option<String> {
+    match err.downcast_ref::<conary_core::Error>()? {
+        conary_core::Error::ResolutionBundleRebuildRequired { found, current } => Some(format!(
+            "resolution_bundle_rebuild_required: obsolete schema {found}; regenerate native or candidate resolution evidence using schema {current}"
+        )),
+        _ => None,
+    }
 }
 
 fn finish_main(result: anyhow::Result<()>) -> i32 {
@@ -788,6 +801,27 @@ mod tests {
     #[test]
     fn test_finish_main_preserves_101_on_top_level_failure() {
         assert_eq!(finish_main(Err(anyhow::anyhow!("boom"))), 101);
+    }
+
+    #[test]
+    fn resolution_bundle_rebuild_survives_cli_context() {
+        for found in [1, 2] {
+            let error = anyhow::Error::new(conary_core::Error::ResolutionBundleRebuildRequired {
+                found,
+                current: 3,
+            })
+            .context("reopen promotion proof inputs");
+            assert_eq!(
+                resolution_bundle_rebuild_message(&error),
+                Some(format!(
+                    "resolution_bundle_rebuild_required: obsolete schema {found}; regenerate native or candidate resolution evidence using schema 3"
+                ))
+            );
+        }
+        assert!(
+            resolution_bundle_rebuild_message(&anyhow::anyhow!("malformed current evidence"))
+                .is_none()
+        );
     }
 
     fn write_config(path: &std::path::Path, bind: &str, admin_bind: &str, storage_root: &str) {

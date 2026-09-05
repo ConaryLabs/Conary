@@ -915,6 +915,9 @@ survey_validate_oracle_transport() {
     [[ "$(jq -cS . "$manifest")" == "$(cat "$manifest")" ]] ||
         die "resolution-survey oracle manifest is not canonical JSON"
 
+    if jq -e '.schema_version == 1' "$manifest" >/dev/null; then
+        die '{"status":"obsolete","reason":"schema_rebuild_required","envelope":"survey input manifest","found_schema":1,"current_schema":2,"message":"rebuild retained survey input as schema 2"}'
+    fi
     jq -e \
         --arg survey_id "$survey_id" \
         --arg export_id "$export_id" '
@@ -923,7 +926,7 @@ survey_validate_oracle_transport() {
         def uint: type == "number" and floor == . and . >= 0;
         def exact_keys($keys): (keys | sort) == ($keys | sort);
         exact_keys(["deployment", "export_id", "files", "profiles", "schema_version", "survey_id", "workflow_runs"])
-        and .schema_version == 1
+        and .schema_version == 2
         and .survey_id == $survey_id
         and .export_id == $export_id
         and (.workflow_runs | exact_keys(["deployment", "export", "oracle"]))
@@ -1030,7 +1033,9 @@ survey_validate_unpacked_oracles() {
             --arg package_manifest_sha256 "$package_manifest_sha256" \
             --arg artifact_sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
             --argjson artifact_size "$(stat -c '%s' "$resolution_artifact")" '
-            .schema_version == 2
+            (if .schema_version == 1 or .schema_version == 2 then
+              error("schema_rebuild_required: obsolete native resolution bundle; rebuild required as schema 3")
+              else .schema_version == 3 end)
             and .profile == $profile
             and .profile_revision_sha256 == $revision
             and .package_oracle_manifest_sha256 == $package_manifest_sha256
@@ -1436,7 +1441,7 @@ survey_resolution() {
         --slurpfile files "$inventory" \
         --slurpfile outcome "$outcome" '
         {
-          schema_version: 2,
+          schema_version: 3,
           survey_id: $survey_id,
           export_id: $export_id,
           deployment: $input[0].deployment,

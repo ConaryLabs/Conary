@@ -79,6 +79,12 @@ pub enum Error {
         supported_revision: i32,
     },
 
+    /// Retired resolution evidence is non-authority and must be regenerated.
+    #[error(
+        "Native resolution bundle schema rebuild required: found {found}, current {current}; regenerate native or candidate resolution evidence"
+    )]
+    ResolutionBundleRebuildRequired { found: u32, current: u32 },
+
     /// Missing ID on model object (required for update/query operations)
     #[error("Missing ID: {0}")]
     MissingId(String),
@@ -127,6 +133,20 @@ pub enum Error {
     /// Resource conflict (e.g., duplicate name)
     #[error("Conflict: {0}")]
     ConflictError(String),
+
+    /// Native provider probing stopped before another evaluation could exceed its budget.
+    #[error("Native provider search budget exceeded for root '{root}' after {checks} checks")]
+    ProviderSearchBudgetExceeded { root: String, checks: u32 },
+
+    /// Exact-root missing-first probing exhausted its shared evaluation/time budget.
+    #[error(
+        "Hidden conflict probe budget exceeded for root '{root}' after {resolves} re-solves; elapsed={elapsed:?}"
+    )]
+    HiddenConflictProbeBudgetExceeded {
+        root: String,
+        resolves: u32,
+        elapsed: std::time::Duration,
+    },
 
     /// Operator-supplied architecture disagrees with the selected profile authority.
     #[error("Architecture mismatch for profile '{profile}': expected '{expected}', got '{actual}'")]

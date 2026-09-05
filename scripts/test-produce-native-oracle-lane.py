@@ -71,7 +71,7 @@ if "--package-oracle" not in args:
         "schema_version": 1,
     }
 else:
-    resolution_projection = {"rpm": 4, "debian": 2, "alpm": 2}[ecosystem]
+    resolution_projection = {"rpm": 5, "debian": 3, "alpm": 3}[ecosystem]
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
     policy = {"architecture": one("--architecture"), "architecture_admission": "native_only", "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"}
     package_manifest = (Path(one("--package-oracle")) / "manifest.json").read_bytes()
@@ -83,22 +83,37 @@ else:
         "workers": 2,
     }))
     if "--survey" in args:
+        explanation = {"ecosystem": "rpm", "result": {"problems": [], "status": "problems"}}
+        diagnostic_outcome = {
+            "architecture": one("--architecture"),
+            "name": "conflict-root",
+            "native_explanation": explanation,
+            "outcome": {"reason": "conflicting_closure", "status": "not_installable"},
+            "release": "1",
+            "root_package_key_sha256": "f" * 64,
+            "version": "1",
+        }
         survey = {
-            "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 0, "resolved_roots": 0, "roots_walked": 0, "unresolved_roots": 0},
-            "evidence_byte_limit": 67108864,
+            "counts": {"error_kinds": [], "failed_roots": 0, "not_installable_roots": 1, "resolved_roots": 0, "roots_walked": 1, "unresolved_roots": 0},
+            "evidence_byte_limit": int(os.environ["FAKE_EVIDENCE_BYTE_LIMIT"]),
             "failure_record_limit": 5000,
+            "diagnostic_outcome_record_limit": 5000,
+            "diagnostic_outcomes": [diagnostic_outcome],
+            "diagnostic_outcomes_truncated": False,
             "failures": [],
             "implementation": impl,
             "package_oracle_manifest_sha256": hashlib.sha256(package_manifest).hexdigest(),
             "policy": policy,
             "profile": profile["profile"],
             "profile_revision_sha256": revision_sha,
-            "retained_evidence_bytes": 0,
-            "retained_explanations": 0,
+            "retained_evidence_bytes": len(canonical(explanation)),
+            "retained_diagnostic_outcomes": 1,
+            "retained_explanations": 1,
             "retained_failures": 0,
-            "schema_version": 2,
+            "schema_version": 3,
             "target_architecture": one("--architecture"),
             "total_failures": 0,
+            "total_diagnostic_outcomes": 1,
             "truncated": False,
             "truncated_evidence": False,
             "withheld_explanations": 0,
@@ -120,7 +135,7 @@ else:
         "profile": profile["profile"],
         "profile_logical_digest_sha256": "b" * 64,
         "profile_revision_sha256": revision_sha,
-        "schema_version": 2,
+        "schema_version": int(os.environ.get("FAKE_RESOLUTION_SCHEMA", "3")),
     }
 (output / "manifest.json").write_bytes(canonical(manifest))
 '''
@@ -151,7 +166,7 @@ class NativeOracleLaneTests(unittest.TestCase):
             int(resolution_pin.group(1)),
             constant(
                 parity_root / "resolution_contract.rs",
-                "NATIVE_RESOLUTION_ORACLE_SCHEMA_V2",
+                "NATIVE_RESOLUTION_ORACLE_SCHEMA_V3",
             ),
         )
 
@@ -209,6 +224,8 @@ class NativeOracleLaneTests(unittest.TestCase):
         architecture: str = "x86_64",
         producer_commit: str = PRODUCER_COMMIT,
         strict_failure: bool = False,
+        evidence_byte_limit: int = 33554432,
+        resolution_schema: int = 3,
     ) -> subprocess.CompletedProcess[str]:
         ecosystem = {"fedora-44": "rpm", "ubuntu-26.04": "debian", "arch": "alpm"}[profile]
         package = self.root / f"conary-{ecosystem}-oracle"
@@ -239,15 +256,34 @@ class NativeOracleLaneTests(unittest.TestCase):
             text=True,
             capture_output=True,
             check=False,
-            env={**os.environ, "FAKE_STRICT_FAIL": "1" if strict_failure else "0"},
+            env={
+                **os.environ,
+                "FAKE_STRICT_FAIL": "1" if strict_failure else "0",
+                "FAKE_EVIDENCE_BYTE_LIMIT": str(evidence_byte_limit),
+                "FAKE_RESOLUTION_SCHEMA": str(resolution_schema),
+            },
         )
+
+    def assert_retired_resolution(self, found: int) -> None:
+        result = self.run_lane(resolution_schema=found)
+        self.assertEqual(result.returncode, 3, result.stderr)
+        state = json.loads(result.stderr)
+        self.assertEqual(state["reason"], "schema_rebuild_required")
+        self.assertEqual(state["found_schema"], found)
+        self.assertEqual(state["current_schema"], 3)
+
+    def test_retired_resolution_schema_one_requires_rebuild(self) -> None:
+        self.assert_retired_resolution(1)
+
+    def test_retired_resolution_schema_two_requires_rebuild(self) -> None:
+        self.assert_retired_resolution(2)
 
     def test_produces_exact_package_and_resolution_evidence(self) -> None:
         result = self.run_lane()
         self.assertEqual(result.returncode, 0, result.stderr)
         evidence = json.loads(result.stdout)
         self.assertEqual(evidence["profile"], "fedora-44")
-        self.assertEqual(evidence["schema_version"], 4)
+        self.assertEqual(evidence["schema_version"], 5)
         self.assertEqual(evidence["artifact_type"], "native-oracle-lane")
         self.assertEqual(evidence["deployment_run_id"], 123)
         self.assertEqual(evidence["export_run_id"], 456)
@@ -263,9 +299,9 @@ class NativeOracleLaneTests(unittest.TestCase):
             hashlib.sha256(FAKE_PRODUCER.encode()).hexdigest(),
         )
         self.assertEqual(evidence["package_oracle"]["schema_version"], 1)
-        self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
+        self.assertEqual(evidence["resolution_oracle"]["schema_version"], 3)
         self.assertEqual(evidence["package_oracle"]["implementation"]["version"], "0.7.36")
-        self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 4)
+        self.assertEqual(evidence["resolution_oracle"]["implementation"]["projection_schema"], 5)
         self.assertEqual(evidence["resolution_oracle"]["implementation"]["name"], "libsolv")
         self.assertEqual(evidence["resolution_implementation"]["workers"], 2)
         self.assertEqual(
@@ -275,24 +311,28 @@ class NativeOracleLaneTests(unittest.TestCase):
         survey_root = self.root / "survey-fedora-44"
         survey = json.loads((survey_root / "survey.json").read_bytes())
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
-        self.assertEqual(manifest["schema_version"], 2)
+        self.assertEqual(manifest["schema_version"], 3)
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertEqual(manifest["producer_commit"], PRODUCER_COMMIT)
         self.assertEqual(manifest["survey"]["sha256"], digest(survey))
-        self.assertEqual(manifest["survey"]["schema_version"], 2)
+        self.assertEqual(manifest["survey"]["schema_version"], 3)
+        self.assertEqual(
+            survey["diagnostic_outcomes"][0]["outcome"],
+            {"reason": "conflicting_closure", "status": "not_installable"},
+        )
         self.assertEqual(manifest["resolution_implementation"]["workers"], 2)
 
     def test_fake_matches_current_resolution_projection_schemas(self) -> None:
         for profile, architecture, projection_schema in (
-            ("fedora-44", "x86_64", 4),
-            ("ubuntu-26.04", "amd64", 2),
-            ("arch", "x86_64", 2),
+            ("fedora-44", "x86_64", 5),
+            ("ubuntu-26.04", "amd64", 3),
+            ("arch", "x86_64", 3),
         ):
             with self.subTest(profile=profile):
                 result = self.run_lane(profile, architecture)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 evidence = json.loads(result.stdout)
-                self.assertEqual(evidence["resolution_oracle"]["schema_version"], 2)
+                self.assertEqual(evidence["resolution_oracle"]["schema_version"], 3)
                 self.assertEqual(
                     evidence["resolution_oracle"]["implementation"]["projection_schema"],
                     projection_schema,
@@ -344,6 +384,12 @@ class NativeOracleLaneTests(unittest.TestCase):
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertFalse((self.root / "output-fedora-44" / "evidence.json").exists())
+
+    def test_rejects_noncanonical_survey_evidence_limit(self) -> None:
+        result = self.run_lane(evidence_byte_limit=16777216)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("native resolution survey evidence counts drifted", result.stderr)
+        self.assertFalse((self.root / "survey-fedora-44" / "manifest.json").exists())
 
     def test_rejects_malformed_producer_commit(self) -> None:
         result = self.run_lane(producer_commit="main")

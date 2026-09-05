@@ -9,7 +9,7 @@ use conary_core::ccs::attestation::{
 use conary_core::ccs::{CcsTransportEnvelopeV1, CcsTransportObjectV1};
 use conary_core::db::models::{ConvertedPackage, MetadataTable, Repository, set_metadata};
 use conary_core::repository::catalog::{
-    NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
+    NATIVE_PARITY_COMPARISON_SCHEMA_V1, NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
     NativeParityComparisonV1, NativeParityCountsV1, NativeResolutionComparisonV1,
     NativeResolutionCountsV1,
 };
@@ -29,7 +29,7 @@ use crate::server::promotion_evidence::tests::{
     architecture, write_package_oracle, write_resolution,
 };
 use crate::server::promotion_evidence::{
-    REMI_PROMOTION_EVIDENCE_SCHEMA_V1, RemiPromotionCanonicalMapV1, RemiPromotionProfileEvidenceV1,
+    REMI_PROMOTION_EVIDENCE_SCHEMA_V2, RemiPromotionCanonicalMapV1, RemiPromotionProfileEvidenceV1,
 };
 use crate::server::promotion_proof::{
     RemiPromotionProofConfig, RemiPromotionProofProfileInput, produce_remi_promotion_proof,
@@ -163,7 +163,7 @@ impl PromotionFixture {
                     counts: NativeParityCountsV1::from(revision.counts),
                 },
                 resolution_parity: NativeResolutionComparisonV1 {
-                    schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V2,
+                    schema_version: NATIVE_RESOLUTION_COMPARISON_SCHEMA_V3,
                     profile: profile.id().to_string(),
                     profile_revision_sha256: revision_sha256,
                     package_oracle_manifest_sha256: package_oracle_sha256,
@@ -196,7 +196,7 @@ impl PromotionFixture {
         };
         let canonical_bytes = canonical_bytes(&canonical_map).expect("canonical map bytes");
         let evidence = RemiPromotionEvidenceV1 {
-            schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V1,
+            schema_version: REMI_PROMOTION_EVIDENCE_SCHEMA_V2,
             conversion_crawl_sha256: conary_core::hash::sha256(
                 &fs::read(&crawl_path).expect("read crawl bytes"),
             ),

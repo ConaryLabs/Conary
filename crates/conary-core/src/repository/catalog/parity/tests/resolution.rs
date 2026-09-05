@@ -3,6 +3,7 @@
 use std::fs;
 
 use super::*;
+use crate::Error;
 
 struct ResolutionFixture {
     _directory: tempfile::TempDir,
@@ -115,6 +116,107 @@ fn fixtures(
     let roots = root_rows(&packages);
     let package_oracle = oracle(&candidate, ecosystem, packages);
     (candidate, package_oracle, roots)
+}
+
+#[test]
+fn resolution_bundle_inspection_fences_retired_native_and_candidate_schemas() {
+    for implementation in ["native-solver", "conary-sat"] {
+        let (candidate, package_oracle, roots) = fixtures(NativeParityEcosystemV1::Rpm);
+        let bundle = write_resolution(
+            &candidate,
+            &package_oracle,
+            NativeParityEcosystemV1::Rpm,
+            implementation,
+            &roots,
+            true,
+        );
+        let directory = bundle._directory.path();
+        let manifest_path = directory.join(NATIVE_RESOLUTION_MANIFEST_FILE_NAME);
+        assert!(matches!(
+            inspect_native_resolution_oracle_bundle(
+                directory,
+                &candidate.profile,
+                &package_oracle.reader
+            )
+            .unwrap(),
+            NativeResolutionBundleState::Current(_)
+        ));
+        for found in [1, 2] {
+            let mut manifest = bundle.reader.manifest().clone();
+            manifest.schema_version = found;
+            assert!(
+                matches!(manifest.validate(), Err(Error::ResolutionBundleRebuildRequired { found: actual, current: 3 }) if actual == found)
+            );
+            // Retired fields must never be parsed as the current nested form.
+            fs::write(&manifest_path, format!("{{\"schema_version\":{found}}}")).unwrap();
+            assert!(
+                matches!(inspect_native_resolution_oracle_bundle(directory, &candidate.profile, &package_oracle.reader).unwrap(),
+                NativeResolutionBundleState::ObsoleteSchema { found: actual, current: 3 } if actual == found)
+            );
+            let error = verify_native_resolution_oracle_bundle(
+                directory,
+                &candidate.profile,
+                &package_oracle.reader,
+            )
+            .err()
+            .unwrap();
+            assert!(
+                matches!(error, Error::ResolutionBundleRebuildRequired { found: actual, current: 3 } if actual == found)
+            );
+            assert!(error.to_string().contains("schema rebuild required"));
+        }
+        for found in [0, 4] {
+            fs::write(&manifest_path, format!("{{\"schema_version\":{found}}}")).unwrap();
+            assert!(matches!(
+                inspect_native_resolution_oracle_bundle(
+                    directory,
+                    &candidate.profile,
+                    &package_oracle.reader
+                ),
+                Err(Error::ConfigError(_))
+            ));
+        }
+    }
+}
+
+#[test]
+fn resolution_bundle_inspection_rejects_malformed_envelopes_and_current_contents() {
+    let (candidate, package_oracle, roots) = fixtures(NativeParityEcosystemV1::Rpm);
+    let bundle = write_resolution(
+        &candidate,
+        &package_oracle,
+        NativeParityEcosystemV1::Rpm,
+        "native-solver",
+        &roots,
+        true,
+    );
+    let directory = bundle._directory.path();
+    for bytes in [
+        "{}",
+        "null",
+        "[]",
+        "{",
+        "{\"schema_version\":true}",
+        "{\"schema_version\":\"2\"}",
+        "{\"schema_version\":2.0}",
+        "{\"schema_version\":-1}",
+        "{\"schema_version\":4294967296}",
+        "{\"schema_version\":3,\"schema_version\":2}",
+        "{\"schema_version\":3}",
+    ] {
+        fs::write(directory.join(NATIVE_RESOLUTION_MANIFEST_FILE_NAME), bytes).unwrap();
+        let error = inspect_native_resolution_oracle_bundle(
+            directory,
+            &candidate.profile,
+            &package_oracle.reader,
+        )
+        .err()
+        .expect("malformed bundle must fail");
+        assert!(
+            matches!(error, Error::ConfigError(_) | Error::ParseError(_)),
+            "{bytes}: {error}"
+        );
+    }
 }
 
 #[test]
@@ -300,6 +402,68 @@ fn closure_unresolved_and_outcome_drift_are_typed() {
                 NativeResolutionMismatchV1::ResolutionOutcome {
                     oracle: NativeResolutionOutcomeKindV1::Unresolved,
                     candidate: NativeResolutionOutcomeKindV1::NotInstallable,
+                    ..
+                }
+            )
+    ));
+}
+
+#[test]
+fn conflicting_closure_matches_by_reason_and_differs_from_unresolved() {
+    let ecosystem = NativeParityEcosystemV1::Rpm;
+    let (candidate, package_oracle, roots) = fixtures(ecosystem);
+    let mut conflicting = roots.clone();
+    conflicting[1].outcome = NativeResolutionOutcomeV1::NotInstallable {
+        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+    };
+    let native = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "libsolv",
+        &conflicting,
+        true,
+    );
+    let matching = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-resolvo",
+        &conflicting,
+        true,
+    );
+    let comparison = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &matching.reader,
+    )
+    .unwrap();
+    assert_eq!(comparison.counts.not_installable_roots, 1);
+
+    let unresolved = write_resolution(
+        &candidate,
+        &package_oracle,
+        ecosystem,
+        "conary-resolvo",
+        &roots,
+        true,
+    );
+    let error = compare_native_resolution_oracle(
+        &candidate.profile,
+        &package_oracle.reader,
+        &native.reader,
+        &unresolved.reader,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        NativeResolutionComparisonError::Mismatch(mismatch)
+            if matches!(
+                mismatch.as_ref(),
+                NativeResolutionMismatchV1::ResolutionOutcome {
+                    oracle: NativeResolutionOutcomeKindV1::NotInstallable,
+                    candidate: NativeResolutionOutcomeKindV1::Unresolved,
                     ..
                 }
             )

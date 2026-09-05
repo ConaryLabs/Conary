@@ -30,7 +30,7 @@ use crate::repository::versioning::VersionScheme;
 mod resolution;
 
 pub use resolution::{
-    ALPM_RESOLUTION_PROJECTION_SCHEMA_V2, produce_alpm_resolution_oracle,
+    ALPM_RESOLUTION_PROJECTION_SCHEMA_V3, produce_alpm_resolution_oracle,
     produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
     produce_alpm_resolution_survey_with_workers,
 };

@@ -5,6 +5,7 @@
 //! Provides policy-explicit install solving and exact removal analysis using
 //! the CDCL SAT solver with backtracking support.
 
+mod hidden_conflict;
 mod install;
 mod relations;
 mod removal;
@@ -109,6 +110,20 @@ pub enum SatExactResolution {
     Unresolved {
         dependencies: Vec<SatUnresolvedDependency>,
     },
+    ConflictingClosure,
+}
+
+fn conflict_graph_has_conflict_class(
+    graph: &resolvo::conflict::ConflictGraph<resolvo::SolvableId>,
+) -> bool {
+    graph
+        .graph
+        .edge_references()
+        .any(|edge| matches!(edge.weight(), resolvo::conflict::ConflictEdge::Conflict(_)))
+        || graph
+            .graph
+            .node_weights()
+            .any(|node| matches!(node, resolvo::conflict::ConflictNode::Excluded(_)))
 }
 
 /// Solve an install request using the SAT solver with an explicit source-selection policy.
@@ -168,7 +183,8 @@ pub fn solve_install_with_policy(
 /// Unlike the user-facing name/version request, this root constraint cannot
 /// select a different release, architecture, repository, or package variant.
 /// Missing positive dependency groups are returned as persisted typed
-/// authority; package conflicts and other solver failures remain hard errors.
+/// authority; root-reachable conflicts are a separate typed outcome and only
+/// unattributed solver failures remain hard errors.
 pub fn solve_exact_repository_package_with_policy(
     conn: &Connection,
     repository_package_id: i64,
@@ -215,6 +231,8 @@ fn solve_exact_repository_package_with_policy_inner(
         &crate::resolver::provider::ConaryProvider<'_>,
     ),
 ) -> Result<SatExactResolution> {
+    #[cfg(test)]
+    hidden_conflict::reset_counts();
     let root = crate::db::models::RepositoryPackage::find_by_id(conn, repository_package_id)?
         .ok_or_else(|| {
             Error::NotFound(format!(
@@ -253,7 +271,11 @@ fn solve_exact_repository_package_with_policy_inner(
         Err(UnsolvableOrCancelled::Unsolvable(conflict)) => {
             let graph = conflict.graph(&solver);
             let projected = (|| {
+                let has_conflict_class = conflict_graph_has_conflict_class(&graph);
                 let Some(unresolved) = graph.unresolved_node else {
+                    if has_conflict_class {
+                        return Ok(SatExactResolution::ConflictingClosure);
+                    }
                     return Err(Error::ConflictError(format!(
                         "exact repository package {repository_package_id} is unsatisfiable without a missing typed dependency: {}",
                         conflict.display_user_friendly(&solver)
@@ -263,6 +285,9 @@ fn solve_exact_repository_package_with_policy_inner(
                 for edge in graph.graph.edges_directed(unresolved, Direction::Incoming) {
                     let resolvo::conflict::ConflictEdge::Requires(requirement) = *edge.weight()
                     else {
+                        if has_conflict_class {
+                            return Ok(SatExactResolution::ConflictingClosure);
+                        }
                         return Err(Error::InternalError(
                             "resolver unresolved sink has a non-requirement edge".to_string(),
                         ));
@@ -285,13 +310,26 @@ fn solve_exact_repository_package_with_policy_inner(
                     }
                 }
                 if dependencies.is_empty() {
+                    if has_conflict_class {
+                        return Ok(SatExactResolution::ConflictingClosure);
+                    }
                     return Err(Error::ConflictError(format!(
                         "exact repository package {repository_package_id} is unresolved without a persisted required-group authority"
                     )));
                 }
-                Ok(SatExactResolution::Unresolved {
-                    dependencies: dependencies.into_iter().collect(),
-                })
+                let dependencies = dependencies.into_iter().collect::<Vec<_>>();
+                let Some(dependencies) = hidden_conflict::probe(
+                    conn,
+                    &root.name,
+                    repository_package_id,
+                    architecture,
+                    policy,
+                    &dependencies,
+                )?
+                else {
+                    return Ok(SatExactResolution::ConflictingClosure);
+                };
+                Ok(SatExactResolution::Unresolved { dependencies })
             })();
             if projected.is_err() {
                 on_failure(&graph, solver.provider());

@@ -241,7 +241,7 @@ class TransportFixture:
             package_manifest_bytes = canonical(package_manifest)
             (package_root / "manifest.json").write_bytes(package_manifest_bytes)
             resolution_manifest = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "profile": profile,
                 "profile_revision_sha256": self.candidates[profile],
                 "profile_logical_digest_sha256": "f" * 64,
@@ -282,7 +282,7 @@ class TransportFixture:
                 "resolution": {"name": resolution_binary, "sha256": str(index + 3) * 64},
             }
             evidence = {
-                "schema_version": 4,
+                "schema_version": 5,
                 "artifact_type": "native-oracle-lane",
                 "deployment_run_id": int(DEPLOYMENT_RUN_ID),
                 "export_run_id": int(EXPORT_RUN_ID),
@@ -307,7 +307,7 @@ class TransportFixture:
                     },
                 },
                 "resolution_oracle": {
-                    "schema_version": 2,
+                    "schema_version": 3,
                     "manifest_sha256": digest(resolution_manifest_bytes),
                     "artifact": {
                         "name": "roots.jsonl",
@@ -351,7 +351,7 @@ class TransportFixture:
         write_json(
             self.assembly_evidence,
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "artifact_type": "native-oracle-three-lane-set",
                 "deployment_run_id": int(DEPLOYMENT_RUN_ID),
                 "export_run_id": int(EXPORT_RUN_ID),
@@ -415,7 +415,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
         "error_kinds": [{"kind": error_kind, "count": 1}],
     }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "profile": profile,
         "profile_revision_sha256": revision,
         "package_oracle_manifest_sha256": package_manifest,
@@ -423,7 +423,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
             "ecosystem": ECOSYSTEMS[profile],
             "name": "conary-sat",
             "version": "1",
-            "projection_schema": 2,
+            "projection_schema": 3,
         },
         "policy": {
             "architecture": architecture,
@@ -452,7 +452,7 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
         "total_failures": 1,
         "retained_failures": 1,
         "truncated": False,
-        "evidence_byte_limit": 67108864,
+        "evidence_byte_limit": 33554432,
         "retained_evidence_bytes": 0,
         "retained_explanations": 0,
         "withheld_explanations": 1,
@@ -476,6 +476,19 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_conflicting_closure_is_a_canonical_not_installable_reason(self) -> None:
+        root = "1" * 64
+        conflicting = {"status": "not_installable", "reason": "conflicting_closure"}
+        excluded = {"status": "not_installable", "reason": "architecture_excluded"}
+        self.assertEqual(
+            TRANSPORT_TOOL.validate_native_outcome(conflicting, root, "fixture"),
+            "not_installable",
+        )
+        self.assertNotEqual(
+            TRANSPORT_TOOL.native_outcome_sha256(conflicting),
+            TRANSPORT_TOOL.native_outcome_sha256(excluded),
+        )
+
     def test_oracle_transport_format_supports_members_larger_than_ustar(self) -> None:
         member = tarfile.TarInfo("fedora-44/package-oracle/packages.jsonl")
         member.size = 8 * 1024 * 1024 * 1024
@@ -522,7 +535,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             ],
         }
         comparison = {
-            "schema_version": 1,
+            "schema_version": 2,
             "profile": profile["profile"],
             "profile_revision_sha256": profile["profile_revision_sha256"],
             "package_oracle_manifest_sha256": profile[
@@ -570,6 +583,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
         TRANSPORT_TOOL.validate_comparison_survey(
             comparison, profile, "comparison.json", candidate, candidate_manifest
         )
+
+        malformed = json.loads(canonical(comparison))
+        malformed["schema_version"] = 1
+        with self.assertRaisesRegex(ValueError, "identity or oracle binding drifted"):
+            TRANSPORT_TOOL.validate_comparison_survey(
+                malformed, profile, "comparison.json", candidate, candidate_manifest
+            )
 
         malformed = json.loads(canonical(comparison))
         malformed["mismatches"][0]["candidate"]["outcome"] = resolved
@@ -636,6 +656,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(command, text=True, capture_output=True, check=False)
             self.assertEqual(result.returncode, 0, result.stderr)
             evidence = json.loads(fixture.evidence.read_bytes())
+            self.assertEqual(evidence["schema_version"], 2)
             self.assertEqual(evidence["workflow_runs"], {"oracle": 300, "export": 200, "deployment": 100})
             self.assertEqual(
                 evidence["oracle_operator"],
@@ -650,6 +671,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             )
             self.assertEqual(evidence["deployment"]["binary_sha256"], BINARY_SHA256)
             with tarfile.open(fixture.transport, mode="r:") as archive:
+                self.assertEqual(json.load(archive.extractfile("manifest.json"))["schema_version"], 2)
                 self.assertEqual(
                     archive.getnames(),
                     ["manifest.json"]
@@ -669,6 +691,43 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 self.assertFalse((lane / "package-oracle" / "packages.jsonl").exists())
                 self.assertFalse((lane / "resolution-oracle" / "manifest.json").exists())
                 self.assertFalse((lane / "resolution-oracle" / "roots.jsonl").exists())
+
+    def test_retired_input_envelopes_are_typed_rebuild_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            fixture = TransportFixture(root)
+            result = subprocess.run(fixture.command(), text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            # Deliberately omit the old envelope's nested fields: the outer
+            # retirement must be classified before any nested validation.
+            write_json(fixture.evidence, {"schema_version": 1})
+            with self.assertRaises(TRANSPORT_TOOL.SchemaRebuildRequired) as caught:
+                TRANSPORT_TOOL.validate_input_evidence(
+                    fixture.evidence, fixture.survey_id, EXPORT_ID
+                )
+            self.assertEqual(caught.exception.evidence["reason"], "schema_rebuild_required")
+            self.assertEqual(caught.exception.evidence["current_schema"], 2)
+            command = ["python3", str(TOOL), "verify-output",
+                       "--survey-id", fixture.survey_id, "--export-id", EXPORT_ID,
+                       "--input-evidence", str(fixture.evidence),
+                       "--oracle-transport", str(fixture.transport),
+                       "--transport", str(root / "absent-output.tar"),
+                       "--evidence", str(root / "verification.json")]
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 3, result.stderr)
+            self.assertEqual(json.loads(result.stderr)["status"], "obsolete")
+
+            manifest = root / "old-input.json"
+            write_json(manifest, {"schema_version": 1})
+            with tarfile.open(fixture.transport, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+                archive.add(manifest, arcname="manifest.json")
+            with self.assertRaises(TRANSPORT_TOOL.SchemaRebuildRequired) as caught:
+                TRANSPORT_TOOL.load_input_package_manifests(
+                    fixture.transport, digest(manifest.read_bytes()),
+                    {"sha256": digest(fixture.transport.read_bytes()),
+                     "size": fixture.transport.stat().st_size}, []
+                )
+            self.assertEqual(caught.exception.evidence["envelope"], "survey input manifest")
 
     def test_build_input_rejects_run_and_lane_binding_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -700,6 +759,15 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("pinned SSH operator attestation", result.stderr)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = TransportFixture(Path(temporary))
+            assembly = json.loads(fixture.assembly_evidence.read_bytes())
+            assembly["schema_version"] = 1
+            write_json(fixture.assembly_evidence, assembly)
+            result = subprocess.run(fixture.command(), text=True, capture_output=True, check=False)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("one canonical assembled three-lane set", result.stderr)
 
         with tempfile.TemporaryDirectory() as temporary:
             fixture = TransportFixture(Path(temporary))
@@ -744,6 +812,13 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 profile["profile_revision_sha256"],
                 profile["package_oracle_manifest_sha256"],
             )
+            TRANSPORT_TOOL.validate_candidate_survey(candidate, profile, "candidate.json")
+            obsolete_candidate = json.loads(canonical(candidate))
+            obsolete_candidate["schema_version"] = 1
+            with self.assertRaisesRegex(ValueError, "identity or oracle binding drifted"):
+                TRANSPORT_TOOL.validate_candidate_survey(
+                    obsolete_candidate, profile, "candidate.json"
+                )
             TRANSPORT_TOOL.validate_candidate_package_coverage(
                 fixture.transport,
                 artifacts[profile["profile"]],
@@ -896,7 +971,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                     }
                 )
             manifest = {
-                "schema_version": 2,
+                "schema_version": 3,
                 "survey_id": fixture.survey_id,
                 "export_id": EXPORT_ID,
                 "deployment": input_manifest["deployment"],
@@ -953,6 +1028,25 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
             self.assertEqual(
                 json.loads(verification.read_bytes())["counts"]["candidate_failures"], 3
             )
+            self.assertEqual(json.loads(verification.read_bytes())["schema_version"], 3)
+
+            for obsolete_schema in (1, 2):
+                manifest["schema_version"] = obsolete_schema
+                # Even absent nested fields cannot mask an obsolete envelope.
+                saved_profiles = manifest.pop("profiles")
+                write_output()
+                verification.unlink(missing_ok=True)
+                result = subprocess.run(command, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 3, result.stderr)
+                retired = json.loads(result.stderr)
+                self.assertEqual(retired["status"], "obsolete")
+                self.assertEqual(retired["reason"], "schema_rebuild_required")
+                self.assertEqual(retired["found_schema"], obsolete_schema)
+                self.assertEqual(retired["current_schema"], 3)
+                self.assertFalse(verification.exists())
+                manifest["profiles"] = saved_profiles
+            manifest["schema_version"] = 3
+            write_output()
 
             first_name = sorted(
                 name
@@ -960,6 +1054,16 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 if name.endswith(".candidate-resolution-survey.json")
             )[0]
             valid_candidate = survey_files[first_name]
+            obsolete_nested = json.loads(valid_candidate)
+            obsolete_nested["schema_version"] = 1
+            survey_files[first_name] = canonical(obsolete_nested)
+            write_output()
+            result = subprocess.run(command, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("identity or oracle binding drifted", result.stderr)
+            self.assertNotIn("schema_rebuild_required", result.stderr)
+            survey_files[first_name] = valid_candidate
+            write_output()
             with TRANSPORT_TOOL.StreamingJsonDocument(
                 root / first_name,
                 "streamed candidate survey",
@@ -989,7 +1093,7 @@ class ResolutionSurveyTransportTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn("unsigned 64-bit integer", result.stderr)
-            manifest["schema_version"] = 2
+            manifest["schema_version"] = 3
 
             first_implementation = sorted(
                 name

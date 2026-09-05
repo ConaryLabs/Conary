@@ -5,22 +5,26 @@
 #[cfg(test)]
 use std::cell::Cell;
 use std::collections::{BTreeMap, VecDeque};
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::num::NonZeroUsize;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError, TrySendError};
 use std::time::Instant;
-
-use serde::{Deserialize, Serialize};
 
 use super::contract::NativeParityPackageV1;
 use super::io::NativeParityOracleReader;
 use crate::error::{Error, Result};
+
+mod evidence;
+
+use evidence::AtomicResolutionExplanationLimits;
+pub(crate) use evidence::ResolutionExplanationLimits;
+pub use evidence::{
+    ResolutionWalkImplementationEvidenceV1, ensure_resolution_walk_evidence_outside_bundle,
+    write_resolution_walk_implementation_evidence,
+};
 
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const PROC_SELF_CGROUP: &str = "/proc/self/cgroup";
@@ -139,113 +143,6 @@ impl ResolutionWorkerRequest {
     }
 }
 
-/// Non-authoritative execution evidence emitted separately from canonical
-/// resolution bundles and surveys.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ResolutionWalkImplementationEvidenceV1 {
-    pub schema_version: u32,
-    pub workers: u64,
-    pub worker_load_milliseconds: Vec<u64>,
-    pub memory_budget_bytes: u64,
-    pub measured_worker_rss_bytes: u64,
-}
-
-impl ResolutionWalkImplementationEvidenceV1 {
-    pub(crate) fn new(
-        workers: ResolutionWorkerCount,
-        worker_load_milliseconds: Vec<u64>,
-        memory_budget_bytes: u64,
-        measured_worker_rss_bytes: u64,
-    ) -> Result<Self> {
-        if worker_load_milliseconds.len() != workers.get() {
-            return Err(Error::InternalError(
-                "resolution worker load evidence count drifted".to_string(),
-            ));
-        }
-        Ok(Self {
-            schema_version: 1,
-            workers: workers.get() as u64,
-            worker_load_milliseconds,
-            memory_budget_bytes,
-            measured_worker_rss_bytes,
-        })
-    }
-}
-
-/// Write non-authoritative worker evidence without altering canonical artifacts.
-pub fn write_resolution_walk_implementation_evidence(
-    path: &Path,
-    evidence: &ResolutionWalkImplementationEvidenceV1,
-) -> Result<()> {
-    let bytes = crate::json::canonical_json(evidence).map_err(|error| {
-        Error::ParseError(format!("serialize resolution worker evidence: {error}"))
-    })?;
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    Ok(())
-}
-
-/// Reject an implementation-evidence destination inside a strict bundle.
-///
-/// The comparison resolves existing ancestors before checking containment, so
-/// relative paths, parent components, and symlinked parents cannot alias the
-/// bundle while evading the exact-layout boundary.
-pub fn ensure_resolution_walk_evidence_outside_bundle(
-    bundle: &Path,
-    evidence: &Path,
-) -> Result<()> {
-    let bundle = resolved_destination(bundle)?;
-    let evidence = resolved_destination(evidence)?;
-    if evidence.starts_with(&bundle) {
-        return Err(Error::ConfigError(format!(
-            "resolution implementation evidence {} must remain outside strict bundle {}",
-            evidence.display(),
-            bundle.display()
-        )));
-    }
-    Ok(())
-}
-
-fn resolved_destination(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()?.join(path)
-    };
-    let mut resolved = PathBuf::new();
-    for component in absolute.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                resolved.pop();
-            }
-            Component::Prefix(_) | Component::RootDir => {
-                resolved.push(component.as_os_str());
-            }
-            Component::Normal(name) => {
-                let candidate = resolved.join(name);
-                match fs::symlink_metadata(&candidate) {
-                    Ok(_) => resolved = fs::canonicalize(&candidate)?,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                        resolved.push(name);
-                    }
-                    Err(error) => return Err(error.into()),
-                }
-            }
-        }
-    }
-    Ok(resolved)
-}
-
 pub(crate) struct OrderedResolutionMetrics {
     pub(crate) worker_load_milliseconds: Vec<u64>,
 }
@@ -276,10 +173,10 @@ enum WorkerMessage<R> {
 pub(crate) fn walk_ordered_parallel<W, R>(
     package_oracle: &NativeParityOracleReader,
     workers: ResolutionWorkerCount,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
     initialize: impl Fn(usize) -> Result<W> + Sync,
-    resolve: impl Fn(&mut W, &NativeParityPackageV1, u64) -> R + Sync,
-    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    resolve: impl Fn(&mut W, &NativeParityPackageV1, ResolutionExplanationLimits) -> R + Sync,
+    mut emit: impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<OrderedResolutionMetrics>
 where
     R: Send,
@@ -293,7 +190,8 @@ where
             .ok_or_else(|| {
                 Error::ConfigError("resolution in-flight capacity exceeds u64".to_string())
             })?;
-        let explanation_byte_limit = Arc::new(AtomicU64::new(explanation_byte_limit));
+        let explanation_limits =
+            Arc::new(AtomicResolutionExplanationLimits::new(explanation_limits));
         let (result_sender, result_receiver) = mpsc::sync_channel(channel_capacity);
         let mut job_senders = Vec::with_capacity(worker_count);
         let mut handles = Vec::with_capacity(worker_count);
@@ -303,7 +201,7 @@ where
             let result_sender = result_sender.clone();
             let initialize = &initialize;
             let resolve = &resolve;
-            let explanation_byte_limit = Arc::clone(&explanation_byte_limit);
+            let explanation_limits = Arc::clone(&explanation_limits);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let mut state = match catch_worker_panic(worker, None, || initialize(worker)) {
@@ -332,12 +230,12 @@ where
                 }
                 let mut terminal_failure: Option<String> = None;
                 while let Ok((sequence, root)) = job_receiver.recv() {
-                    let byte_limit = explanation_byte_limit.load(Ordering::Acquire);
+                    let limits = explanation_limits.load();
                     let result = if let Some(message) = &terminal_failure {
                         Err(Error::InternalError(message.clone()))
                     } else {
                         match catch_worker_panic(worker, Some(sequence), || {
-                            resolve(&mut state, &root, byte_limit)
+                            resolve(&mut state, &root, limits)
                         }) {
                             Ok(result) => Ok(result),
                             Err(error) => {
@@ -402,7 +300,7 @@ where
                     &mut pending,
                     &mut available_workers,
                     &mut next_sequence,
-                    explanation_byte_limit.as_ref(),
+                    explanation_limits.as_ref(),
                     &mut emit,
                 )?;
             }
@@ -412,7 +310,7 @@ where
                     &mut pending,
                     &mut available_workers,
                     &mut next_sequence,
-                    explanation_byte_limit.as_ref(),
+                    explanation_limits.as_ref(),
                     &mut emit,
                 )?;
             }
@@ -443,7 +341,7 @@ where
                 &mut pending,
                 &mut available_workers,
                 &mut next_sequence,
-                explanation_byte_limit.as_ref(),
+                explanation_limits.as_ref(),
                 &mut emit,
             )
         });
@@ -457,7 +355,7 @@ where
                         &mut pending,
                         &mut available_workers,
                         &mut next_sequence,
-                        explanation_byte_limit.as_ref(),
+                        explanation_limits.as_ref(),
                         &mut emit,
                     )?;
                 }
@@ -493,14 +391,14 @@ fn receive_and_emit<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     let message = receiver
         .recv()
         .map_err(|_| Error::InternalError("resolution worker result channel closed".to_string()))?;
     retain_result(message, pending, available_workers)?;
-    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit)
 }
 
 fn drain_available<R>(
@@ -508,8 +406,8 @@ fn drain_available<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     available_workers: &mut VecDeque<usize>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     loop {
         match receiver.try_recv() {
@@ -518,7 +416,7 @@ fn drain_available<R>(
             Err(TryRecvError::Disconnected) => break,
         }
     }
-    emit_ready(pending, next_sequence, explanation_byte_limit, emit)
+    emit_ready(pending, next_sequence, explanation_limits, emit)
 }
 
 fn retain_result<R>(
@@ -549,11 +447,11 @@ fn retain_result<R>(
 fn emit_ready<R>(
     pending: &mut BTreeMap<u64, (NativeParityPackageV1, Result<R>)>,
     next_sequence: &mut u64,
-    explanation_byte_limit: &AtomicU64,
-    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<u64>,
+    explanation_limits: &AtomicResolutionExplanationLimits,
+    emit: &mut impl FnMut(&NativeParityPackageV1, R) -> Result<ResolutionExplanationLimits>,
 ) -> Result<()> {
     while let Some((root, result)) = pending.remove(next_sequence) {
-        explanation_byte_limit.store(emit(&root, result?)?, Ordering::Release);
+        explanation_limits.store(emit(&root, result?)?);
         *next_sequence = next_sequence.checked_add(1).ok_or_else(|| {
             Error::ConfigError("resolution root sequence exceeds u64".to_string())
         })?;
@@ -870,91 +768,25 @@ mod tests {
     }
 
     #[test]
-    fn implementation_evidence_is_canonical_and_create_only() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("implementation.json");
-        let evidence = ResolutionWalkImplementationEvidenceV1::new(
-            ResolutionWorkerCount::new(2).unwrap(),
-            vec![11, 13],
-            8 * 1024 * 1024 * 1024,
-            1536 * 1024 * 1024,
-        )
-        .unwrap();
-        write_resolution_walk_implementation_evidence(&path, &evidence).unwrap();
-        assert_eq!(
-            std::fs::read(&path).unwrap(),
-            crate::json::canonical_json(&evidence).unwrap()
-        );
-        assert!(write_resolution_walk_implementation_evidence(&path, &evidence).is_err());
-    }
-
-    #[test]
-    fn implementation_evidence_must_remain_outside_strict_bundle() {
-        let directory = tempfile::tempdir().unwrap();
-        let bundle = directory.path().join("strict-bundle");
-        let sibling = directory.path().join("implementation.json");
-
-        ensure_resolution_walk_evidence_outside_bundle(&bundle, &sibling).unwrap();
-        let error = ensure_resolution_walk_evidence_outside_bundle(
-            &bundle,
-            &bundle.join("nested/../implementation.json"),
-        )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("must remain outside strict bundle")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn implementation_evidence_resolves_symlinked_parent_aliases() {
-        use std::os::unix::fs::symlink;
-
-        let directory = tempfile::tempdir().unwrap();
-        let real = directory.path().join("real");
-        let alias = directory.path().join("alias");
-        std::fs::create_dir(&real).unwrap();
-        symlink(&real, &alias).unwrap();
-
-        let bundle = real.join("strict-bundle");
-        let evidence = alias.join("strict-bundle/implementation.json");
-        assert!(ensure_resolution_walk_evidence_outside_bundle(&bundle, &evidence).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn implementation_evidence_preserves_symlink_parent_component_semantics() {
-        use std::os::unix::fs::symlink;
-
-        let temporary = tempfile::tempdir().unwrap();
-        let bundle = temporary.path().join("strict-bundle");
-        let nested = bundle.join("nested");
-        fs::create_dir_all(&nested).unwrap();
-        let alias = temporary.path().join("alias");
-        symlink(&nested, &alias).unwrap();
-
-        let evidence = alias.join("../implementation.json");
-        assert!(ensure_resolution_walk_evidence_outside_bundle(&bundle, &evidence).is_err());
-    }
-
-    #[test]
-    fn ordered_emit_publishes_exhausted_evidence_budget_to_workers() {
+    fn ordered_emit_publishes_independent_explanation_limits_to_workers() {
         let mut pending = BTreeMap::from([(0, (root(), Ok(())))]);
         let mut next_sequence = 0;
-        let explanation_byte_limit = AtomicU64::new(64);
+        let explanation_limits =
+            AtomicResolutionExplanationLimits::new(ResolutionExplanationLimits::new(64, 128));
 
         emit_ready(
             &mut pending,
             &mut next_sequence,
-            &explanation_byte_limit,
-            &mut |_, ()| Ok(0),
+            &explanation_limits,
+            &mut |_, ()| Ok(ResolutionExplanationLimits::new(0, 32)),
         )
         .unwrap();
 
         assert_eq!(next_sequence, 1);
-        assert_eq!(explanation_byte_limit.load(Ordering::Acquire), 0);
+        assert_eq!(
+            explanation_limits.load(),
+            ResolutionExplanationLimits::new(0, 32)
+        );
     }
 
     #[test]

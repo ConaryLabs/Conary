@@ -23,13 +23,13 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionWalkImplementationEvidenceV1,
-    ResolutionWorkerCount, ResolutionWorkerRequest, resolution_walk_memory_budget_bytes,
-    walk_ordered_parallel,
+    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
+    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
+    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
-    RootOutcomeSink,
+    NativeRootResolutionSuccess, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
     NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
@@ -39,23 +39,27 @@ use crate::repository::catalog::parity::{
     NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
     NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyNativeExplanationV1,
-    NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
-    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest, write_native_resolution_survey,
+    NativeResolutionSurveyRpmResultV1, NativeResolutionSurveyV1, NativeUnresolvedDependencyV1,
+    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
+    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
+    write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 mod evidence;
 
-use evidence::rpm_explanation;
+use evidence::{rpm_explanation, rpm_resolved_explanation};
 
 /// Projection contract for libsolv transaction results and typed problem rules.
-pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V4: u32 = 4;
+pub const RPM_RESOLUTION_PROJECTION_SCHEMA_V5: u32 = 5;
 
 const SOLVER_RULE_PKG_NOT_INSTALLABLE: i32 = 0x101;
 const SOLVER_RULE_PKG_NOTHING_PROVIDES_DEP: i32 = 0x102;
 const SOLVER_RULE_PKG_REQUIRES: i32 = 0x103;
 const SOLVER_RULE_PKG_CONFLICTS: i32 = 0x105;
+const SOLVER_RULE_PKG_SAME_NAME: i32 = 0x106;
+const SOLVER_RULE_PKG_OBSOLETES: i32 = 0x107;
+const SOLVER_RULE_PKG_IMPLICIT_OBSOLETES: i32 = 0x108;
 const SOLVER_RULE_JOB: i32 = 0x400;
 const SOLVER_RULE_JOB_UNSUPPORTED: i32 = 0x404;
 const SOLVER_RULE_INFARCH: i32 = 0x600;
@@ -225,7 +229,7 @@ fn produce_rpm_resolution(
         ecosystem: NativeParityEcosystemV1::Rpm,
         name: "libsolv".to_string(),
         version: PINNED_LIBSOLV_VERSION.to_string(),
-        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V4,
+        projection_schema: RPM_RESOLUTION_PROJECTION_SCHEMA_V5,
     };
     match destination {
         ResolutionDestination::Oracle(output) => {
@@ -295,18 +299,18 @@ fn walk_resolution_roots(
     mut sink: RootOutcomeSink<'_>,
     workers: ResolutionWorkerCount,
 ) -> Result<OrderedResolutionMetrics> {
-    let explanation_byte_limit = sink.explanation_byte_limit();
+    let explanation_limits = sink.explanation_limits();
     walk_ordered_parallel(
         package_oracle,
         workers,
-        explanation_byte_limit,
+        explanation_limits,
         |_| {
             Ok(RpmResolutionWorker {
                 pool: load_resolution_pool(profile, staged, &policy.architecture)?,
                 package_index: package_index.worker()?,
             })
         },
-        |worker, root, byte_limit| match worker
+        |worker, root, limits| match worker
             .package_index
             .selected_native_index(&root.package_key_sha256)
         {
@@ -316,19 +320,21 @@ fn walk_resolution_roots(
                 root_index,
                 root,
                 policy,
-                byte_limit,
+                limits,
             ),
             Err(error) => Err(NativeRootResolutionError::new(
                 error,
                 NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
                 NativeResolutionSurveyNativeExplanationV1::Rpm {
-                    problems: Vec::new(),
+                    result: NativeResolutionSurveyRpmResultV1::Problems {
+                        problems: Vec::new(),
+                    },
                 },
             )),
         },
         |root, result| {
             sink.root(root, result)?;
-            Ok(sink.explanation_byte_limit())
+            Ok(sink.explanation_limits())
         },
     )
 }
@@ -531,7 +537,7 @@ fn resolve_exact_root(
     root_index: usize,
     root: &crate::repository::catalog::parity::NativeParityPackageV1,
     policy: &NativeResolutionPolicyV1,
-    explanation_byte_limit: u64,
+    explanation_limits: ResolutionExplanationLimits,
 ) -> NativeRootResolutionResult {
     let root_architecture = root.architecture.as_deref().ok_or_else(|| {
         NativeRootResolutionError::new(
@@ -541,7 +547,9 @@ fn resolve_exact_root(
             )),
             NativeResolutionSurveyErrorReasonV1::ExactRootProjectionFailed,
             NativeResolutionSurveyNativeExplanationV1::Rpm {
-                problems: Vec::new(),
+                result: NativeResolutionSurveyRpmResultV1::Problems {
+                    problems: Vec::new(),
+                },
             },
         )
     })?;
@@ -560,7 +568,9 @@ fn resolve_exact_root(
                 error,
                 NativeResolutionSurveyErrorReasonV1::UnknownArchitectureToken,
                 NativeResolutionSurveyNativeExplanationV1::Rpm {
-                    problems: Vec::new(),
+                    result: NativeResolutionSurveyRpmResultV1::Problems {
+                        problems: Vec::new(),
+                    },
                 },
             ));
         }
@@ -570,7 +580,9 @@ fn resolve_exact_root(
             error,
             NativeResolutionSurveyErrorReasonV1::NativeSolverFailed,
             NativeResolutionSurveyNativeExplanationV1::Rpm {
-                problems: Vec::new(),
+                result: NativeResolutionSurveyRpmResultV1::Problems {
+                    problems: Vec::new(),
+                },
             },
         )
     })?;
@@ -584,12 +596,15 @@ fn resolve_exact_root(
                     )),
                     NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
                     NativeResolutionSurveyNativeExplanationV1::Rpm {
-                        problems: Vec::new(),
+                        result: NativeResolutionSurveyRpmResultV1::Problems {
+                            problems: Vec::new(),
+                        },
                     },
                 ));
             }
             let closure = packages
-                .into_iter()
+                .iter()
+                .copied()
                 .map(|index| package_index.package_key(index))
                 .collect::<Result<BTreeSet<_>>>()
                 .map_err(|error| {
@@ -597,32 +612,54 @@ fn resolve_exact_root(
                         error,
                         NativeResolutionSurveyErrorReasonV1::ResolvedClosureProjectionFailed,
                         NativeResolutionSurveyNativeExplanationV1::Rpm {
-                            problems: Vec::new(),
+                            result: NativeResolutionSurveyRpmResultV1::Problems {
+                                problems: Vec::new(),
+                            },
                         },
                     )
                 })?;
             if !closure.contains(&root.package_key_sha256) {
-                return Err(NativeRootResolutionError::new(
-                    Error::ConflictError(format!(
-                        "libsolv closure for '{}' omits its exact root",
-                        root.name
-                    )),
-                    NativeResolutionSurveyErrorReasonV1::ResolvedClosureOmittedRoot,
-                    NativeResolutionSurveyNativeExplanationV1::Rpm {
-                        problems: Vec::new(),
+                return Ok(NativeRootResolutionSuccess::explained(
+                    NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
                     },
+                    rpm_resolved_explanation(
+                        pool,
+                        package_index,
+                        &packages,
+                        explanation_limits.diagnostic_outcome_bytes(),
+                    ),
                 ));
             }
-            Ok(NativeResolutionOutcomeV1::Resolved {
-                closure_package_keys_sha256: closure.into_iter().collect(),
-            })
+            Ok(NativeRootResolutionSuccess::plain(
+                NativeResolutionOutcomeV1::Resolved {
+                    closure_package_keys_sha256: closure.into_iter().collect(),
+                },
+            ))
         }
         SolvResolution::Unresolved(problems) => {
             match unresolved_outcome(pool, package_index, root_index, root, policy, &problems) {
-                Ok(outcome) => Ok(outcome),
+                Ok(
+                    outcome @ NativeResolutionOutcomeV1::NotInstallable {
+                        reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+                    },
+                ) => Ok(NativeRootResolutionSuccess::explained(
+                    outcome,
+                    rpm_explanation(
+                        pool,
+                        package_index,
+                        &problems,
+                        explanation_limits.diagnostic_outcome_bytes(),
+                    ),
+                )),
+                Ok(outcome) => Ok(NativeRootResolutionSuccess::plain(outcome)),
                 Err(error) => {
-                    let explanation =
-                        rpm_explanation(pool, package_index, &problems, explanation_byte_limit);
+                    let explanation = rpm_explanation(
+                        pool,
+                        package_index,
+                        &problems,
+                        explanation_limits.failure_bytes(),
+                    );
                     Err(NativeRootResolutionError::new(
                         error,
                         NativeResolutionSurveyErrorReasonV1::UnresolvedProjectionFailed,
@@ -642,6 +679,23 @@ fn unresolved_outcome(
     policy: &NativeResolutionPolicyV1,
     problems: &[SolvProblem],
 ) -> Result<NativeResolutionOutcomeV1> {
+    if problems
+        .iter()
+        .flat_map(|problem| &problem.rules)
+        .any(|rule| {
+            matches!(
+                rule.rule_type,
+                SOLVER_RULE_PKG_CONFLICTS
+                    | SOLVER_RULE_PKG_SAME_NAME
+                    | SOLVER_RULE_PKG_OBSOLETES
+                    | SOLVER_RULE_PKG_IMPLICIT_OBSOLETES
+            )
+        })
+    {
+        return Ok(NativeResolutionOutcomeV1::NotInstallable {
+            reason: NativeResolutionNotInstallableReasonV1::ConflictingClosure,
+        });
+    }
     if let Some(outcome) = architecture_excluded_outcome(root_index, root, policy, problems)? {
         return Ok(outcome);
     }
@@ -877,7 +931,10 @@ fn project_unresolved_problem(
                     root.name, architecture
                 )));
             }
-            SOLVER_RULE_PKG_CONFLICTS => {
+            SOLVER_RULE_PKG_CONFLICTS
+            | SOLVER_RULE_PKG_SAME_NAME
+            | SOLVER_RULE_PKG_OBSOLETES
+            | SOLVER_RULE_PKG_IMPLICIT_OBSOLETES => {
                 return Err(Error::ConflictError(format!(
                     "libsolv found exact root '{}' unsatisfiable with problem rule {:#x} (from={:?}, to={:?}, dependency={})",
                     root.name, rule.rule_type, rule.from_index, rule.to_index, rule.dependency

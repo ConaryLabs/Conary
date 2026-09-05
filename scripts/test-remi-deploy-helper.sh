@@ -372,7 +372,7 @@ for index in 0 1 2; do
         --arg package "$package_manifest_sha256" \
         --argjson failures "$failures" '
         {
-          schema_version:1,
+          schema_version:2,
           profile:$profile,
           profile_revision_sha256:$revision,
           package_oracle_manifest_sha256:$package,
@@ -380,7 +380,7 @@ for index in 0 1 2; do
             ecosystem:$ecosystem,
             name:"conary-sat",
             version:"1",
-            projection_schema:2
+            projection_schema:3
           },
           policy:{
             architecture:$architecture,
@@ -411,7 +411,7 @@ for index in 0 1 2; do
           total_failures:$failures,
           retained_failures:$failures,
           truncated:false,
-          evidence_byte_limit:67108864,
+          evidence_byte_limit:33554432,
           retained_evidence_bytes:0,
           retained_explanations:0,
           withheld_explanations:$failures,
@@ -453,7 +453,7 @@ for index in 0 1 2; do
             --arg artifact "$candidate_artifact_sha256" \
             --argjson size "$candidate_artifact_size" '
             {
-              schema_version:2,
+              schema_version:3,
               profile:$candidate.profile,
               profile_revision_sha256:$candidate.profile_revision_sha256,
               profile_logical_digest_sha256:$package[0].profile_logical_digest_sha256,
@@ -474,7 +474,7 @@ for index in 0 1 2; do
             --arg package "$package_manifest_sha256" --arg resolution "$resolution_manifest_sha256" \
             --arg candidate "$candidate_manifest_sha256" '
             {
-              schema_version:1,
+              schema_version:2,
               profile:$profile,
               profile_revision_sha256:$revision,
               package_oracle_manifest_sha256:$package,
@@ -622,7 +622,7 @@ make_survey_oracle_transport() {
             --arg sha256 "$(sha256sum "$resolution_artifact" | cut -d ' ' -f 1)" \
             --argjson size "$(stat -c '%s' "$resolution_artifact")" '
             {
-              schema_version:2,
+              schema_version:3,
               profile:$profile,
               profile_revision_sha256:$revision,
               profile_logical_digest_sha256:("1" * 64),
@@ -682,7 +682,7 @@ make_survey_oracle_transport() {
         --arg binary "$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)" \
         --slurpfile profiles "$profiles_json" --slurpfile files "$files_json" '
         {
-          schema_version:1,
+          schema_version:2,
           survey_id:$survey_id,
           export_id:$export_id,
           workflow_runs:{oracle:300,export:200,deployment:100},
@@ -714,7 +714,7 @@ make_survey_oracle_transport() {
         --arg transport_sha256 "$(sha256sum "$transport" | cut -d ' ' -f 1)" \
         --argjson transport_size "$(stat -c '%s' "$transport")" '
         {
-          schema_version:1,
+          schema_version:2,
           survey_id:$input[0].survey_id,
           export_id:$input[0].export_id,
           workflow_runs:$input[0].workflow_runs,
@@ -1407,7 +1407,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
         --transport "$transport" \
         --evidence "$verification" >/dev/null
     jq -e '
-        .schema_version == 2
+        .schema_version == 3
         and .counts == {
           candidate_failures: 0,
           comparison_mismatches: 0,
@@ -1540,6 +1540,27 @@ test_resolution_survey_preflight_failure_cleans_staging() {
     fi
     [[ ! -s "$fake_root/service-log" ]] ||
         fail "survey preflight failure caused downtime"
+}
+
+test_resolution_survey_rejects_obsolete_input_before_downtime() {
+    local survey_id="survey-obsolete-$$"
+    local export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local transport="/tmp/remi-resolution-survey-oracles-${survey_id}.tar"
+    local build="${tmpdir}/survey-oracles-${survey_id}"
+    local output="${tmpdir}/obsolete-survey-output"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    # Deliberately absent nested bindings must not mask the retired envelope.
+    printf '%s' '{"schema_version":1}' >"$build/manifest.json"
+    tar -cf "$transport" -C "$build" manifest.json
+    if run_survey_helper "$fake_root" "$survey_id" "$export_id" "$transport" >"$output" 2>&1; then
+        fail "obsolete survey input was admitted"
+    fi
+    grep -F '"reason":"schema_rebuild_required"' "$output" >/dev/null ||
+        fail "obsolete survey input was not typed rebuild state"
+    grep -F '"current_schema":2' "$output" >/dev/null ||
+        fail "obsolete survey input omitted its replacement schema"
+    [[ ! -s "$fake_root/service-log" ]] || fail "obsolete survey input caused downtime"
 }
 
 test_resolution_survey_rejects_invalid_requests_before_downtime() {
@@ -2139,6 +2160,7 @@ main() {
     test_resolution_survey_inspection_failure_sanitizes_diagnostic
     test_resolution_survey_preflight_failure_cleans_staging
     test_resolution_survey_rejects_invalid_requests_before_downtime
+    test_resolution_survey_rejects_obsolete_input_before_downtime
     test_conversion_benchmark_uses_fixed_paths_arguments_and_service_sequence
     test_conversion_benchmark_failure_restarts_without_publication
     test_conversion_benchmark_reserves_ssh_failure_status

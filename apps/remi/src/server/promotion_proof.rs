@@ -303,13 +303,13 @@ mod tests {
     fn promotion_proof_comparison_type_rejects_a_survey_file() {
         use conary_core::repository::catalog::{
             NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT,
-            NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
             NativeResolutionComparisonSurveyCountsV1, NativeResolutionComparisonSurveyV1,
             NativeResolutionComparisonV1, write_native_resolution_comparison_survey,
         };
 
         let survey = NativeResolutionComparisonSurveyV1 {
-            schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+            schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
             profile: "fedora-44".to_string(),
             profile_revision_sha256: "a".repeat(64),
             package_oracle_manifest_sha256: "b".repeat(64),
@@ -458,22 +458,39 @@ mod tests {
         )
         .expect("write complete fixture crawl");
         let output = output_parent.path().join("proof");
-        let result = produce_remi_promotion_proof(
-            &RemiPromotionProofConfig {
-                db_path: catalogs.db_path().to_path_buf(),
-                catalog_dir: catalogs.catalog_dir().to_path_buf(),
-                conversion_crawl_path: crawl_path,
-                output_dir: output.clone(),
-                profiles: fixtures
-                    .iter()
-                    .map(|fixture| fixture.input.clone())
-                    .collect(),
-            },
-            catalogs.authority(),
-        )
-        .expect("produce complete operator proof");
+        let config = RemiPromotionProofConfig {
+            db_path: catalogs.db_path().to_path_buf(),
+            catalog_dir: catalogs.catalog_dir().to_path_buf(),
+            conversion_crawl_path: crawl_path,
+            output_dir: output.clone(),
+            profiles: fixtures
+                .iter()
+                .map(|fixture| fixture.input.clone())
+                .collect(),
+        };
+        let result = produce_remi_promotion_proof(&config, catalogs.authority())
+            .expect("produce complete operator proof");
 
         assert_eq!(result.profiles, 3);
+        let manifest = fixtures[0]
+            .input
+            .native_resolution_dir
+            .join("manifest.json");
+        let current = fs::read(&manifest).unwrap();
+        for found in [1, 2] {
+            fs::write(&manifest, format!("{{\"schema_version\":{found}}}")).unwrap();
+            let retired_config = RemiPromotionProofConfig {
+                output_dir: output_parent.path().join(format!("retired-{found}")),
+                ..config.clone()
+            };
+            let error = produce_remi_promotion_proof(&retired_config, catalogs.authority())
+                .expect_err("retired native resolution requires rebuild before promotion");
+            assert!(matches!(error.downcast_ref::<conary_core::Error>(),
+                Some(conary_core::Error::ResolutionBundleRebuildRequired { found: actual, current: 3 }) if *actual == found));
+            assert!(format!("{error:#}").contains("schema rebuild required"));
+            assert!(!retired_config.output_dir.exists());
+        }
+        fs::write(manifest, current).unwrap();
         assert_eq!(result.output_dir, output);
         assert_eq!(
             reopen_remi_promotion_evidence(&result.promotion_evidence_path)

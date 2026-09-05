@@ -406,7 +406,7 @@ jobs:
             --arg resolution_sha256 "$resolution_sha256" \
             --arg survey_sha256 "$survey_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 2 and
+            .schema_version == 3 and
             .artifact_type == "native-resolution-survey-diagnostics" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
@@ -418,32 +418,50 @@ jobs:
             .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
             .lane_image == $lane_image and
             .package_oracle.schema_version == 1 and
-            .survey.schema_version == 2 and
+            .survey.schema_version == 3 and
             .survey.sha256 == $survey_sha256 and
             .survey.size > 0 and
+            (.survey.diagnostic_outcome_record_limit | type == "number") and
+            (.survey.total_diagnostic_outcomes | type == "number") and
+            (.survey.retained_diagnostic_outcomes | type == "number") and
+            (.survey.diagnostic_outcomes_truncated | type == "boolean") and
+            .survey.evidence_byte_limit == 33554432 and
             .resolution_implementation.schema_version == 1 and
             .resolution_implementation.workers >= 1 and
             (.resolution_implementation.worker_load_milliseconds | length) ==
               .resolution_implementation.workers
           ' "$manifest" >/dev/null
           jq -e --arg profile "$PROFILE" --arg sha256 "$survey_sha256" '
-            .schema_version == 2 and
+            .schema_version == 3 and
             .profile == $profile and
             (.counts.roots_walked | type == "number") and
             (.counts.failed_roots | type == "number") and
+            (.diagnostic_outcomes | type == "array") and
+            (.diagnostic_outcome_record_limit | type == "number") and
+            (.total_diagnostic_outcomes | type == "number") and
+            (.retained_diagnostic_outcomes | type == "number") and
+            (.diagnostic_outcomes_truncated | type == "boolean") and
+            .failure_record_limit == 5000 and
+            .diagnostic_outcome_record_limit == 5000 and
+            .evidence_byte_limit == 33554432 and
+            .retained_diagnostic_outcomes == (.diagnostic_outcomes | length) and
+            .retained_diagnostic_outcomes <= .total_diagnostic_outcomes and
+            .retained_diagnostic_outcomes <= .diagnostic_outcome_record_limit and
+            .diagnostic_outcomes_truncated == (.retained_diagnostic_outcomes < .total_diagnostic_outcomes) and
+            .total_diagnostic_outcomes <= .counts.not_installable_roots and
             .total_failures == .counts.failed_roots
           ' "$survey" >/dev/null
           case "$PROFILE" in
             fedora-44)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"} and
-                .survey.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:4,version:"0.7.36"}
+                .survey.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:5,version:"0.7.36"}
               ' "$manifest" >/dev/null
               ;;
             ubuntu-26.04)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:1,version:"3.2.0"} and
-                .survey.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:2,version:"3.2.0"}
+                .survey.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:3,version:"3.2.0"}
               ' "$manifest" >/dev/null
               ;;
             arch)
@@ -454,7 +472,7 @@ jobs:
                 .package_oracle.implementation.version == .survey.implementation.version and
                 .survey.implementation.ecosystem == "alpm" and
                 .survey.implementation.name == "libalpm" and
-                .survey.implementation.projection_schema == 2
+                .survey.implementation.projection_schema == 3
               ' "$manifest" >/dev/null
               ;;
           esac
@@ -500,7 +518,7 @@ jobs:
             --arg resolution_name "${RESOLUTION_PRODUCER##*/}" \
             --arg resolution_sha256 "$resolution_sha256" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-            .schema_version == 4 and
+            .schema_version == 5 and
             .artifact_type == "native-oracle-lane" and
             .deployment_run_id == $deployment_run_id and
             .export_run_id == $export_run_id and
@@ -512,7 +530,7 @@ jobs:
             .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and
             .lane_image == $lane_image and
             .package_oracle.schema_version == 1 and
-            .resolution_oracle.schema_version == 2 and
+            .resolution_oracle.schema_version == 3 and
             .resolution_implementation.schema_version == 1 and
             .resolution_implementation.workers >= 1 and
             (.resolution_implementation.worker_load_milliseconds | length) ==
@@ -522,13 +540,13 @@ jobs:
             fedora-44)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:1,version:"0.7.36"} and
-                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:4,version:"0.7.36"}
+                .resolution_oracle.implementation == {ecosystem:"rpm",name:"libsolv",projection_schema:5,version:"0.7.36"}
               ' "$evidence" >/dev/null
               ;;
             ubuntu-26.04)
               jq -e '
                 .package_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:1,version:"3.2.0"} and
-                .resolution_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:2,version:"3.2.0"}
+                .resolution_oracle.implementation == {ecosystem:"debian",name:"apt-pkg",projection_schema:3,version:"3.2.0"}
               ' "$evidence" >/dev/null
               ;;
             arch)
@@ -539,7 +557,7 @@ jobs:
                 .package_oracle.implementation.version == .resolution_oracle.implementation.version and
                 .resolution_oracle.implementation.ecosystem == "alpm" and
                 .resolution_oracle.implementation.name == "libalpm" and
-                .resolution_oracle.implementation.projection_schema == 2
+                .resolution_oracle.implementation.projection_schema == 3
               ' "$evidence" >/dev/null
               ;;
           esac
@@ -770,7 +788,7 @@ jobs:
             --arg deployed_commit "$DEPLOYED_COMMIT" \
             --arg export_id "$EXPORT_ID" \
             --arg transport_sha256 "$TRANSPORT_SHA256" '
-              .schema_version == 1 and
+              .schema_version == 2 and
               .artifact_type == "native-oracle-three-lane-set" and
               .deployed_commit == $deployed_commit and
               .export_id == $export_id and

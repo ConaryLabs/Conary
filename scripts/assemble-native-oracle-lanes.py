@@ -17,6 +17,18 @@ from typing import Any
 
 
 PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
+
+
+class ResolutionBundleRebuildRequired(ValueError):
+    """Recognized retired resolution evidence is typed non-authority."""
+
+    def __init__(self, found: int):
+        self.state = {"status": "obsolete", "reason": "schema_rebuild_required",
+                      "envelope": "native resolution bundle", "found_schema": found,
+                      "current_schema": 3,
+                      "message": f"native resolution bundle schema {found} is obsolete; rebuild required as schema 3"}
+        super().__init__(self.state["message"])
+
 LANES = {
     "fedora-44": {
         "architecture": "x86_64",
@@ -32,7 +44,7 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "rpm",
             "name": "libsolv",
-            "projection_schema": 4,
+            "projection_schema": 5,
             "version": "0.7.36",
         },
     },
@@ -50,7 +62,7 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "debian",
             "name": "apt-pkg",
-            "projection_schema": 2,
+            "projection_schema": 3,
             "version": "3.2.0",
         },
     },
@@ -67,12 +79,13 @@ LANES = {
         "resolution_implementation": {
             "ecosystem": "alpm",
             "name": "libalpm",
-            "projection_schema": 2,
+            "projection_schema": 3,
         },
     },
 }
 MAX_JSON_BYTES = 16 * 1024 * 1024
-NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 4
+NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 5
+NATIVE_ORACLE_THREE_LANE_SET_SCHEMA = 2
 
 
 def canonical_json(value: Any) -> bytes:
@@ -194,6 +207,12 @@ def verify_oracle(
     ):
         raise ValueError(f"{label} directory is incomplete or unexpected")
     manifest, manifest_bytes = load_canonical(root / "manifest.json", f"{label} manifest")
+    if schema_version == 3:
+        found = manifest.get("schema_version")
+        if type(found) is not int or found < 0 or found > 2**32 - 1:
+            raise ValueError(f"{label} schema must be an unsigned 32-bit integer")
+        if found in (1, 2):
+            raise ResolutionBundleRebuildRequired(found)
     artifact_path = root / artifact_name
     artifact_metadata = artifact_path.lstat()
     if not stat.S_ISREG(artifact_metadata.st_mode):
@@ -359,7 +378,7 @@ def verify_lane(
         evidence["resolution_oracle"],
         profile,
         profile_revision,
-        2,
+        3,
         lane["resolution_implementation"],
         f"{profile} resolution oracle",
     )
@@ -451,7 +470,7 @@ def assemble(arguments: argparse.Namespace) -> dict[str, Any]:
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": NATIVE_ORACLE_THREE_LANE_SET_SCHEMA,
         "artifact_type": "native-oracle-three-lane-set",
         "deployment_run_id": arguments.deployment_run_id,
         "export_run_id": arguments.export_run_id,
@@ -486,6 +505,9 @@ def main() -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("xb") as destination:
             destination.write(canonical_json(evidence))
+    except ResolutionBundleRebuildRequired as error:
+        print(json.dumps(error.state, sort_keys=True, separators=(",", ":")), file=sys.stderr)
+        raise SystemExit(3) from error
     except (json.JSONDecodeError, OSError, RuntimeError, TypeError, ValueError) as error:
         raise SystemExit(f"native-oracle lane assembly failed: {error}") from error
     json.dump(evidence, sys.stdout, sort_keys=True, separators=(",", ":"))

@@ -12,6 +12,32 @@ use super::resolution_survey::{
 use crate::error::Error;
 
 #[allow(dead_code)] // Shared by feature-gated native producer root loops.
+pub(super) struct NativeRootResolutionSuccess {
+    pub(super) outcome: NativeResolutionOutcomeV1,
+    pub(super) explanation: Option<NativeResolutionSurveyNativeExplanationV1>,
+}
+
+#[allow(dead_code)]
+impl NativeRootResolutionSuccess {
+    pub(super) fn plain(outcome: NativeResolutionOutcomeV1) -> Self {
+        Self {
+            outcome,
+            explanation: None,
+        }
+    }
+
+    pub(super) fn explained(
+        outcome: NativeResolutionOutcomeV1,
+        explanation: NativeResolutionSurveyNativeExplanationV1,
+    ) -> Self {
+        Self {
+            outcome,
+            explanation: Some(explanation),
+        }
+    }
+}
+
+#[allow(dead_code)] // Shared by feature-gated native producer root loops.
 pub(super) struct NativeRootResolutionError {
     pub(super) error: Error,
     pub(super) reason: NativeResolutionSurveyErrorReasonV1,
@@ -22,6 +48,10 @@ pub(super) struct NativeRootResolutionError {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum NativeResolutionWireErrorV1 {
+    ProviderSearchBudgetExceeded {
+        root: String,
+        checks: u32,
+    },
     Display {
         variant: NativeResolutionSurveyErrorVariantV1,
         message: String,
@@ -55,6 +85,9 @@ impl NativeRootResolutionError {
         NativeResolutionSurveyNativeExplanationV1,
     ) {
         let error = match self.error {
+            Error::ProviderSearchBudgetExceeded { root, checks } => {
+                NativeResolutionWireErrorV1::ProviderSearchBudgetExceeded { root, checks }
+            }
             Error::UnknownArchitectureToken { scheme, token } => {
                 NativeResolutionWireErrorV1::UnknownArchitectureToken { scheme, token }
             }
@@ -72,6 +105,15 @@ impl NativeRootResolutionError {
         explanation: NativeResolutionSurveyNativeExplanationV1,
     ) -> Box<Self> {
         let (error, variant, message) = match wire_error {
+            NativeResolutionWireErrorV1::ProviderSearchBudgetExceeded { root, checks } => {
+                let error = Error::ProviderSearchBudgetExceeded { root, checks };
+                let message = error.to_string();
+                (
+                    error,
+                    NativeResolutionSurveyErrorVariantV1::ProviderSearchBudgetExceeded,
+                    message,
+                )
+            }
             NativeResolutionWireErrorV1::UnknownArchitectureToken { scheme, token } => {
                 let error = Error::UnknownArchitectureToken { scheme, token };
                 let message = error.to_string();
@@ -190,7 +232,7 @@ fn strip_error_prefix(message: &str, prefix: &str) -> String {
 
 #[allow(dead_code)]
 pub(super) type NativeRootResolutionResult =
-    std::result::Result<NativeResolutionOutcomeV1, Box<NativeRootResolutionError>>;
+    std::result::Result<NativeRootResolutionSuccess, Box<NativeRootResolutionError>>;
 
 #[cfg(test)]
 mod tests {
@@ -198,6 +240,40 @@ mod tests {
     use crate::repository::catalog::parity::resolution_survey::{
         NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyNativeExplanationV1,
     };
+
+    #[test]
+    fn worker_wire_preserves_provider_search_budget_fields() {
+        let explanation = NativeResolutionSurveyNativeExplanationV1::Alpm {
+            result: super::super::resolution_survey::NativeResolutionSurveyAlpmResultV1::ProviderSearchBudgetExceeded {
+                root: "budget-root".to_string(),
+                checks: 256,
+            },
+        };
+        let failure = NativeRootResolutionError::new(
+            Error::ProviderSearchBudgetExceeded {
+                root: "budget-root".to_string(),
+                checks: 256,
+            },
+            NativeResolutionSurveyErrorReasonV1::ProviderSearchBudgetExceeded,
+            explanation.clone(),
+        );
+        let (wire, reason, evidence) = (*failure).into_wire();
+        let wire: NativeResolutionWireErrorV1 =
+            serde_json::from_slice(&serde_json::to_vec(&wire).unwrap()).unwrap();
+        let restored = NativeRootResolutionError::from_wire(wire, reason, evidence);
+        assert!(
+            matches!(restored.error, Error::ProviderSearchBudgetExceeded { ref root, checks: 256 } if root == "budget-root")
+        );
+        assert_eq!(restored.explanation, explanation);
+        assert_eq!(
+            restored.reason,
+            NativeResolutionSurveyErrorReasonV1::ProviderSearchBudgetExceeded
+        );
+        assert_eq!(
+            restored.wire_identity.unwrap().0,
+            NativeResolutionSurveyErrorVariantV1::ProviderSearchBudgetExceeded
+        );
+    }
 
     #[test]
     fn worker_wire_preserves_unknown_architecture_error_fields() {

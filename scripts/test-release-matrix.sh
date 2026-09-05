@@ -2073,8 +2073,8 @@ test_check_release_matrix_rejects_native_oracle_lane_schema_drift() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .schema_version == 4 and' \
-        '            .schema_version == 3 and'
+        '            .schema_version == 5 and' \
+        '            .schema_version == 4 and'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2086,8 +2086,8 @@ test_check_release_matrix_rejects_native_oracle_implementation_pin_drift() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        'projection_schema:4,version:"0.7.36"' \
-        'projection_schema:5,version:"0.7.36"'
+        'projection_schema:5,version:"0.7.36"' \
+        'projection_schema:4,version:"0.7.36"'
 
     assert_check_release_matrix_fails \
         "$repo" \
@@ -2372,12 +2372,28 @@ test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/remi-resolution-survey-transport.py" \
-        '            exact_u32(manifest["schema_version"], "survey manifest.schema_version") != 2' \
-        '            manifest["schema_version"] != 2'
+        '        require_envelope_schema(manifest, OUTPUT_MANIFEST_SCHEMA, "survey output manifest")' \
+        '        # Incorrectly accept an obsolete outer manifest.'
 
     assert_check_release_matrix_fails \
         "$repo" \
         "resolution survey strict sanitized output transport verification"
+}
+
+test_check_release_matrix_rejects_retired_resolution_survey_envelopes() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/scripts/remi-resolution-survey-transport.py" \
+        'INPUT_EVIDENCE_SCHEMA = 2' 'INPUT_EVIDENCE_SCHEMA = 1'
+    assert_check_release_matrix_fails "$repo" "resolution survey hard-cut envelope schemas"
+
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/survey-remi-resolution.yml" \
+        '              else .schema_version == 3 end)' \
+        '              else .schema_version == 2 end)'
+    assert_check_release_matrix_fails "$repo" "resolution survey verification evidence envelope fences"
 }
 
 test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
@@ -3925,6 +3941,7 @@ main() {
         test_check_release_matrix_rejects_executable_resolution_survey_summary
         test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
         test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
+        test_check_release_matrix_rejects_retired_resolution_survey_envelopes
         test_check_release_matrix_rejects_buffered_resolution_survey_documents
         test_check_release_matrix_rejects_helper_survey_document_slurp
         test_check_release_matrix_rejects_nonportable_helper_summary_jq

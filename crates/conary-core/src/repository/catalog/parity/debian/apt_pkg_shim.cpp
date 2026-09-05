@@ -202,6 +202,7 @@ struct ResolutionHandle {
     std::string architecture;
     std::vector<NativeIdentity> closure;
     std::vector<MissingRequirement> missing;
+    bool conflicting = false;
     std::string error;
 };
 
@@ -684,9 +685,269 @@ bool probe_has_only_root_no_target_breaks(ResolutionHandle &handle,
     return broken_marked_packages == broken_count;
 }
 
+bool group_targets_version(ResolutionHandle &handle, pkgCache::DepIterator const &start,
+                           pkgCache::DepIterator const &end,
+                           pkgCache::VerIterator const &version) {
+    for (pkgCache::DepIterator atom = start;; ++atom) {
+        std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+        for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+            if (pkgCache::VerIterator(*handle.cache, targets[index]) == version) {
+                return true;
+            }
+        }
+        if (atom == end) {
+            break;
+        }
+    }
+    return false;
+}
+
+bool version_has_negative_relation_to_selected(ResolutionHandle &handle,
+                                               EvidenceDepCache &dependency_cache,
+                                               pkgCache::VerIterator const &version) {
+    for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+        pkgCache::DepIterator start;
+        pkgCache::DepIterator end;
+        cursor.GlobOr(start, end);
+        cursor = end;
+        ++cursor;
+        if (!end.IsNegative()) {
+            continue;
+        }
+        for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+            pkgDepCache::StateCache &state = dependency_cache[package];
+            if (!state.Install()) {
+                continue;
+            }
+            pkgCache::VerIterator selected = state.InstVerIter(*handle.cache);
+            if (!selected.end() && selected != version &&
+                group_targets_version(handle, start, end, selected)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool version_has_negative_relation_to_version(ResolutionHandle &handle,
+                                              pkgCache::VerIterator const &source,
+                                              pkgCache::VerIterator const &target) {
+    if (source == target) {
+        return false;
+    }
+    for (pkgCache::DepIterator cursor = source.DependsList(); !cursor.end();) {
+        pkgCache::DepIterator start;
+        pkgCache::DepIterator end;
+        cursor.GlobOr(start, end);
+        cursor = end;
+        ++cursor;
+        if (end.IsNegative() && group_targets_version(handle, start, end, target)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool probe_has_conflict_class(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
+                              pkgCache::VerIterator const &candidate) {
+    if (version_has_negative_relation_to_selected(handle, dependency_cache, candidate)) {
+        return true;
+    }
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        pkgDepCache::StateCache &state = dependency_cache[package];
+        if (!state.Install()) {
+            continue;
+        }
+        pkgCache::VerIterator selected = state.InstVerIter(*handle.cache);
+        if (selected.end()) {
+            continue;
+        }
+        if (version_has_negative_relation_to_selected(handle, dependency_cache, selected)) {
+            return true;
+        }
+        for (pkgCache::DepIterator cursor = selected.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+            bool const satisfied =
+                (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+            if (satisfied) {
+                continue;
+            }
+            if (end.IsNegative()) {
+                return true;
+            }
+            if (!end.IsCritical()) {
+                continue;
+            }
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                    pkgCache::VerIterator target(*handle.cache, targets[index]);
+                    pkgDepCache::StateCache &target_state = dependency_cache[target.ParentPkg()];
+                    if (target_state.Install()) {
+                        pkgCache::VerIterator installed =
+                            target_state.InstVerIter(*handle.cache);
+                        if (!installed.end() && installed != target) {
+                            return true;
+                        }
+                    }
+                }
+                if (atom == end) {
+                    break;
+                }
+            }
+        }
+        if (version_has_negative_relation_to_version(handle, selected, candidate)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool selected_closure_conflicts_with_version(ResolutionHandle &handle,
+                                             EvidenceDepCache &dependency_cache,
+                                             pkgCache::VerIterator const &version) {
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        pkgDepCache::StateCache &state = dependency_cache[package];
+        if (!state.Install()) {
+            continue;
+        }
+        pkgCache::VerIterator selected = state.InstVerIter(*handle.cache);
+        if (selected.end()) {
+            continue;
+        }
+        if (selected.ParentPkg() == version.ParentPkg() && selected != version) {
+            return true;
+        }
+        if (version_has_negative_relation_to_version(handle, selected, version) ||
+            version_has_negative_relation_to_version(handle, version, selected)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool reachable_required_targets_have_conflict(ResolutionHandle &handle,
+                                              pkgCache::VerIterator const &root,
+                                              pkgCache::VerIterator const &initial) {
+    struct ReachableConflictNode {
+        unsigned long id;
+        pkgCache::VerIterator version;
+        bool directly_conflicting;
+        std::vector<std::vector<unsigned long>> required_groups;
+    };
+
+    // Include all exact-root dependencies, not only the currently probed target:
+    // another required sibling can have disappeared from the failed marker.
+    std::vector<pkgCache::VerIterator> pending{root, initial};
+    std::set<unsigned long> visited;
+    std::vector<ReachableConflictNode> nodes;
+    while (!pending.empty()) {
+        pkgCache::VerIterator version = pending.back();
+        pending.pop_back();
+        if (!visited.insert(version->ID).second) {
+            continue;
+        }
+        ReachableConflictNode node{
+            version->ID,
+            version,
+            (version.ParentPkg() == root.ParentPkg() && version != root) ||
+                version_has_negative_relation_to_version(handle, version, root) ||
+                version_has_negative_relation_to_version(handle, root, version),
+            {},
+        };
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+            if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
+                continue;
+            }
+            std::vector<unsigned long> group_targets;
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                    pkgCache::VerIterator target(*handle.cache, targets[index]);
+                    if (handle.policy->GetPriority(target) > 0) {
+                        group_targets.push_back(target->ID);
+                        pending.push_back(target);
+                    }
+                }
+                if (atom == end) {
+                    break;
+                }
+            }
+            std::sort(group_targets.begin(), group_targets.end());
+            group_targets.erase(
+                std::unique(group_targets.begin(), group_targets.end()), group_targets.end());
+            if (!group_targets.empty()) {
+                node.required_groups.push_back(std::move(group_targets));
+            }
+        }
+        nodes.push_back(std::move(node));
+    }
+
+    // A failed apt marker can retain only one side of a transitive sibling conflict.
+    // Read apt's negative relations across every reachable version, in both directions;
+    // the marker's retained selection is not the complete required closure. AllTargets
+    // remains the native version/provide matcher; this adds no alternate package solver.
+    for (std::size_t left = 0; left < nodes.size(); ++left) {
+        for (std::size_t right = left + 1; right < nodes.size(); ++right) {
+            if (version_has_negative_relation_to_version(
+                    handle, nodes[left].version, nodes[right].version) ||
+                version_has_negative_relation_to_version(
+                    handle, nodes[right].version, nodes[left].version)) {
+                nodes[left].directly_conflicting = true;
+                nodes[right].directly_conflicting = true;
+            }
+        }
+    }
+
+    // Conflict authority is the least fixed point over hard dependency groups: a version is
+    // blocked by a reachable negative pair, or when one of its required groups has
+    // candidates but every candidate is itself blocked. This keeps a usable OR alternative from
+    // being poisoned by a rejected sibling and treats dependency cycles without a conflict as
+    // viable rather than inventing evidence.
+    std::set<unsigned long> conflicting;
+    for (ReachableConflictNode const &node : nodes) {
+        if (node.directly_conflicting) {
+            conflicting.insert(node.id);
+        }
+    }
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (ReachableConflictNode const &node : nodes) {
+            if (conflicting.find(node.id) != conflicting.end()) {
+                continue;
+            }
+            bool const has_blocked_group =
+                std::any_of(node.required_groups.begin(), node.required_groups.end(),
+                            [&conflicting](std::vector<unsigned long> const &targets) {
+                                return std::all_of(
+                                    targets.begin(), targets.end(),
+                                    [&conflicting](unsigned long target_id) {
+                                        return conflicting.find(target_id) != conflicting.end();
+                                    });
+                            });
+            if (has_blocked_group) {
+                conflicting.insert(node.id);
+                changed = true;
+            }
+        }
+    }
+    return conflicting.find(initial->ID) != conflicting.end();
+}
+
 bool target_is_installable_with_root(ResolutionHandle &handle,
                                      pkgCache::VerIterator const &root,
-                                     pkgCache::VerIterator const &target, bool &installable) {
+                                     pkgCache::VerIterator const &target, bool &installable,
+                                     bool &conflicting) {
     // A failed solver3 run rolls its selections back. Ask apt's marker in an isolated cache
     // whether the entire closure beside the protected exact root is healthy, apart from the
     // root's own no-target groups that direct-root attribution will emit.
@@ -699,104 +960,261 @@ bool target_is_installable_with_root(ResolutionHandle &handle,
     probe.allow_exact_root(root.ParentPkg());
     if (!probe.MarkInstall(root.ParentPkg(), true, 0, true, false)) {
         installable = false;
+        EvidenceDepCache target_probe(handle.cache.get(), handle.policy.get());
+        if (!target_probe.Init(nullptr)) {
+            handle.error = apt_errors();
+            return false;
+        }
+        target_probe.SetCandidateVersion(target);
+        target_probe.MarkInstall(target.ParentPkg(), true, 0, true, false);
+        conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
+                      probe_has_conflict_class(handle, target_probe, target) ||
+                      selected_closure_conflicts_with_version(handle, target_probe, root) ||
+                      reachable_required_targets_have_conflict(handle, root, target);
         return true;
     }
     probe.MarkProtected(root.ParentPkg());
     probe.SetCandidateVersion(target);
     if (!probe.MarkInstall(target.ParentPkg(), true, 0, true, false)) {
         installable = false;
+        conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
+                      probe_has_conflict_class(handle, probe, target) ||
+                      reachable_required_targets_have_conflict(handle, root, target);
         return true;
     }
     probe.MarkProtected(target.ParentPkg());
-    installable = probe_has_only_root_no_target_breaks(handle, probe, root);
+    conflicting = (target.ParentPkg() == root.ParentPkg() && target != root) ||
+                  probe_has_conflict_class(handle, probe, target) ||
+                  reachable_required_targets_have_conflict(handle, root, target);
+    installable = !conflicting && probe_has_only_root_no_target_breaks(handle, probe, root);
     return true;
 }
 
-bool collect_direct_root_missing(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
-                                 pkgCache::VerIterator const &root) {
-    pkgDepCache::StateCache &state = dependency_cache[root.ParentPkg()];
-    if (!state.Install() || !state.InstBroken()) {
-        return true;
-    }
-    pkgCache::VerIterator version = state.InstVerIter(*handle.cache);
-    if (version != root) {
-        handle.error = "apt-pkg did not retain the protected exact root while attributing failure";
-        return false;
-    }
-    Package const *source = find_source_package(handle, version);
-    if (source == nullptr) {
-        handle.error = "apt-pkg exact root is absent from authenticated Packages inputs: " +
-                       root.ParentPkg().FullName(false) + "=" + root.VerStr();
-        return false;
-    }
-    std::size_t depends_ordinal = 0;
-    std::size_t pre_depends_ordinal = 0;
-    bool has_unattributed_failure = false;
+bool required_target_probe_has_conflict(ResolutionHandle &handle,
+                                        pkgCache::VerIterator const &root,
+                                        pkgCache::VerIterator const &version) {
     for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
         pkgCache::DepIterator start;
         pkgCache::DepIterator end;
         cursor.GlobOr(start, end);
         cursor = end;
         ++cursor;
-
-        int kind = 0;
-        std::size_t ordinal = 0;
-        if (end->Type == pkgCache::Dep::PreDepends) {
-            kind = PRE_DEPENDS;
-            ordinal = pre_depends_ordinal++;
-        } else if (end->Type == pkgCache::Dep::Depends) {
-            kind = DEPENDS;
-            ordinal = depends_ordinal++;
-        }
-        bool const satisfied =
-            (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
-        if (satisfied) {
-            continue;
-        }
-        if (kind == 0) {
-            if (end.IsCritical() || end.IsNegative()) {
-                has_unattributed_failure = true;
-            }
+        if (end->Type != pkgCache::Dep::Depends && end->Type != pkgCache::Dep::PreDepends) {
             continue;
         }
         bool has_satisfying_candidate = false;
         bool has_installable_candidate = false;
+        bool has_conflicting_candidate = false;
         for (pkgCache::DepIterator atom = start;; ++atom) {
             std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
             for (std::size_t index = 0; targets[index] != nullptr; ++index) {
                 pkgCache::VerIterator target(*handle.cache, targets[index]);
-                if (handle.policy->GetPriority(target) > 0) {
-                    has_satisfying_candidate = true;
-                    bool installable = false;
-                    if (!target_is_installable_with_root(handle, root, target, installable)) {
-                        return false;
-                    }
-                    if (installable) {
-                        has_installable_candidate = true;
-                        break;
-                    }
+                if (handle.policy->GetPriority(target) <= 0) {
+                    continue;
+                }
+                has_satisfying_candidate = true;
+                bool installable = false;
+                bool conflicting = false;
+                if (!target_is_installable_with_root(
+                        handle, root, target, installable, conflicting)) {
+                    return false;
+                }
+                has_installable_candidate = has_installable_candidate || installable;
+                has_conflicting_candidate = has_conflicting_candidate || conflicting;
+                if (has_installable_candidate) {
+                    break;
                 }
             }
             if (has_installable_candidate || atom == end) {
                 break;
             }
         }
-        if (has_satisfying_candidate) {
-            if (!has_installable_candidate) {
-                has_unattributed_failure = true;
-            }
+        if (has_satisfying_candidate && !has_installable_candidate &&
+            has_conflicting_candidate) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool collect_reachable_no_target_groups(ResolutionHandle &handle,
+                                        pkgCache::VerIterator const &root) {
+    std::vector<pkgCache::VerIterator> pending{root};
+    std::set<unsigned long> visited;
+    while (!pending.empty()) {
+        pkgCache::VerIterator version = pending.back();
+        pending.pop_back();
+        if (!visited.insert(version->ID).second) {
             continue;
         }
-        RelationGroup const *group = strong_group_at(*source, kind, ordinal);
-        if (group == nullptr) {
-            handle.error = "apt-pkg unsatisfied dependency does not bind an exact source group for " +
-                           root.ParentPkg().FullName(false) + "=" + root.VerStr();
+        Package const *source = find_source_package(handle, version);
+        if (source == nullptr) {
+            handle.error = "apt-pkg reachable package is absent from authenticated Packages inputs: " +
+                           version.ParentPkg().FullName(false) + "=" + version.VerStr();
             return false;
         }
-        handle.missing.push_back(
-            {{source->name, source->version, source->architecture}, kind, group->native_text});
+        std::size_t depends_ordinal = 0;
+        std::size_t pre_depends_ordinal = 0;
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+            int kind = 0;
+            std::size_t ordinal = 0;
+            if (end->Type == pkgCache::Dep::PreDepends) {
+                kind = PRE_DEPENDS;
+                ordinal = pre_depends_ordinal++;
+            } else if (end->Type == pkgCache::Dep::Depends) {
+                kind = DEPENDS;
+                ordinal = depends_ordinal++;
+            } else {
+                continue;
+            }
+            bool has_target = false;
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                    pkgCache::VerIterator target(*handle.cache, targets[index]);
+                    if (handle.policy->GetPriority(target) > 0) {
+                        has_target = true;
+                        pending.push_back(target);
+                    }
+                }
+                if (atom == end) {
+                    break;
+                }
+            }
+            if (has_target) {
+                continue;
+            }
+            RelationGroup const *group = strong_group_at(*source, kind, ordinal);
+            if (group == nullptr) {
+                handle.error =
+                    "apt-pkg reachable missing dependency does not bind an exact source group for " +
+                    version.ParentPkg().FullName(false) + "=" + version.VerStr();
+                return false;
+            }
+            handle.missing.push_back(
+                {{source->name, source->version, source->architecture}, kind, group->native_text});
+        }
     }
-    if (has_unattributed_failure) {
+    return true;
+}
+
+bool collect_failed_state(ResolutionHandle &handle, EvidenceDepCache &dependency_cache,
+                          pkgCache::VerIterator const &root) {
+    pkgDepCache::StateCache &root_state = dependency_cache[root.ParentPkg()];
+    if (!root_state.Install() || root_state.InstVerIter(*handle.cache) != root) {
+        handle.error = "apt-pkg did not retain the protected exact root while attributing failure";
+        return false;
+    }
+    bool has_conflict = probe_has_conflict_class(handle, dependency_cache, root);
+    has_conflict = has_conflict || required_target_probe_has_conflict(handle, root, root);
+    if (!handle.error.empty()) {
+        return false;
+    }
+    for (pkgCache::PkgIterator package = handle.cache->PkgBegin(); !package.end(); ++package) {
+        pkgDepCache::StateCache &state = dependency_cache[package];
+        if (!state.Install()) {
+            continue;
+        }
+        pkgCache::VerIterator version = state.InstVerIter(*handle.cache);
+        if (version.end()) {
+            continue;
+        }
+        has_conflict =
+            has_conflict || required_target_probe_has_conflict(handle, root, version);
+        if (!handle.error.empty()) {
+            return false;
+        }
+        Package const *source = find_source_package(handle, version);
+        if (source == nullptr) {
+            handle.error = "apt-pkg selected package is absent from authenticated Packages inputs: " +
+                           package.FullName(false) + "=" + version.VerStr();
+            return false;
+        }
+        std::size_t depends_ordinal = 0;
+        std::size_t pre_depends_ordinal = 0;
+        for (pkgCache::DepIterator cursor = version.DependsList(); !cursor.end();) {
+            pkgCache::DepIterator start;
+            pkgCache::DepIterator end;
+            cursor.GlobOr(start, end);
+            cursor = end;
+            ++cursor;
+
+            int kind = 0;
+            std::size_t ordinal = 0;
+            if (end->Type == pkgCache::Dep::PreDepends) {
+                kind = PRE_DEPENDS;
+                ordinal = pre_depends_ordinal++;
+            } else if (end->Type == pkgCache::Dep::Depends) {
+                kind = DEPENDS;
+                ordinal = depends_ordinal++;
+            }
+            bool const satisfied =
+                (dependency_cache[end] & pkgDepCache::DepGInstall) == pkgDepCache::DepGInstall;
+            if (satisfied) {
+                continue;
+            }
+            if (kind == 0) {
+                if (end.IsNegative()) {
+                    has_conflict = true;
+                }
+                continue;
+            }
+            bool has_satisfying_candidate = false;
+            bool has_installable_candidate = false;
+            bool has_conflicting_candidate = false;
+            for (pkgCache::DepIterator atom = start;; ++atom) {
+                std::unique_ptr<pkgCache::Version *[]> targets(atom.AllTargets());
+                for (std::size_t index = 0; targets[index] != nullptr; ++index) {
+                    pkgCache::VerIterator target(*handle.cache, targets[index]);
+                    if (handle.policy->GetPriority(target) > 0) {
+                        has_satisfying_candidate = true;
+                        bool installable = false;
+                        bool conflicting = false;
+                        if (!target_is_installable_with_root(
+                                handle, root, target, installable, conflicting)) {
+                            return false;
+                        }
+                        has_conflicting_candidate = has_conflicting_candidate || conflicting;
+                        if (installable) {
+                            has_installable_candidate = true;
+                            break;
+                        }
+                    }
+                }
+                if (has_installable_candidate || atom == end) {
+                    break;
+                }
+            }
+            if (has_satisfying_candidate) {
+                if (!has_installable_candidate) {
+                    if (has_conflicting_candidate) {
+                        has_conflict = true;
+                    }
+                }
+                continue;
+            }
+            RelationGroup const *group = strong_group_at(*source, kind, ordinal);
+            if (group == nullptr) {
+                handle.error =
+                    "apt-pkg unsatisfied dependency does not bind an exact source group for " +
+                    package.FullName(false) + "=" + version.VerStr();
+                return false;
+            }
+            handle.missing.push_back(
+                {{source->name, source->version, source->architecture}, kind, group->native_text});
+        }
+    }
+    if (!has_conflict && handle.missing.empty() &&
+        !collect_reachable_no_target_groups(handle, root)) {
+        return false;
+    }
+    if (has_conflict) {
+        handle.conflicting = true;
         handle.missing.clear();
     }
     return true;
@@ -806,6 +1224,7 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
              char const *architecture) {
     handle.closure.clear();
     handle.missing.clear();
+    handle.conflicting = false;
     handle.error.clear();
     if (name == nullptr || version == nullptr || architecture == nullptr || *name == '\0' ||
         *version == '\0' || *architecture == '\0') {
@@ -866,13 +1285,16 @@ bool resolve(ResolutionHandle &handle, char const *name, char const *version,
         return false;
     }
     handle.closure.clear();
-    if (!collect_direct_root_missing(handle, dependency_cache, root)) {
+    if (!collect_failed_state(handle, dependency_cache, root)) {
         if (!solver_errors.empty()) {
             handle.error.append(": ").append(solver_errors);
         }
         return false;
     }
     if (!handle.missing.empty()) {
+        return true;
+    }
+    if (handle.conflicting) {
         return true;
     }
     handle.error = "apt-pkg could not resolve the exact root without a typed missing requirement";
@@ -1092,6 +1514,11 @@ RESOLUTION_CLOSURE_GETTER(conary_apt_resolution_closure_architecture, architectu
 std::size_t conary_apt_resolution_missing_count(void const *opaque) {
     auto const *handle = static_cast<ResolutionHandle const *>(opaque);
     return handle == nullptr ? 0 : handle->missing.size();
+}
+
+int conary_apt_resolution_conflicting(void const *opaque) {
+    auto const *handle = static_cast<ResolutionHandle const *>(opaque);
+    return handle != nullptr && handle->conflicting ? 1 : 0;
 }
 
 MissingRequirement const *missing_at(ResolutionHandle const *handle, std::size_t index) {

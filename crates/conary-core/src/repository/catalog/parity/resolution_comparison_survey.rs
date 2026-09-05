@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::contract::{validate_identity, validate_sha256};
 
-pub const NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1: u32 = 1;
+pub const NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2: u32 = 2;
 pub const NATIVE_RESOLUTION_COMPARISON_SURVEY_MISMATCH_LIMIT: usize = 5_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,10 +39,10 @@ pub struct NativeResolutionComparisonSurveyV1 {
 
 impl NativeResolutionComparisonSurveyV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1 {
+        if self.schema_version != NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2 {
             return Err(Error::ConfigError(format!(
                 "native resolution comparison survey schema {} is unsupported; expected {}",
-                self.schema_version, NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1
+                self.schema_version, NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2
             )));
         }
         validate_identity(&self.profile, "resolution comparison survey profile")?;
@@ -303,7 +303,7 @@ pub fn compare_native_resolution_oracle_survey(
         }
     }
     let survey = collector.finish(NativeResolutionComparisonSurveyV1 {
-        schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+        schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
         profile: profile.profile.clone(),
         profile_revision_sha256: profile.manifest_sha256()?,
         package_oracle_manifest_sha256,
@@ -507,7 +507,7 @@ mod tests {
         }
         let survey = collector
             .finish(NativeResolutionComparisonSurveyV1 {
-                schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V1,
+                schema_version: NATIVE_RESOLUTION_COMPARISON_SURVEY_SCHEMA_V2,
                 profile: "fedora-44".to_string(),
                 profile_revision_sha256: "a".repeat(64),
                 package_oracle_manifest_sha256: "b".repeat(64),
@@ -541,5 +541,9 @@ mod tests {
             survey.counts.outcome_kind_pairs[0].count,
             survey.total_mismatches
         );
+
+        let mut obsolete = survey;
+        obsolete.schema_version = 1;
+        assert!(obsolete.validate().is_err());
     }
 }

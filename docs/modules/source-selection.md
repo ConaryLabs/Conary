@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 63
+last_updated: 2026-09-05
+revision: 64
 summary: Describe package-variant selection, source identity, architecture and ABI admission, supported profiles, signed Remi universes, adoption, dependency acquisition, and lifecycle handoff.
 ---
 
@@ -650,6 +650,11 @@ Eligibility inputs include:
 
 Strict mixing admits only the exact transaction source identity supplied by an
 explicit source/repository scope or selected repository-backed root package.
+Exact-root parity's missing-first conflict probe is owned by
+`resolver/sat/hidden_conflict.rs`: it reuses loaded provider facts across fresh
+SAT caches, with 64 re-solves and one monotonic 30-second deadline for the
+whole probe. Exhaustion is a typed producer failure before classification;
+it cannot become an unresolved or conflicting-closure outcome.
 The policy-explicit SAT API rejects strict dependency solving when that
 identity has not been established; it never treats an absent identity as an
 empty candidate set and never derives

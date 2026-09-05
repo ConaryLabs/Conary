@@ -37,7 +37,7 @@ use ffi::{DependencyField, SolvDependency, SolvPackage, SolvPool};
 
 pub const RPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;
 pub use resolution::{
-    RPM_RESOLUTION_PROJECTION_SCHEMA_V4, produce_rpm_resolution_oracle,
+    RPM_RESOLUTION_PROJECTION_SCHEMA_V5, produce_rpm_resolution_oracle,
     produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey,
     produce_rpm_resolution_survey_with_workers,
 };

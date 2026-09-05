@@ -176,6 +176,7 @@ unsafe extern "C" {
         index: usize,
     ) -> *const c_char;
     fn conary_apt_resolution_missing_count(handle: *const c_void) -> usize;
+    fn conary_apt_resolution_conflicting(handle: *const c_void) -> c_int;
     fn conary_apt_resolution_missing_name(handle: *const c_void, index: usize) -> *const c_char;
     fn conary_apt_resolution_missing_version(handle: *const c_void, index: usize) -> *const c_char;
     fn conary_apt_resolution_missing_architecture(
@@ -207,6 +208,7 @@ pub(super) struct AptMissingRequirement {
 pub(super) enum AptResolutionOutcome {
     Resolved(Vec<AptNativeIdentity>),
     Unresolved(Vec<AptMissingRequirement>),
+    ConflictingClosure,
 }
 
 #[derive(Debug)]
@@ -279,6 +281,9 @@ impl AptResolution {
                 )
                 .unwrap_or_else(|error| error.to_string()),
             ));
+        }
+        if unsafe { conary_apt_resolution_conflicting(self.handle.as_ptr()) } == 1 {
+            return Ok(AptResolutionOutcome::ConflictingClosure);
         }
         let missing_count = unsafe { conary_apt_resolution_missing_count(self.handle.as_ptr()) };
         if missing_count != 0 {
