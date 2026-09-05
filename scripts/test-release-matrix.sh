@@ -86,6 +86,8 @@ create_release_fixture() {
     write_cargo_manifest "$repo/crates/conary-core/Cargo.toml" "conary-core"
     write_cargo_manifest "$repo/crates/conary-bootstrap/Cargo.toml" "conary-bootstrap"
     write_cargo_manifest "$repo/apps/remi/Cargo.toml" "remi"
+    # The Remi server declares its own license (issue #900); every other member inherits.
+    replace_fixture_text_once "$repo/apps/remi/Cargo.toml" 'license.workspace = true' 'license = "AGPL-3.0-or-later"'
     write_cargo_manifest "$repo/apps/conaryd/Cargo.toml" "conaryd"
     write_cargo_manifest "$repo/apps/conary-test/Cargo.toml" "conary-test"
     write_cargo_manifest "$repo/crates/conary-mcp/Cargo.toml" "conary-mcp"
@@ -464,6 +466,75 @@ test_assert_owned_version_rejects_mismatched_manifest() {
         "$output" \
         "workspace package version is not inherited from [workspace.package]: crates/conary-core/Cargo.toml" \
         "version inheritance failure should identify the package manifest"
+}
+
+test_assert_owned_version_rejects_remi_with_the_workspace_license() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    replace_fixture_text_once \
+        "$repo/apps/remi/Cargo.toml" \
+        'license = "AGPL-3.0-or-later"' \
+        'license.workspace = true'
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version suite 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject a Remi manifest that inherits the workspace license"
+    fi
+    assert_contains \
+        "$output" \
+        "workspace package license must be exactly 'license = \"AGPL-3.0-or-later\"' in apps/remi/Cargo.toml" \
+        "Remi license inheritance failure should name the manifest"
+}
+
+test_assert_owned_version_rejects_remi_with_another_license() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    replace_fixture_text_once \
+        "$repo/apps/remi/Cargo.toml" \
+        'license = "AGPL-3.0-or-later"' \
+        'license = "MIT"'
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version suite 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject a Remi manifest with a different license"
+    fi
+    assert_contains \
+        "$output" \
+        "workspace package license must be exactly" \
+        "Remi license drift failure should state the expected declaration"
+}
+
+test_assert_owned_version_rejects_client_with_independent_license() {
+    local repo output status
+
+    repo="$(create_release_fixture)"
+    replace_fixture_text_once \
+        "$repo/crates/conary-core/Cargo.toml" \
+        'license.workspace = true' \
+        'license = "AGPL-3.0-or-later"'
+
+    set +e
+    output="$(run_repo_matrix "$repo" assert-owned-version suite 0.7.0 2>&1)"
+    status=$?
+    set -e
+
+    if [[ "$status" -eq 0 ]]; then
+        fail "assert-owned-version should reject a client crate that stops inheriting the license"
+    fi
+    assert_contains \
+        "$output" \
+        "workspace package license is not inherited from [workspace.package]: crates/conary-core/Cargo.toml" \
+        "client license inheritance failure should name the manifest"
 }
 
 test_assert_owned_version_rejects_independent_publish_policy() {
@@ -1798,6 +1869,9 @@ main() {
         test_max_owned_version_in_fixture
         test_assert_owned_version_accepts_matching_manifests
         test_assert_owned_version_rejects_mismatched_manifest
+        test_assert_owned_version_rejects_remi_with_the_workspace_license
+        test_assert_owned_version_rejects_remi_with_another_license
+        test_assert_owned_version_rejects_client_with_independent_license
         test_assert_owned_version_rejects_independent_publish_policy
         test_assert_owned_version_rejects_publishable_workspace_root
         test_release_dry_run_uses_one_suite_history
