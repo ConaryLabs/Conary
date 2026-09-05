@@ -64,6 +64,23 @@ struct DistroMatrix {
     distro: Vec<String>,
 }
 
+/// `needs` accepts one job id or a list; the typed view is always a list.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum JobNeeds {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl JobNeeds {
+    fn ids(&self) -> Vec<&str> {
+        match self {
+            Self::One(id) => vec![id.as_str()],
+            Self::Many(ids) => ids.iter().map(String::as_str).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct GateJob {
     name: String,
@@ -71,8 +88,41 @@ struct GateJob {
     condition: String,
     #[serde(rename = "continue-on-error", default)]
     continue_on_error: bool,
-    needs: String,
+    needs: JobNeeds,
     steps: Vec<WorkflowStep>,
+}
+
+/// The gate scripts accept a skipped matrix only when change-scope says the
+/// matrices were intentionally skipped; every other non-success result fails.
+fn assert_scope_aware_matrix_gate(step: &WorkflowStep, script: &str) {
+    assert_eq!(
+        step.env.get("NATIVE_MATRICES").map(String::as_str),
+        Some("${{ needs.change-scope.outputs.native_matrices }}")
+    );
+    for (result, native_matrices, expected_success) in [
+        ("success", "true", true),
+        ("success", "false", true),
+        ("failure", "true", false),
+        ("failure", "false", false),
+        ("cancelled", "false", false),
+        ("skipped", "true", false),
+        ("skipped", "false", true),
+        ("skipped", "", false),
+    ] {
+        let status = Command::new("bash")
+            .args(["-euo", "pipefail", "-c", script])
+            .env("MATRIX_RESULT", result)
+            .env("NATIVE_MATRICES", native_matrices)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap_or_else(|error| panic!("execute matrix gate for `{result}`: {error}"));
+        assert_eq!(
+            status.success(),
+            expected_success,
+            "matrix gate produced the wrong result for `{result}` with native_matrices=`{native_matrices}`"
+        );
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -732,7 +782,7 @@ fn native_cross_source_gate_is_a_stable_all_lane_required_context() {
     assert_eq!(job.name, STABLE_CHECK_CONTEXT);
     assert_eq!(job.condition, "${{ always() }}");
     assert!(!job.continue_on_error);
-    assert_eq!(job.needs, MATRIX_JOB_ID);
+    assert_eq!(job.needs.ids(), ["change-scope", MATRIX_JOB_ID]);
 
     let step = named_step(&job.steps, "Require every distro lifecycle job");
     assert_eq!(
@@ -746,25 +796,7 @@ fn native_cross_source_gate_is_a_stable_all_lane_required_context() {
         .as_deref()
         .expect("matrix gate must execute a script");
 
-    for (result, expected_success) in [
-        ("success", true),
-        ("failure", false),
-        ("cancelled", false),
-        ("skipped", false),
-    ] {
-        let status = Command::new("bash")
-            .args(["-euo", "pipefail", "-c", script])
-            .env("MATRIX_RESULT", result)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .unwrap_or_else(|error| panic!("execute matrix gate for `{result}`: {error}"));
-        assert_eq!(
-            status.success(),
-            expected_success,
-            "matrix gate produced the wrong result for `{result}`"
-        );
-    }
+    assert_scope_aware_matrix_gate(step, script);
 }
 
 #[test]
@@ -813,7 +845,7 @@ fn native_daily_driver_gate_executes_the_three_attributable_lanes() {
     let gate: GateJob = parse_job(&workflow, DAILY_DRIVER_GATE_ID);
     assert_eq!(gate.name, "native-daily-driver-corpus");
     assert_eq!(gate.condition, "${{ always() }}");
-    assert_eq!(gate.needs, DAILY_DRIVER_JOB_ID);
+    assert_eq!(gate.needs.ids(), ["change-scope", DAILY_DRIVER_JOB_ID]);
     assert!(!gate.continue_on_error);
     let gate_step = named_step(&gate.steps, "Require every daily-driver corpus job");
     assert_eq!(
@@ -879,7 +911,7 @@ fn native_pm_parity_gate_runs_the_full_deterministic_suite_and_timeout_contract(
     let gate: GateJob = parse_job(&workflow, NATIVE_PARITY_GATE_ID);
     assert_eq!(gate.name, "native-pm-parity");
     assert_eq!(gate.condition, "${{ always() }}");
-    assert_eq!(gate.needs, NATIVE_PARITY_JOB_ID);
+    assert_eq!(gate.needs.ids(), ["change-scope", NATIVE_PARITY_JOB_ID]);
     assert!(!gate.continue_on_error);
     let gate_step = named_step(&gate.steps, "Require every full native parity job");
     assert_eq!(
@@ -969,7 +1001,7 @@ fn workspace_gate_provisions_the_exact_namespace_test_boundary() {
     let aggregate: GateJob = parse_job(&workflow, "workspace-tests");
     assert_eq!(aggregate.name, "workspace-tests");
     assert_eq!(aggregate.condition, "${{ always() }}");
-    assert_eq!(aggregate.needs, "workspace-test-shards");
+    assert_eq!(aggregate.needs.ids(), ["workspace-test-shards"]);
     let require = named_step(&aggregate.steps, "Require every workspace test shard");
     assert_eq!(
         require.env.get("SHARDS_RESULT").map(String::as_str),
@@ -1111,6 +1143,6 @@ fn release_artifact_workflow_installs_every_published_native_package() {
     let gate: GateJob = parse_job(&workflow, RELEASE_ARTIFACT_GATE_ID);
     assert_eq!(gate.name, RELEASE_ARTIFACT_GATE_ID);
     assert_eq!(gate.condition, "${{ always() }}");
-    assert_eq!(gate.needs, RELEASE_ARTIFACT_MATRIX_JOB_ID);
+    assert_eq!(gate.needs.ids(), [RELEASE_ARTIFACT_MATRIX_JOB_ID]);
     assert!(!gate.continue_on_error);
 }
