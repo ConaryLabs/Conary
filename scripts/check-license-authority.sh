@@ -117,13 +117,41 @@ require_live_line packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-MIT %\{bu
 require_live_line packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-APACHE %\{buildroot\}%\{_datadir\}/licenses/%\{crate\}/LICENSE-APACHE' 'rpm Apache license install'
 require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
 require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
-require_match .github/workflows/release-build.yml 'apps/remi" LICENSE' 'remi tarball AGPL text'
 require_live_line packaging/deb/debian/rules 'dh_compress -X LICENSE-MIT -X LICENSE-APACHE' 'debian rules license compress exclusion'
-require_match .github/workflows/release-build.yml 'copy_exact apps/remi/LICENSE LICENSE-AGPL-3\.0-remi' 'suite release AGPL asset'
-require_match .github/workflows/release-build.yml 'check-release-license-contents\.sh suite suite-packages' 'suite release license asset proof'
-for kind in rpm deb arch ccs remi-tar client-tar; do
-    require_match .github/workflows/release-build.yml "check-release-license-contents\.sh ${kind} " "release-build packaged-contents proof for ${kind}"
-done
+# The release workflow is parsed as YAML: a required command must appear in a
+# live step `run` script (comment lines stripped), never in dead text.
+command -v python3 >/dev/null || fail "python3 is required to parse the release workflow"
+python3 -I - .github/workflows/release-build.yml <<'PY' || fail "release workflow does not carry every license proof as a live step"
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit("PyYAML is required to parse the release workflow")
+path = sys.argv[1]
+with open(path, encoding="utf-8") as handle:
+    workflow = yaml.safe_load(handle)
+live = []
+for job_id, job in (workflow.get("jobs") or {}).items():
+    for step in job.get("steps") or []:
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        lines = [line for line in run.splitlines() if not line.lstrip().startswith("#")]
+        live.append((job_id, "\n".join(lines)))
+required = {
+    "remi tarball AGPL text": 'apps/remi" LICENSE',
+    "suite release AGPL asset": "copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi",
+    "suite release license asset proof": "check-release-license-contents.sh suite suite-packages",
+}
+for kind in ["rpm", "deb", "arch", "ccs", "remi-tar", "client-tar"]:
+    required[f"packaged-contents proof for {kind}"] = f"check-release-license-contents.sh {kind} "
+missing = [name for name, needle in required.items() if not any(needle in text for _, text in live)]
+if missing:
+    sys.exit("missing live release proof: " + ", ".join(missing))
+client_tar_jobs = {job for job, text in live if "check-release-license-contents.sh client-tar " in text}
+if not {"build-conaryd", "build-conary-test"} <= client_tar_jobs:
+    sys.exit("client-tar proofs must run in build-conaryd and build-conary-test, found: " + ", ".join(sorted(client_tar_jobs)))
+PY
 require_match scripts/remi-candidate-artifact.sh '-C "\$license_dir" LICENSE' 'candidate bundle AGPL text'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
 require_match README.md 'apps/remi/LICENSE' 'README Remi license link'
