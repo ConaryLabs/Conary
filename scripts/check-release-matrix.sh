@@ -44,6 +44,8 @@ candidate_cache_action=".github/actions/setup-remi-candidate-compiler-cache/acti
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 cross_source_lifecycle_manifest="apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
 cross_source_lifecycle_script="apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
+retry_command_script="apps/conary/tests/fixtures/native/retry-command.sh"
+arch_integration_containerfile="apps/conary/tests/integration/remi/containers/Containerfile.arch"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
@@ -282,6 +284,8 @@ required_files=(
     "$artifact_proof_workflow"
     "$cross_source_lifecycle_manifest"
     "$cross_source_lifecycle_script"
+    "$retry_command_script"
+    "$arch_integration_containerfile"
     "$merge_workflow"
     "$pr_workflow"
     "$exact_ownership_action"
@@ -427,6 +431,8 @@ require_job_match "$release_build" workspace-validation "uses: \\./\\.github/act
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
+require_match "$arch_integration_containerfile" "COPY fixtures/native/retry-command\.sh[\s\S]*${arch_archive_pattern}[\s\S]*retry-command 5[\s\S]*pacman -Syyu --noconfirm --disable-download-timeout" 'Arch integration image must retry its pinned archive sync and package fetch'
+require_match "$retry_command_script" 'attempts:1\.\.10[\s\S]*attempt=1[\s\S]*if "\$@"[\s\S]*attempt.*-ge.*attempts[\s\S]*sleep "\$delay"[\s\S]*delay=\$\(\(delay \* 2\)\)' 'shared integration command retry must be bounded with backoff'
 require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM spec systemd macro build dependency'
 require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
 require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
