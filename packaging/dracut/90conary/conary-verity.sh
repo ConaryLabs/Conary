@@ -37,7 +37,7 @@ conary_composefs_options() {
 
     case "$conary_verity_value" in
         on)
-            printf 'basedir=%s,verity_check=1\n' "$conary_verity_basedir"
+            printf 'basedir=%s,verity\n' "$conary_verity_basedir"
             ;;
         off)
             printf 'conary: WARNING: conary.verity=off disables composefs fs-verity verification\n' >&2

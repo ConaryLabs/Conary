@@ -14,7 +14,21 @@ cat > "$fake_bin/mount" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >> "$MOUNT_LOG"
-if [[ " $* " == *" -t composefs "* && " $* " == *"verity_check=1"* ]]; then
+# Accept only the option grammar of the pinned composefs helper: `verity` as
+# a whole `-o` option. The obsolete `verity_check=1` must never be emitted.
+composefs=0
+options=""
+previous=""
+for argument in "$@"; do
+    [[ "$previous" == "-t" && "$argument" == "composefs" ]] && composefs=1
+    [[ "$previous" == "-o" ]] && options="$argument"
+    previous="$argument"
+done
+if [[ "$options" == *"verity_check"* ]]; then
+    echo "obsolete verity_check option" >&2
+    exit 32
+fi
+if [[ "$composefs" -eq 1 && ",$options," == *",verity,"* ]]; then
     exit "${VERIFIED_MOUNT_STATUS:-0}"
 fi
 exit 0
@@ -56,7 +70,7 @@ run_generator() {
 
 case_root="$(prepare_case verified-default 'quiet conary.generation=1')"
 run_generator "$case_root" 0 || fail "default verified activation failed"
-grep -q 'verity_check=1' "$case_root/mount.log" ||
+grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log" ||
     fail "default activation did not require fs-verity"
 [[ "$(grep -c -- '-t composefs' "$case_root/mount.log")" -eq 1 ]] ||
     fail "default activation attempted more than one composefs mount"
@@ -65,7 +79,7 @@ case_root="$(prepare_case verified-failure 'quiet conary.generation=1')"
 if run_generator "$case_root" 1; then
     fail "verified mount failure silently downgraded"
 fi
-grep -q 'verity_check=1' "$case_root/mount.log" ||
+grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log" ||
     fail "failed verified activation did not attempt fs-verity"
 [[ "$(grep -c -- '-t composefs' "$case_root/mount.log")" -eq 1 ]] ||
     fail "failed verified activation attempted an unverified fallback"
@@ -74,7 +88,7 @@ grep -q 'composefs mount failed' "$case_root/stderr" ||
 
 case_root="$(prepare_case explicit-off 'quiet conary.generation=1 conary.verity=off')"
 run_generator "$case_root" 1 || fail "explicit unverified activation failed"
-if grep -q 'verity_check=1' "$case_root/mount.log"; then
+if grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log"; then
     fail "explicit unverified activation still requested fs-verity"
 fi
 grep -q 'conary.verity=off disables composefs fs-verity verification' "$case_root/stderr" ||
@@ -82,19 +96,19 @@ grep -q 'conary.verity=off disables composefs fs-verity verification' "$case_roo
 
 case_root="$(prepare_case explicit-on 'quiet conary.generation=1 conary.verity=on')"
 run_generator "$case_root" 0 || fail "explicit verified activation failed"
-grep -q 'verity_check=1' "$case_root/mount.log" ||
+grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log" ||
     fail "conary.verity=on did not require fs-verity"
 
 case_root="$(prepare_case duplicate-last-on \
     'quiet conary.generation=1 conary.verity=off conary.verity=on')"
 run_generator "$case_root" 0 || fail "last conary.verity=on was not authoritative"
-grep -q 'verity_check=1' "$case_root/mount.log" ||
+grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log" ||
     fail "last conary.verity=on did not require fs-verity"
 
 case_root="$(prepare_case duplicate-last-off \
     'quiet conary.generation=1 conary.verity=on conary.verity=off')"
 run_generator "$case_root" 1 || fail "last conary.verity=off was not authoritative"
-if grep -q 'verity_check=1' "$case_root/mount.log"; then
+if grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log"; then
     fail "earlier conary.verity=on overrode the final explicit opt-out"
 fi
 grep -q 'conary.verity=off disables composefs fs-verity verification' "$case_root/stderr" ||
@@ -127,7 +141,7 @@ done
 case_root="$(prepare_case corrected-empty-value \
     'quiet conary.generation=1 conary.verity= conary.verity=on')"
 run_generator "$case_root" 0 || fail "last valid verity argument did not override empty value"
-grep -q 'verity_check=1' "$case_root/mount.log" ||
+grep -qE -- '-o [^ ]*,verity( |$)' "$case_root/mount.log" ||
     fail "corrected empty verity value did not require fs-verity"
 
 echo "conary generator verity policy tests passed"

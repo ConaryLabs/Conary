@@ -1,6 +1,7 @@
 // crates/conary-core/src/generation/verity_policy/tests.rs
 
 use super::*;
+use crate::generation::mount::COMPOSEFS_VERITY_OPTION;
 
 #[test]
 fn presence_and_last_exact_argument_control_policy() {
@@ -72,7 +73,11 @@ fn binary_free_initramfs_adapter_conforms_to_rust_policy() {
             match policy.requires_verification() {
                 Ok(required) => {
                     assert!(output.status.success(), "{cmdline}");
-                    let suffix = if required { ",verity_check=1" } else { "" };
+                    let suffix = if required {
+                        format!(",{COMPOSEFS_VERITY_OPTION}")
+                    } else {
+                        String::new()
+                    };
                     assert_eq!(
                         String::from_utf8(output.stdout).unwrap(),
                         format!("basedir=/conary/objects{suffix}\n"),

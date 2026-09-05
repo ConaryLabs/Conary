@@ -257,7 +257,13 @@ fn bootstrap_initramfs_verity_distinguishes_absent_and_empty_arguments() {
 
         assert_eq!(output.status.success(), valid, "cmdline: {contents}");
         if valid {
-            assert_eq!(output.stdout, b"basedir=/conary/objects,verity_check=1\n");
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap(),
+                format!(
+                    "basedir=/conary/objects,{}\n",
+                    crate::generation::mount::COMPOSEFS_VERITY_OPTION
+                )
+            );
         } else {
             assert!(
                 output.stdout.is_empty(),
