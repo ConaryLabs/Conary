@@ -123,6 +123,21 @@ pub(super) struct Both<'a> {
     pub oracle: &'a Path,
 }
 
+/// Strict authority is independent of a completed diagnostic survey.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeResolutionStrictError {
+    #[error("resolution survey recorded {total_failures} failed roots")]
+    FailedRoots { total_failures: u64 },
+    #[error("strict resolution finalization failed: {source}")]
+    Finalization {
+        #[source]
+        source: Box<Error>,
+    },
+}
+
+pub type NativeResolutionStrictResult =
+    std::result::Result<NativeResolutionOracleV1, NativeResolutionStrictError>;
+
 pub(super) struct BothCollector {
     writer: Option<NativeResolutionOracleWriter>,
     collector: NativeResolutionSurveyCollector,
@@ -130,7 +145,7 @@ pub(super) struct BothCollector {
 }
 
 impl ResolutionDestination for Both<'_> {
-    type Output = (NativeResolutionSurveyV1, Option<NativeResolutionOracleV1>);
+    type Output = (NativeResolutionSurveyV1, NativeResolutionStrictResult);
     type Collector = BothCollector;
 
     fn open(
@@ -189,28 +204,36 @@ impl ResolutionDestination for Both<'_> {
         } = collector;
         // Publish diagnostics before attempting strict finalization.
         let survey = Survey(self.survey).finish(collector, profile, package_oracle, ecosystem)?;
-        let manifest = if survey.total_failures == 0 {
-            let writer = writer.ok_or_else(|| {
-                Error::InternalError(
-                    "successful resolution walk lost its strict writer".to_string(),
+        let strict = if survey.total_failures == 0 {
+            let finalize = || -> Result<NativeResolutionOracleV1> {
+                let writer = writer.ok_or_else(|| {
+                    Error::InternalError(
+                        "successful resolution walk lost its strict writer".to_string(),
+                    )
+                })?;
+                let staged = staging.path().join("oracle");
+                let manifest =
+                    Oracle(&staged).finish(writer, profile, package_oracle, ecosystem)?;
+                // Never replace an output another producer created during the walk.
+                nix::fcntl::renameat2(
+                    nix::fcntl::AT_FDCWD,
+                    staged.as_path(),
+                    nix::fcntl::AT_FDCWD,
+                    self.oracle,
+                    nix::fcntl::RenameFlags::RENAME_NOREPLACE,
                 )
-            })?;
-            let staged = staging.path().join("oracle");
-            let manifest = Oracle(&staged).finish(writer, profile, package_oracle, ecosystem)?;
-            // Never replace an output another producer created during the walk.
-            nix::fcntl::renameat2(
-                nix::fcntl::AT_FDCWD,
-                staged.as_path(),
-                nix::fcntl::AT_FDCWD,
-                self.oracle,
-                nix::fcntl::RenameFlags::RENAME_NOREPLACE,
-            )
-            .map_err(std::io::Error::from)?;
-            Some(manifest)
+                .map_err(std::io::Error::from)?;
+                Ok(manifest)
+            };
+            finalize().map_err(|source| NativeResolutionStrictError::Finalization {
+                source: Box::new(source),
+            })
         } else {
-            None
+            Err(NativeResolutionStrictError::FailedRoots {
+                total_failures: survey.total_failures,
+            })
         };
-        Ok((survey, manifest))
+        Ok((survey, strict))
     }
 }
 
@@ -378,7 +401,7 @@ macro_rules! resolution_producers {
             survey: &Path,
             output: &Path,
             worker_request: ResolutionWorkerRequest,
-        ) -> Result<(NativeResolutionSurveyV1, Option<NativeResolutionOracleV1>, ResolutionWalkImplementationEvidenceV1)> {
+        ) -> Result<(NativeResolutionSurveyV1, $crate::repository::catalog::NativeResolutionStrictResult, ResolutionWalkImplementationEvidenceV1)> {
             let ((survey, oracle), evidence) = produce_resolution::<$ecosystem, _>(
                 profile, inputs, package_oracle_directory, architecture,
                 Both { survey, oracle: output }, worker_request,

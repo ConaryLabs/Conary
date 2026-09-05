@@ -1,8 +1,8 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define single-walk producer-bound strict native parity lanes with live progress, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
+summary: Define single-walk producer-bound strict native parity lanes with live progress and independent diagnostic retention, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 76
+revision: 77
 status: active
 ---
 
@@ -101,7 +101,13 @@ continues through every root; the strict output directory must not exist when
 reopens, and publishes the strict bundle. Single-destination calls retain their
 strict-only or survey-only behavior. Survey findings cause
 the combined process to return non-zero after writing; the lane adapter accepts
-that status only when it agrees with the validated failure inventory. A strict
+that status for recorded root failures or a typed strict-finalization failure.
+A completed survey and walk implementation evidence remain independently
+available when strict finalization or publication fails, including a destination
+created by another producer during the walk. The CLI writes the implementation
+evidence before reporting that distinct failure. The lane retains the survey
+binding manifest and reports `strict_finalization_failed`, without publishing
+strict lane evidence. Existing competing output is never replaced or deleted. A strict
 failure still fails the lane and emits no strict lane artifact, but it cannot
 discard an already validated survey. Survey artifacts are named separately,
 carry the export/deployment/producer/image/schema/implementation/binary-digest
@@ -475,8 +481,9 @@ non-authority and must be rebuilt before promotion or activation.
 
 ### Diagnostics-only resolution survey
 
-The three native resolution binaries also accept `--survey <FILE>`. Exactly
-one of `--output <DIRECTORY>` and `--survey <FILE>` is required. Survey mode
+The three native resolution binaries also accept `--survey <FILE>`. At least
+one of `--output <DIRECTORY>` and `--survey <FILE>` is required; both are
+permitted and the production lane passes both for one combined walk. Survey mode
 walks every package-oracle root even when a native result cannot be
 projected into the strict resolution contract. It writes one create-only
 canonical `NativeResolutionSurveyV1` JSON file, refuses to replace an existing

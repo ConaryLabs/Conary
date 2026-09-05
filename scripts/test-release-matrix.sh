@@ -2637,7 +2637,7 @@ test_check_release_matrix_rejects_unvalidated_native_oracle_survey() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/produce-native-oracle-lane.py" \
-        '        survey = write_resolution_survey(' \
+        '        survey, lane_outcome = write_resolution_survey(' \
         '        survey = resolution_survey_evidence('
 
     assert_check_release_matrix_fails \

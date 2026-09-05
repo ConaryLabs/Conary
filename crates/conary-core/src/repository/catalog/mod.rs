@@ -160,3 +160,11 @@ pub(in crate::repository) use store::{
 pub(in crate::repository) use store::{
     logical_verification_passes_for_test, physical_verification_passes_for_test,
 };
+
+#[cfg(any(
+    test,
+    feature = "native-rpm-oracle",
+    feature = "native-debian-oracle",
+    feature = "native-alpm-oracle"
+))]
+pub use parity::{NativeResolutionStrictError, NativeResolutionStrictResult};

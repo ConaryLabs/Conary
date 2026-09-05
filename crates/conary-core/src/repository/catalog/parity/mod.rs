@@ -19,6 +19,13 @@ mod resolution_parallel;
     feature = "native-alpm-oracle"
 ))]
 mod resolution_producer;
+#[cfg(any(
+    test,
+    feature = "native-rpm-oracle",
+    feature = "native-debian-oracle",
+    feature = "native-alpm-oracle"
+))]
+pub use resolution_producer::{NativeResolutionStrictError, NativeResolutionStrictResult};
 mod resolution_root;
 mod resolution_survey;
 mod support;

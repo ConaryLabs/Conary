@@ -130,6 +130,8 @@ else:
         Path(one("--survey")).write_bytes(canonical(survey))
         if survey["total_failures"]:
             sys.exit(17)
+        if os.environ.get("FAKE_FINALIZATION_FAIL") == "1":
+            sys.exit(18)
         if "--output" not in args:
             sys.exit(0)
     output = Path(one("--output"))
@@ -234,6 +236,7 @@ class NativeOracleLaneTests(unittest.TestCase):
         architecture: str = "x86_64",
         producer_commit: str = PRODUCER_COMMIT,
         strict_failure: bool = False,
+        finalization_failure: bool = False,
         evidence_byte_limit: int = 33554432,
         resolution_schema: int = 3,
     ) -> subprocess.CompletedProcess[str]:
@@ -269,6 +272,7 @@ class NativeOracleLaneTests(unittest.TestCase):
             env={
                 **os.environ,
                 "FAKE_STRICT_FAIL": "1" if strict_failure else "0",
+                "FAKE_FINALIZATION_FAIL": "1" if finalization_failure else "0",
                 "FAKE_EVIDENCE_BYTE_LIMIT": str(evidence_byte_limit),
                 "FAKE_RESOLUTION_SCHEMA": str(resolution_schema),
             },
@@ -481,6 +485,26 @@ class NativeOracleLaneTests(unittest.TestCase):
         manifest = json.loads((survey_root / "manifest.json").read_bytes())
         self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
         self.assertFalse((self.root / "output-fedora-44" / "evidence.json").exists())
+
+    def test_retains_survey_manifest_when_strict_finalization_fails(self) -> None:
+        result = self.run_lane(finalization_failure=True)
+        self.assertNotEqual(result.returncode, 0)
+        failure = json.loads(result.stderr)
+        self.assertEqual(failure["reason"], "strict_finalization_failed")
+        self.assertEqual(failure["status"], "failed")
+        self.assert_single_resolution_invocation("fedora-44")
+        survey_root = self.root / "survey-fedora-44"
+        survey = json.loads((survey_root / "survey.json").read_bytes())
+        manifest = json.loads((survey_root / "manifest.json").read_bytes())
+        self.assertEqual(survey["total_failures"], 0)
+        self.assertEqual(manifest["survey"]["sha256"], digest(survey))
+        self.assertEqual(manifest["resolution_implementation"]["workers"], 2)
+        self.assertEqual(manifest["artifact_type"], "native-resolution-survey-diagnostics")
+        self.assertFalse((self.root / "output-fedora-44" / "resolution-oracle").exists())
+        self.assertFalse((self.root / "output-fedora-44" / "evidence.json").exists())
+
+        validated = self.validate_workflow_survey("fedora-44")
+        self.assertEqual(validated.returncode, 0, validated.stderr)
 
     def test_rejects_noncanonical_survey_evidence_limit(self) -> None:
         result = self.run_lane(evidence_byte_limit=16777216)

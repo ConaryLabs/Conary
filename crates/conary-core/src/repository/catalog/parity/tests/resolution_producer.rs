@@ -15,6 +15,7 @@ use crate::repository::catalog::parity::resolution_survey::{
 struct Input {
     calls: AtomicUsize,
     fail_key: Option<String>,
+    competing_destination: Option<std::path::PathBuf>,
 }
 
 struct FixtureEcosystem;
@@ -43,7 +44,13 @@ impl NativeResolutionEcosystem<'_> for FixtureEcosystem {
         root: &NativeParityPackageV1,
         limits: ResolutionExplanationLimits,
     ) -> Result<NativeRootResolutionResult> {
-        context.inputs[0].calls.fetch_add(1, Ordering::SeqCst);
+        let ordinal = context.inputs[0].calls.fetch_add(1, Ordering::SeqCst);
+        if ordinal == 0
+            && let Some(path) = &context.inputs[0].competing_destination
+        {
+            fs::create_dir(path)?;
+            fs::write(path.join("competing-producer"), b"preserve")?;
+        }
         if context.inputs[0].fail_key.as_ref() == Some(&root.package_key_sha256) {
             return Ok(Err(NativeRootResolutionError::new(
                 Error::ConflictError("fixture failed root".to_string()),
@@ -91,6 +98,7 @@ fn check_combined_walk(fail: bool) {
     let inputs = [Input {
         calls: AtomicUsize::new(0),
         fail_key: fail.then(|| packages[0].package_key_sha256.clone()),
+        competing_destination: None,
     }];
     let directory = tempfile::tempdir().unwrap();
     let survey_path = directory.path().join("survey.json");
@@ -110,7 +118,7 @@ fn check_combined_walk(fail: bool) {
     assert_eq!(inputs[0].calls.load(Ordering::SeqCst), packages.len());
     assert_eq!(survey.counts.roots_walked, packages.len() as u64);
     assert_eq!(survey.total_failures, u64::from(fail));
-    assert_eq!(manifest.is_some(), !fail);
+    assert_eq!(manifest.is_ok(), !fail);
     assert_eq!(strict_path.exists(), !fail);
     let standalone_survey = directory.path().join("standalone.json");
     produce_resolution::<FixtureEcosystem, _>(
@@ -156,4 +164,54 @@ fn check_combined_walk(fail: bool) {
             .to_string_lossy()
             .starts_with(".conary-resolution-")
     }));
+}
+
+#[test]
+fn strict_publication_race_preserves_completed_survey_and_walk_evidence() {
+    let _capacity = super::super::resolution_parallel::resolution_test_capacity(2);
+    let candidate = candidate(NativeParityEcosystemV1::Rpm);
+    let packages = rows(&candidate);
+    let oracle = oracle(&candidate, NativeParityEcosystemV1::Rpm, packages.clone());
+    let directory = tempfile::tempdir().unwrap();
+    let survey_path = directory.path().join("survey.json");
+    let strict_path = directory.path().join("strict");
+    let evidence_path = directory.path().join("implementation.json");
+    let inputs = [Input {
+        calls: AtomicUsize::new(0),
+        fail_key: None,
+        competing_destination: Some(strict_path.clone()),
+    }];
+    let ((survey, strict), evidence) = produce_resolution::<FixtureEcosystem, _>(
+        &candidate.profile,
+        &inputs,
+        oracle._directory.path(),
+        "x86_64",
+        Both {
+            survey: &survey_path,
+            oracle: &strict_path,
+        },
+        ResolutionWorkerRequest::Automatic,
+    )
+    .unwrap();
+    write_resolution_walk_implementation_evidence(&evidence_path, &evidence).unwrap();
+    assert_eq!(survey.total_failures, 0);
+    assert_eq!(survey.counts.roots_walked, packages.len() as u64);
+    assert_eq!(inputs[0].calls.load(Ordering::SeqCst), packages.len());
+    assert!(matches!(
+        strict,
+        Err(NativeResolutionStrictError::Finalization { .. })
+    ));
+    let written_survey: NativeResolutionSurveyV1 =
+        serde_json::from_slice(&fs::read(survey_path).unwrap()).unwrap();
+    assert_eq!(written_survey, survey);
+    let written_evidence: ResolutionWalkImplementationEvidenceV1 =
+        serde_json::from_slice(&fs::read(evidence_path).unwrap()).unwrap();
+    assert_eq!(written_evidence, evidence);
+    assert!(!strict_path.join("manifest.json").exists());
+    assert!(!strict_path.join("roots.jsonl").exists());
+    assert_eq!(
+        fs::read(strict_path.join("competing-producer")).unwrap(),
+        b"preserve"
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 3);
 }

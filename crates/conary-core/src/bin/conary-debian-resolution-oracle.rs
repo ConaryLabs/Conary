@@ -127,6 +127,7 @@ fn run(arguments: Arguments) -> Result<()> {
         ResolutionWorkerRequest::explicit,
     );
     let mut survey_failures = None;
+    let mut strict_failure = None;
     let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
             let (_, evidence) = produce_debian_resolution_oracle_with_workers(
@@ -156,7 +157,7 @@ fn run(arguments: Arguments) -> Result<()> {
             evidence
         }
         (Some(output), Some(survey_path)) => {
-            let (survey, manifest, evidence) = produce_debian_resolution_walk_with_workers(
+            let (survey, strict, evidence) = produce_debian_resolution_walk_with_workers(
                 &profile,
                 &inputs,
                 &arguments.package_oracle,
@@ -168,8 +169,8 @@ fn run(arguments: Arguments) -> Result<()> {
             .context("produce Debian resolution survey and oracle")?;
             if survey.total_failures != 0 {
                 survey_failures = Some((survey.total_failures, survey_path));
-            } else if manifest.is_none() {
-                bail!("Debian resolution walk omitted its strict bundle");
+            } else if let Err(error) = strict {
+                strict_failure = Some(error);
             }
             evidence
         }
@@ -182,6 +183,9 @@ fn run(arguments: Arguments) -> Result<()> {
             "Debian resolution survey recorded {failures} failed roots; inventory written to {}",
             output.display()
         );
+    }
+    if let Some(error) = strict_failure {
+        bail!("Debian {error}; survey and implementation evidence written");
     }
     Ok(())
 }
