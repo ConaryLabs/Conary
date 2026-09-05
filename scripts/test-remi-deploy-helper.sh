@@ -1792,6 +1792,15 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         [[ -f "$retained/diagnostic.log" && "$(stat -c '%a' "$retained/diagnostic.log")" == 600 ]]
         jq -e '.outcome == "helper_failed" and .status == 1 and (.message | contains("outcome."))' \
             "$retained/helper.json" >/dev/null
+        # A writer can create an allowlisted file before failing. Neither this
+        # empty member nor a host-local diagnostic may block the useful files.
+        : >"$retained/manifest.json"
+        chmod 0600 "$retained/manifest.json"
+        mkdir -p "$retained/survey-output"
+        chmod 0700 "$retained/survey-output"
+        printf '%s\n' '{"message":"journal: \u002fvar/lib/remi/private"}' \
+            >"$retained/survey-output/arch.comparison-resolution-implementation.json"
+        chmod 0600 "$retained/survey-output/arch.comparison-resolution-implementation.json"
         run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" >"$recovery"
         python3 scripts/remi-resolution-survey-transport.py verify-recovery \
             --survey-id "$survey_id" --export-id "$export_id" \
@@ -1800,6 +1809,13 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         test_resolution_survey_workflow_recovers_without_a_report "$survey_id" "$export_id" "$fake_root" "$recovery"
         cmp "$retained/outcome.json" "$unpacked/outcome.json"
         cmp "$retained/restore.json" "$unpacked/restore.json"
+        cmp "$retained/helper.json" "$unpacked/helper.json"
+        jq -e '
+            (.withheld | index({path:"manifest.json",reason:"empty"})) != null
+            and (.withheld | index({path:"survey-output/arch.comparison-resolution-implementation.json",reason:"private_host_path"})) != null
+            and all(.files[]; .size > 0)
+        ' "$unpacked/recovery.json" >/dev/null
+        [[ ! -e "$unpacked/manifest.json" && ! -e "$unpacked/survey-output/arch.comparison-resolution-implementation.json" ]]
         [[ ! -e "$unpacked/diagnostic.log" && ! -e "$unpacked/outcome.raw.json" ]]
         [[ -f "$retained/outcome.raw.json" && "$(stat -c '%a' "$retained/outcome.raw.json")" == 600 ]]
         jq -e '.authority == "diagnostic_only" and .input_binding == "verified"' \
@@ -1811,13 +1827,20 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
             [[ ! -d "$unpacked/survey-output" ]]
         fi
         local mutation broken
-        for mutation in digest input_binding withheld_input extra_member; do
+        for mutation in digest input_binding withheld_input included_empty private_path escaped_path private_key extra_member; do
             broken="${tmpdir}/${survey_id}-${mutation}.tar"
             python3 - "$recovery" "$broken" "$mutation" <<'PYRECOVERY'
 import io
+import hashlib
 import json
 import sys
 import tarfile
+replacement = {
+    'included_empty': b'',
+    'private_path': b'{"message":"journal: /usr/local/bin/remi"}',
+    'escaped_path': br'{"message":"journal: \u002fvar/lib/remi/private"}',
+    'private_key': b'{"/arbitrary-root/private":"diagnostic"}',
+}.get(sys.argv[3])
 with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as target:
     for member in source:
         if sys.argv[3] == 'withheld_input' and member.name == 'input-manifest.json':
@@ -1833,7 +1856,14 @@ with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as targ
                 assert value['input_manifest_sha256'] is not None
                 value['files'] = [item for item in value['files'] if item['path'] != 'input-manifest.json']
                 value['withheld'].append({'path': 'input-manifest.json', 'reason': 'private_host_path'})
+            elif replacement is not None:
+                item = next(item for item in value['files'] if item['path'] == 'helper.json')
+                item['size'] = len(replacement)
+                item['sha256'] = hashlib.sha256(replacement).hexdigest()
             data = json.dumps(value).encode()
+            member.size = len(data)
+        elif member.name == 'helper.json' and replacement is not None:
+            data = replacement
             member.size = len(data)
         target.addfile(member, io.BytesIO(data))
     if sys.argv[3] == 'extra_member':
@@ -1850,6 +1880,13 @@ PYRECOVERY
             fi
             if [[ "$mutation" == withheld_input ]]; then
                 grep -Fq 'survey recovery input binding lacks its retained manifest' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            fi
+            if [[ "$mutation" == included_empty ]]; then
+                grep -Fq 'survey recovery file size must be positive' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            elif [[ "$mutation" == private_path || "$mutation" == escaped_path || "$mutation" == private_key ]]; then
+                grep -Fq 'survey recovery member contains a private host path' \
                     "${tmpdir}/recovery-${name}-${mutation}.stderr"
             fi
             [[ ! -e "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" ]]
@@ -2588,6 +2625,15 @@ test_rust_resolution_survey_outcome_fixtures() (
     survey_sanitize_outcome "$rejected" | jq -e '
         .document_state == "invalid_json" and (.source_sha256 | length == 64)
     ' >/dev/null
+    local host_path
+    for host_path in '/var/lib/remi/private' '/usr/local/bin/remi' '/arbitrary-root/private' \
+        '/root-secret' 'journal: /var/lib/remi/private' 'file:///opt/remi/private'; do
+        jq -cn --arg path "$host_path" '{message:$path,nested:{($path):"detail"},url:"https://example.invalid/evidence",relative:"survey-output/arch.json"}' \
+            | survey_sanitize_json | jq -e '
+                .message == "<redacted-host-path>" and .nested["<redacted-host-path>"] == "detail"
+                and .url == "https://example.invalid/evidence" and .relative == "survey-output/arch.json"
+            ' >/dev/null
+    done
 )
 
 main() {

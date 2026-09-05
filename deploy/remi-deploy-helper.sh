@@ -994,10 +994,13 @@ SURVEY_TRANSPORT_NEXT=""
 SURVEY_RETAINED=""
 SURVEY_COMMAND_STATUS=null
 SURVEY_FAILURE_MESSAGE=""
+# Match absolute path tokens regardless of their top-level directory. Relative
+# evidence paths and HTTPS URLs remain public; file URIs are host-local.
+SURVEY_HOST_PATH_PATTERN='(^|[^A-Za-z0-9_./-])/(?!/)|^/|file:/'
 
 survey_sanitize_json() {
-    jq -cS '
-        def redact: if test("(/conary/|/etc/|/tmp/|/data/|/home/)") then "<redacted-host-path>" else . end;
+    jq -cS --arg pattern "$SURVEY_HOST_PATH_PATTERN" '
+        def redact: if test($pattern) then "<redacted-host-path>" else . end;
         walk(if type == "string" then redact
              elif type == "object" then with_entries(.key |= redact) else . end)
     '
@@ -1067,17 +1070,11 @@ export_resolution_survey_evidence() {
     : >"$rows"
     : >"$skipped"
     local -a members=()
-    local path file size sha256
+    local path file size sha256 path_status
     if [[ -e "$retained" || -L "$retained" ]]; then
         [[ -d "$retained" && ! -L "$retained" && "$(stat -c '%a:%u' "$retained")" == "700:$(id -u)" ]] ||
             die "survey recovery root is not a private control-owned directory"
         availability=retained
-        if [[ -f "$retained/input-manifest.json" && ! -L "$retained/input-manifest.json" ]]; then
-            jq -e --arg survey "$survey_id" --arg export "$export_id" '
-                .schema_version == 2 and .survey_id == $survey and .export_id == $export
-            ' "$retained/input-manifest.json" >/dev/null || die "survey recovery input binding disagrees"
-            input_sha256="\"$(sha256sum "$retained/input-manifest.json" | cut -d ' ' -f 1)\""
-        fi
         for path in outcome.json restore.json helper.json input-manifest.json manifest.json \
             survey-output/{fedora-44,ubuntu-26.04,arch}.{candidate-resolution-survey,candidate-resolution-implementation,native-resolution-comparison-survey,comparison-resolution-implementation}.json; do
             file="${retained}/${path}"
@@ -1089,12 +1086,29 @@ export_resolution_survey_evidence() {
                     && "$(stat -c '%a:%u' "$retained/survey-output")" == "700:$(id -u)" ]] ||
                     die "survey recovery output is not a private control-owned directory"
             fi
-            if grep -F -e /conary/ -e /etc/ -e /tmp/ -e /data/ -e /home/ "$file" >/dev/null; then
-                jq -cn --arg path "$path" '{path:$path,reason:"private_host_path"}' >>"$skipped"
+            size="$(stat -c '%s' "$file")"
+            if (( size == 0 )); then
+                jq -cn --arg path "$path" '{path:$path,reason:"empty"}' >>"$skipped"
                 continue
             fi
+            # Decode one JSON leaf at a time, including escaped paths and keys,
+            # without loading a full-catalog survey document into memory.
+            path_status=0
+            jq -en --stream --arg pattern "$SURVEY_HOST_PATH_PATTERN" \
+                'any(inputs; any(.. | strings; test($pattern)))' "$file" \
+                >/dev/null 2>&1 || path_status=$?
+            case "$path_status" in
+                0) jq -cn --arg path "$path" '{path:$path,reason:"private_host_path"}' >>"$skipped"; continue ;;
+                1) ;;
+                *) jq -cn --arg path "$path" '{path:$path,reason:"invalid_json"}' >>"$skipped"; continue ;;
+            esac
             sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
-            size="$(stat -c '%s' "$file")"
+            if [[ "$path" == input-manifest.json ]]; then
+                jq -e --arg survey "$survey_id" --arg export "$export_id" '
+                    .schema_version == 2 and .survey_id == $survey and .export_id == $export
+                ' "$file" >/dev/null || die "survey recovery input binding disagrees"
+                input_sha256="\"$sha256\""
+            fi
             jq -cn --arg path "$path" --arg sha256 "$sha256" --argjson size "$size" \
                 '{path:$path,sha256:$sha256,size:$size}' >>"$rows"
             members+=("$path")

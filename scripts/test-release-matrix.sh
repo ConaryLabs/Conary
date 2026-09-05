@@ -796,6 +796,8 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_included_empty_recovery_member', 'replace', 'scripts/remi-resolution-survey-transport.py', 'exact_positive_int(item["size"], "survey recovery file size")', 'exact_nonnegative_int(item["size"], "survey recovery file size")', 'resolution survey recovery requires positive included sizes and typed withheld reasons'),
+    ('test_check_release_matrix_rejects_archived_empty_recovery_member', 'replace', 'deploy/remi-deploy-helper.sh', 'if (( size == 0 )); then', 'if (( size < 0 )); then', 'resolution survey recovery withholds empty and unsafe JSON before archiving'),
     ('test_check_release_matrix_rejects_unredirected_survey_recovery_stderr', 'replace', '.github/workflows/survey-remi-resolution.yml', '>"$recovery_archive" 2>"$recovery_stderr"; then', '>"$recovery_archive"; then', 'resolution survey recovery export confines stderr privately and reports a sanitized failure'),
     ('test_check_release_matrix_rejects_survey_recovery_input_binding', 'replace', '.github/workflows/survey-remi-resolution.yml', '\n                --input-evidence resolution-survey-input-verification.json \\', '\n                # recovery input binding removed', 'resolution survey recovery invocation preserves authenticated input binding'),
     ('test_check_release_matrix_rejects_survey_outcome_document_count', 'replace', 'deploy/remi-deploy-helper.sh', 'clause("outcome.document_count"; length == 1)', 'clause("outcome.document_count"; length >= 0)', 'resolution survey validates named clauses against one outcome document and reports sanitized evidence'),

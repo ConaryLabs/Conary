@@ -2976,6 +2976,18 @@ def verify_output(args: argparse.Namespace) -> None:
         )
 
 
+def forbid_recovery_host_paths(path: Path) -> None:
+    # Same token grammar as SURVEY_HOST_PATH_PATTERN in the fixed helper.
+    pattern = re.compile(r"(^|[^A-Za-z0-9_./-])/(?!/)|^/|file:/")
+    with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+        position = 0
+        while (start := data.find(b'"', position)) != -1:
+            position = scan_json_string_end(data, start, "survey recovery member")
+            value = decode_json(data[start:position], "survey recovery string")
+            if pattern.search(value):
+                fail("survey recovery member contains a private host path")
+
+
 def verify_recovery(args: argparse.Namespace) -> None:
     """Admit digest-bound diagnostic bytes without granting survey authority."""
     survey_id = require_identity(args.survey_id, "survey id")
@@ -3029,7 +3041,7 @@ def verify_recovery(args: argparse.Namespace) -> None:
             if not isinstance(name, str) or name not in allowed or name in included:
                 fail("survey recovery file is unsafe or repeated")
             included.add(name)
-            exact_nonnegative_int(item["size"], "survey recovery file size")
+            exact_positive_int(item["size"], "survey recovery file size")
             require_sha256(item["sha256"], "survey recovery file digest")
             entries.append(item)
         for item in manifest["withheld"]:
@@ -3037,7 +3049,8 @@ def verify_recovery(args: argparse.Namespace) -> None:
             if (
                 not isinstance(item["path"], str) or item["path"] not in allowed
                 or item["path"] in included or item["path"] in withheld
-                or item["reason"] != "private_host_path"
+                or not isinstance(item["reason"], str)
+                or item["reason"] not in {"private_host_path", "empty", "invalid_json"}
             ):
                 fail("survey recovery withheld file is unsafe or repeated")
             withheld.add(item["path"])
@@ -3055,7 +3068,7 @@ def verify_recovery(args: argparse.Namespace) -> None:
                 destination = staging / item["path"]
                 destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
                 copy_tar_member(archive, member, destination, item["size"], item["sha256"])
-                forbid_private_path_bytes(destination, "survey recovery member")
+                forbid_recovery_host_paths(destination)
                 if item["path"] == "input-manifest.json" and item["sha256"] != input_sha256:
                     fail("retained recovery input bytes differ from authenticated input")
             write_new(staging / "recovery.json", canonical_json(manifest))
