@@ -8,6 +8,9 @@ use crate::generation::verity_policy::VerityPolicy;
 use rusqlite::Connection;
 use std::path::Path;
 
+mod runtime;
+use runtime::{HostRecoveryRuntime, RecoveryRuntime};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecoveryScanPolicy {
     SelectedGenerationOnly,
@@ -36,6 +39,7 @@ impl TransactionEngine {
             conn,
             RecoveryScanPolicy::SelectedGenerationOnly,
             &VerityPolicy::Verified,
+            &HostRecoveryRuntime,
         )
     }
 
@@ -52,13 +56,27 @@ impl TransactionEngine {
         conn: &Connection,
         verity: &VerityPolicy,
     ) -> Result<()> {
+        self.recover_boot_selection_with_runtime(conn, verity, &HostRecoveryRuntime)
+    }
+
+    fn recover_boot_selection_with_runtime(
+        &self,
+        conn: &Connection,
+        verity: &VerityPolicy,
+        runtime: &impl RecoveryRuntime,
+    ) -> Result<()> {
         // Validate before DB inspection, repair, scanning or mount reuse. An
         // invalid command line is not a damaged artifact that can be bypassed.
         verity.requires_verification()?;
         if let Some(warning) = verity.warning() {
             eprintln!("{warning}");
         }
-        self.recover_with_policy(conn, RecoveryScanPolicy::SelectedOrLatestArtifact, verity)
+        self.recover_with_policy(
+            conn,
+            RecoveryScanPolicy::SelectedOrLatestArtifact,
+            verity,
+            runtime,
+        )
     }
 
     fn recover_with_policy(
@@ -66,6 +84,7 @@ impl TransactionEngine {
         conn: &Connection,
         policy: RecoveryScanPolicy,
         verity: &VerityPolicy,
+        runtime: &impl RecoveryRuntime,
     ) -> Result<()> {
         use crate::generation::mount::current_generation;
 
@@ -118,7 +137,13 @@ impl TransactionEngine {
                         "Recovery: generation {} has valid artifact but is not mounted, mounting",
                         current_num
                     );
-                    return self.mount_artifact_and_link(conn, current_num, &artifact, verity);
+                    return self.mount_artifact_and_link(
+                        conn,
+                        current_num,
+                        &artifact,
+                        verity,
+                        runtime,
+                    );
                 }
                 Err(error) => {
                     tracing::warn!(
@@ -129,10 +154,10 @@ impl TransactionEngine {
                 }
             }
 
-            return self.rebuild_or_scan(conn, Some(current_num), policy, verity);
+            return self.rebuild_or_scan(conn, Some(current_num), policy, verity, runtime);
         }
 
-        self.rebuild_or_scan(conn, None, policy, verity)
+        self.rebuild_or_scan(conn, None, policy, verity, runtime)
     }
 
     fn rebuild_or_scan(
@@ -141,6 +166,7 @@ impl TransactionEngine {
         selected_generation: Option<i64>,
         policy: RecoveryScanPolicy,
         verity: &VerityPolicy,
+        runtime: &impl RecoveryRuntime,
     ) -> Result<()> {
         if let Some(expected) = selected_generation {
             tracing::info!(
@@ -148,14 +174,24 @@ impl TransactionEngine {
                 expected
             );
 
-            match crate::generation::builder::rebuild_generation_image(
+            match runtime.rebuild(
                 conn,
                 &self.config.generations_dir,
                 expected,
                 &format!("Recovery rebuild of generation {expected}"),
             ) {
-                Ok(_build_result) => {
+                Ok(build_result) => {
                     let gen_dir = self.config.generations_dir.join(expected.to_string());
+                    if policy == RecoveryScanPolicy::SelectedOrLatestArtifact
+                        && verity.requires_verification()?
+                    {
+                        crate::generation::builder::enable_generation_rootfs_verity_with(
+                            &gen_dir,
+                            &build_result.image_path,
+                            |image| runtime.enable_verity(image),
+                        )?;
+                    }
+                    // Reload only after verity finalization persists the metadata.
                     let artifact = load_generation_artifact_for_number(expected, &gen_dir)?;
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
                         tracing::info!(
@@ -164,7 +200,8 @@ impl TransactionEngine {
                         );
                         return mark_generation_state_active_if_present(conn, expected);
                     }
-                    return self.mount_artifact_and_link(conn, expected, &artifact, verity);
+                    return self
+                        .mount_artifact_and_link(conn, expected, &artifact, verity, runtime);
                 }
                 Err(e) => {
                     if policy == RecoveryScanPolicy::SelectedGenerationOnly {
@@ -198,7 +235,7 @@ impl TransactionEngine {
                 "Recovery: found valid generation artifact for generation {}, mounting",
                 gen_num
             );
-            return self.mount_artifact_and_link(conn, gen_num, &artifact, verity);
+            return self.mount_artifact_and_link(conn, gen_num, &artifact, verity, runtime);
         }
 
         Err(crate::Error::RecoveryFailed(
@@ -220,19 +257,19 @@ impl TransactionEngine {
         gen_num: i64,
         artifact: &GenerationArtifact,
         verity: &VerityPolicy,
+        runtime: &impl RecoveryRuntime,
     ) -> Result<()> {
         let (requested_verity, digest) = verity.mount_requirements(&artifact.metadata)?;
 
-        let _mount_outcome =
-            crate::generation::mount::mount_generation(&crate::generation::mount::MountOptions {
-                image_path: artifact.erofs_path.clone(),
-                basedir: artifact.cas_dir.clone(),
-                mount_point: self.config.mount_point.clone(),
-                verity: requested_verity,
-                digest,
-                upperdir: None,
-                workdir: None,
-            })?;
+        let _mount_outcome = runtime.mount(&crate::generation::mount::MountOptions {
+            image_path: artifact.erofs_path.clone(),
+            basedir: artifact.cas_dir.clone(),
+            mount_point: self.config.mount_point.clone(),
+            verity: requested_verity,
+            digest,
+            upperdir: None,
+            workdir: None,
+        })?;
 
         crate::generation::mount::update_current_symlink(&self.config.root, gen_num)?;
         mark_generation_state_active_if_present(conn, gen_num)?;
@@ -352,6 +389,9 @@ mod tests {
     use crate::db::models::GenerationPublicationStatus;
     use crate::generation::verity_policy::VerityPolicyError;
     use tempfile::TempDir;
+
+    #[cfg(feature = "composefs-rs")]
+    mod rebuild;
 
     fn recovery_fixture() -> (TempDir, Connection, TransactionEngine, GenerationArtifact) {
         let tmp = TempDir::new().unwrap();

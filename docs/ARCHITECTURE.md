@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 66
+revision: 67
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -513,6 +513,10 @@ presence tracked separately: an empty or otherwise invalid final value fails
 activation. A failed verified mount is fatal and is never retried without
 verification. Recovery rejects generation metadata lacking the fs-verity flag
 or EROFS verity digest with a typed error under the verified policy.
+When recovery rebuilds a missing or damaged selected image, it finalizes
+fs-verity and persists the flag alongside the builder's digest before mounting.
+`generation::builder::verity` owns this finalization for both normal publication
+and recovery; an explicit `off` rebuild skips enablement and mounts unverified.
 
 The deployed-system `deploy/dracut` hook invokes `conary system generation
 recover`, which consumes this Rust policy before repair, artifact scanning or

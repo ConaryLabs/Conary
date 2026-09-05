@@ -19,6 +19,7 @@ mod rebuild;
 mod root_validation;
 mod runtime_inputs;
 mod sysroot;
+mod verity;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -34,6 +35,10 @@ pub use create::{
 pub(crate) use file_capabilities::SECURITY_CAPABILITY_XATTR;
 pub use file_capabilities::encode_security_capability_xattr;
 pub(crate) use rebuild::rebuild_generation_image;
+#[cfg(test)]
+pub(crate) use rebuild::rebuild_generation_image_with_boot_root;
+pub use verity::enable_generation_rootfs_verity;
+pub(crate) use verity::enable_generation_rootfs_verity_with;
 
 /// Result of serializing one exact generation-root manifest to EROFS.
 #[derive(Debug, Clone)]
