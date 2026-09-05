@@ -164,6 +164,10 @@ sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh ccs |\1con
 expect_failure "release-build ccs proof allowed to fail" "$root"
 
 make_fixture "$root"
+sed -i "s|^\(\s*\)if: \${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}$|\1if: \${{ github.event_name == 'never' }}|" "$root/.github/workflows/release-build.yml"
+expect_failure "release-build proofs under a condition other than the tree guard" "$root"
+
+make_fixture "$root"
 sed -i 's|^\(\s*run: bash scripts/check-release-license-contents.sh rpm .*\)$|\1 \|\| true|' "$root/.github/workflows/release-build.yml"
 expect_failure "release-build rpm proof masked with || true" "$root"
 

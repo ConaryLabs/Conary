@@ -161,6 +161,7 @@ owners = {
 # The proof must be the complete command on its line: a plain word list with
 # no shell control operators, redirections, or status-masking suffixes, run by
 # a step whose shell keeps errexit (the default or an explicit -e).
+TREE_GUARD = "${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}"
 COMMAND = re.compile(r"^\s*bash scripts/check-release-license-contents\.sh (?P<kind>[a-z-]+)(?P<args>( [A-Za-z0-9_./*${}\"-]+)+)\s*$")
 def shell_keeps_errexit(step):
     shell = step.get("shell")
@@ -178,7 +179,9 @@ def executes(job_id, kind):
         if step.get("continue-on-error") is True:
             continue
         condition = step.get("if")
-        if condition is not None and str(condition).strip() in ("false", "${{ false }}"):
+        # The only permitted condition is the tree-support guard that lets nightly
+        # recovery rebuild an older tag; anything else is not a live proof.
+        if condition is not None and str(condition).strip() != TREE_GUARD:
             continue
         if not shell_keeps_errexit(step):
             continue
