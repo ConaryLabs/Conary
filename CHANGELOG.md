@@ -22,7 +22,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - require portable catalog attestations
 - anchor durable verification
 - persist catalog physical attestations
-- add fd-bound fs-verity measurement
 - export exact native oracle inputs (#602)
 - expose exact promotion proof operator (#588)
 - make promotion the sole atomic activation authority (#586)
@@ -508,7 +507,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - ops(remi): survey and reassemble native lanes
 - ops(remi): bind native oracle producers
 - ops(remi): produce pinned native oracles
-- Revert "feat(filesystem): add fd-bound fs-verity measurement"
 - ops(remi): protect native oracle export (#686)
 - ci: isolate hosted Ubuntu package bootstrap
 - ops(remi): require post-deploy candidate refresh
