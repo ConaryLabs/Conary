@@ -2,13 +2,15 @@
 
 //! Command implementations for automation system.
 
+mod prompt;
+
 use super::open_db;
 use anyhow::{Context, Result};
 use conary_core::automation::{
     AutomationManager, AutomationSummary,
     action::{ActionExecutor, PlannedOp},
     check::AutomationChecker,
-    prompt::{AutomationPrompt, SummaryResponse},
+    prompt::{SummaryResponse, actions_for_decision},
     scheduler::AutomationDaemon,
 };
 use conary_core::model::{
@@ -672,14 +674,15 @@ pub async fn cmd_automation_apply(
     }
 
     // Interactive mode
-    let prompt = AutomationPrompt::detect();
     let summary = manager.summary();
 
-    match prompt.show_summary(&summary)? {
+    let decision = prompt::show_summary(&summary)?;
+    let selected_actions = actions_for_decision(&manager, &decision);
+    match decision {
         SummaryResponse::ApplyAll => {
             println!("Applying all actions...");
             let (applied, failed, partial) =
-                execute_actions(&conn, &all_actions, db_path, root).await?;
+                execute_actions(&conn, &selected_actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",
@@ -693,12 +696,10 @@ pub async fn cmd_automation_apply(
                 );
             }
         }
-        SummaryResponse::ReviewCategory(category) => {
-            let actions = manager.pending_by_category(category);
-            println!("Reviewing {} action(s)...", actions.len());
-            let actions: Vec<_> = actions.into_iter().cloned().collect();
+        SummaryResponse::ReviewCategory(_) => {
+            println!("Reviewing {} action(s)...", selected_actions.len());
             let (applied, failed, partial) =
-                execute_actions(&conn, &actions, db_path, root).await?;
+                execute_actions(&conn, &selected_actions, db_path, root).await?;
             println!();
             println!(
                 "Complete: {} applied, {} failed, {} partial",
