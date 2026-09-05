@@ -110,6 +110,13 @@ tools are absent from the runner. Tests assert every rendering exactly and run
 Debian comparator; they also use `vercmp` when installed. No local comparator
 substitutes for an ecosystem's ordering implementation.
 
+Immutable source pins for those native manuals are
+[RPM 6.0.2, `a7f89afb`](https://github.com/rpm-software-management/rpm/blob/a7f89afb57a98f6419d0eff35ca792198293b682/docs/man/rpm-version.7.scd),
+[Debian Policy 4.7.4.1, `f2b46743`](https://salsa.debian.org/dbnpolicy/policy/-/blob/f2b46743e3fb22fb3f461c28ffff4c2788a75bed/policy/ch-controlfields.rst),
+and pacman 7.1.0, `5683f847`:
+[vercmp(8)](https://gitlab.archlinux.org/pacman/pacman/-/blob/5683f8477a0afcc6b331766175a83445b2dcfe89/doc/vercmp.8.asciidoc)
+and [PKGBUILD(5)](https://gitlab.archlinux.org/pacman/pacman/-/blob/5683f8477a0afcc6b331766175a83445b2dcfe89/doc/PKGBUILD.5.asciidoc).
+
 CCS manifest validation delegates to `repository::versioning::validate_repo_version`
 with `VersionScheme::Conary`, which parses `semver::Version`.
 `self_update::versioning` likewise parses and compares full SemVer values.

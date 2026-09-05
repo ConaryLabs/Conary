@@ -166,7 +166,8 @@ generate_changelog() {
 }
 
 update_workspace_version() {
-    local new_version="$1"
+    local new_version
+    new_version="$(bash "$MATRIX" render-version "$1" cargo)"
     local tmp
 
     tmp="$(mktemp)"
