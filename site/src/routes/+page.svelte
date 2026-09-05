@@ -210,7 +210,9 @@
 				Pick a source whose package format differs from the host. Every dry-run shows the
 				package's typed lifecycle, dependencies, payload, and required host capabilities
 				before anything is mutated. Commands that change packages, files, or generation
-				state require an explicit <code>--yes</code>.
+				state require an explicit <code>--yes</code>; repository sync, adoption, and
+				self-update change state without it, so the absence of the flag never means
+				read-only.
 			</p>
 
 			<div class="authority-summary">
@@ -226,19 +228,37 @@
 		</div>
 
 		<div class="evidence-terminal">
-			<TerminalFrame title="cross-distro package loop">
-				<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
-			</TerminalFrame>
-			<p class="evidence-note">
-				Commands only; output is not shown because it varies by host. A reproducible
-				captured demo is open work, not something the site pretends to have.
-			</p>
+			{#if previewRelease.testerPinAssigned}
+				<TerminalFrame title="cross-distro package loop">
+					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
+				</TerminalFrame>
+				<p class="evidence-note">
+					Commands only; output is not shown because it varies by host. A reproducible
+					captured demo is open work, not something the site pretends to have.
+				</p>
+			{:else}
+				<!-- The live loop is owned by the paused tester guide; while no release is
+				     pinned the homepage shows only the non-mutating inspection commands. -->
+				<TerminalFrame title="inspection only · tester loop inactive">
+					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update --dry-run</span></span>
+				</TerminalFrame>
+				<p class="evidence-note">
+					Dry-run inspection only. The live install, update, and remove loop is owned by
+					the tester guide, which is paused until a release is pinned; the
+					<a href="/install/#tester-loop">install page</a> keeps its retained commands
+					folded away. No output is shown because it varies by host.
+				</p>
+			{/if}
 		</div>
 	</div>
 </section>
