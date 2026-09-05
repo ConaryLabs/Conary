@@ -9,7 +9,9 @@
 
 <PageMeta
 	title="Install the Conary pre-alpha — Conary"
-	description={`Inspect the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The external tester loop stays inactive until a release is pinned.`}
+	description={pinned
+		? `Install the ${previewRelease.tag} external tester release on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script, then run the bounded cross-distro loop.`
+		: `Inspect the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The external tester loop stays inactive until a release is pinned.`}
 	path="/install/"
 />
 

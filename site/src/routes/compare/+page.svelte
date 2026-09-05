@@ -222,8 +222,13 @@
 				<article class="detail-card maturity-card">
 					<h3>Where Conary is still early</h3>
 					<p>
-						Conary {previewRelease.version} is pre-alpha and a single-maintainer project. No
-						release is assigned as external tester authority yet. Native CCS packages are
+						Conary {previewRelease.version} is pre-alpha and a single-maintainer project.
+						{#if previewRelease.testerPinAssigned}
+							{previewRelease.tag} is the assigned external tester release.
+						{:else}
+							No release is assigned as external tester authority yet.
+						{/if}
+						Native CCS packages are
 						few, the cross-distro lifecycle matrix still needs wider installed-host evidence,
 						generation work is VM-only, and the community and operational track record are
 						small beside the established managers.

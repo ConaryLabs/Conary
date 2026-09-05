@@ -291,8 +291,12 @@
 			<h2>Install the pre-alpha and read the plan before you apply it.</h2>
 			<p>
 				The bootstrap script verifies the signed release manifest and the package for
-				your host before it touches anything, and previews by default. The external
-				tester loop stays inactive until a release is pinned.
+				your host before it touches anything, and previews by default.
+				{#if previewRelease.testerPinAssigned}
+					{previewRelease.tag} is the assigned external tester release.
+				{:else}
+					The external tester loop stays inactive until a release is pinned.
+				{/if}
 			</p>
 		</div>
 		<div class="button-row">
