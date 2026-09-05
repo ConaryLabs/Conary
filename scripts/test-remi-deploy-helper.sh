@@ -1816,14 +1816,14 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
             grep -F '"document_state":"empty"' "$stderr_file" >/dev/null
         else
             grep -F 'outcome.keys' "$stderr_file" >/dev/null
-            grep -F '"output_dir":"<survey-output>"' "$stderr_file" >/dev/null
+            grep -F '"output_dir":"<redacted:private_host_path>"' "$stderr_file" >/dev/null
         fi
         if grep -F "$fake_root" "$stderr_file"; then
             fail "$name outcome diagnostic leaked its private path"
         fi
         [[ -f "$retained/outcome.json" && -f "$retained/restore.json" && -f "$retained/helper.json" ]]
         [[ -f "$retained/diagnostic.log" && "$(stat -c '%a' "$retained/diagnostic.log")" == 600 ]]
-        jq -e '.outcome == "helper_failed" and .status == 1 and (.message | contains("outcome."))' \
+        jq -e '.outcome == "helper_failed" and .status == 1 and (.message | startswith("<redacted:"))' \
             "$retained/helper.json" >/dev/null
         # A writer can create an allowlisted file before failing. Neither this
         # empty member nor a host-local diagnostic may block the useful files.
@@ -1851,18 +1851,19 @@ test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
         [[ ! -e "$unpacked/manifest.json" && ! -e "$unpacked/survey-output/arch.comparison-resolution-implementation.json" ]]
         [[ ! -e "$unpacked/diagnostic.log" && ! -e "$unpacked/outcome.raw.json" ]]
         [[ -f "$retained/outcome.raw.json" && "$(stat -c '%a' "$retained/outcome.raw.json")" == 600 ]]
-        jq -e '.authority == "diagnostic_only" and .input_binding == "verified"' \
+        jq -e '.authority == "diagnostic_only" and .input_binding == "not_retained"' \
             "$unpacked/recovery-verification.json" >/dev/null
+        jq -e '.input_manifest_sha256 == null
+            and any(.withheld[]; .path == "input-manifest.json")' "$unpacked/recovery.json" >/dev/null
         if [[ "$name" == predicate ]]; then
-            cmp "$retained/survey-output/fedora-44.candidate-resolution-survey.json" \
-                "$unpacked/survey-output/fedora-44.candidate-resolution-survey.json"
-        else
-            [[ ! -d "$unpacked/survey-output" ]]
+            jq -e 'any(.withheld[]; .path == "survey-output/fedora-44.candidate-resolution-survey.json")' \
+                "$unpacked/recovery.json" >/dev/null
         fi
+        [[ ! -d "$unpacked/survey-output" ]]
         local mutation broken
-        for mutation in digest input_binding withheld_input included_empty private_path escaped_path private_key extra_member; do
+        for mutation in digest input_binding withheld_input included_empty private_path escaped_path private_key network_path unc_path unknown_string extra_member; do
             broken="${tmpdir}/${survey_id}-${mutation}.tar"
-            python3 - "$recovery" "$broken" "$mutation" <<'PYRECOVERY'
+            python3 - "$recovery" "$broken" "$mutation" "$(jq -r .manifest_sha256 "$fake_root/survey-input-verification.json")" <<'PYRECOVERY'
 import io
 import hashlib
 import json
@@ -1873,6 +1874,9 @@ replacement = {
     'private_path': b'{"message":"journal: /usr/local/bin/remi"}',
     'escaped_path': br'{"message":"journal: \u002fvar/lib/remi/private"}',
     'private_key': b'{"/arbitrary-root/private":"diagnostic"}',
+    'network_path': b'{"message":"journal: //private.internal/share"}',
+    'unc_path': json.dumps({'message': r'\\private.internal\share'}).encode(),
+    'unknown_string': b'{"message":"new-shape-not-in-any-denylist"}',
 }.get(sys.argv[3])
 with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as target:
     for member in source:
@@ -1886,8 +1890,9 @@ with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as targ
             elif sys.argv[3] == 'input_binding':
                 value['input_manifest_sha256'] = '0' * 64
             elif sys.argv[3] == 'withheld_input':
-                assert value['input_manifest_sha256'] is not None
+                value['input_manifest_sha256'] = sys.argv[4]
                 value['files'] = [item for item in value['files'] if item['path'] != 'input-manifest.json']
+                value['withheld'] = [item for item in value['withheld'] if item['path'] != 'input-manifest.json']
                 value['withheld'].append({'path': 'input-manifest.json', 'reason': 'private_host_path'})
             elif replacement is not None:
                 item = next(item for item in value['files'] if item['path'] == 'helper.json')
@@ -1921,6 +1926,8 @@ PYRECOVERY
             elif [[ "$mutation" == private_path || "$mutation" == escaped_path || "$mutation" == private_key ]]; then
                 grep -Fq 'survey recovery member contains a private host path' \
                     "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            elif [[ "$mutation" == network_path || "$mutation" == unc_path || "$mutation" == unknown_string ]]; then
+                grep -Fq 'outside the safe grammar' "${tmpdir}/recovery-${name}-${mutation}.stderr"
             fi
             [[ ! -e "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" ]]
         done
@@ -2615,22 +2622,23 @@ test_recovery_path_uri_policy() (
     source "$helper"
     local fake_root="${tmpdir}/uri-policy-root"
     local retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-uri-policy"
-    local value reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
+    local value key reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
     mkdir -p "$retained"
     chmod 0700 "$retained"
     for name in helper outcome restore; do
         printf '{}\n' >"$retained/$name.json"
         chmod 0600 "$retained/$name.json"
     done
-    while IFS=$'\t' read -r value reason; do
-        jq -cn --arg value "$value" '{message:$value}' >"$member"
+    while IFS=$'\t' read -r value key reason; do
+        jq -cn --arg value "$value" --arg key "$key" '{($key):$value}' >"$member"
         [[ "$(survey_recovery_path_reason "$member")" == "$reason" ]] || fail "URI policy classification drifted"
         if [[ "$reason" == safe ]]; then
-            survey_sanitize_json <"$member" | jq -e --arg value "$value" '.message == $value' >/dev/null
+            survey_sanitize_json <"$member" | jq -e --arg value "$value" --arg key "$key" '.[$key] == $value' >/dev/null
         else
-            survey_sanitize_json <"$member" | jq -e '.message == "<redacted-host-path>"' >/dev/null
-            jq -cn --arg value "$value" '{($value):"detail"}' | survey_sanitize_json \
-                | jq -e '.["<redacted-host-path>"] == "detail"' >/dev/null
+            survey_sanitize_json <"$member" | jq -e --arg key "$key" --arg reason "$reason" \
+                '.[$key] == ("<redacted:" + $reason + ">")' >/dev/null
+            jq -cn --arg value "$value" '{($value):"ready"}' | survey_sanitize_json \
+                | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "ready")' >/dev/null
         fi
         install -m 0600 "$member" "$retained/manifest.json"
         run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy >"$archive"
@@ -2642,7 +2650,7 @@ test_recovery_path_uri_policy() (
         for name in helper outcome restore; do
             tar -xOf "$archive" "$name.json" | cmp - "$retained/$name.json"
         done
-    done < <(jq -r '.[] | [.value,.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
+    done < <(jq -r '.[] | [.value,(.key // "message"),.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
 )
 
 test_rust_resolution_survey_outcome_fixtures() (
@@ -2695,10 +2703,10 @@ test_rust_resolution_survey_outcome_fixtures() (
     local host_path
     for host_path in '/var/lib/remi/private' '/usr/local/bin/remi' '/arbitrary-root/private' \
         '/root-secret' 'journal: /var/lib/remi/private' 'file:///opt/remi/private'; do
-        jq -cn --arg path "$host_path" '{message:$path,nested:{($path):"detail"},url:"https://example.invalid/evidence",relative:"survey-output/arch.json"}' \
+        jq -cn --arg path "$host_path" '{message:$path,candidate:{($path):"ready"},output_dir:"https://example.invalid/evidence",reason:"survey-output/arch.json"}' \
             | survey_sanitize_json | jq -e '
-                .message == "<redacted-host-path>" and .nested["<redacted-host-path>"] == "detail"
-                and .url == "https://example.invalid/evidence" and .relative == "survey-output/arch.json"
+                .message == "<redacted:private_host_path>" and .candidate["<redacted:private_host_path>"] == "ready"
+                and .output_dir == "<redacted:private_string>" and .reason == "<redacted:private_string>"
             ' >/dev/null
     done
 )

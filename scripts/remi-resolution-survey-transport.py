@@ -2993,6 +2993,8 @@ def forbid_recovery_host_paths(path: Path) -> None:
         return
     if result.returncode == 0 and result.stdout == b"private_host_path\n":
         fail("survey recovery member contains a private host path")
+    if result.returncode == 0 and result.stdout in {b"private_string\n", b"unknown_key\n"}:
+        fail("survey recovery member contains a string outside the safe grammar")
     fail("survey recovery member redaction_unproven")
 
 
@@ -3058,7 +3060,7 @@ def verify_recovery(args: argparse.Namespace) -> None:
                 not isinstance(item["path"], str) or item["path"] not in allowed
                 or item["path"] in included or item["path"] in withheld
                 or not isinstance(item["reason"], str)
-                or item["reason"] not in {"private_host_path", "empty", "redaction_unproven"}
+                or item["reason"] not in {"private_host_path", "private_string", "unknown_key", "empty", "redaction_unproven"}
             ):
                 fail("survey recovery withheld file is unsafe or repeated")
             withheld.add(item["path"])

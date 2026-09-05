@@ -796,6 +796,8 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_denylist_only_recovery_strings', 'replace', 'deploy/remi-deploy-helper.sh', 'if $safe and $defense == null then null', 'if $defense == null then null', 'resolution survey recovery gates strings and keys on one typed allowlist'),
+    ('test_check_release_matrix_rejects_unchecked_recovery_keys', 'replace', 'deploy/remi-deploy-helper.sh', 'first(inputs | recovery_event_reasons', 'first(inputs | .. | strings | recovery_path_reason', 'resolution survey recovery gates strings and keys on one typed allowlist'),
     ('test_check_release_matrix_rejects_case_sensitive_recovery_uris', 'replace', 'deploy/remi-deploy-helper.sh', '(file|ssh|scp|sftp):"; "i")', '(file|ssh|scp|sftp):"; "")', 'resolution survey shared path policy decodes escaped case-insensitive private URIs'),
     ('test_check_release_matrix_rejects_independent_recovery_path_policy', 'replace', 'scripts/remi-resolution-survey-transport.py', 'source "$1"; survey_recovery_path_reason "$2"', 'printf "safe\\n"', 'resolution survey verifier calls the helper-owned path policy'),
     ('test_check_release_matrix_rejects_raw_survey_ssh_artifact', 'replace', '.github/workflows/survey-remi-resolution.yml', '--argjson stderr "$(sanitize_helper_stderr)"', '--rawfile stderr "$helper_stderr"', 'resolution survey sanitizes connection identifiers before constructing failure artifacts'),

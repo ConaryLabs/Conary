@@ -994,10 +994,36 @@ SURVEY_TRANSPORT_NEXT=""
 SURVEY_RETAINED=""
 SURVEY_COMMAND_STATUS=null
 SURVEY_FAILURE_MESSAGE=""
-# The sole recovery path/URI policy. The runner calls the library function below
-# from this same helper; it must not maintain a second grammar or decoder.
+# The sole recovery safe-string grammar. Unknown keys and values are private;
+# path/URI detection is only defense in depth, never evidence that a value is safe.
+# The runner calls this helper in library mode instead of duplicating the gate.
 survey_recovery_path_policy() {
     cat <<'JQ'
+        def redacted_token: IN("<redacted:private_string>", "<redacted:unknown_key>",
+            "<redacted:private_host_path>", "<redacted:redaction_unproven>");
+        def recovery_known_key:
+            redacted_token or IN("schema_version", "output_dir", "profiles", "profile_results", "profile",
+                "candidate", "comparison", "counts", "roots_walked", "resolved_roots", "unresolved_roots",
+                "not_installable_roots", "failed_roots", "error_kinds", "kind", "error_variant", "reason",
+                "count", "total_failures", "candidate_manifest_sha256", "matching_roots", "mismatched_roots",
+                "mismatch_kinds", "outcome_kind_pairs", "total_mismatches", "candidate_failures",
+                "comparison_mismatches", "comparison_profiles", "candidate_outcome", "native_outcome",
+                "outcome", "status", "survey_status", "message", "document_state", "source_bytes",
+                "source_sha256", "probe", "budget_source", "basis_seconds", "multiplier", "ceiling_seconds",
+                "budget_seconds", "elapsed_seconds", "restart_to_ready_seconds", "last_ready_duration_seconds",
+                "systemctl_status", "survey_id", "export_id", "run_id", "timestamp", "started_at", "completed_at");
+        def recovery_safe_value($key):
+            redacted_token
+            or test("^[0-9a-f]{64}$")
+            or test("^(0|[1-9][0-9]{0,19})$")
+            or test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$")
+            or ($key == "profile" and IN("fedora-44", "ubuntu-26.04", "arch"))
+            or (($key | IN("survey_id", "export_id", "run_id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
+            or IN("helper_failed", "restored", "restore_failed", "measurement_required", "ready",
+                "readiness_timeout", "systemctl_failed", "deploy_health", "issue_913_startup_evidence",
+                "last_recorded_duration", "not_written", "empty", "invalid_json", "not_retained",
+                "private_host_path", "private_string", "unknown_key", "redaction_unproven",
+                "resolved", "unresolved", "not_installable", "failed", "config_error", "solver_failed");
         def hex_digit: ascii_downcase | explode[0] | if . >= 97 then . - 87 else . - 48 end;
         def percent_decode($budget):
             if $budget == 0 then . else
@@ -1010,6 +1036,34 @@ survey_recovery_path_policy() {
             | if $decoded | contains("%") then "redaction_unproven"
               elif $decoded | test("(^|[^A-Za-z0-9_./-])/(?!/)|^/|(file|ssh|scp|sftp):"; "i")
               then "private_host_path" else null end;
+        def recovery_string_reason($key; $is_key):
+            (if $is_key then recovery_known_key else recovery_safe_value($key) end) as $safe
+            | recovery_path_reason as $defense
+            | if $safe and $defense == null then null
+              else $defense // (if $is_key then "unknown_key" else "private_string" end) end;
+        def recovery_event_reasons:
+            . as $event
+            | ($event[0][] | select(type == "string") | recovery_string_reason(null; true)),
+              (if ($event | length) == 2 and ($event[1] | type) == "string" then
+                  ($event[0] | map(select(type == "string")) | last) as $key
+                  | $event[1] | recovery_string_reason($key; false)
+               else empty end);
+        def recovery_document_reasons($key):
+            if type == "object" then to_entries[] | . as $entry
+                | (.key | recovery_string_reason(null; true)),
+                  (.value | recovery_document_reasons($entry.key))
+            elif type == "array" then .[] | recovery_document_reasons($key)
+            elif type == "string" then recovery_string_reason($key; false)
+            else empty end;
+        def recovery_sanitize($key):
+            if type == "object" then to_entries | map(. as $entry
+                | .value |= recovery_sanitize($entry.key)
+                | .key |= (recovery_string_reason(null; true) as $reason
+                    | if $reason == null then . else "<redacted:" + $reason + ">" end)) | from_entries
+            elif type == "array" then map(recovery_sanitize($key))
+            elif type == "string" then recovery_string_reason($key; false) as $reason
+                | if $reason == null then . else "<redacted:" + $reason + ">" end
+            else . end;
 JQ
 }
 
@@ -1017,22 +1071,20 @@ survey_recovery_path_reason() {
     local reason
     # Stream decoded JSON keys and leaves; never load a full-catalog document.
     if ! reason="$(jq -nr --stream "$(survey_recovery_path_policy)
-        first(inputs | .. | strings | recovery_path_reason | select(. != null)) // \"safe\"
+        first(inputs | recovery_event_reasons | select(. != null)) // \"safe\"
     " "$1" 2>/dev/null)"; then
         reason=redaction_unproven
     fi
     case "$reason" in
-        safe|private_host_path|redaction_unproven) printf '%s\n' "$reason" ;;
+        safe|private_string|unknown_key|private_host_path|redaction_unproven) printf '%s\n' "$reason" ;;
         *) printf '%s\n' redaction_unproven ;;
     esac
 }
 
 survey_sanitize_json() {
     jq -cS "$(survey_recovery_path_policy)"'
-        def redact: if recovery_path_reason != null then "<redacted-host-path>" else . end;
-        walk(if type == "string" then redact
-             elif type == "object" then with_entries(.key |= redact) else . end)
-        | if any(.. | strings; recovery_path_reason != null)
+        recovery_sanitize(null)
+        | if any(recovery_document_reasons(null); . != null)
           then error("redaction_unproven") else . end
     '
 }
@@ -1044,7 +1096,7 @@ survey_sanitize_outcome() {
     elif [[ ! -s "$outcome" ]]; then
         printf '%s\n' '{"document_state":"empty","source_bytes":0}'
     elif sanitized="$(jq -es 'if length == 1 then .[0] else error("document_count") end
-        | if type == "object" and has("output_dir") then .output_dir = "<survey-output>" else . end' \
+        | if type == "object" and has("output_dir") then .output_dir = "<redacted:private_host_path>" else . end' \
         "$outcome" 2>/dev/null | survey_sanitize_json)"; then
         printf '%s\n' "$sanitized"
     else
