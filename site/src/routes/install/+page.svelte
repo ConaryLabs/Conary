@@ -79,13 +79,18 @@
 				<p class="eyebrow">Confirmation rule</p>
 				<h2 id="confirmation-title">When <code>--yes</code> is required, and when it is not.</h2>
 				<p>
-					{commandRisk.rule} The list below is transcribed from
-					<a href={commandRisk.sourceUrl}><code>{commandRisk.source}</code></a>, the
-					policy that enforces it; the absence of a <code>--yes</code> flag never means a
-					command is read-only.
+					{commandRisk.rule} The <code>--yes</code>-gated classes below are transcribed
+					from <a href={commandRisk.sourceUrl}><code>{commandRisk.source}</code></a>, the
+					policy that enforces them, and are complete by construction. The two side-effect
+					groups are known misclassifications, commands the policy calls read-only whose
+					implementations write; they are examples found by audit, not a complete list,
+					and are tracked in
+					<a href={commandRisk.misclassificationIssueUrl}>{commandRisk.misclassificationIssue}</a>
+					until the classifier is fixed and this list is generated from it. The absence of a
+					<code>--yes</code> flag never means a command is read-only.
 				</p>
 				<details class="risk-list">
-					<summary>The complete list, by policy class</summary>
+					<summary>Policy classes, plus known misclassifications</summary>
 					<dl>
 						<div>
 							<dt>Require <code>--yes</code> outside <code>--dry-run</code></dt>
@@ -104,11 +109,11 @@
 							<dd><ul>{#each commandRisk.localStateWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>
-							<dt>Classed read-only or non-host, but write artifacts</dt>
+							<dt>Known misclassifications, examples only: classed read-only or non-host, but write artifacts</dt>
 							<dd><ul>{#each commandRisk.artifactWritingWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>
-							<dt>Classed read-only, but write the database as a side effect</dt>
+							<dt>Known misclassifications, examples only: classed read-only, but write the database</dt>
 							<dd><ul>{#each commandRisk.databaseWritingReadOnlyClassified as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>

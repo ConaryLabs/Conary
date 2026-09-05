@@ -212,8 +212,8 @@
 				Pick a source whose package format differs from the host. Every dry-run shows the
 				package's typed lifecycle, dependencies, payload, and required host capabilities
 				before anything is mutated. {commandRisk.rule} The
-				<a href="/install/#confirmation">complete list</a> is derived from
-				<code>{commandRisk.source}</code>.
+				<a href="/install/#confirmation">policy classes and known exceptions</a> are
+				derived from <code>{commandRisk.source}</code>.
 			</p>
 
 			<div class="authority-summary">

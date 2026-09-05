@@ -1,7 +1,18 @@
 import launchStatus from '../../../docs/roadmaps/launch-status.json';
+import testerGuide from '../../../docs/guides/agent-assisted-tester-loop.md?raw';
 
 const version = launchStatus.published_release.version;
 const tag = launchStatus.published_release.tag;
+
+/**
+ * The tester guide's own resume condition: launch-status assigns an exact
+ * release, the guide's frontmatter status is `active`, and the guide names
+ * that same release. A launch-status-only assignment leaves the guide paused,
+ * and the guide is the execution authority for the loop, so the site treats
+ * that intermediate state as still unassigned.
+ */
+const testerGuideStatus = testerGuide.match(/^status:\s*(\S+)\s*$/m)?.[1] ?? 'unknown';
+const testerGuideActive = testerGuideStatus === 'active' && testerGuide.includes(tag);
 
 const orgUrl = 'https://github.com/FieldmouseWorks';
 const repoUrl = `${orgUrl}/Conary`;
@@ -43,8 +54,12 @@ export const previewRelease = {
 	downloadBaseUrl: `${repoUrl}/releases/download/${tag}`,
 	matrixUrl: `${mainBlobUrl}/docs/operations/release-artifact-matrix.md`,
 	testerAuthority: launchStatus.tester_authority.state,
-	/** True only once launch-status.json assigns an exact external tester release. */
-	testerPinAssigned: launchStatus.tester_authority.state === 'assigned',
+	testerGuideStatus,
+	/**
+	 * True only once launch-status.json assigns an exact external tester release
+	 * and the tester guide is active and names it.
+	 */
+	testerPinAssigned: launchStatus.tester_authority.state === 'assigned' && testerGuideActive,
 	testerAuthorityReason: launchStatus.tester_authority.reason,
 	announcementClaim: launchStatus.announcement_claim,
 	testerGuideUrl: `${mainBlobUrl}/docs/guides/agent-assisted-tester-loop.md`,

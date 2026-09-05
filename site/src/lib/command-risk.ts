@@ -1,12 +1,21 @@
 /**
  * Which commands need `--yes`, derived from `apps/conary/src/command_risk.rs`.
  *
- * `CommandRiskPolicy::requires_apply_intent` is the authority: a command needs
- * apply intent only when its risk is DestructiveDbMutation,
- * SelectedRootMutation, ActiveHostMutation, or AlwaysLive and it is not a dry
- * run. Everything below is transcribed from the `classify_*` functions in that
- * file. When the policy changes, this list changes with it; do not edit the
- * copy on the routes instead.
+ * Two kinds of group live here and they carry different authority:
+ *
+ * - The `--yes`-gated groups (`requiresYes`, `builtInIntent`) and the policy's
+ *   own no-confirmation classes (`databaseWithoutConfirmation`,
+ *   `localStateWithoutConfirmation`, `bootActivation`) are transcribed from
+ *   `CommandRiskPolicy::requires_apply_intent` and the `classify_*` arms. They
+ *   are complete by construction: a command needs apply intent only when its
+ *   risk is DestructiveDbMutation, SelectedRootMutation, ActiveHostMutation,
+ *   or AlwaysLive and it is not a dry run.
+ * - The side-effect groups (`artifactWritingWithoutConfirmation`,
+ *   `databaseWritingReadOnlyClassified`) are known misclassifications: the
+ *   policy calls them read-only or non-host, their implementations write.
+ *   They are examples found by audit, not a complete list, and are tracked in
+ *   the issue below until the classifier is fixed and this projection is
+ *   generated from it. Nothing here implies an unlisted command is read-only.
  *
  * Hook-only entries (`system adopt --sync-hook`,
  * `system adopt --refresh --quiet --from-sync-hook`) are omitted: they are
@@ -16,6 +25,8 @@ export const commandRisk = {
 	source: 'apps/conary/src/command_risk.rs',
 	sourceUrl:
 		'https://github.com/FieldmouseWorks/Conary/blob/main/apps/conary/src/command_risk.rs',
+	misclassificationIssue: '#918',
+	misclassificationIssueUrl: 'https://github.com/FieldmouseWorks/Conary/issues/918',
 
 	/** The one-sentence rule every route states. */
 	rule:
@@ -99,11 +110,12 @@ export const commandRisk = {
 	],
 
 	/**
-	 * Classed read-only or non-host by the policy even though they write
-	 * artifacts (images, signatures, keys, lock files, SBOMs, exports, caches,
-	 * build outputs) or publish to a remote. The policy file does not say which
-	 * read-only arms write; this group comes from the output arguments and
-	 * behaviour of each command definition under `apps/conary/src/cli/`.
+	 * Known misclassifications (#918), examples only: classed read-only or
+	 * non-host by the policy even though they write artifacts (images,
+	 * signatures, keys, lock files, SBOMs, PID files, exports, caches, build
+	 * outputs) or publish to a remote. Found by reading the output arguments
+	 * and behaviour of the command definitions under `apps/conary/src/cli/`
+	 * and `apps/conary/src/commands/`.
 	 */
 	artifactWritingWithoutConfirmation: [
 		'conary system generation export',
@@ -119,19 +131,25 @@ export const commandRisk = {
 		'conary profile publish',
 		'conary derive build',
 		'conary derivation build',
+		'conary automation daemon',
 		'conary cache populate',
 		'conary bootstrap (every subcommand except seed --from-adopted)',
 		'conary export'
 	],
 
 	/**
-	 * Classed read-only by the policy but write Conary's database as a side
-	 * effect of the check itself. Derived from the command implementations:
-	 * `crates/conary-core/src/automation/check.rs` persists
-	 * `troves.orphan_since`; `apps/conary/src/commands/federation.rs`
+	 * Known misclassifications (#918), examples only: classed read-only by the
+	 * policy but write Conary's database as a side effect. From the command
+	 * implementations: `crates/conary-core/src/automation/check.rs` persists
+	 * `troves.orphan_since` (run by `automation check` and on a schedule by
+	 * `automation daemon`); `apps/conary/src/commands/federation.rs`
 	 * `cmd_federation_test` updates peer latency and last-seen.
 	 */
-	databaseWritingReadOnlyClassified: ['conary automation check', 'conary federation test'],
+	databaseWritingReadOnlyClassified: [
+		'conary automation check',
+		'conary automation daemon',
+		'conary federation test'
+	],
 
 	/**
 	 * GenerationBootActivation: an internal boot continuation authorized by the
