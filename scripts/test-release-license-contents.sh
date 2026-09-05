@@ -97,7 +97,12 @@ cat > "$tmp/bin/conary" <<'SH'
 #!/usr/bin/env bash
 case "$1 $2" in
   "ccs verify") [[ "$4" == "--policy" && -f "$5" && -f "${3}.verify-ok" ]] ;;
-  "ccs inspect") [[ "$*" == *"--format json"* && "$*" == *"--policy"* ]] || exit 2; cat "${3}.json" ;;
+  "ccs inspect")
+    # Mirror the real CLI: inspect takes --files/--hooks/--deps/--format and the
+    # package only; any --policy is an unexpected argument.
+    [[ "$*" != *"--policy"* ]] || { echo "error: unexpected argument '--policy' found" >&2; exit 2; }
+    [[ "$*" == *"--format json"* ]] || exit 2
+    cat "${3}.json" ;;
   *) exit 2 ;;
 esac
 SH
