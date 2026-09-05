@@ -108,6 +108,10 @@
 							<dd><ul>{#each commandRisk.artifactWritingWithoutConfirmation as command}<li>{command}</li>{/each}</ul></dd>
 						</div>
 						<div>
+							<dt>Classed read-only, but write the database as a side effect</dt>
+							<dd><ul>{#each commandRisk.databaseWritingReadOnlyClassified as command}<li>{command}</li>{/each}</ul></dd>
+						</div>
+						<div>
 							<dt>Boot continuation authorized by the generation artifact, not a flag</dt>
 							<dd><ul>{#each commandRisk.bootActivation as command}<li>{command}</li>{/each}</ul></dd>
 						</div>

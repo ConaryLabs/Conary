@@ -260,7 +260,7 @@
 				<p class="eyebrow">The useful question</p>
 				<h2>Would one package engine across distro boundaries solve a real problem for you?</h2>
 			</div>
-			<a href="/install/" class="btn btn-primary">Try the bounded loop</a>
+			<a href="/install/" class="btn btn-primary">{previewRelease.testerPinAssigned ? 'Try the bounded loop' : 'Inspect the preview'}</a>
 		</div>
 	</div>
 </section>

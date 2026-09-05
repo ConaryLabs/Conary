@@ -206,7 +206,7 @@
 <section class="section section-band evidence">
 	<div class="container grid-12">
 		<div class="evidence-copy">
-			<p class="eyebrow">The bounded loop</p>
+			<p class="eyebrow">{previewRelease.testerPinAssigned ? 'The bounded loop' : 'The bounded loop · inactive until a release is pinned'}</p>
 			<h2 class="section-heading">Cross the format boundary, then prove you can come back.</h2>
 			<p class="section-copy">
 				Pick a source whose package format differs from the host. Every dry-run shows the

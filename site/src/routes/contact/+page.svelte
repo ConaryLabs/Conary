@@ -12,14 +12,23 @@
 			href: project.securityAdvisoryUrl,
 			action: 'Open a private advisory'
 		},
-		{
-			label: 'preview run',
-			tone: 'normal',
-			title: 'Report a preview run',
-			body: 'Tried the bounded loop on a disposable host? Use the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, source package format, and where it stopped. Runs that simply worked count too.',
-			href: previewRelease.feedbackUrl,
-			action: 'Open pre-alpha feedback'
-		},
+		previewRelease.testerPinAssigned
+			? {
+					label: 'tester run',
+					tone: 'normal',
+					title: 'Report a tester-loop run',
+					body: `Ran the bounded loop on ${previewRelease.tag}, the pinned tester release? Use the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, source package format, and where it stopped. Runs that simply worked count too.`,
+					href: previewRelease.feedbackUrl,
+					action: 'Open pre-alpha feedback'
+				}
+			: {
+					label: 'preview feedback',
+					tone: 'normal',
+					title: 'Report early feedback',
+					body: 'No tester release is pinned, so nothing you run today is a qualifying tester-loop run. Findings from inspecting the signed bootstrap, a dry-run of a local RPM, DEB, or Arch artifact, or adoption on a disposable host are still welcome through the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, and source package format.',
+					href: previewRelease.feedbackUrl,
+					action: 'Open pre-alpha feedback'
+				},
 		{
 			label: 'bug',
 			tone: 'normal',
@@ -49,14 +58,14 @@
 
 <PageMeta
 	title="Contact — Conary"
-	description="Where to send a Conary bug report, preview-run report, security advisory, question, or anything else."
+	description="Where to send a Conary bug report, early feedback, security advisory, question, or anything else."
 	path="/contact/"
 />
 
 <PageIntro
 	eyebrow="Contact"
 	title="Where to send it."
-	description="Bugs, questions, preview reports, and capability requests go to GitHub so the answers stay public and searchable. Security issues have a private path. Anything else reaches the maintainer directly."
+	description="Bugs, questions, early feedback, and capability requests go to GitHub so the answers stay public and searchable. Security issues have a private path. Anything else reaches the maintainer directly."
 />
 
 <section class="section contact-section">

@@ -125,6 +125,15 @@ export const commandRisk = {
 	],
 
 	/**
+	 * Classed read-only by the policy but write Conary's database as a side
+	 * effect of the check itself. Derived from the command implementations:
+	 * `crates/conary-core/src/automation/check.rs` persists
+	 * `troves.orphan_since`; `apps/conary/src/commands/federation.rs`
+	 * `cmd_federation_test` updates peer latency and last-seen.
+	 */
+	databaseWritingReadOnlyClassified: ['conary automation check', 'conary federation test'],
+
+	/**
 	 * GenerationBootActivation: an internal boot continuation authorized by the
 	 * generation artifact and kernel command line, not by `--yes`.
 	 */
