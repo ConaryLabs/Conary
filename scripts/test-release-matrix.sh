@@ -725,6 +725,14 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_survey_restore_exit_binding', 'replace', '.github/workflows/survey-remi-resolution.yml', '|| "$helper_status:$restore_outcome" == 1:restore_failed', '|| "$helper_status:$restore_outcome" == 255:restore_failed', 'resolution survey separates SSH status and typed restore evidence'),
+    ('test_check_release_matrix_rejects_survey_restore_upload', 'replace', '.github/workflows/survey-remi-resolution.yml', '            resolution-survey-restore.json\n          if-no-files-found', '          if-no-files-found', 'resolution survey verifies and uploads completed evidence before failing restoration'),
+    ('test_check_release_matrix_rejects_survey_restore_final_gate', 'replace', '.github/workflows/survey-remi-resolution.yml', '[[ "$RESTORE_OUTCOME" == restored ]]', '[[ "$RESTORE_OUTCOME" == restore_failed ]]', 'resolution survey verifies and uploads completed evidence before failing restoration'),
+    ('test_check_release_matrix_rejects_survey_restore_retention', 'replace', 'deploy/remi-deploy-helper.sh', 'mv -- "$frozen_output" "${retained}/survey-output"', 'rm -rf -- "$frozen_output"', 'resolution survey retains frozen output and publishes transport across restore failure'),
+    ('test_check_release_matrix_rejects_survey_restore_budget', 'replace', 'deploy/remi-deploy-helper.sh', 'basis="$previous"', 'basis=30', 'Remi restore budget derives from recorded startup evidence with a hard ceiling'),
+    ('test_check_release_matrix_rejects_survey_restore_ceiling', 'replace', 'deploy/remi-deploy-helper.sh', '(( budget <= 7200 )) || budget=7200', '(( budget <= 14400 )) || budget=14400', 'Remi restore budget derives from recorded startup evidence with a hard ceiling'),
+    ('test_check_release_matrix_rejects_survey_restore_journal', 'replace', 'deploy/remi-deploy-helper.sh', '"$READINESS_JOURNAL" -u remi -n 30 --no-pager', 'true', 'Remi restore diagnostics include causal status elapsed budget and journal tail'),
+    ('test_check_release_matrix_rejects_deploy_restore_inspection', 'replace', 'deploy/remi-deploy-helper.sh', 'restart_readiness:$readiness', 'restart_readiness:null', 'Remi sanitized inspection retains restart timing evidence'),
     ("test_nightly_date_selection_priority", "replace", "scripts/nightly-release.py", 'outcome = "selected_by_existing_date_tag"', 'outcome = "selected_by_green_run"', "nightly date tag precedes green selection"),
     ("test_nightly_date_recovery_route", "replace", ".github/workflows/nightly-release.yml", 'if [[ "$selected_by" == "selected_by_existing_date_tag" ]]; then', 'if [[ "$selected_by" == "selected_by_green_run" ]]; then', "nightly existing date recovery bypasses new-tag preflight"),
     ("test_nightly_preflight_ancestor", "replace", "scripts/nightly-release.py", '"--is-ancestor", workflow_commit, commit', '"--is-ancestor", commit, workflow_commit', "nightly workflow ancestor preflight"),

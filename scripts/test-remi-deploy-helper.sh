@@ -754,7 +754,7 @@ make_survey_oracle_transport() {
         }
     ')"
     printf '%s' "$input_verification" >"${fake_root}/survey-input-verification.json"
-    benchmark_tmp_paths+=("$transport" "/tmp/remi-resolution-survey-${survey_id}.tar")
+    benchmark_tmp_paths+=("$transport" "/tmp/remi-resolution-survey-${survey_id}.tar" "/tmp/remi-resolution-survey-${survey_id}.restore.json")
 }
 
 make_benchmark_fixture() {
@@ -832,7 +832,11 @@ run_survey_helper() {
 
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=0 \
-    CONARY_REMI_DEPLOY_SURVEY_READINESS_URL="file://${fake_root}/health" \
+    CONARY_REMI_DEPLOY_HEALTH_URL="file://${fake_root}/health" \
+    CONARY_REMI_DEPLOY_TEST_CLOCK="${fake_root}/fake-clock" \
+    CONARY_REMI_DEPLOY_TEST_CURL="${fake_root}/fake-curl" \
+    CONARY_REMI_DEPLOY_TEST_JOURNAL="${fake_root}/fake-journal" \
+    CONARY_FAKE_CLOCK="${fake_root}/clock" \
     CONARY_REMI_DEPLOY_TEST_SYSTEMCTL="${fake_root}/fake-systemctl" \
     CONARY_FAKE_SERVICE_STATE="${fake_root}/service-state" \
     CONARY_FAKE_SERVICE_LOG="${fake_root}/service-log" \
@@ -1397,6 +1401,25 @@ make_survey_fixture() {
     : >"$fake_root/service-log"
     printf 'ok\n' >"$fake_root/health"
     make_survey_oracle_transport "$fake_root" "$survey_id" "$export_id"
+    printf '0\n' >"$fake_root/clock"
+    cat >"$fake_root/fake-clock" <<'EOF'
+#!/usr/bin/env bash
+cat "$CONARY_FAKE_CLOCK"
+EOF
+    cat >"$fake_root/fake-curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == *"file://"*"/health" ]] || exit 2
+now=$(( $(cat "$CONARY_FAKE_CLOCK") + ${CONARY_FAKE_PROBE_TICK:-1} ))
+printf '%s\n' "$now" >"$CONARY_FAKE_CLOCK"
+(( now >= ${CONARY_FAKE_READY_AFTER:-1} ))
+EOF
+    cat >"$fake_root/fake-journal" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == '-u remi -n 30 --no-pager' ]] || exit 2
+printf 'Remi journal tail: catalog reopen still in progress\n'
+EOF
+    chmod 0700 "$fake_root"/fake-{clock,curl,journal}
 }
 
 test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
@@ -1404,15 +1427,6 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     local export_id="slice6-export-$$"
     local fake_root="${tmpdir}/root-${survey_id}"
     local output transport verification
-    # shellcheck disable=SC2016
-    grep -F 'SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"' \
-        "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
-    grep -F 'start_and_probe "$SURVEY_READINESS_URL" 30' "$helper" >/dev/null ||
-        fail "resolution survey lost its shared bounded readiness poll"
-    grep -F 'start_and_probe "$HEALTH_URL" 30' "$helper" >/dev/null ||
-        fail "Remi deployment lost its bounded health retry"
-    grep -F 'while (( attempts > 0 )); do' "$helper" >/dev/null ||
-        fail "shared Remi probe lost its bounded retry loop"
     if grep -F 'transport_stage' "$helper" >/dev/null; then
         fail "resolution survey duplicates its frozen output before archiving"
     fi
@@ -1428,7 +1442,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
         run_survey_helper "$fake_root" \
         "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar")"
     transport="/tmp/remi-resolution-survey-${survey_id}.tar"
-    [[ "$output" =~ ^Resolution\ survey:\ survey=${survey_id}\ export=${export_id}\ transport=${transport}\ sha256=[0-9a-f]{64}\ bytes=[1-9][0-9]*\ candidate_failures=0\ comparison_mismatches=0$ ]] ||
+    [[ "$output" =~ ^Resolution\ survey:\ survey=${survey_id}\ export=${export_id}\ transport=${transport}\ sha256=[0-9a-f]{64}\ bytes=[1-9][0-9]*\ candidate_failures=0\ comparison_mismatches=0\ restore_outcome=restored\ restore_sha256=[0-9a-f]{64}$ ]] ||
         fail "resolution survey returned an unexpected publication line: $output"
     [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
         fail "resolution survey service ordering drifted: $(cat "$fake_root/service-log")"
@@ -1439,7 +1453,7 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     [[ -d "$fake_root/conary/evidence/.remi-operator-staging" \
         && "$(stat -c '%a' "$fake_root/conary/evidence/.remi-operator-staging")" == "750" ]]
     if find "$fake_root/conary/evidence/.remi-operator-staging" \
-        -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+        -mindepth 1 -maxdepth 1 ! -name "completed-resolution-survey-${survey_id}" -print -quit | grep -q .; then
         fail "resolution survey leaked capacity-domain operator staging"
     fi
     grep -F 'forged_after_restart' \
@@ -1481,7 +1495,7 @@ test_resolution_survey_findings_restart_and_succeed() {
     output="$(CONARY_FAKE_SURVEY_FINDINGS=1 run_survey_helper "$fake_root" \
         "$survey_id" "$export_id" "/tmp/remi-resolution-survey-oracles-${survey_id}.tar")"
     transport="/tmp/remi-resolution-survey-${survey_id}.tar"
-    [[ "$output" =~ candidate_failures=3\ comparison_mismatches=0$ ]] ||
+    [[ "$output" =~ candidate_failures=3\ comparison_mismatches=0\ restore_outcome=restored\ restore_sha256=[0-9a-f]{64}$ ]] ||
         fail "survey findings were not reported as a successful helper outcome"
     [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
         fail "survey findings did not restore Remi in order"
@@ -1497,6 +1511,147 @@ test_resolution_survey_findings_restart_and_succeed() {
         and .counts.comparison_profiles == 0
         and all(.profiles[]; .comparison == null)
     ' "$verification" >/dev/null
+}
+
+test_resolution_survey_restore_outcomes_and_measured_budgets() {
+    local row name prior ready_after tick expected_status expected_outcome budget elapsed reason
+    local survey_id export_id fake_root stdout_file stderr_file status retained transport restore
+    local runner_script="${tmpdir}/survey-runner-handoff.sh"
+    cat >"$runner_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+SURVEY_ID="$1" EXPORT_ID="$2" source_report="$3" source_status="$4"
+cd "$5"
+target=fixture
+remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
+remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
+ssh_opts=()
+ssh() { cat "$source_report"; return "$source_status"; }
+scp() { cp "${1#*:}" "$2"; }
+EOF
+    # Execute the workflow's actual handoff/parser, including its status and
+    # sidecar checks, against both restored and retained-on-failure outputs.
+    python3 - "$runner_script" <<'PYCODE'
+from pathlib import Path
+import sys
+workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
+start = workflow.index('          helper_status=0\n')
+end = workflow.index('          scp "${ssh_opts[@]}" "${target}:${remote_output}"', start)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
+PYCODE
+    local -a cases=(
+        'start-failure|null|1|1|1|restore_failed|7080|0|systemctl_failed'
+        'within-budget|60|100|10|0|restored|120|100|ready'
+        'ceiling|5000|99999|3600|1|restore_failed|7200|7200|readiness_timeout'
+        'recorded-timeout|10|99|10|1|restore_failed|20|20|readiness_timeout'
+        'obsolete|obsolete|1|1|0|restored|7080|1|ready'
+    )
+    for row in "${cases[@]}"; do
+        IFS='|' read -r name prior ready_after tick expected_status expected_outcome budget elapsed reason <<<"$row"
+        survey_id="survey-restore-${name}-$$"
+        export_id="slice6-export-$$"
+        fake_root="${tmpdir}/root-${survey_id}"
+        stdout_file="${tmpdir}/${survey_id}.stdout"
+        stderr_file="${tmpdir}/${survey_id}.stderr"
+        make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+        if [[ "$prior" != null ]]; then
+            mkdir -p -m 0700 "$fake_root/var/lib/conary-remi-deploy"
+            if [[ "$prior" == obsolete ]]; then
+                printf '{"schema_version":0,"last_ready_duration_seconds":1}' >"$fake_root/var/lib/conary-remi-deploy/readiness.json"
+            else
+                jq -cn --argjson prior "$prior" '{schema_version:1,last_ready_duration_seconds:$prior}' \
+                    >"$fake_root/var/lib/conary-remi-deploy/readiness.json"
+            fi
+        fi
+        [[ "$name" != start-failure ]] || touch "$fake_root/fail-start"
+        status=0
+        CONARY_FAKE_READY_AFTER="$ready_after" CONARY_FAKE_PROBE_TICK="$tick" \
+            run_survey_helper "$fake_root" "$survey_id" "$export_id" \
+            "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+            >"$stdout_file" 2>"$stderr_file" || status=$?
+        [[ "$status" == "$expected_status" ]] || fail "$name returned $status"
+        grep -F "restore_outcome=${expected_outcome}" "$stdout_file" >/dev/null
+        retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}"
+        transport="/tmp/remi-resolution-survey-${survey_id}.tar"
+        restore="/tmp/remi-resolution-survey-${survey_id}.restore.json"
+        [[ "$(stat -c '%a' "$retained")" == 700 ]]
+        [[ "$(stat -c '%a' "$restore")" == 600 ]]
+        cmp "$restore" "$retained/restore.json"
+        mkdir "${tmpdir}/runner-${survey_id}"
+        bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" "$status" \
+            "${tmpdir}/runner-${survey_id}" || fail "$name failed the real workflow handoff"
+        expect_fail "SSH failure cannot become a retained survey result" \
+            bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" 255 \
+            "${tmpdir}/runner-${survey_id}"
+        expect_fail "restore outcome must agree with helper status" \
+            bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" "$((1-status))" \
+            "${tmpdir}/runner-${survey_id}"
+        jq -e --arg outcome "$expected_outcome" --arg reason "$reason" \
+            --argjson budget "$budget" --argjson elapsed "$elapsed" \
+            --arg sha256 "$(sha256sum "$transport" | cut -d ' ' -f 1)" '
+            .schema_version == 1 and .transport.sha256 == $sha256
+            and .retained.kind == "completed_resolution_survey"
+            and .restore.outcome == $outcome and .restore.reason == $reason
+            and .restore.budget_seconds == $budget and .restore.elapsed_seconds == $elapsed
+        ' "$restore" >/dev/null || fail "$name lost typed restore inspection"
+        # Successful measurements feed both inspect-remi and the next restart.
+        jq -e --argjson elapsed "$elapsed" --arg outcome "$expected_outcome" '
+            if $outcome == "restored" then .last_ready_duration_seconds == $elapsed
+            else .restart_to_ready_seconds == null end
+        ' "$fake_root/var/lib/conary-remi-deploy/readiness.json" >/dev/null
+        [[ "$(cat "$fake_root/service-log")" == $'is-active --quiet remi\nstop remi\ninspect\nsurvey\nstart remi' ]] ||
+            fail "$name repeated restoration or changed service ordering"
+        if [[ "$expected_outcome" == restore_failed ]]; then
+            grep -F "${reason}: systemctl status" "$stderr_file" >/dev/null
+            grep -F "elapsed ${elapsed}s, budget ${budget}s" "$stderr_file" >/dev/null
+            grep -F 'Remi journal tail: catalog reopen still in progress' "$stderr_file" >/dev/null
+            if [[ "$name" == start-failure ]]; then
+                grep -F 'systemctl status 37' "$stderr_file" >/dev/null
+            fi
+        fi
+        python3 scripts/remi-resolution-survey-transport.py verify-output \
+            --survey-id "$survey_id" --export-id "$export_id" \
+            --input-evidence "$fake_root/survey-input-verification.json" \
+            --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+            --transport "$transport" --evidence "${tmpdir}/${survey_id}-verification.json" >/dev/null
+        tar -xOf "$transport" manifest.json | cmp - "$retained/manifest.json"
+        tar -xOf "$transport" fedora-44.candidate-resolution-survey.json | \
+            cmp - "$retained/survey-output/fedora-44.candidate-resolution-survey.json"
+    done
+}
+
+test_deploy_records_readiness_and_reuses_survey_measurement() {
+    local survey_id="survey-deploy-timing-$$" export_id="slice6-export-$$"
+    local fake_root="${tmpdir}/root-${survey_id}"
+    local bundle="${tmpdir}/timed-remi.tar.gz" repositories="${tmpdir}/timed-repositories.toml"
+    make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+    CONARY_FAKE_READY_AFTER=20 CONARY_FAKE_PROBE_TICK=10 \
+        run_survey_helper "$fake_root" "$survey_id" "$export_id" \
+        "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" >/dev/null
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+    printf '0\n' >"$fake_root/clock"
+    CONARY_REMI_DEPLOY_ROOT="$fake_root" CONARY_REMI_DEPLOY_SKIP_RESTART=0 \
+    CONARY_REMI_DEPLOY_HEALTH_URL="file://${fake_root}/health" \
+    CONARY_REMI_DEPLOY_TEST_SYSTEMCTL="$fake_root/fake-systemctl" \
+    CONARY_REMI_DEPLOY_TEST_CLOCK="$fake_root/fake-clock" \
+    CONARY_REMI_DEPLOY_TEST_CURL="$fake_root/fake-curl" \
+    CONARY_FAKE_CLOCK="$fake_root/clock" CONARY_FAKE_READY_AFTER=30 CONARY_FAKE_PROBE_TICK=10 \
+    CONARY_FAKE_SERVICE_STATE="$fake_root/service-state" \
+    CONARY_FAKE_SERVICE_LOG="$fake_root/service-log" \
+    CONARY_FAKE_FAIL_START="$fake_root/fail-start" \
+        bash "$helper" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" "$bundle" "$repositories" 32 >/dev/null
+    CONARY_FAKE_INSPECT_DIAGNOSTIC=1 run_helper "$fake_root" inspect-remi | jq -e '
+        .restart_readiness.outcome == "restored"
+        and .restart_readiness.budget_source == "last_recorded_duration"
+        and .restart_readiness.basis_seconds == 20
+        and .restart_readiness.budget_seconds == 40
+        and .restart_readiness.restart_to_ready_seconds == 30
+        and .restart_readiness.last_ready_duration_seconds == 30
+    ' >/dev/null || fail "deployment did not reuse survey timing or expose its new measurement"
 }
 
 test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap() {
@@ -2199,6 +2354,8 @@ main() {
     test_export_native_oracle_inputs_uses_exact_public_candidates
     test_resolution_survey_uses_stopped_runtime_and_sanitized_transport
     test_resolution_survey_findings_restart_and_succeed
+    test_resolution_survey_restore_outcomes_and_measured_budgets
+    test_deploy_records_readiness_and_reuses_survey_measurement
     test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap
     test_resolution_survey_failure_sanitizes_diagnostic
     test_resolution_survey_inspection_failure_sanitizes_diagnostic
