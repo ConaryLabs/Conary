@@ -1,18 +1,69 @@
 import launchStatus from '../../../docs/roadmaps/launch-status.json';
-import testerGuide from '../../../docs/guides/agent-assisted-tester-loop.md?raw';
 
 const version = launchStatus.published_release.version;
 const tag = launchStatus.published_release.tag;
 
 /**
- * The tester guide's own resume condition: launch-status assigns an exact
- * release, the guide's frontmatter status is `active`, and the guide names
- * that same release. A launch-status-only assignment leaves the guide paused,
- * and the guide is the execution authority for the loop, so the site treats
- * that intermediate state as still unassigned.
+ * Typed tester-guide pin.
+ *
+ * `docs/guides/agent-assisted-tester-loop.md` is the execution authority for
+ * the external tester loop, and its YAML frontmatter is the only part of it
+ * the site reads. Two keys are authority:
+ *
+ * - `status`: exactly `paused` or `active`. Any other value fails the build.
+ * - `tester_release`: an exact `vMAJOR.MINOR.PATCH` tag. Required when
+ *   `status` is `active`; it must equal `launch-status.json`'s published tag,
+ *   and launch-status must itself assign tester authority. A mismatch, a
+ *   missing tag, or an active guide beside an unassigned launch-status is a
+ *   contradictory intermediate state and fails the build rather than
+ *   exposing the loop. Body text is never consulted.
+ *
+ * `status` is `unknown` only when the guide file is absent; the pin is then
+ * unassigned.
  */
-const testerGuideStatus = testerGuide.match(/^status:\s*(\S+)\s*$/m)?.[1] ?? 'unknown';
-const testerGuideActive = testerGuideStatus === 'active' && testerGuide.includes(tag);
+type TesterGuideStatus = 'paused' | 'active' | 'unknown';
+
+const testerGuideFiles = import.meta.glob('../../../docs/guides/agent-assisted-tester-loop.md', {
+	query: '?raw',
+	import: 'default',
+	eager: true
+}) as Record<string, string>;
+
+function readTesterGuidePin(text: string | undefined): {
+	status: TesterGuideStatus;
+	release: string | undefined;
+} {
+	if (text === undefined) return { status: 'unknown', release: undefined };
+
+	const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+	if (!frontmatter) throw new Error('tester guide: missing YAML frontmatter');
+
+	const statusMatch = frontmatter[1].match(/^status: (paused|active)$/m);
+	if (!statusMatch) throw new Error('tester guide: status must be exactly paused or active');
+	const status = statusMatch[1] as TesterGuideStatus;
+
+	const releaseLine = frontmatter[1].match(/^tester_release: (\S+)$/m);
+	const release = releaseLine?.[1];
+	if (release !== undefined && !/^v\d+\.\d+\.\d+$/.test(release)) {
+		throw new Error(`tester guide: tester_release is not an exact v* tag: ${release}`);
+	}
+
+	if (status === 'active') {
+		if (release === undefined) throw new Error('tester guide: active but names no tester_release');
+		if (release !== tag) {
+			throw new Error(`tester guide: active for ${release}, launch-status publishes ${tag}`);
+		}
+		if (launchStatus.tester_authority.state !== 'assigned') {
+			throw new Error('tester guide: active while launch-status assigns no tester authority');
+		}
+	}
+
+	return { status, release };
+}
+
+const testerGuide = readTesterGuidePin(Object.values(testerGuideFiles)[0]);
+const testerGuideStatus = testerGuide.status;
+const testerGuideActive = testerGuide.status === 'active' && testerGuide.release === tag;
 
 const orgUrl = 'https://github.com/FieldmouseWorks';
 const repoUrl = `${orgUrl}/Conary`;
@@ -57,7 +108,7 @@ export const previewRelease = {
 	testerGuideStatus,
 	/**
 	 * True only once launch-status.json assigns an exact external tester release
-	 * and the tester guide is active and names it.
+	 * and the tester guide's typed frontmatter pin is active for that same tag.
 	 */
 	testerPinAssigned: launchStatus.tester_authority.state === 'assigned' && testerGuideActive,
 	testerAuthorityReason: launchStatus.tester_authority.reason,

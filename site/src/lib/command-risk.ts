@@ -133,7 +133,23 @@ export const commandRisk = {
 		'conary derivation build',
 		'conary automation daemon',
 		'conary cache populate',
-		'conary bootstrap (every subcommand except seed --from-adopted)',
+		// bootstrap, per apps/conary/src/commands/bootstrap/{setup,phases,image,run,seed,cleanup}.rs
+		// and the Bootstrap constructor in crates/conary-core/src/bootstrap/mod.rs, which
+		// create_dir_all's the work directory. Read-only by implementation and therefore
+		// not listed: bootstrap check, status, verify-convergence, diff-seeds.
+		'conary bootstrap init',
+		'conary bootstrap dry-run (creates the work directory, validates only)',
+		'conary bootstrap cross-tools',
+		'conary bootstrap temp-tools',
+		'conary bootstrap system',
+		'conary bootstrap config',
+		'conary bootstrap tier2',
+		'conary bootstrap guest-profile',
+		'conary bootstrap image',
+		'conary bootstrap run',
+		'conary bootstrap resume',
+		'conary bootstrap seed',
+		'conary bootstrap clean (removes stage trees)',
 		'conary export'
 	],
 
