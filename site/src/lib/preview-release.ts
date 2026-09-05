@@ -1,94 +1,30 @@
 import launchStatus from '../../../docs/roadmaps/launch-status.json';
+import {
+	deriveTesterState,
+	readTesterGuidePin,
+	type TesterGuideStatus,
+	type TesterState
+} from './tester-state';
 
 const version = launchStatus.published_release.version;
 const tag = launchStatus.published_release.tag;
 
 /**
- * Typed tester-guide pin.
- *
- * `docs/guides/agent-assisted-tester-loop.md` is the execution authority for
- * the external tester loop, and its YAML frontmatter is the only part of it
- * the site reads. Two keys are authority:
- *
- * - `status`: exactly `paused` or `active`. Any other value fails the build.
- * - `tester_release`: an exact `vMAJOR.MINOR.PATCH` tag. Required when
- *   `status` is `active`; it must equal `launch-status.json`'s published tag,
- *   and launch-status must itself assign tester authority. A mismatch, a
- *   missing tag, or an active guide beside an unassigned launch-status is a
- *   contradictory intermediate state and fails the build rather than
- *   exposing the loop. Body text is never consulted.
- *
- * `status` is `unknown` only when the guide file is absent; the pin is then
- * unassigned.
+ * The tester guide is loaded through `import.meta.glob` so an absent file is
+ * a value (`status: 'unknown'`) rather than an import error. Only its typed
+ * frontmatter keys are authority; see `tester-state.ts`.
  */
-type TesterGuideStatus = 'paused' | 'active' | 'unknown';
-
 const testerGuideFiles = import.meta.glob('../../../docs/guides/agent-assisted-tester-loop.md', {
 	query: '?raw',
 	import: 'default',
 	eager: true
 }) as Record<string, string>;
 
-function readTesterGuidePin(text: string | undefined): {
-	status: TesterGuideStatus;
-	release: string | undefined;
-} {
-	if (text === undefined) return { status: 'unknown', release: undefined };
-
-	const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-	if (!frontmatter) throw new Error('tester guide: missing YAML frontmatter');
-
-	const statusMatch = frontmatter[1].match(/^status: (paused|active)$/m);
-	if (!statusMatch) throw new Error('tester guide: status must be exactly paused or active');
-	const status = statusMatch[1] as TesterGuideStatus;
-
-	const releaseLine = frontmatter[1].match(/^tester_release: (\S+)$/m);
-	const release = releaseLine?.[1];
-	if (release !== undefined && !/^v\d+\.\d+\.\d+$/.test(release)) {
-		throw new Error(`tester guide: tester_release is not an exact v* tag: ${release}`);
-	}
-
-	if (status === 'active') {
-		if (release === undefined) throw new Error('tester guide: active but names no tester_release');
-		if (release !== tag) {
-			throw new Error(`tester guide: active for ${release}, launch-status publishes ${tag}`);
-		}
-		if (launchStatus.tester_authority.state !== 'assigned') {
-			throw new Error('tester guide: active while launch-status assigns no tester authority');
-		}
-	}
-
-	return { status, release };
-}
-
-const testerGuide = readTesterGuidePin(Object.values(testerGuideFiles)[0]);
-const testerGuideStatus = testerGuide.status;
-const testerGuideActive = testerGuide.status === 'active' && testerGuide.release === tag;
-
-/**
- * External tester state, derived from launch-status plus the guide's typed pin.
- * Assignment and activation are distinct events, so the middle state is
- * explicit rather than hidden inside one boolean:
- *
- * - `unassigned`: launch-status assigns no tester authority.
- * - `assigned_guide_paused`: launch-status assigns the published release, but
- *   the tester guide (the loop's execution authority) is still paused or
- *   absent. Routes name the assigned release and say the loop is not yet
- *   open; no loop invitation, no "runs count".
- * - `assigned_guide_active`: both agree on the same tag; the loop is open.
- *
- * The contradictory combinations (guide active while launch-status is
- * unassigned, or active for a different tag) fail the build in
- * `readTesterGuidePin` and never reach here.
- */
-export type TesterState = 'unassigned' | 'assigned_guide_paused' | 'assigned_guide_active';
-
-const testerState: TesterState =
-	launchStatus.tester_authority.state !== 'assigned'
-		? 'unassigned'
-		: testerGuideActive
-			? 'assigned_guide_active'
-			: 'assigned_guide_paused';
+const launchAssigned = launchStatus.tester_authority.state === 'assigned';
+const testerGuide = readTesterGuidePin(Object.values(testerGuideFiles)[0], tag, launchAssigned);
+const testerGuideStatus: TesterGuideStatus = testerGuide.status;
+const testerState: TesterState = deriveTesterState(launchAssigned, testerGuide, tag);
+export type { TesterState };
 
 const orgUrl = 'https://github.com/FieldmouseWorks';
 const repoUrl = `${orgUrl}/Conary`;

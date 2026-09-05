@@ -10,8 +10,9 @@
 		"build": "vite build && npm run verify:build",
 		"preview": "vite preview",
 		"precheck": "bash ../scripts/sync-brand.sh",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"verify:build": "node scripts/verify-build.mjs"
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json && npm test",
+		"verify:build": "node scripts/verify-build.mjs",
+		"test": "vitest run"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.8",
@@ -21,7 +22,8 @@
 		"svelte": "^5.57.0",
 		"svelte-check": "^4.7.6",
 		"typescript": "^6.0.3",
-		"vite": "^8.2.2"
+		"vite": "^8.2.2",
+		"vitest": "^5.0.0"
 	},
 	"overrides": {
 		"cookie": "0.7.2"
