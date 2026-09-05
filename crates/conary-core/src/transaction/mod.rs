@@ -21,7 +21,9 @@
 
 pub mod package_relations;
 mod recovery;
-pub use recovery::{RecoveryEvidence, RecoverySkipReason, RecoverySkippedArtifact};
+pub use recovery::{
+    RecoveryEvidence, RecoverySkipReason, RecoverySkippedArtifact, host_boot_verity_policy,
+};
 
 use crate::Result;
 use crate::filesystem::CasStore;

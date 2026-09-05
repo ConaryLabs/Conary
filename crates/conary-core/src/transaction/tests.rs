@@ -383,7 +383,12 @@ fn test_boot_selection_recovery_fails_without_valid_artifacts_and_preserves_miss
     let config = TransactionConfig::new(&root);
     let engine = TransactionEngine::new(config).unwrap();
 
-    let err = engine.recover_boot_selection(&conn, |_| {}).unwrap_err();
+    let err = engine
+        .recover_boot_selection(
+            &conn,
+            &crate::generation::verity_policy::VerityPolicy::Verified,
+        )
+        .unwrap_err();
 
     assert!(
         matches!(err, crate::Error::RecoveryScanExhausted { .. }),
