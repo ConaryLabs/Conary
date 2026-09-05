@@ -71,8 +71,14 @@ require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian co
 require_match packaging/deb/debian/copyright '^Files: apps/remi/\*$' 'debian copyright Remi stanza'
 require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright Remi AGPL license'
 require_match packaging/ccs/build.sh 'LICENSE-APACHE' 'ccs bundle Apache license install'
+require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
+require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
 require_match .github/workflows/release-build.yml 'apps/remi" LICENSE' 'remi tarball AGPL text'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
 require_match README.md 'apps/remi/LICENSE' 'README Remi license link'
+
+if grep -rEn --include=rules --include=*.sh --include=*.spec --include=PKGBUILD -- '(^|[[:space:]"/])LICENSE([[:space:]"]|$)' packaging >/dev/null; then
+    fail "packaging still installs a bare LICENSE file: $(grep -rEn --include=rules --include=*.sh --include=*.spec --include=PKGBUILD -- '(^|[[:space:]"/])LICENSE([[:space:]"]|$)' packaging | head -n 1)"
+fi
 
 echo "License authority checks passed."

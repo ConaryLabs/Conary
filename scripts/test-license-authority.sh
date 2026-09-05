@@ -25,6 +25,7 @@ make_fixture() {
     cp packaging/arch/PKGBUILD "$root/packaging/arch/"
     cp packaging/ccs/ccs.toml packaging/ccs/build.sh "$root/packaging/ccs/"
     cp packaging/deb/debian/copyright "$root/packaging/deb/debian/"
+    cp packaging/deb/debian/rules "$root/packaging/deb/debian/"
     cp .github/workflows/release-build.yml "$root/.github/workflows/"
     cp scripts/check-license-authority.sh "$root/scripts/"
     for manifest in apps/*/Cargo.toml crates/*/Cargo.toml; do
@@ -85,6 +86,10 @@ expect_failure "altered AGPL text" "$root"
 make_fixture "$root"
 sed -i '/^Files: apps\/remi\/\*$/,/^$/d' "$root/packaging/deb/debian/copyright"
 expect_failure "missing Remi Debian stanza" "$root"
+
+make_fixture "$root"
+sed -i 's#install -Dpm 0644 LICENSE-MIT debian/conary/usr/share/doc/conary/LICENSE-MIT#install -Dpm 0644 LICENSE debian/conary/usr/share/doc/conary/LICENSE#' "$root/packaging/deb/debian/rules"
+expect_failure "debian rules installing a bare LICENSE" "$root"
 
 make_fixture "$root"
 sed -i 's/^License:        MIT OR Apache-2.0$/License:        MIT/' "$root/packaging/rpm/conary.spec"
