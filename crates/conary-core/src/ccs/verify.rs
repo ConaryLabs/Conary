@@ -454,24 +454,6 @@ pub(crate) fn verify_manifest_signature(
     Ok(())
 }
 
-pub fn print_result(result: &VerifiedCcsArchive) {
-    println!(
-        "[OK] {} v{}",
-        result.package_name(),
-        result.package_version()
-    );
-    println!(
-        "Signature: [VALID]{}",
-        result
-            .signature()
-            .key_id
-            .as_deref()
-            .map(|key_id| format!(" key={key_id}"))
-            .unwrap_or_default()
-    );
-    println!("Content: [VALID] {} files verified", result.files_checked());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

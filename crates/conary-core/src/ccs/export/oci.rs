@@ -162,7 +162,19 @@ struct OciFileEntry {
 }
 
 /// Export CCS packages to OCI image format
-pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy) -> Result<()> {
+/// Facts about a successfully written OCI archive.
+#[derive(Debug, Clone)]
+pub struct OciExportReport {
+    pub output: std::path::PathBuf,
+    pub package_names: Vec<String>,
+    pub layer_size: u64,
+}
+
+pub fn export_oci(
+    packages: &[String],
+    output: &Path,
+    trust_policy: &TrustPolicy,
+) -> Result<OciExportReport> {
     if packages.is_empty() {
         anyhow::bail!("No packages specified for export");
     }
@@ -304,20 +316,11 @@ pub fn export_oci(packages: &[String], output: &Path, trust_policy: &TrustPolicy
     archive.append_dir_all(".", temp_dir.path())?;
     archive.finish()?;
 
-    println!("Exported OCI image: {}", output.display());
-    println!("  Packages: {}", package_names.join(", "));
-    println!("  Layer size: {layer_size} bytes");
-    println!();
-    println!("To load the image:");
-    println!("  podman load < {}", output.display());
-    println!("  # or");
-    println!(
-        "  skopeo copy oci-archive:{} containers-storage:localhost/{}:latest",
-        output.display(),
-        package_names.first().unwrap_or(&"image".to_string())
-    );
-
-    Ok(())
+    Ok(OciExportReport {
+        output: output.to_path_buf(),
+        package_names,
+        layer_size,
+    })
 }
 
 /// Write file entries into a tar archive, creating parent directories as needed
@@ -562,13 +565,16 @@ mod tests {
         let output = temp.path().join("demo.oci.tar");
         let trusted = TrustPolicy::strict(vec![signer.public_key_base64()]);
 
-        export_oci(
+        let report = export_oci(
             &[package_path.to_string_lossy().into_owned()],
             &output,
             &trusted,
         )
         .unwrap();
         assert!(output.exists());
+        assert_eq!(report.output, output);
+        assert_eq!(report.package_names, ["demo"]);
+        assert!(report.layer_size > 0);
 
         let untrusted = crate::ccs::signing::SigningKeyPair::generate();
         let error = export_oci(

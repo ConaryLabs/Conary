@@ -20,5 +20,25 @@ pub fn cmd_ccs_export(
     let trust_policy = TrustPolicy::from_file(Path::new(policy_path))
         .with_context(|| format!("Failed to load CCS trust policy: {policy_path}"))?;
 
-    export(export_format, packages, Path::new(output), &trust_policy)
+    let report = export(export_format, packages, Path::new(output), &trust_policy)?;
+    crate::ui::row(
+        crate::ui::Status::Ok,
+        &[&format!("Exported OCI image: {}", report.output.display())],
+    );
+    println!("  Packages: {}", report.package_names.join(", "));
+    println!("  Layer size: {} bytes", report.layer_size);
+    println!();
+    println!("To load the image:");
+    println!("  podman load < {}", report.output.display());
+    println!("  # or");
+    println!(
+        "  skopeo copy oci-archive:{} containers-storage:localhost/{}:latest",
+        report.output.display(),
+        report
+            .package_names
+            .first()
+            .map(String::as_str)
+            .unwrap_or("image")
+    );
+    Ok(())
 }

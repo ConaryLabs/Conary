@@ -5,6 +5,8 @@
 //! Commands for building CCS packages from manifests,
 //! including native package export.
 
+mod render;
+
 use anyhow::{Context, Result};
 use conary_core::ccs::{CcsBuilder, CcsInstallPrefix, CcsManifest, builder, native_export};
 use std::path::Path;
@@ -137,7 +139,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
             .build()
             .context("Failed to build package")?;
 
-        builder::print_build_summary(&result);
+        render::print_build_summary(&result);
         Some(result)
     } else {
         None
@@ -233,7 +235,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         output_path.display(),
                         gen_result.size
                     );
-                    gen_result.loss_report.print_summary("DEB");
+                    render::print_loss_report(&gen_result.loss_report, "DEB");
                 }
                 "rpm" => {
                     println!();
@@ -245,7 +247,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         output_path.display(),
                         gen_result.size
                     );
-                    gen_result.loss_report.print_summary("RPM");
+                    render::print_loss_report(&gen_result.loss_report, "RPM");
                 }
                 "arch" => {
                     println!();
@@ -257,7 +259,7 @@ pub fn cmd_ccs_build(options: CcsBuildOptions) -> Result<()> {
                         output_path.display(),
                         gen_result.size
                     );
-                    gen_result.loss_report.print_summary("Arch");
+                    render::print_loss_report(&gen_result.loss_report, "Arch");
                 }
                 _ => {}
             }
