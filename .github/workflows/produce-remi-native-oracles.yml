@@ -593,7 +593,7 @@ jobs:
               "- package_rows: `\(.package_oracle.artifact.counts.packages)`\n" +
               "- survey_failures: `\(.survey.total_failures)`\n" +
               "- resolution_workers: `\(.resolution_implementation.workers)`\n" +
-              "- worker_load_ms: `\(.resolution_implementation.worker_load_milliseconds | join(\",\"))`\n" +
+              "- worker_load_ms: `\(.resolution_implementation.worker_load_milliseconds | map(tostring) | join(","))`\n" +
               "- implementation: `\(.package_oracle.implementation.name) \(.package_oracle.implementation.version)`"
             ' "$survey_manifest"
             echo "- survey_artifact_digest: \`$SURVEY_ARTIFACT_DIGEST\`"
