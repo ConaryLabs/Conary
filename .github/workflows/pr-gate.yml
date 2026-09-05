@@ -18,9 +18,42 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  change-scope:
+    name: change-scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      native_matrices: ${{ steps.scope.outputs.native_matrices }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify changed paths
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != pull_request ]]; then
+            echo "native_matrices=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "pull request base and head must be full lowercase SHAs" >&2
+            exit 1
+          }
+          merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
+          git diff --name-only "$merge_base" "$HEAD_SHA" |
+            bash scripts/pr-gate-scope.sh | tee -a "$GITHUB_OUTPUT"
+
   native-matrix-artifacts:
     name: native-matrix-artifacts
     runs-on: ubuntu-latest
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.native_matrices == 'true' }}
     timeout-minutes: 30
     env:
       CARGO_INCREMENTAL: 0
@@ -250,6 +283,8 @@ jobs:
         run: bash scripts/check-github-action-runtimes.sh
       - name: Test GitHub Actions runtime policy checker
         run: bash scripts/test-github-action-runtimes.sh
+      - name: Test pull-request change-scope classification
+        run: bash scripts/test-pr-gate-scope.sh
 
   release-matrix-policy:
     name: release-matrix-policy
@@ -463,6 +498,8 @@ jobs:
   alpm-parity-producer:
     name: alpm-parity-producer
     runs-on: ubuntu-latest
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.native_matrices == 'true' }}
     timeout-minutes: 30
     container:
       image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
@@ -485,6 +522,8 @@ jobs:
   rpm-parity-producer:
     name: rpm-parity-producer
     runs-on: ubuntu-latest
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.native_matrices == 'true' }}
     timeout-minutes: 60
     container:
       image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb
@@ -505,6 +544,8 @@ jobs:
   debian-parity-producer:
     name: debian-parity-producer
     runs-on: ubuntu-latest
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.native_matrices == 'true' }}
     timeout-minutes: 30
     container:
       image: docker.io/library/ubuntu:26.04@sha256:678c6550cc43645e08669028bc177f50be4e7c5b8cca677067b1914d4afc7a03
@@ -711,13 +752,18 @@ jobs:
   native-cross-source-lifecycle-gate:
     name: native-cross-source-lifecycle
     if: ${{ always() }}
-    needs: native-cross-source-lifecycle
+    needs: [change-scope, native-cross-source-lifecycle]
     runs-on: ubuntu-latest
     steps:
       - name: Require every distro lifecycle job
         env:
           MATRIX_RESULT: ${{ needs.native-cross-source-lifecycle.result }}
+          NATIVE_MATRICES: ${{ needs.change-scope.outputs.native_matrices }}
         run: |
+          if [[ "$MATRIX_RESULT" == "skipped" && "$NATIVE_MATRICES" == "false" ]]; then
+            echo "native matrices intentionally skipped: no changed path can affect the conary runtime"
+            exit 0
+          fi
           if [[ "$MATRIX_RESULT" != "success" ]]; then
             echo "native cross-source lifecycle matrix result: $MATRIX_RESULT" >&2
             exit 1
@@ -776,13 +822,18 @@ jobs:
   native-daily-driver-corpus-gate:
     name: native-daily-driver-corpus
     if: ${{ always() }}
-    needs: native-daily-driver-corpus
+    needs: [change-scope, native-daily-driver-corpus]
     runs-on: ubuntu-latest
     steps:
       - name: Require every daily-driver corpus job
         env:
           MATRIX_RESULT: ${{ needs.native-daily-driver-corpus.result }}
+          NATIVE_MATRICES: ${{ needs.change-scope.outputs.native_matrices }}
         run: |
+          if [[ "$MATRIX_RESULT" == "skipped" && "$NATIVE_MATRICES" == "false" ]]; then
+            echo "native matrices intentionally skipped: no changed path can affect the conary runtime"
+            exit 0
+          fi
           if [[ "$MATRIX_RESULT" != "success" ]]; then
             echo "native daily-driver corpus matrix result: $MATRIX_RESULT" >&2
             exit 1
@@ -851,13 +902,18 @@ jobs:
   native-pm-parity-gate:
     name: native-pm-parity
     if: ${{ always() }}
-    needs: native-pm-parity
+    needs: [change-scope, native-pm-parity]
     runs-on: ubuntu-latest
     steps:
       - name: Require every full native parity job
         env:
           MATRIX_RESULT: ${{ needs.native-pm-parity.result }}
+          NATIVE_MATRICES: ${{ needs.change-scope.outputs.native_matrices }}
         run: |
+          if [[ "$MATRIX_RESULT" == "skipped" && "$NATIVE_MATRICES" == "false" ]]; then
+            echo "native matrices intentionally skipped: no changed path can affect the conary runtime"
+            exit 0
+          fi
           if [[ "$MATRIX_RESULT" != "success" ]]; then
             echo "native package-manager parity matrix result: $MATRIX_RESULT" >&2
             exit 1
