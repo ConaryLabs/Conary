@@ -230,7 +230,7 @@ fn build_generation_from_runtime_inputs(
         }
     }
 
-    // Step 1: Ensure generations base directory exists
+    // Ensure generations base directory exists
     std::fs::create_dir_all(generations_root).map_err(|e| {
         crate::error::Error::IoError(format!(
             "Failed to create generations directory {}: {e}",
@@ -238,7 +238,7 @@ fn build_generation_from_runtime_inputs(
         ))
     })?;
 
-    // Step 2: Reserve the generation number and create the directory.
+    // Reserve the generation number and create the directory.
     //
     // TOCTOU guard: hold an exclusive advisory lock on the generations
     // directory for the duration of number-allocation + directory-creation.
@@ -291,7 +291,7 @@ fn build_generation_from_runtime_inputs(
     })?;
     let mut pending_guard = PendingGenerationGuard::new(gen_dir.clone());
 
-    // Step 3: Validate the exact runtime input selected by the caller, then
+    // Validate the exact runtime input selected by the caller, then
     // prepare boot assets before freezing the immutable image. Boot
     // preparation may derive exact kernel-module metadata that must become
     // generation authority rather than remain in an ephemeral sysroot.
@@ -305,7 +305,7 @@ fn build_generation_from_runtime_inputs(
     )?;
     let security_capability_xattr_count = runtime_inputs.security_capability_xattr_count();
 
-    // Step 4: Build the EROFS image from the finalized immutable manifest.
+    // Build the EROFS image from the finalized immutable manifest.
     // This must succeed before we commit state to the database.
     validate_runtime_generation_root_is_self_contained(&runtime_inputs.generation)?;
     let cas_objects = deduplicate_sort_cas_objects(cas_objects_from_manifests(
@@ -317,7 +317,7 @@ fn build_generation_from_runtime_inputs(
     let result = build_erofs_image_from_root_manifest(&runtime_inputs.generation, &gen_dir)?;
     runtime_inputs.state.write_to(&gen_dir)?;
 
-    // Step 5: Stage the already-prepared boot assets and write the export
+    // Stage the already-prepared boot assets and write the export
     // artifact contract before committing metadata. Export must not scrape
     // live /boot later.
     let kernel_version = boot_asset_sources.kernel_version.clone();
@@ -339,7 +339,7 @@ fn build_generation_from_runtime_inputs(
         carrier_capabilities,
     })?;
 
-    // Step 6: Create system state snapshot at the reserved number -- only
+    // Create system state snapshot at the reserved number -- only
     // after successful image build so we never leave orphaned state records
     // on build failure. Using create_snapshot_at() ensures the DB state
     // number matches the directory number we already created.
@@ -355,7 +355,7 @@ fn build_generation_from_runtime_inputs(
     let applied_high_water = GenerationPublication::applied_high_water_changeset_id(conn)?;
     GenerationActivationIntent::project_through(conn, gen_number, applied_high_water)?;
 
-    // Step 7: Write generation metadata
+    // Write generation metadata
     #[allow(clippy::cast_possible_wrap)]
     let metadata = GenerationMetadata {
         generation: gen_number,

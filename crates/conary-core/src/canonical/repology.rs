@@ -11,11 +11,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::error::{Error, Result};
-
-// ---------------------------------------------------------------------------
 // Types
-// ---------------------------------------------------------------------------
-
 /// A single package entry from the Repology API response.
 ///
 /// Repology returns an array of these for each project, one per repository.
@@ -58,11 +54,7 @@ impl From<RepologyPackage> for RepologyImplementation {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
 // Parsing functions (pure, no network)
-// ---------------------------------------------------------------------------
-
 /// Parse a Repology `/api/v1/project/{name}` response (JSON array) into a
 /// `RepologyProject`.
 pub fn parse_project_response(name: &str, json: &str) -> Result<RepologyProject> {
@@ -124,11 +116,7 @@ pub fn repo_to_profile(repo: &str) -> Option<String> {
         .find(|profile| profile.repology_repo() == repo)
         .map(|profile| profile.id().to_string())
 }
-
-// ---------------------------------------------------------------------------
 // Async client
-// ---------------------------------------------------------------------------
-
 /// Async client for the Repology REST API.
 ///
 /// Note: Repology enforces strict rate limits (~1 request/second). Callers
@@ -199,11 +187,7 @@ impl RepologyClient {
         parse_projects_batch(&body)
     }
 }
-
-// ---------------------------------------------------------------------------
 // Cache persistence
-// ---------------------------------------------------------------------------
-
 /// Write a batch of Repology projects to the `repology_cache` table.
 /// Maps Repology repo IDs to Conary distro names, skipping unrecognised repos.
 /// Returns the number of cache entries written.
@@ -236,11 +220,7 @@ pub fn cache_projects_to_db(
     tx.commit()?;
     Ok(count)
 }
-
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -100,10 +100,7 @@ mod tests {
 
         fs
     }
-
-    // ---------------------------------------------------------------
     // Bloom filter (xattr name filter) in EROFS superblock
-    // ---------------------------------------------------------------
     #[test]
     fn test_bloom_filter_feature_flag() {
         let fs = ValidatedFileSystem::new(build_cas_only_tree()).unwrap();

@@ -67,11 +67,7 @@ impl DownloadOptions {
         })
     }
 }
-
-// =============================================================================
 // Core download implementation
-// =============================================================================
-
 /// Internal unified download function
 ///
 /// All public download functions delegate to this implementation.
@@ -273,11 +269,7 @@ async fn fetch_and_verify_arch_signature(
         Err(error) => Err(error),
     }
 }
-
-// =============================================================================
 // Public API (thin wrappers around download_package_inner)
-// =============================================================================
-
 /// Download a package through its required native trust contract.
 pub async fn download_package_verified(
     repo_pkg: &RepositoryPackage,
@@ -504,11 +496,7 @@ fn verify_file_size(path: &Path, expected_size: u64) -> Result<()> {
 
     Ok(())
 }
-
-// =============================================================================
 // Progress-aware download functions
-// =============================================================================
-
 /// Create a styled progress bar for package downloads
 fn create_progress_bar(size: u64, name: &str) -> ProgressBar {
     let pb = ProgressBar::new(size);

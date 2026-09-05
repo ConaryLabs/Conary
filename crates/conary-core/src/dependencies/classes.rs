@@ -394,11 +394,7 @@ impl fmt::Display for LanguageDep {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ====================
     // DependencyClass tests
-    // ====================
-
     #[test]
     fn test_dependency_class_prefix() {
         assert_eq!(DependencyClass::Package.prefix(), "");
@@ -436,11 +432,7 @@ mod tests {
         assert!(!DependencyClass::Soname.is_language());
         assert!(!DependencyClass::File.is_language());
     }
-
-    // ====================
     // LanguageDep parsing
-    // ====================
-
     #[test]
     fn test_parse_python_dep_simple() {
         let dep = LanguageDep::parse("python(requests)").unwrap();
@@ -501,11 +493,7 @@ mod tests {
     fn test_parse_invalid_unmatched_parens() {
         assert!(LanguageDep::parse("python(requests").is_none());
     }
-
-    // ====================
     // LanguageDep formatting
-    // ====================
-
     #[test]
     fn test_to_dep_string_simple() {
         let dep = LanguageDep::new(DependencyClass::Python, "requests");
@@ -524,11 +512,7 @@ mod tests {
         let parsed = LanguageDep::parse(original).unwrap();
         assert_eq!(parsed.to_dep_string(), original);
     }
-
-    // ====================
     // Version satisfaction
-    // ====================
-
     #[test]
     fn test_satisfied_no_constraint() {
         let dep = LanguageDep::new(DependencyClass::Python, "requests");

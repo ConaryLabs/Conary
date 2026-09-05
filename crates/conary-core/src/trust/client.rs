@@ -167,7 +167,7 @@ impl TufClient {
             stored_targets,
         } = state;
 
-        // Step 1: Check for root rotation BEFORE any other metadata verification
+        // Check for root rotation BEFORE any other metadata verification
         // (TUF spec 5.3). Probe for {version+1}.root.json and walk the chain
         // until no newer root is available. This ensures all subsequent metadata
         // is verified against the latest root keys.
@@ -176,7 +176,7 @@ impl TufClient {
             self.verify_signed_metadata_not_expired(Role::Root, &current_root)?;
         }
 
-        // Step 2: Fetch and verify timestamp using (possibly updated) root keys
+        // Fetch and verify timestamp using (possibly updated) root keys
         let timestamp_bytes = self.fetch_metadata("timestamp.json").await?;
         let signed_timestamp: Signed<TimestampMetadata> = serde_json::from_slice(&timestamp_bytes)?;
         verify_type_field(&signed_timestamp.signed.type_field, "timestamp")?;
@@ -262,7 +262,7 @@ impl TufClient {
             }
         }
 
-        // Step 3: Check if snapshot needs updating
+        // Check if snapshot needs updating
         let snapshot_ref = signed_timestamp
             .signed
             .meta
@@ -300,7 +300,7 @@ impl TufClient {
             signed
         };
 
-        // Step 4: Check if targets needs updating
+        // Check if targets needs updating
         let targets_ref = signed_snapshot.signed.meta.get("targets.json");
 
         let targets_changed =

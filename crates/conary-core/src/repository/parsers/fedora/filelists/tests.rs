@@ -246,11 +246,7 @@ fn a_file_dependency_outside_the_primary_filter_resolves_after_filelists_ingest(
     assert!(installed.contains(&"crypto-policies"));
     assert!(installed.contains(&"systemd"));
 }
-
-// ---------------------------------------------------------------------------
 // Join between the two signed documents
-// ---------------------------------------------------------------------------
-
 #[test]
 fn filelists_record_for_an_unpublished_package_is_refused() {
     let mut packages = parse_primary();
@@ -341,11 +337,7 @@ fn filelists_package_without_a_version_is_refused() {
 
     assert!(error.to_string().contains("carries no version"), "{error}");
 }
-
-// ---------------------------------------------------------------------------
 // The `<file>` grammar is one owner shared with primary.xml
-// ---------------------------------------------------------------------------
-
 /// Everything primary.xml's file grammar admits, filelists.xml admits, and
 /// everything one refuses the other refuses. The documents are written by one
 /// generator function, so one parser owner has to admit exactly one language.
@@ -452,11 +444,7 @@ fn filelists_file_paths(records: &str) -> Result<Vec<String>> {
         .map(ToString::to_string)
         .collect())
 }
-
-// ---------------------------------------------------------------------------
 // Decoding one verified document
-// ---------------------------------------------------------------------------
-
 fn gzip(content: &str) -> Vec<u8> {
     use std::io::Write;
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -527,11 +515,7 @@ fn a_document_shorter_than_the_signed_decompressed_length_is_refused() {
         "{error}"
     );
 }
-
-// ---------------------------------------------------------------------------
 // Failing closed when the repository publishes no filelists record
-// ---------------------------------------------------------------------------
-
 #[test]
 fn a_path_requirement_without_a_filelists_record_refuses_the_repository() {
     let packages = parse_primary();

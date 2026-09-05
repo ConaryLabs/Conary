@@ -14,11 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-
-// ---------------------------------------------------------------------------
 // Request scope
-// ---------------------------------------------------------------------------
-
 /// How a user explicitly constrained the source of a request.
 ///
 /// This applies only to root-level requests (i.e. what the user typed on the
@@ -35,11 +31,7 @@ pub enum RequestScope {
     /// The user selected one exact persisted native source identity.
     SourceIdentity(String),
 }
-
-// ---------------------------------------------------------------------------
 // Dependency mixing policy
-// ---------------------------------------------------------------------------
-
 /// How aggressively dependencies may mix exact source identities.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -89,11 +81,7 @@ impl FromStr for DependencyMixingPolicy {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
 // Top-level resolution policy
-// ---------------------------------------------------------------------------
-
 /// The complete policy governing how the resolver selects candidates.
 ///
 /// A `ResolutionPolicy` is assembled from the user's command-line flags, the
@@ -219,7 +207,7 @@ impl ResolutionPolicy {
         source_identity: Option<&str>,
         is_root: bool,
     ) -> bool {
-        // Step 1: Check request scope (root requests only).
+        // Check request scope (root requests only).
         if is_root {
             match &self.request_scope {
                 RequestScope::Any => {}
@@ -236,7 +224,7 @@ impl ResolutionPolicy {
             }
         }
 
-        // Step 2: Enforce one exact transaction source under strict policy.
+        // Enforce one exact transaction source under strict policy.
         //
         // An explicit root scope is already checked above. An unscoped root
         // may establish an identity later, but an unidentified transitive

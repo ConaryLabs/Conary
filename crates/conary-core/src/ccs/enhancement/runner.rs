@@ -235,11 +235,7 @@ impl<'a> EnhancementRunner<'a> {
         ConvertedPackageInfo::count_by_status(self.conn)
     }
 }
-
-// ============================================================================
 // Lazy Enhancement Scheduling
-// ============================================================================
-
 /// Mode for handling enhancement during package installation
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum EnhancementMode {

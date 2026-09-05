@@ -18,8 +18,6 @@ use base64::alphabet;
 use base64::engine::DecodePaddingMode;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use std::collections::BTreeMap;
-
-// ---------------------------------------------------------------------------
 // Base64 decoder matching libarchive's exact writer grammar.
 //
 // libarchive commit f5509ae993ac30417f81acc5118f232ae3f2d27d,
@@ -32,8 +30,6 @@ use std::collections::BTreeMap;
 // We use the base64 crate's GeneralPurpose with the standard alphabet,
 // RequireNone decode padding (rejects any '=' in input), and
 // decode_allow_trailing_bits(false) (the default for new()).
-// ---------------------------------------------------------------------------
-
 /// Base64 engine that matches libarchive's writer: standard alphabet, no
 /// padding, no trailing '=', non-zero trailing bits rejected.
 const UNPADDED_BASE64: GeneralPurpose = GeneralPurpose::new(
@@ -54,11 +50,7 @@ pub(super) fn decode_libarchive_base64(value: &[u8], path: &str) -> Result<Vec<u
         ))
     })
 }
-
-// ---------------------------------------------------------------------------
 // Per-family xattr tracking and projection
-// ---------------------------------------------------------------------------
-
 /// The three PAX families that can carry xattr values for the same name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum PaxXattrFamily {
@@ -124,11 +116,7 @@ impl PaxXattrRecords {
         Ok(xattrs)
     }
 }
-
-// ---------------------------------------------------------------------------
 // Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
