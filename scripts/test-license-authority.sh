@@ -139,6 +139,30 @@ PY
 expect_failure "release-build deb proof present only as a YAML comment" "$root"
 
 make_fixture "$root"
+sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh rpm \(.*\)$|\1run: echo "bash scripts/check-release-license-contents.sh rpm \2"|' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build rpm proof only echoed, not executed" "$root"
+
+make_fixture "$root"
+python3 - "$root/.github/workflows/release-build.yml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+needle = "        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst\n"
+assert needle in text
+# Execute the arch proof, but from the deb job instead of its owner.
+text = text.replace(needle, "        run: 'true'\n", 1)
+deb = "        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb\n"
+assert deb in text
+text = text.replace(deb, deb + "      - name: Misplaced arch proof\n        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst\n", 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+expect_failure "release-build arch proof executed by the wrong job" "$root"
+
+make_fixture "$root"
+sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh ccs |\1continue-on-error: true\n\1run: bash scripts/check-release-license-contents.sh ccs |' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build ccs proof allowed to fail" "$root"
+
+make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"
 expect_failure "PKGBUILD missing the Apache install" "$root"
 

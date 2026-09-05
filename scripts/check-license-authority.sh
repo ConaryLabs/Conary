@@ -137,20 +137,45 @@ for job_id, job in (workflow.get("jobs") or {}).items():
         if not isinstance(run, str):
             continue
         lines = [line for line in run.splitlines() if not line.lstrip().startswith("#")]
-        live.append((job_id, "\n".join(lines)))
-required = {
-    "remi tarball AGPL text": 'apps/remi" LICENSE',
-    "suite release AGPL asset": "copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi",
-    "suite release license asset proof": "check-release-license-contents.sh suite suite-packages",
+        live.append((job_id, step, "\n".join(lines)))
+import re
+owners = {
+    "rpm": ["build-rpm"],
+    "deb": ["build-deb"],
+    "arch": ["build-arch"],
+    "ccs": ["build-ccs"],
+    "remi-tar": ["build-remi"],
+    "client-tar": ["build-conaryd", "build-conary-test"],
+    "suite": ["bundle-suite"],
 }
-for kind in ["rpm", "deb", "arch", "ccs", "remi-tar", "client-tar"]:
-    required[f"packaged-contents proof for {kind}"] = f"check-release-license-contents.sh {kind} "
-missing = [name for name, needle in required.items() if not any(needle in text for _, text in live)]
+def executes(job_id, kind):
+    """A live step in job_id whose run script executes the proof as a command."""
+    pattern = re.compile(r"^\s*bash scripts/check-release-license-contents\.sh " + re.escape(kind) + r" ")
+    for job, step, text in live:
+        if job != job_id:
+            continue
+        if step.get("continue-on-error") is True:
+            continue
+        condition = step.get("if")
+        if condition is not None and str(condition).strip() in ("false", "${{ false }}"):
+            continue
+        if any(pattern.match(line) for line in text.splitlines()):
+            return True
+    return False
+missing = []
+for kind, jobs in owners.items():
+    for job_id in jobs:
+        if not executes(job_id, kind):
+            missing.append(f"{kind} proof executed by job {job_id}")
+extras = {
+    "remi tarball AGPL text in build-remi": ("build-remi", 'apps/remi" LICENSE'),
+    "suite AGPL asset copied in bundle-suite": ("bundle-suite", "copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi"),
+}
+for name, (job_id, needle) in extras.items():
+    if not any(job == job_id and needle in text for job, _, text in live):
+        missing.append(name)
 if missing:
     sys.exit("missing live release proof: " + ", ".join(missing))
-client_tar_jobs = {job for job, text in live if "check-release-license-contents.sh client-tar " in text}
-if not {"build-conaryd", "build-conary-test"} <= client_tar_jobs:
-    sys.exit("client-tar proofs must run in build-conaryd and build-conary-test, found: " + ", ".join(sorted(client_tar_jobs)))
 PY
 require_match scripts/remi-candidate-artifact.sh '-C "\$license_dir" LICENSE' 'candidate bundle AGPL text'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
