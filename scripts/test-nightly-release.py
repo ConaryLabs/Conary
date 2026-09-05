@@ -68,6 +68,10 @@ class NightlyTests(unittest.TestCase):
                 nightly.release_for_tag(API(status=status), TAG)
             self.assertEqual(caught.exception.record["api_status"], status)
 
+    def test_draft_is_found_in_authenticated_listing(self):
+        draft = {**RELEASE, "draft": True, "immutable": False}
+        self.assertEqual(nightly.release_for_tag(API(status=404, rows={"releases": [draft]}), TAG), draft)
+
     def test_published_release_identity(self):
         for field, value in (("draft", True), ("immutable", False), ("prerelease", False)):
             with self.subTest(field=field), self.assertRaises(nightly.Failure):
@@ -124,6 +128,17 @@ class NightlyTests(unittest.TestCase):
                                datetime(2026, 9, 20, tzinfo=timezone.utc))
             self.assertEqual(caught.exception.record, {"schema_version": 1,
                              "outcome": "retention_delete_failed", "release_id": 42, "api_status": status})
+
+    def test_retention_snapshots_all_pages_before_deletion(self):
+        api = API(status=204)
+        def pages(path):
+            yield RELEASE
+            self.assertEqual(api.calls, [], "deletion must not shift unread API pages")
+            yield {**RELEASE, "id": 43}
+        api.pages = pages
+        with patch.object(nightly, "report"):
+            nightly.retain(api, datetime(2026, 9, 20, tzinfo=timezone.utc))
+        self.assertEqual(api.calls, [("DELETE", "releases/42"), ("DELETE", "releases/43")])
 
 
 if __name__ == "__main__":

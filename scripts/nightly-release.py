@@ -87,8 +87,14 @@ class GitHub:
 def release_for_tag(api, tag):
     status, release = api.request("GET", "releases/tags/" + urllib.parse.quote(tag, safe=""))
     if status == 404:
-        return None
-    if status != 200:
+        # Authenticated listings include drafts, even when lookup by tag does not.
+        matches = [row for row in api.pages("releases") if row.get("tag_name") == tag]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise Failure("ambiguous_release", tag_name=tag)
+        release = matches[0]
+    elif status != 200:
         raise Failure("api_read_failed", tag_name=tag, api_status=status)
     if (release.get("tag_name") != tag or type(release.get("id")) is not int
             or type(release.get("draft")) is not bool):
@@ -169,7 +175,9 @@ def resolve(api, candidate_tag, commit):
 
 def retain(api, now):
     cutoff = now - timedelta(days=14)
-    for release in api.pages("releases"):
+    # Snapshot before deleting: mutation would otherwise shift subsequent pages.
+    releases = list(api.pages("releases"))
+    for release in releases:
         tag = release.get("tag_name", "")
         # Discovery narrows candidates; matrix grammar establishes authority.
         if "-nightly." not in tag:
