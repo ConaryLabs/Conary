@@ -100,3 +100,7 @@ web/static/apple-touch-icon.png
 
 # Delegate work reports stay local
 /REPORT.md
+
+# Protected workflows check out their own definition here (sparse .github/actions)
+# before verifying the candidate checkout; it is never part of the candidate tree.
+/workflow-authority/
