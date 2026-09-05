@@ -68,7 +68,23 @@ require_live_line() {
 }
 require_match Cargo.toml '^license = "MIT OR Apache-2\.0"$' 'workspace license'
 require_match apps/remi/Cargo.toml '^license = "AGPL-3\.0-or-later"$' 'remi license override'
+# Metadata fields must be assigned exactly once so a later override cannot
+# change the effective value; the PKGBUILD value is also evaluated as makepkg
+# would see it.
+require_unique_line() {
+    local file="$1" pattern="$2" description="$3" count
+    count="$(grep -cE -- "$pattern" "$file" || true)"
+    [[ "$count" -eq 1 ]] || fail "$description must be assigned exactly once in $file (found $count)"
+}
+require_unique_line packaging/rpm/conary.spec '^License:' 'rpm License field'
 require_match packaging/rpm/conary.spec '^License:[[:space:]]+MIT OR Apache-2\.0$' 'rpm License field'
+require_unique_line packaging/arch/PKGBUILD '^[[:space:]]*license=' 'PKGBUILD license array'
+effective_pkgbuild_license="$(bash -c 'set -eu; source "$1"; printf "%s\n" "${license[@]}"' _ packaging/arch/PKGBUILD 2>/dev/null | paste -sd ' ')"
+[[ "$effective_pkgbuild_license" == "MIT Apache-2.0" ]] ||
+    fail "PKGBUILD evaluates license to '${effective_pkgbuild_license}', expected 'MIT Apache-2.0'"
+require_unique_line packaging/ccs/ccs.toml '^license[[:space:]]*=' 'ccs manifest license'
+require_unique_line Cargo.toml '^license[[:space:]]*=' 'workspace license'
+require_unique_line apps/remi/Cargo.toml '^license[[:space:]]*=' 'remi license'
 require_live_line packaging/rpm/conary.spec '%license LICENSE-MIT LICENSE-APACHE$' 'rpm %license files'
 require_match packaging/arch/PKGBUILD "^license=\\('MIT' 'Apache-2\\.0'\\)$" 'PKGBUILD license array'
 require_match packaging/ccs/ccs.toml '^license = "MIT OR Apache-2\.0"$' 'ccs manifest license'

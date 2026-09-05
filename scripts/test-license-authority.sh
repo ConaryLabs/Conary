@@ -130,6 +130,18 @@ sed -i '/install -Dpm 0644 LICENSE-APACHE %{buildroot}/d' "$root/packaging/rpm/c
 expect_failure "rpm spec missing the Apache install" "$root"
 
 make_fixture "$root"
+printf "license=('GPL')\n" >> "$root/packaging/arch/PKGBUILD"
+expect_failure "PKGBUILD license overridden by a later assignment" "$root"
+
+make_fixture "$root"
+printf 'License:        GPL-3.0-or-later\n' >> "$root/packaging/rpm/conary.spec"
+expect_failure "rpm spec with a second License field" "$root"
+
+make_fixture "$root"
+printf '\n[package]\nlicense = "GPL-3.0-or-later"\n' >> "$root/packaging/ccs/ccs.toml"
+expect_failure "ccs manifest with a second license key" "$root"
+
+make_fixture "$root"
 sed -i 's/^License:        MIT OR Apache-2.0$/License:        MIT/' "$root/packaging/rpm/conary.spec"
 expect_failure "rpm License drift" "$root"
 
