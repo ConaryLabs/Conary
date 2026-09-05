@@ -238,7 +238,14 @@ impl SubpackageRelationship {
                 .filter(|r| r.subpackage_name != package_name)
                 .collect();
 
+            let base_installed = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM troves WHERE name = ?1)",
+                [&rel.base_package],
+                |row| row.get(0),
+            )?;
+
             return Ok(RelatedPackages::Subpackage {
+                base_installed,
                 base_package: rel.base_package,
                 component_type: rel.component_type,
                 siblings,
@@ -265,6 +272,8 @@ pub enum RelatedPackages {
     },
     /// This is a subpackage
     Subpackage {
+        /// Whether the base package is present in the installed database.
+        base_installed: bool,
         base_package: String,
         component_type: String,
         siblings: Vec<SubpackageRelationship>,
@@ -297,6 +306,7 @@ impl RelatedPackages {
                 base_package,
                 component_type,
                 siblings,
+                ..
             } => {
                 let mut msg = format!(
                     "This is the {} component of '{}'",
@@ -310,57 +320,6 @@ impl RelatedPackages {
                 Some(msg)
             }
             Self::None => None,
-        }
-    }
-}
-
-/// Display user guidance about related packages after installation
-///
-/// This function checks for related packages and prints helpful guidance.
-/// Call this after a package has been successfully installed.
-pub fn show_subpackage_guidance(conn: &Connection, package_name: &str) {
-    match SubpackageRelationship::get_related_packages(conn, package_name) {
-        Ok(related) => {
-            if let Some(summary) = related.summary() {
-                println!();
-                println!("Hint: {}", summary);
-                match &related {
-                    RelatedPackages::BasePackage { subpackages } => {
-                        // Show install commands for subpackages
-                        for subpkg in subpackages.iter().take(3) {
-                            println!(
-                                "  Install {}: conary install {}",
-                                subpkg.component_type, subpkg.subpackage_name
-                            );
-                        }
-                        if subpackages.len() > 3 {
-                            println!("  ... and {} more", subpackages.len() - 3);
-                        }
-                    }
-                    RelatedPackages::Subpackage { base_package, .. } => {
-                        // Check if base is installed
-                        let base_installed: bool = conn
-                            .query_row(
-                                "SELECT EXISTS(SELECT 1 FROM troves WHERE name = ?1)",
-                                [base_package],
-                                |row| row.get(0),
-                            )
-                            .unwrap_or(false);
-
-                        if !base_installed {
-                            println!(
-                                "  Note: Base package '{}' should be installed for full functionality",
-                                base_package
-                            );
-                        }
-                    }
-                    RelatedPackages::None => {}
-                }
-            }
-        }
-        Err(e) => {
-            // Non-fatal - just log and continue
-            tracing::debug!("Could not check related packages: {}", e);
         }
     }
 }
@@ -506,7 +465,9 @@ mod tests {
                 base_package,
                 component_type,
                 siblings,
+                base_installed,
             } => {
+                assert!(!base_installed);
                 assert_eq!(base_package, "nginx");
                 assert_eq!(component_type, "devel");
                 assert_eq!(siblings.len(), 1);
@@ -514,6 +475,25 @@ mod tests {
             }
             _ => panic!("Expected Subpackage"),
         }
+
+        let mut base = crate::db::models::Trove::new(
+            "nginx".into(),
+            "1.0".into(),
+            crate::db::models::TroveType::Package,
+            crate::repository::versioning::VersionScheme::Rpm,
+        );
+        base.insert(&conn).unwrap();
+        assert!(matches!(
+            SubpackageRelationship::get_related_packages(&conn, "nginx-devel").unwrap(),
+            RelatedPackages::Subpackage {
+                base_installed: true,
+                ..
+            }
+        ));
+        // A broken installed-state query must not become a false missing-base hint.
+        conn.execute_batch("ALTER TABLE troves RENAME TO unavailable_troves")
+            .unwrap();
+        assert!(SubpackageRelationship::get_related_packages(&conn, "nginx-devel").is_err());
     }
 
     #[test]

@@ -134,7 +134,8 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
             keep_logs: opts.keep_logs,
             shell_on_failure: opts.shell_on_failure,
         };
-        let executor = DerivationExecutor::new(cas, cas_dir.clone(), executor_config);
+        let executor = DerivationExecutor::new(cas, cas_dir.clone(), executor_config)
+            .with_debug_shell_reporter(render_debug_shell_event);
 
         // 7. Create pipeline
         let pipeline_config = PipelineConfig {
@@ -295,6 +296,41 @@ pub async fn cmd_bootstrap_run(opts: BootstrapRunOptions<'_>) -> Result<()> {
         Err(error) => {
             finish_bootstrap_run_failure(&mut record, &error)?;
             Err(error)
+        }
+    }
+}
+
+/// Render while the executor still retains the failed build's directories.
+fn render_debug_shell_event(event: conary_core::derivation::executor::DebugShellEvent<'_>) {
+    use crate::ui::{Status, row_line};
+    use conary_core::derivation::executor::DebugShellEvent;
+
+    match event {
+        DebugShellEvent::BuildFailed {
+            package,
+            version,
+            log_path,
+            sysroot,
+            destdir,
+        } => {
+            eprintln!(
+                "{}",
+                row_line(Status::Fail, &[&format!("{package}-{version}")])
+            );
+            if let Some(path) = log_path {
+                eprintln!("  Build log: {}", path.display());
+            }
+            eprintln!("  Sysroot: {}", sysroot.display());
+            eprintln!("  DESTDIR: {}", destdir.display());
+        }
+        DebugShellEvent::Starting { .. } => {
+            eprintln!(
+                "\n{}\n",
+                row_line(
+                    Status::Info,
+                    &["Dropping into build environment. Exit shell to continue."]
+                )
+            );
         }
     }
 }

@@ -87,6 +87,45 @@ pub enum ExecutionResult {
     },
 }
 
+/// Transient facts reported while the failed build environment still exists.
+#[derive(Debug, Clone, Copy)]
+pub enum DebugShellEvent<'a> {
+    BuildFailed {
+        package: &'a str,
+        version: &'a str,
+        log_path: Option<&'a Path>,
+        sysroot: &'a Path,
+        destdir: &'a Path,
+    },
+    Starting {
+        shell: &'a str,
+    },
+}
+
+fn trace_debug_shell_event(event: DebugShellEvent<'_>) {
+    match event {
+        DebugShellEvent::BuildFailed {
+            package,
+            version,
+            log_path,
+            sysroot,
+            destdir,
+        } => {
+            tracing::error!(
+                package,
+                version,
+                ?log_path,
+                ?sysroot,
+                ?destdir,
+                "build failed before debug shell"
+            );
+        }
+        DebugShellEvent::Starting { shell } => {
+            info!(shell, "entering build environment; exit shell to continue");
+        }
+    }
+}
+
 /// RAII guard that removes a directory on drop unless disarmed.
 ///
 /// Used to ensure build output directories (DESTDIR) are cleaned up even when
@@ -147,7 +186,12 @@ fn stdin_is_terminal() -> bool {
 /// Spawn an interactive debug shell in the build environment.
 ///
 /// Only spawns if stdin is a tty. Returns when the user exits the shell.
-fn spawn_debug_shell(destdir: &Path, sysroot: &Path, recipe: &Recipe) {
+fn spawn_debug_shell(
+    destdir: &Path,
+    sysroot: &Path,
+    recipe: &Recipe,
+    report: fn(DebugShellEvent<'_>),
+) {
     if !stdin_is_terminal() {
         tracing::warn!("--shell-on-failure: no tty detected, skipping shell");
         return;
@@ -161,7 +205,7 @@ fn spawn_debug_shell(destdir: &Path, sysroot: &Path, recipe: &Recipe) {
         }
     });
 
-    eprintln!("\n  Dropping into build environment. Exit shell to continue.\n");
+    report(DebugShellEvent::Starting { shell: &shell });
 
     let status = std::process::Command::new(&shell)
         .current_dir(destdir)
@@ -189,6 +233,7 @@ pub struct DerivationExecutor {
     _cas_dir: PathBuf,
     /// Executor configuration (logging, shell-on-failure, etc.).
     config: ExecutorConfig,
+    debug_shell_reporter: fn(DebugShellEvent<'_>),
 }
 
 impl DerivationExecutor {
@@ -209,7 +254,15 @@ impl DerivationExecutor {
             cas,
             _cas_dir: cas_dir,
             config,
+            debug_shell_reporter: trace_debug_shell_event,
         }
+    }
+
+    /// Report debug-shell facts synchronously before the environment is cleaned up.
+    #[must_use]
+    pub fn with_debug_shell_reporter(mut self, reporter: fn(DebugShellEvent<'_>)) -> Self {
+        self.debug_shell_reporter = reporter;
+        self
     }
 
     /// Access the underlying CAS store.
@@ -412,17 +465,15 @@ impl DerivationExecutor {
                 // Disarm guard to keep DESTDIR alive during shell session.
                 destdir_guard.disarm();
 
-                eprintln!(
-                    "[FAILED] {}-{}",
-                    recipe.package.name, recipe.package.version
-                );
-                if let Some(path) = &log_path {
-                    eprintln!("  Build log: {}", path.display());
-                }
-                eprintln!("  Sysroot: {}", sysroot.display());
-                eprintln!("  DESTDIR: {}", destdir.display());
+                (self.debug_shell_reporter)(DebugShellEvent::BuildFailed {
+                    package: &recipe.package.name,
+                    version: &recipe.package.version,
+                    log_path: log_path.as_deref(),
+                    sysroot,
+                    destdir: &destdir,
+                });
 
-                spawn_debug_shell(&destdir, sysroot, recipe);
+                spawn_debug_shell(&destdir, sysroot, recipe, self.debug_shell_reporter);
 
                 // Clean up DESTDIR after shell exits (guard was disarmed).
                 let _ = std::fs::remove_dir_all(&destdir);

@@ -334,15 +334,6 @@ pub struct ResolveResult {
     pub was_redirected: bool,
 }
 
-impl ResolveResult {
-    /// Print redirect messages to the user
-    pub fn print_messages(&self) {
-        for msg in &self.messages {
-            eprintln!("Note: {}", msg);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -334,6 +334,25 @@ fn destdir_cleaned_up_on_build_failure() {
 
 #[test]
 fn shell_on_failure_does_not_hang_without_tty() {
+    static REPORTED_DESTDIR: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+    fn report(event: DebugShellEvent<'_>) {
+        let DebugShellEvent::BuildFailed {
+            package,
+            version,
+            log_path,
+            sysroot,
+            destdir,
+        } = event
+        else {
+            panic!("non-TTY failure must not start a shell");
+        };
+        assert_eq!((package, version), ("sed", "4.9"));
+        assert!(sysroot.is_dir());
+        assert!(destdir.is_dir());
+        assert!(log_path.unwrap().is_file());
+        *REPORTED_DESTDIR.lock().unwrap() = Some(destdir.to_path_buf());
+    }
+
     // Force the non-interactive path even when the test runner has a tty.
     // Verify that with shell_on_failure=true, execute() still returns
     // the build error without blocking.
@@ -343,7 +362,7 @@ fn shell_on_failure_does_not_hang_without_tty() {
     let conn = setup_db();
 
     let config = ExecutorConfig {
-        log_dir: None,
+        log_dir: Some(tmp.path().join("logs")),
         keep_logs: false,
         shell_on_failure: true, // enabled, but no tty in tests
     };
@@ -352,7 +371,8 @@ fn shell_on_failure_does_not_hang_without_tty() {
     let sysroot = tmp.path().join("sysroot");
     std::fs::create_dir_all(&sysroot).unwrap();
 
-    let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), config);
+    let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), config)
+        .with_debug_shell_reporter(report);
     let result = executor.execute(
         &recipe,
         "env_hash",
@@ -364,6 +384,12 @@ fn shell_on_failure_does_not_hang_without_tty() {
 
     // Should fail with Build error, not hang
     assert!(matches!(result, Err(ExecutorError::Build(_))));
+    let destdir = REPORTED_DESTDIR
+        .lock()
+        .unwrap()
+        .take()
+        .expect("failure reported before cleanup");
+    assert!(!destdir.exists());
 }
 
 #[test]

@@ -146,7 +146,7 @@ pub use repository_package_key::{RepositoryPackageKey, RepositoryPackageKeyStatu
 pub use repository_requirement::{RepositoryRequirement, RepositoryRequirementGroup};
 pub use resolution::{CacheTier, PackageResolution, PrimaryStrategy, ResolutionStrategy};
 pub use state::{RestorePlan, StateDiff, StateEngine, StateMember, SystemState};
-pub use subpackage::{RelatedPackages, SubpackageRelationship, show_subpackage_guidance};
+pub use subpackage::{RelatedPackages, SubpackageRelationship};
 pub use system_affinity::SystemAffinity;
 pub use trigger::{ChangesetTrigger, Trigger, TriggerDependency, TriggerStatus};
 pub use trigger_engine::TriggerEngine;
