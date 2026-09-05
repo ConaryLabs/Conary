@@ -57,6 +57,11 @@ class SshDiagnosticTests(unittest.TestCase):
                 self.assertEqual(result, diagnostic.withheld("connection_identifier_remaining"))
                 self.assertNotIn("message", result)
 
+    def test_short_user_inside_ipv6_cannot_split_the_literal(self):
+        identifiers = diagnostic.connection_identifiers("db8@destination.example.invalid", CONFIG, KNOWN_HOSTS)
+        result = diagnostic.sanitize("Connection closed by 2001:db8::42 port 22", identifiers)
+        self.assertEqual(result["message"], "Connection closed by <ip> port 22")
+
     def test_second_line_is_checked_before_first_line_is_selected(self):
         result = diagnostic.public_diagnostic("Host key verification failed.\n" + FAILURES[0], IDENTIFIERS)
         self.assertEqual(result["outcome"], "withheld")

@@ -105,9 +105,11 @@ def sanitize(stderr: str, identifiers: dict[str, str]) -> dict:
     # an obfuscated identifier or terminal control sequence.
     if any(ord(char) < 32 and char not in "\n\r\t" for char in stderr):
         return withheld("unsupported_diagnostic_encoding")
-    pattern = re.compile("|".join(re.escape(value) for value in sorted(identifiers, key=len, reverse=True)), re.IGNORECASE)
-    message = pattern.sub(lambda match: identifiers[match[0].casefold()], stderr)
-    message = IP_LITERAL.sub("<ip>", message)
+    # Match whole IP literals before shorter usernames/aliases that could occur
+    # inside them, and never run replacement over the tokens we just emitted.
+    names = "|".join(re.escape(value) for value in sorted(identifiers, key=len, reverse=True))
+    pattern = re.compile(rf"(?P<ip>{IP_LITERAL.pattern})|(?P<identity>{names})", re.IGNORECASE)
+    message = pattern.sub(lambda match: "<ip>" if match["ip"] else identifiers[match[0].casefold()], stderr)
     message = re.sub(r"/[^\s]+", "<redacted-path>", message)
     return public_diagnostic(message, identifiers)
 
