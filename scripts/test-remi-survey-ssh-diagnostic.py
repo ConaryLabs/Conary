@@ -61,6 +61,9 @@ class SshDiagnosticTests(unittest.TestCase):
         identifiers = diagnostic.connection_identifiers("db8@destination.example.invalid", CONFIG, KNOWN_HOSTS)
         result = diagnostic.sanitize("Connection closed by 2001:db8::42 port 22", identifiers)
         self.assertEqual(result["message"], "Connection closed by <ip> port 22")
+        identifiers = diagnostic.connection_identifiers("operator@192.0.2.1.example.invalid", CONFIG, KNOWN_HOSTS)
+        result = diagnostic.sanitize("connect to host 192.0.2.1.example.invalid port 22", identifiers)
+        self.assertEqual(result["message"], "connect to host <ssh-host> port 22")
 
     def test_second_line_is_checked_before_first_line_is_selected(self):
         result = diagnostic.public_diagnostic("Host key verification failed.\n" + FAILURES[0], IDENTIFIERS)

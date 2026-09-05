@@ -105,11 +105,26 @@ def sanitize(stderr: str, identifiers: dict[str, str]) -> dict:
     # an obfuscated identifier or terminal control sequence.
     if any(ord(char) < 32 and char not in "\n\r\t" for char in stderr):
         return withheld("unsupported_diagnostic_encoding")
-    # Match whole IP literals before shorter usernames/aliases that could occur
-    # inside them, and never run replacement over the tokens we just emitted.
+    # Redact the union of whole identifiers and IP literals. Either may contain
+    # the other; replacement order must never expose a remaining fragment.
     names = "|".join(re.escape(value) for value in sorted(identifiers, key=len, reverse=True))
-    pattern = re.compile(rf"(?P<ip>{IP_LITERAL.pattern})|(?P<identity>{names})", re.IGNORECASE)
-    message = pattern.sub(lambda match: "<ip>" if match["ip"] else identifiers[match[0].casefold()], stderr)
+    pattern = re.compile(f"(?=({names}))", re.IGNORECASE)
+    spans = [(match.start(), match.end(), "<ip>") for match in IP_LITERAL.finditer(stderr)]
+    spans.extend((match.start(1), match.end(1), identifiers[match[1].casefold()]) for match in pattern.finditer(stderr))
+    merged = []
+    for start, end, token in sorted(spans, key=lambda span: (span[0], -span[1])):
+        if merged and start < merged[-1][1]:
+            previous_start, previous_end, previous_token = merged[-1]
+            merged[-1] = (previous_start, max(previous_end, end), previous_token)
+        else:
+            merged.append((start, end, token))
+    pieces = []
+    position = 0
+    for start, end, token in merged:
+        pieces.extend((stderr[position:start], token))
+        position = end
+    pieces.append(stderr[position:])
+    message = "".join(pieces)
     message = re.sub(r"/[^\s]+", "<redacted-path>", message)
     return public_diagnostic(message, identifiers)
 
