@@ -637,7 +637,14 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/remi "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE/apps/remi" LICENSE
+          # The tree-capability guard matches the packaged-license proofs: trees
+          # carrying scripts/check-release-license-contents.sh ship license texts;
+          # older immutable tags rebuilt by nightly recovery are packaged as they were.
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE/apps/remi" LICENSE)
+          fi
+          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
       - name: Require the AGPL text inside the remi bundle
         # Nightly recovery may rebuild an older immutable tag whose tree predates
@@ -712,7 +719,11 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conaryd "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)
+          fi
+          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
       - name: Require both license texts inside the conaryd bundle
         # Nightly recovery may rebuild an older immutable tag whose tree predates
@@ -787,7 +798,11 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conary-test "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)
+          fi
+          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
       - name: Require both license texts inside the conary-test bundle
         # Nightly recovery may rebuild an older immutable tag whose tree predates
@@ -968,10 +983,17 @@ jobs:
           copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64.tar.gz" "conaryd-${VERSION}-linux-x64.tar.gz"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64" "conary-test-${VERSION}-linux-x64"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64.tar.gz" "conary-test-${VERSION}-linux-x64.tar.gz"
-          # License texts accompany every standalone binary on the release page.
-          copy_exact LICENSE-MIT LICENSE-MIT
-          copy_exact LICENSE-APACHE LICENSE-APACHE
-          copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi
+          # License texts accompany every standalone binary on the release page
+          # for trees that carry them (same tree-capability guard as the proofs).
+          expected_live_assets=14
+          expected_rehearsal_assets=15
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            copy_exact LICENSE-MIT LICENSE-MIT
+            copy_exact LICENSE-APACHE LICENSE-APACHE
+            copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi
+            expected_live_assets=17
+            expected_rehearsal_assets=18
+          fi
 
           if [[ -s release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
             copy_exact \
@@ -1022,8 +1044,8 @@ jobs:
             mapfile -d '' assets < <(
               find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z
             )
-            [[ ${#assets[@]} -eq 17 || ${#assets[@]} -eq 18 ]] || {
-              echo "expected 17 live suite assets or 18 rehearsal assets; found ${#assets[@]}" >&2
+            [[ ${#assets[@]} -eq $expected_live_assets || ${#assets[@]} -eq $expected_rehearsal_assets ]] || {
+              echo "expected $expected_live_assets live suite assets or $expected_rehearsal_assets rehearsal assets; found ${#assets[@]}" >&2
               exit 1
             }
             sha256sum -- "${assets[@]}" > SHA256SUMS

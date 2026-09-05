@@ -198,9 +198,16 @@ for kind, jobs in owners.items():
     for job_id in jobs:
         if not executes(job_id, kind):
             missing.append(f"{kind} proof executed by job {job_id}")
+GUARD_LINE = "if [[ -f scripts/check-release-license-contents.sh ]]; then"
 extras = {
-    "remi tarball AGPL text in build-remi": ("build-remi", 'apps/remi" LICENSE'),
+    "remi tarball AGPL text in build-remi": ("build-remi", 'license_members=(-C "$GITHUB_WORKSPACE/apps/remi" LICENSE)'),
+    "remi tarball tree guard in build-remi": ("build-remi", GUARD_LINE),
+    "conaryd tarball texts in build-conaryd": ("build-conaryd", 'license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)'),
+    "conaryd tarball tree guard": ("build-conaryd", GUARD_LINE),
+    "conary-test tarball texts in build-conary-test": ("build-conary-test", 'license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)'),
+    "conary-test tarball tree guard": ("build-conary-test", GUARD_LINE),
     "suite AGPL asset copied in bundle-suite": ("bundle-suite", "copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi"),
+    "suite asset tree guard": ("bundle-suite", GUARD_LINE),
 }
 for name, (job_id, needle) in extras.items():
     if not any(job == job_id and needle in text for job, _, text in live):
