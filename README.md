@@ -149,28 +149,41 @@ already owned by dnf, apt, or pacman, adoption remains available as a
 reversible migration bridge; those native package managers are not runtime
 authority for Conary-owned operations.
 
-An install runs through one pipeline regardless of source format:
+A native RPM, DEB, or Arch install runs in this order:
 
-1. Parse the RPM, DEB, or Arch artifact into a lossless source-authority
-   record and convert it to a CCS lifecycle bundle.
-2. Resolve dependencies with a SAT solver against typed provides, and match
-   source requirements against the typed host capability inventory.
-3. Preflight the exact lifecycle plan: stages, arguments, triggers, and
-   payload boundaries in source-ABI order.
-4. Fetch content into the CAS and materialize an isolated selected root from
-   the current generation or DB/CAS state.
-5. Inside that root and one SQLite transaction, run the lifecycle scriptlets,
-   payload, config decisions, and triggers, then bind the exact selected-root
-   snapshot. Any failure here rolls back the database transaction and
-   discards the root; nothing has been committed yet.
-6. Commit SQLite, then publish the recorded generation and select it. A
+1. Resolve the request against source policy, download the artifact, and
+   parse it into a lossless source-authority record with its typed lifecycle
+   bundle.
+2. Resolve dependencies with a SAT solver against typed provides. Missing
+   dependencies are downloaded and installed first as their own batch
+   transaction, which commits before the requested package is touched. If a
+   later step fails, those dependencies stay installed and are recorded with
+   a dependency install reason.
+3. Plan conflicts and replacements. `--dry-run` stops here: it proves the
+   package resolves and prints the package, architecture, file count,
+   dependencies that would be installed, and replacements, without changing
+   anything. It does not extract the payload, prepare a selected root, or
+   run the lifecycle preflight, so a scriptlet or capability failure can
+   still surface on the real run.
+4. Take the runtime lock, extract and classify the payload, check file
+   ownership, and prepare an isolated selected root from the current
+   generation or DB/CAS state.
+5. Preflight the exact lifecycle plan against that root and the typed host
+   capability inventory: stages, arguments, triggers, and payload boundaries
+   in source-ABI order. A failure here stops before mutation.
+6. Inside that root and one SQLite transaction, run the lifecycle
+   scriptlets, payload, config decisions, and triggers, then bind the exact
+   selected-root snapshot. Any failure rolls back the transaction and
+   discards the root; nothing from this package has been committed.
+7. Commit SQLite, then publish the recorded generation and select it. A
    publication failure after commit leaves typed debt for deterministic
    retry.
 
-That ordering is implemented in
-`apps/conary/src/commands/install/batch/execution.rs` and documented under
-"Composefs-native transactions" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-The lifecycle contract itself is
+That ordering is implemented in `apps/conary/src/commands/install/command.rs`,
+`apps/conary/src/commands/install/dependencies.rs`, and
+`apps/conary/src/commands/install/batch/execution.rs`, and the rollback
+boundary is documented under "Composefs-native transactions" in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The lifecycle contract itself is
 [docs/specs/foreign-package-lifecycle-contracts.md](docs/specs/foreign-package-lifecycle-contracts.md).
 
 Conary is a virtual Rust workspace:
