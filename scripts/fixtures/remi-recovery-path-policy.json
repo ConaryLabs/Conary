@@ -94,11 +94,13 @@
   },
   {
     "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "reason": "safe"
+    "reason": "safe",
+    "key": "source_sha256"
   },
   {
     "value": "1234567890",
-    "reason": "safe"
+    "reason": "safe",
+    "key": "run_id"
   },
   {
     "value": "2026-09-05T19:41:33Z",
@@ -128,5 +130,35 @@
   {
     "value": "<redacted:private_string>",
     "reason": "safe"
+  },
+  {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "1234567890",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "2026-09-05T19:41:33Z",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "key": "timestamp",
+    "reason": "private_string"
+  },
+  {
+    "value": "1234567890",
+    "key": "source_sha256",
+    "reason": "private_string"
+  },
+  {
+    "value": "2026-09-05T19:41:33Z",
+    "key": "run_id",
+    "reason": "private_string"
   }
 ]

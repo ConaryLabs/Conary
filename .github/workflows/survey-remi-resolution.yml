@@ -356,12 +356,37 @@ jobs:
           chmod 0600 "$helper_stderr"
           sanitize_helper_stderr() {
             local sanitized
+            if [[ ! -s "$helper_stderr" ]]; then
+              printf '%s\n' '{"schema_version":1,"outcome":"empty"}'
+              return
+            fi
             if ! sanitized="$(python3 scripts/remi-survey-ssh-diagnostic.py \
               --stderr "$helper_stderr" --ssh-config "$REMI_SSH_CONFIG" \
               --known-hosts "$known_hosts" 2>/dev/null)"; then
               sanitized='{"schema_version":1,"outcome":"withheld","reason":"sanitizer_failed"}'
             fi
             printf '%s\n' "$sanitized"
+          }
+          record_helper_evidence() {
+            local observed_status="$1" workflow_status="$2" recovery_state="$3"
+            jq -cn --argjson status "$observed_status" --argjson workflow_status "$workflow_status" \
+              --arg survey_id "$SURVEY_ID" --arg export_id "$EXPORT_ID" \
+              --arg recovery "$recovery_state" --argjson stderr "$(sanitize_helper_stderr)" \
+              --arg evidence_reason "${helper_evidence_reason:-not_checked}" '
+              {schema_version:1,
+               outcome:(if $status != 0 or $workflow_status != 0 then "helper_failed" else "helper_succeeded" end),
+               status:$status,workflow_status:$workflow_status,
+               survey_id:$survey_id,export_id:$export_id,recovery:$recovery,
+               evidence_reason:$evidence_reason,
+               stderr:(if $stderr.outcome == "empty" then "empty" else $stderr end)}
+              + (if $stderr | has("message") then {message:$stderr.message} else {} end)
+            ' > resolution-survey-helper.json
+            if (( observed_status != 0 )) || [[ -s "$helper_stderr" ]]; then
+              if (( ${helper_diagnostic_printed:-0} == 0 )); then
+                jq -r '.message // empty' resolution-survey-helper.json >&2
+                helper_diagnostic_printed=1
+              fi
+            fi
           }
           recover_helper_failure() {
             local workflow_status="$1" recovery_state=fetch_failed
@@ -387,14 +412,7 @@ jobs:
               echo 'resolution survey recovery: fetch_failed (retained evidence export failed)' >&2
             fi
             rm -f -- "$recovery_archive" "$recovery_stderr"
-            jq -cn --argjson status "$observed_status" --argjson workflow_status "$workflow_status" \
-              --arg survey_id "$SURVEY_ID" --arg export_id "$EXPORT_ID" \
-              --arg recovery "$recovery_state" --argjson stderr "$(sanitize_helper_stderr)" '
-              {schema_version:1,outcome:"helper_failed",status:$status,workflow_status:$workflow_status,
-               survey_id:$survey_id,export_id:$export_id,recovery:$recovery,
-               stderr:$stderr,
-               message: ($stderr.message // "survey helper diagnostic withheld")}
-            ' > resolution-survey-helper.json
+            record_helper_evidence "$observed_status" "$workflow_status" "$recovery_state"
             echo "helper_outcome=helper_failed" >> "$GITHUB_OUTPUT"
           }
           cleanup() {
@@ -475,17 +493,24 @@ jobs:
             ssh "${ssh_opts[@]}" "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '$SURVEY_ID' '$EXPORT_ID' '$remote_input'" 2>"$helper_stderr"
           })" || helper_status=$?
-          sanitize_helper_stderr | jq -r '.message // "survey helper diagnostic withheld"' >&2
+          record_helper_evidence "$helper_status" 0 not_requested
           (( helper_status == 0 || helper_status == 1 )) || {
             echo "resolution-survey SSH/helper failed with status $helper_status" >&2
             exit 1
           }
+          if [[ -z "$report" ]]; then
+            helper_evidence_reason=missing_survey_evidence
+            echo "resolution survey evidence: $helper_evidence_reason" >&2
+            exit 1
+          fi
           report_line="$(tail -n 1 <<<"$report")"
           prefix="Resolution survey: survey=${SURVEY_ID} export=${EXPORT_ID} transport=${remote_output} sha256="
           [[ "$report_line" =~ ^${prefix}([0-9a-f]{64})\ bytes=([1-9][0-9]*)\ candidate_failures=([0-9]+)\ comparison_mismatches=([0-9]+)\ restore_outcome=(restored|restore_failed)\ restore_sha256=([0-9a-f]{64})$ ]] || {
-            echo "production helper returned malformed resolution-survey evidence" >&2
+            helper_evidence_reason=malformed_survey_evidence
+            echo "resolution survey evidence: $helper_evidence_reason" >&2
             exit 1
           }
+          helper_evidence_reason=validated_report
           reported_sha256="${BASH_REMATCH[1]}"
           reported_bytes="${BASH_REMATCH[2]}"
           candidate_failures="${BASH_REMATCH[3]}"
@@ -537,6 +562,7 @@ jobs:
           ssh "${ssh_opts[@]}" "$target" \
             "rm -f -- '$remote_input' '$remote_output' '$remote_restore'"
           remote_possible=0
+          record_helper_evidence "$helper_status" 0 not_requested
           {
             echo "restore_outcome=$restore_outcome"
             echo "transport=$local_output"
@@ -590,6 +616,7 @@ jobs:
             resolution-survey-verification.json
             resolution-survey-input-verification.json
             resolution-survey-oracle-set.json
+            resolution-survey-helper.json
             resolution-survey-restore.json
           if-no-files-found: error
           compression-level: 0

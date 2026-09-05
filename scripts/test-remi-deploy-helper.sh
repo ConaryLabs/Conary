@@ -1608,7 +1608,10 @@ PYCODE
         cmp "$restore" "$retained/restore.json"
         mkdir "${tmpdir}/runner-${survey_id}"
         bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" "$status" \
-            "${tmpdir}/runner-${survey_id}" || fail "$name failed the real workflow handoff"
+            "${tmpdir}/runner-${survey_id}" 2>"${tmpdir}/runner-${survey_id}.stderr" || fail "$name failed the real workflow handoff"
+        [[ ! -s "${tmpdir}/runner-${survey_id}.stderr" ]] || fail "empty helper stderr fabricated a diagnostic"
+        jq -e '.stderr == "empty" and (has("message") | not)' \
+            "${tmpdir}/runner-${survey_id}/resolution-survey-helper.json" >/dev/null
         expect_fail "SSH failure cannot become a retained survey result" \
             bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" 255 \
             "${tmpdir}/runner-${survey_id}"
@@ -1724,7 +1727,13 @@ cp "$fixture_root/survey-input-verification.json" resolution-survey-input-verifi
 target=fixture
 ssh_opts=()
 remote_possible=0
+remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
+remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
 ssh() {
+    if [[ "$*" == *"conary-remi-deploy survey-resolution "* ]]; then
+        printf '%s' "$fixture_report"
+        return "$fixture_status"
+    fi
     [[ -f "$key" && -f "$known_hosts" ]] || return 99
     [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" ]] || return 98
     if (( export_status != 0 )); then return "$export_status"; fi
@@ -1750,22 +1759,50 @@ case "${6:-helper}" in
     host_key) printf 'Host key verification failed for fixture (192.0.2.31).\n' >"$helper_stderr" ;;
     kex) printf 'kex_exchange_identification: Connection closed by 2001:db8::42 port 22\n' >"$helper_stderr" ;;
     metadata_missing) printf 'ssh: connect to host fixture port 22\n' >"$helper_stderr"; rm "$REMI_SSH_CONFIG" ;;
+    empty|missing|malformed) ;;
 esac
-# No report line or normal transport exists. The actual EXIT trap must recover.
-exit 1
+# Exercise actual report classification independently of stderr. The EXIT trap
+# must retain its typed reason without manufacturing a diagnostic message.
+if [[ "${6:-helper}" != missing && "${6:-helper}" != malformed ]]; then
+    exit 1
+fi
+fixture_status=0
+fixture_report=""
+[[ "$6" != malformed ]] || fixture_report="invalid report"
 SCRIPT
+    python3 - "$script" <<'PY'
+from pathlib import Path
+import sys
+workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
+start = workflow.index('          helper_status=0\n')
+end = workflow.index('          reported_sha256=', start)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
+PY
     for mode in 0 255; do
-      for diagnostic in helper connect permission host_key kex metadata_missing; do
+      for diagnostic in helper connect permission host_key kex metadata_missing empty missing malformed; do
         runner="${tmpdir}/runner-recovery-${survey_id}-${mode}-${diagnostic}"
         mkdir "$runner"
         ln -s "$root/scripts" "$runner/scripts"
         status=0
-        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$recovery" "$mode" "$fake_root" "$diagnostic") || status=$?
+        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$recovery" "$mode" "$fake_root" "$diagnostic") \
+            2>"$runner/workflow.stderr" || status=$?
+        if [[ "$diagnostic" == empty && "$mode" == 0 ]]; then
+            [[ ! -s "$runner/workflow.stderr" ]] || fail "empty failure stderr fabricated a diagnostic"
+        fi
         [[ "$status" == 1 ]] || fail "workflow recovery changed original failure status"
         [[ ! -e "$runner/key" && ! -e "$runner/known-hosts" ]]
-        jq -e '.outcome == "helper_failed" and .status == 1 and .workflow_status == 1
-            and (.message | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
-        if [[ "$diagnostic" == metadata_missing ]]; then
+        jq -e '.outcome == "helper_failed" and .workflow_status == 1
+            and ((.message // "") | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+        if [[ "$diagnostic" == empty || "$diagnostic" == missing || "$diagnostic" == malformed ]]; then
+            jq -e '.stderr == "empty" and (has("message") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+            if [[ "$diagnostic" == empty ]]; then
+                jq -e '.status == 1 and .evidence_reason == "not_checked"' "$runner/resolution-survey-helper.json" >/dev/null
+            else
+                jq -e --arg reason "${diagnostic}_survey_evidence" \
+                    '.status == 0 and .evidence_reason == $reason' "$runner/resolution-survey-helper.json" >/dev/null
+            fi
+        elif [[ "$diagnostic" == metadata_missing ]]; then
             jq -e '.stderr.outcome == "withheld" and .stderr.reason == "connection_metadata_or_diagnostic_invalid"
                 and (.stderr | has("message") | not)' "$runner/resolution-survey-helper.json" >/dev/null
         else

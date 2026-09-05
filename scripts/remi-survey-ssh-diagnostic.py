@@ -96,7 +96,9 @@ def remaining_identifier(message: str, identifiers: dict[str, str]) -> bool:
 def public_diagnostic(message: str, identifiers: dict[str, str]) -> dict:
     if remaining_identifier(message, identifiers):
         return withheld("connection_identifier_remaining")
-    message = next((line for line in message.splitlines() if line.strip()), "helper returned missing or malformed survey evidence")
+    message = next((line for line in message.splitlines() if line.strip()), None)
+    if message is None:
+        return {"schema_version": 1, "outcome": "empty"}
     return {"schema_version": 1, "outcome": "sanitized", "message": message}
 
 
@@ -136,10 +138,14 @@ def main() -> None:
     parser.add_argument("--known-hosts", type=Path, required=True)
     args = parser.parse_args()
     try:
-        identifiers = connection_identifiers(
-            os.environ["REMI_SSH_TARGET"], read_private(args.ssh_config), read_private(args.known_hosts)
-        )
-        result = sanitize(read_private(args.stderr), identifiers)
+        stderr = read_private(args.stderr)
+        if not stderr:
+            result = {"schema_version": 1, "outcome": "empty"}
+        else:
+            identifiers = connection_identifiers(
+                os.environ["REMI_SSH_TARGET"], read_private(args.ssh_config), read_private(args.known_hosts)
+            )
+            result = sanitize(stderr, identifiers)
     except (OSError, ValueError, KeyError):
         # Exception text may itself contain private connection metadata.
         result = withheld("connection_metadata_or_diagnostic_invalid")

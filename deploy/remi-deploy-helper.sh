@@ -1014,11 +1014,11 @@ survey_recovery_path_policy() {
                 "systemctl_status", "survey_id", "export_id", "run_id", "timestamp", "started_at", "completed_at");
         def recovery_safe_value($key):
             redacted_token
-            or test("^[0-9a-f]{64}$")
-            or test("^(0|[1-9][0-9]{0,19})$")
-            or test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$")
+            or (($key | IN("candidate_manifest_sha256", "source_sha256")) and test("^[0-9a-f]{64}$"))
+            or ($key == "run_id" and test("^(0|[1-9][0-9]{0,19})$"))
+            or (($key | IN("timestamp", "started_at", "completed_at")) and test("^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,9})?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$"))
             or ($key == "profile" and IN("fedora-44", "ubuntu-26.04", "arch"))
-            or (($key | IN("survey_id", "export_id", "run_id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
+            or (($key | IN("survey_id", "export_id")) and test("^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$"))
             or IN("helper_failed", "restored", "restore_failed", "measurement_required", "ready",
                 "readiness_timeout", "systemctl_failed", "deploy_health", "issue_913_startup_evidence",
                 "last_recorded_duration", "not_written", "empty", "invalid_json", "not_retained",

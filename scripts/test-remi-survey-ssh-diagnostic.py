@@ -50,6 +50,12 @@ class SshDiagnosticTests(unittest.TestCase):
         self.assertIn("<ssh-target>", diagnostic.sanitize(FAILURES[1], IDENTIFIERS)["message"])
         self.assertIn("<ip>", diagnostic.sanitize(FAILURES[5], IDENTIFIERS)["message"])
 
+    def test_empty_stream_has_no_fabricated_diagnostic(self):
+        for stream in ("", "\n", " \t\r\n"):
+            with self.subTest(stream=stream):
+                self.assertEqual(diagnostic.sanitize(stream, IDENTIFIERS),
+                                 {"schema_version": 1, "outcome": "empty"})
+
     def test_residual_connection_identifier_withholds_the_stderr(self):
         for line in FAILURES:
             with self.subTest(line=line):
@@ -94,6 +100,10 @@ class SshDiagnosticTests(unittest.TestCase):
             result = json.loads(process.stdout)
             self.assertEqual(result["outcome"], "withheld")
             self.assertNotIn("message", result)
+            self.assertEqual(process.stderr, "")
+            stderr.write_text("")
+            process = subprocess.run(command, env={}, capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(process.stdout), {"schema_version": 1, "outcome": "empty"})
             self.assertEqual(process.stderr, "")
 
 
