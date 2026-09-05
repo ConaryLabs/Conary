@@ -230,38 +230,38 @@ jobs:
     name: bootstrap-remi-access
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.bootstrap_remi_access == 'true' }}
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    environment: production
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_BOOTSTRAP_SSH_TARGET }}
       - name: Install Remi deploy access
         env:
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
           REMI_BOOTSTRAP_SSH_TARGET: ${{ secrets.REMI_BOOTSTRAP_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
-
-          target="${REMI_BOOTSTRAP_SSH_TARGET:-root@ssh.conary.io}"
+          target="$REMI_BOOTSTRAP_SSH_TARGET"
           remote_stage="/tmp/remi-deploy-access-${GITHUB_RUN_ID}"
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
 
-          mkdir -p ~/.ssh
-          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
-          chmod 600 ~/.ssh/remi_key
-          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
-
-          ssh $ssh_opts "$target" "rm -rf '$remote_stage' && mkdir -p '$remote_stage/deploy/sudoers' '$remote_stage/scripts'"
-          scp $ssh_opts \
+          ssh "${ssh_opts[@]}" "$target" "rm -rf '$remote_stage' && mkdir -p '$remote_stage/deploy/sudoers' '$remote_stage/scripts'"
+          scp "${ssh_opts[@]}" \
             deploy/remi-deploy-helper.sh \
             "$target:${remote_stage}/deploy/remi-deploy-helper.sh"
-          scp $ssh_opts \
+          scp "${ssh_opts[@]}" \
             deploy/sudoers/remi \
             "$target:${remote_stage}/deploy/sudoers/remi"
-          scp $ssh_opts \
+          scp "${ssh_opts[@]}" \
             scripts/install-remi-deploy-access.sh \
             "$target:${remote_stage}/scripts/install-remi-deploy-access.sh"
-          ssh $ssh_opts "$target" "cd '$remote_stage' && bash scripts/install-remi-deploy-access.sh && sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          ssh "${ssh_opts[@]}" "$target" "cd '$remote_stage' && bash scripts/install-remi-deploy-access.sh && sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
 
   verify-conary:
     name: verify-conary
@@ -330,8 +330,22 @@ jobs:
     needs: [resolve, validate-routing, deploy-remi]
     if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' && needs.deploy-remi.result == 'success' }}
     runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.environment }}
+    environment: production
     steps:
+      - name: Check out exact release tag for static sites
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve.outputs.tag_name }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Check out workflow repository for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
       - name: Download source artifacts
         shell: bash
         env:
@@ -372,18 +386,24 @@ jobs:
           mkdir -p "$bundle_dir"
           find "$fallback_dir" -maxdepth 1 -type f -exec mv {} "$bundle_dir"/ \;
           rmdir "$fallback_dir"
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./workflow-authority/.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_SSH_TARGET }}
       - name: Deploy conary artifacts
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
           release_dir="source-artifacts/${BUNDLE_NAME}"
           [[ -d "$release_dir" && ! -L "$release_dir" ]] || { echo "suite-bundle artifact missing or symlinked" >&2; exit 1; }
-          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
 
           (
             cd "$release_dir"
@@ -412,24 +432,20 @@ jobs:
           )
           release_dir="$conary_deploy_dir"
 
-          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          mkdir -p ~/.ssh
-          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
-          chmod 600 ~/.ssh/remi_key
-          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
+          target="$REMI_SSH_TARGET"
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
 
           staging="/tmp/conary-release-${VERSION}-${GITHUB_RUN_ID}"
-          ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
-          ssh $ssh_opts "$target" bash -s "$staging" <<'REMOTE_EOF'
+          ssh "${ssh_opts[@]}" "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          ssh "${ssh_opts[@]}" "$target" bash -s "$staging" <<'REMOTE_EOF'
             set -euo pipefail
             staging="$1"
             rm -rf "$staging"
             mkdir -p "$staging"
           REMOTE_EOF
 
-          scp $ssh_opts "${release_dir}"/* "${target}:${staging}/"
-          ssh $ssh_opts "$target" bash -s "$VERSION" "$staging" <<'REMOTE_EOF'
+          scp "${ssh_opts[@]}" "${release_dir}"/* "${target}:${staging}/"
+          ssh "${ssh_opts[@]}" "$target" bash -s "$VERSION" "$staging" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"
             staging="$2"
@@ -445,12 +461,6 @@ jobs:
             echo "Response: $response" >&2
             exit 1
           fi
-      - name: Check out exact release tag for static sites
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.resolve.outputs.tag_name }}
-          fetch-depth: 1
-          persist-credentials: false
       - name: Verify exact release tag checkout
         env:
           TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
@@ -477,39 +487,17 @@ jobs:
           npm ci --prefix web
       - name: Configure static-site deployment access
         env:
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
+          REMI_SSH_KEY_PATH: ${{ steps.production-ssh.outputs.key-path }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
-
-          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          [[ "$target" =~ ^[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || {
-            echo "REMI_SSH_TARGET must be a user@host SSH target" >&2
-            exit 1
-          }
-          host="${target#*@}"
-          key_path="${RUNNER_TEMP}/remi_site_key"
-
-          install -d -m 700 "$HOME/.ssh"
-          umask 077
-          echo "REMI_SITE_KEY_PATH=${key_path}" >> "$GITHUB_ENV"
-          printf '%s\n' "$REMI_SSH_KEY" > "$key_path"
-          ssh-keygen -y -f "$key_path" >/dev/null
-
-          known_host="$(ssh-keyscan -H "$host" 2>/dev/null)"
-          [[ -n "$known_host" ]] || { echo "Could not read SSH host key for ${host}" >&2; exit 1; }
-          printf '%s\n' "$known_host" >> "$HOME/.ssh/known_hosts"
           {
-            printf 'Host %s\n' "$host"
-            printf '  IdentityFile %s\n' "$key_path"
-            printf '  IdentitiesOnly yes\n'
-            printf '  StrictHostKeyChecking yes\n'
-          } >> "$HOME/.ssh/config"
-          chmod 600 "$HOME/.ssh/config" "$HOME/.ssh/known_hosts"
-
-          echo "REMI_HOST=${target}" >> "$GITHUB_ENV"
+            echo "REMI_HOST=$REMI_SSH_TARGET"
+            echo "REMI_SITE_KEY_PATH=$REMI_SSH_KEY_PATH"
+            echo "REMI_SSH_CONFIG=$REMI_SSH_CONFIG"
+          } >> "$GITHUB_ENV"
       - name: Deploy both static sites from the release tag
         shell: bash
         run: bash deploy/deploy-sites.sh both
@@ -611,7 +599,7 @@ jobs:
     needs: [resolve, validate-routing]
     if: ${{ needs.resolve.outputs.release == 'suite' && needs.resolve.outputs.deploy_mode == 'suite' && needs.resolve.outputs.dry_run != 'true' }}
     runs-on: ubuntu-latest
-    environment: ${{ needs.resolve.outputs.environment }}
+    environment: production
     steps:
       - name: Check out exact release tag
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -619,6 +607,21 @@ jobs:
           ref: ${{ needs.resolve.outputs.tag_name }}
           fetch-depth: 1
           persist-credentials: false
+      - name: Check out deploy-remi workflow repository for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./workflow-authority/.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_SSH_TARGET }}
       - name: Verify exact release tag checkout
         env:
           TAG_NAME: ${{ needs.resolve.outputs.tag_name }}
@@ -673,7 +676,7 @@ jobs:
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
           BUNDLE_NAME: ${{ needs.resolve.outputs.bundle_name }}
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           REMI_MAX_CONCURRENT: 32
         shell: bash
@@ -688,26 +691,20 @@ jobs:
           )
           bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"
           [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }
-          [[ -n "${REMI_SSH_KEY:-}" ]] || { echo "REMI_SSH_KEY is required" >&2; exit 1; }
-
-          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          mkdir -p ~/.ssh
-          echo "$REMI_SSH_KEY" > ~/.ssh/remi_key
-          chmod 600 ~/.ssh/remi_key
-          ssh-keyscan -H "${target#*@}" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh_opts="-i ~/.ssh/remi_key -o StrictHostKeyChecking=accept-new"
+          target="$REMI_SSH_TARGET"
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
 
           remote_bundle="/tmp/remi-${VERSION}-${GITHUB_RUN_ID}.tar.gz"
           remote_repositories="/tmp/remi-repositories-${GITHUB_RUN_ID}.toml"
           remote_helper="/tmp/remi-deploy-helper-${GITHUB_RUN_ID}"
           helper_sha="$(sha256sum deploy/remi-deploy-helper.sh | cut -d ' ' -f 1)"
-          ssh $ssh_opts "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
-          scp $ssh_opts deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
-          ssh $ssh_opts "$target" \
+          ssh "${ssh_opts[@]}" "$target" "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          scp "${ssh_opts[@]}" deploy/remi-deploy-helper.sh "${target}:${remote_helper}"
+          ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha' '$remote_helper'"
-          scp $ssh_opts "$bundle" "${target}:${remote_bundle}"
-          scp $ssh_opts deploy/remi-repositories.toml "${target}:${remote_repositories}"
-          ssh $ssh_opts "$target" bash -s \
+          scp "${ssh_opts[@]}" "$bundle" "${target}:${remote_bundle}"
+          scp "${ssh_opts[@]}" deploy/remi-repositories.toml "${target}:${remote_repositories}"
+          ssh "${ssh_opts[@]}" "$target" bash -s \
             "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"

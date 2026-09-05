@@ -15,6 +15,7 @@ native_oracle_production_workflow=".github/workflows/produce-remi-native-oracles
 resolution_survey_workflow=".github/workflows/survey-remi-resolution.yml"
 conversion_benchmark_workflow=".github/workflows/remi-conversion-benchmark.yml"
 r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
+pinned_production_ssh_action=".github/actions/setup-pinned-production-ssh/action.yml"
 conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
 native_oracle_lane_producer="scripts/produce-native-oracle-lane.py"
@@ -143,6 +144,64 @@ require_literal_count() {
         fail "$description expected $expected occurrences in $file, found $actual"
 }
 
+check_historical_checkout_local_action_authority() {
+    python3 - <<'PY'
+from pathlib import Path
+
+import yaml
+
+
+errors = []
+for path in sorted(Path(".github/workflows").glob("*.yml")):
+    document = yaml.safe_load(path.read_text())
+    for job_name, job in (document.get("jobs") or {}).items():
+        steps = job.get("steps") or []
+        root_checkouts = [
+            index for index, step in enumerate(steps)
+            if str(step.get("uses", "")).startswith("actions/checkout@")
+            and (step.get("with") or {}).get("path", ".") in ("", ".")
+        ]
+        historical_roots = [
+            index for index in root_checkouts
+            if str((steps[index].get("with") or {}).get("ref", "")).strip()
+            not in ("", "${{ github.workflow_sha }}")
+        ]
+        if not historical_roots:
+            continue
+
+        for action_index, step in enumerate(steps):
+            local_uses = str(step.get("uses", ""))
+            if not local_uses.startswith("./"):
+                continue
+            preceding_roots = [index for index in root_checkouts if index < action_index]
+            root_index = max(preceding_roots, default=-1)
+            authority_checkouts = [
+                candidate
+                for candidate in steps[root_index + 1 : action_index]
+                if str(candidate.get("uses", "")).startswith("actions/checkout@")
+                and str((candidate.get("with") or {}).get("ref", "")).strip()
+                == "${{ github.workflow_sha }}"
+                and (candidate.get("with") or {}).get("path") == "workflow-authority"
+                and (candidate.get("with") or {}).get("sparse-checkout") == ".github/actions"
+                and (candidate.get("with") or {}).get("persist-credentials") is False
+            ]
+            if not any(index < action_index for index in historical_roots) or not authority_checkouts:
+                errors.append(
+                    f"{path}:{job_name}: local action requires a historical root checkout, "
+                    "then a credential-free, action-only github.workflow_sha checkout at "
+                    "workflow-authority after the latest root checkout and before the action"
+                )
+            if not local_uses.startswith("./workflow-authority/.github/actions/"):
+                errors.append(
+                    f"{path}:{job_name}: local action after a historical checkout must "
+                    "resolve from workflow-authority"
+                )
+
+if errors:
+    raise SystemExit("\n".join(errors))
+PY
+}
+
 require_artifact_matrix_row() {
     local product="$1"
     local expected_route="$2"
@@ -192,6 +251,7 @@ for required_file in \
     "$resolution_survey_workflow" \
     "$conversion_benchmark_workflow" \
     "$r2_durability_workflow" \
+    "$pinned_production_ssh_action" \
     "$conversion_workflow_checker" \
     "$native_oracle_lane_assembler" \
     "$native_oracle_lane_producer" \
@@ -228,6 +288,57 @@ for required_file in \
     "$arch_build_script" \
     "$ccs_build_script"; do
     [[ -f "$required_file" ]] || fail "missing $required_file"
+done
+
+require_match "$pinned_production_ssh_action" 'SSH_KNOWN_HOSTS: \$\{\{ inputs\.known-hosts \}\}[\s\S]*\n[[:space:]]*if ! ssh-keygen -F "\$host" -f "\$known_hosts_path"[\s\S]*\n[[:space:]]*printf '\''  UserKnownHostsFile %s\\n'\''[\s\S]*\n[[:space:]]*printf '\''  GlobalKnownHostsFile /dev/null\\n'\''[\s\S]*\n[[:space:]]*printf '\''  IdentitiesOnly yes\\n'\''[\s\S]*\n[[:space:]]*printf '\''  BatchMode yes\\n'\''[\s\S]*\n[[:space:]]*printf '\''  ConnectTimeout 30\\n'\''[\s\S]*\n[[:space:]]*printf '\''  StrictHostKeyChecking yes\\n'\''[\s\S]*\n[[:space:]]*printf '\''  ServerAliveInterval 30\\n'\''[\s\S]*\n[[:space:]]*printf '\''  ServerAliveCountMax 6\\n'\''' 'shared production SSH action must validate and enforce the exclusive protected host identity pin'
+require_match "$pinned_production_ssh_action" '\[\[ -n "\$SSH_KNOWN_HOSTS" \]\] \|\| \{ echo "production SSH known-hosts pin is required" >&2; exit 1; \}' 'shared production SSH action must fail closed clearly when the known-hosts input is empty'
+
+declare -A production_ssh_action_counts=(
+    ["$deploy_workflow"]=3
+    ["$site_deploy_workflow"]=1
+    ["$candidate_deploy_workflow"]=1
+    ["$native_oracle_export_workflow"]=1
+    ["$resolution_survey_workflow"]=1
+    ["$conversion_benchmark_workflow"]=1
+    ["$r2_durability_workflow"]=1
+)
+for workflow in "${!production_ssh_action_counts[@]}"; do
+    require_literal_count \
+        "$workflow" \
+        'setup-pinned-production-ssh' \
+        "${production_ssh_action_counts[$workflow]}" \
+        'shared pinned production SSH setup'
+    require_match \
+        "$workflow" \
+        'known-hosts: \$\{\{ secrets\.REMI_SSH_KNOWN_HOSTS \}\}' \
+        'protected production SSH known-hosts secret'
+done
+
+production_ssh_jobs=(
+    "$deploy_workflow|bootstrap-remi-access"
+    "$deploy_workflow|deploy-conary"
+    "$deploy_workflow|deploy-remi"
+    "$site_deploy_workflow|deploy"
+    "$candidate_deploy_workflow|deploy-remi-candidate"
+    "$native_oracle_export_workflow|export"
+    "$resolution_survey_workflow|survey"
+    "$conversion_benchmark_workflow|benchmark"
+    "$r2_durability_workflow|inventory"
+)
+for production_ssh_job in "${production_ssh_jobs[@]}"; do
+    workflow="${production_ssh_job%%|*}"
+    job="${production_ssh_job#*|}"
+    require_job_match \
+        "$workflow" \
+        "$job" \
+        '\n    environment: production\n[\s\S]*\n[[:space:]]+uses: \./(workflow-authority/)?\.github/actions/setup-pinned-production-ssh' \
+        'production SSH job must use the production environment for its protected known-hosts secret'
+done
+
+for workflow in .github/workflows/*.yml; do
+    forbid_match "$workflow" 'ssh-keyscan' 'live SSH host-key discovery'
+    forbid_match "$workflow" 'accept-new' 'SSH trust on first use'
+    forbid_match "$workflow" ':-[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*' 'literal user@host fallback'
 done
 
 workspace_rust_version="$({
@@ -444,22 +555,24 @@ validate_release_topology
 require_match "$deploy_workflow" 'BUNDLE_NAME: \$\{\{ needs\.resolve\.outputs\.bundle_name \}\}' 'bundle_name-driven artifact lookup'
 require_match "$deploy_workflow" 'gh api "repos/\$\{?GH_REPO\}?/actions/runs/\$\{?SOURCE_RUN\}?" --jq '\''\.head_branch'\''' 'source-run head-branch lookup for release fallback'
 require_match "$deploy_workflow" 'gh release download "\$source_tag"' 'release-asset fallback for expired source-run artifacts'
-require_job_match "$deploy_workflow" deploy-conary 'name: Verify self-update endpoint[\s\S]*name: Check out exact release tag for static sites[\s\S]*ref: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary static-site checkout must use the serialized release tag after endpoint verification'
+require_job_match "$deploy_workflow" deploy-conary 'name: Check out workflow repository for local actions[\s\S]*uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*persist-credentials: false[\s\S]*name: Download source artifacts[\s\S]*name: Configure pinned production SSH' 'live Conary deployment must check out the exact workflow repository before using the local SSH action'
+require_job_match "$deploy_workflow" deploy-conary 'name: Check out exact release tag for static sites[\s\S]*ref: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}[\s\S]*name: Verify self-update endpoint[\s\S]*name: Verify exact release tag checkout' 'live Conary static-site checkout must use the serialized release tag and verify it before site deployment'
 require_job_match "$deploy_workflow" deploy-conary 'name: Check out exact release tag for static sites[\s\S]*persist-credentials: false[\s\S]*git tag --points-at HEAD \| grep -Fx "\$TAG_NAME"' 'live Conary static-site checkout verification'
 require_job_match "$deploy_workflow" deploy-conary 'name: Set up pinned Node\.js for static sites[\s\S]*actions/setup-node@820762786026740c76f36085b0efc47a31fe5020[\s\S]*node-version: '\''24'\''' 'live Conary static-site pinned Node setup'
 require_job_match "$deploy_workflow" deploy-conary 'name: Install locked static-site dependencies[\s\S]*npm ci --prefix site[\s\S]*npm ci --prefix web' 'live Conary locked static-site dependency installation'
-require_job_match "$deploy_workflow" deploy-conary 'name: Configure static-site deployment access[\s\S]*REMI_SSH_KEY: \$\{\{ secrets\.REMI_SSH_KEY \}\}[\s\S]*REMI_SSH_TARGET: \$\{\{ secrets\.REMI_SSH_TARGET \}\}' 'live Conary static-site SSH configuration'
+require_job_match "$deploy_workflow" deploy-conary 'name: Configure pinned production SSH[\s\S]*known-hosts: \$\{\{ secrets\.REMI_SSH_KNOWN_HOSTS \}\}[\s\S]*name: Configure static-site deployment access[\s\S]*REMI_SSH_CONFIG: \$\{\{ steps\.production-ssh\.outputs\.config-path \}\}[\s\S]*REMI_SSH_TARGET: \$\{\{ secrets\.REMI_SSH_TARGET \}\}' 'live Conary static-site deployment must reuse the job-scoped pinned SSH configuration'
 require_job_match "$deploy_workflow" deploy-conary 'name: Deploy both static sites from the release tag[\s\S]*bash deploy/deploy-sites\.sh both' 'live Conary both-site deployment from the release tag'
 require_job_match "$deploy_workflow" deploy-conary 'needs: \[resolve, validate-routing, deploy-remi\][\s\S]*needs\.deploy-remi\.result == '\''success'\''' 'Conary deployment must follow successful Remi deployment for one suite'
 require_job_match "$deploy_workflow" deploy-conary 'sha256sum -c SHA256SUMS[\s\S]*conary_deploy_dir[\s\S]*conary-\$\{VERSION\}\.ccs[\s\S]*sha256sum -- \* > SHA256SUMS' 'Conary deployment must verify the suite and stage only its product assets'
 require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[resolve, deploy-conary\][\s\S]*needs\.deploy-conary\.result == '\''success'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary deployment must hand the serialized tag to published-artifact proof'
+require_job_match "$deploy_workflow" deploy-remi 'name: Check out deploy-remi workflow repository for local actions[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*name: Configure pinned production SSH[\s\S]*uses: \./workflow-authority/\.github/actions/setup-pinned-production-ssh' 'live Remi deployment must load the local SSH action from the workflow revision after checking out the release tag'
 require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]*name: Verify remi health[\s\S]*curl -fsS https://remi\.conary\.io/health >/dev/null[\s\S]*name: Verify remi readiness[\s\S]*body=\$\(curl -fsS --max-time 30 https://remi\.conary\.io/health/ready\)[\s\S]*jq -e '\''\.ready == true'\''' 'exact post-deploy Remi liveness and structured readiness proof'
 require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
 require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingress[\s\S]*inspect-remi[\s\S]*--require-repopulated[\s\S]*verify-ingress' 'suite Remi deploy verifies static ingress after mutation and completion'
 require_match "$candidate_build_workflow" 'push:\n[[:space:]]+branches:\n[[:space:]]+- main[\s\S]*workflow_dispatch:[\s\S]*commit_sha:[\s\S]*Exact commit already merged into main' 'candidate artifact build must run for protected main and allow exact reproducibility rebuilds'
 require_job_match "$candidate_build_workflow" build-remi-candidate 'CARGO_ENCODED_RUSTFLAGS: ""[\s\S]*RUSTFLAGS: ""[\s\S]*git merge-base --is-ancestor "\$REQUESTED_SHA" origin/main[\s\S]*setup-remi-candidate-compiler-cache[\s\S]*source-sha: \$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*timed-rustc-wrapper\.sh[\s\S]*cargo build -p remi --release --locked[\s\S]*--stop-server[\s\S]*actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' 'candidate artifact build must bind protected source, time exact units, and bulk-save the pinned release cache'
 forbid_match "$candidate_build_workflow" 'SCCACHE_GHA_ENABLED|SCCACHE_GHA_VERSION' 'candidate per-object remote compiler cache'
-require_match "$candidate_cache_action" 'SOURCE_SHA: \$\{\{ inputs\.source-sha \}\}[\s\S]*git rev-parse HEAD[\s\S]*lock=%s[\s\S]*workspace_manifest=%s[\s\S]*remi_manifest=%s[\s\S]*profile=release[\s\S]*namespace="remi-release-local-v1-\$\{identity\}"[\s\S]*SCCACHE_CACHE_BACKEND=local-disk-bulk-v1[\s\S]*actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7[\s\S]*path: \$\{\{ runner\.temp \}\}/remi-release-sccache[\s\S]*mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' 'candidate compiler cache must use one exact-policy bounded local bulk seed'
+require_match "$candidate_cache_action" 'ACTION_DEFINITION: \$\{\{ github\.action_path \}\}/action\.yml[\s\S]*SOURCE_SHA: \$\{\{ inputs\.source-sha \}\}[\s\S]*git rev-parse HEAD[\s\S]*lock=%s[\s\S]*workspace_manifest=%s[\s\S]*remi_manifest=%s[\s\S]*sha256sum "\$ACTION_DEFINITION"[\s\S]*profile=release[\s\S]*namespace="remi-release-local-v1-\$\{identity\}"[\s\S]*SCCACHE_CACHE_BACKEND=local-disk-bulk-v1[\s\S]*actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7[\s\S]*path: \$\{\{ runner\.temp \}\}/remi-release-sccache[\s\S]*mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba' 'candidate compiler cache must use one exact-policy bounded local bulk seed'
 require_match "$timed_rustc_wrapper" 'CONARY_REAL_RUSTC_WRAPPER[\s\S]*CONARY_RUSTC_TIMINGS_PATH[\s\S]*--crate-name[\s\S]*--crate-type[\s\S]*flock 9[\s\S]*duration_ms' 'candidate compiler wrapper must retain attributable per-unit timings'
 require_job_match "$candidate_build_workflow" build-remi-candidate 'remi-candidate-artifact\.sh package[\s\S]*remi-candidate-artifact\.sh verify[\s\S]*event=push -f status=success -f head_sha="\$CANDIDATE_SHA"[\s\S]*Prove same-input binary reproducibility[\s\S]*\.artifact\.binary_sha256 == \$prior\[0\]\.artifact\.binary_sha256[\s\S]*name: remi-candidate-\$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*retention-days: 30' 'candidate artifact build must package, verify, reproduce, and retain the exact protected binary'
 require_match "$candidate_artifact_script" 'schema_version: 2[\s\S]*source: \{[\s\S]*commit_sha: \$commit_sha[\s\S]*cargo_lock_sha256: \$lock_sha256[\s\S]*build: \{[\s\S]*command: "cargo build -p remi --release --locked"[\s\S]*compiler_timing_wrapper_sha256[\s\S]*compiler_cache: \{[\s\S]*backend: \$compiler_cache_backend[\s\S]*provenance: \{[\s\S]*workflow_run_id: \$workflow_run_id[\s\S]*artifact: \{[\s\S]*binary_sha256: \$artifact_sha256[\s\S]*compiler_timings_sha256' 'candidate artifact manifest must bind exact source, build, cache policy, provenance, and compiler evidence'
@@ -470,8 +583,8 @@ require_match "$candidate_deploy_workflow" 'permissions:[\s\S]*actions: read[\s\
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c[\s\S]*name: remi-candidate-\$\{\{ github\.event\.inputs\.commit_sha \}\}[\s\S]*run-id: \$\{\{ steps\.artifact-source\.outputs\.run_id \}\}[\s\S]*remi-candidate-artifact\.sh verify[\s\S]*"\$SOURCE_RUN_ID" push[\s\S]*availability_ms <= 60000 \)\)' 'candidate deploy must download, verify, and budget the exact protected artifact'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'remi-candidate-artifact\.sh verify[\s\S]*\.schema_version == 2' 'candidate deploy must require current compiler-evidence manifest authority'
 forbid_match "$candidate_deploy_workflow" 'cargo build -p remi --release|setup-rust-workspace' 'candidate deploy cold Rust compilation'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'ssh_opts="-i ~/\.ssh/remi_key -o BatchMode=yes -o ConnectTimeout=30 -o ServerAliveInterval=15 -o ServerAliveCountMax=4 -o StrictHostKeyChecking=accept-new"[\s\S]*ssh \$ssh_opts[\s\S]*scp \$ssh_opts[\s\S]*ssh \$ssh_opts "\$target" bash -s' 'candidate deploy must keep every authenticated remote operation noninteractive, bounded, and alive'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'scp \$ssh_opts "\$BUNDLE"[\s\S]*inspect-remi-candidate-baseline[\s\S]*\$VERSION[\s\S]*\$BINARY_SHA256[\s\S]*\$remote_bundle[\s\S]*> remi-predeployment-inspection\.json[\s\S]*baseline_status=\$\?[\s\S]*jq -e -f deploy/remi-predeployment-inspection\.jq[\s\S]*\.measurement\.output_bytes == \$baseline_bytes[\s\S]*failure_phase: "predeployment-candidate-baseline"' 'candidate deploy verifies the exact staged candidate, validates the schema-compatible live baseline, and retains typed preflight failure evidence before mutation'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'ssh_opts=\(-F "\$REMI_SSH_CONFIG"\)[\s\S]*ssh "\$\{ssh_opts\[@\]\}"[\s\S]*scp "\$\{ssh_opts\[@\]\}"[\s\S]*ssh "\$\{ssh_opts\[@\]\}" "\$target" bash -s' 'candidate deploy must route every remote operation through the pinned production SSH configuration'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'scp "\$\{ssh_opts\[@\]\}" "\$BUNDLE"[\s\S]*inspect-remi-candidate-baseline[\s\S]*\$VERSION[\s\S]*\$BINARY_SHA256[\s\S]*\$remote_bundle[\s\S]*> remi-predeployment-inspection\.json[\s\S]*baseline_status=\$\?[\s\S]*jq -e -f deploy/remi-predeployment-inspection\.jq[\s\S]*\.measurement\.output_bytes == \$baseline_bytes[\s\S]*failure_phase: "predeployment-candidate-baseline"' 'candidate deploy verifies the exact staged candidate, validates the schema-compatible live baseline, and retains typed preflight failure evidence before mutation'
 require_match "$candidate_predeployment_filter" 'def candidate_identity:[\s\S]*\. == null or \([\s\S]*\(\.profile_revision_sha256 \| sha256\)[\s\S]*\(\.run_id \| type == "string"\)[\s\S]*\(\.completed_at \| type == "number"\)' 'candidate deploy baseline must distinguish an absent candidate from a complete typed identity'
 require_match "$candidate_predeployment_filter" '\(\[\.candidates\[\]\.profile\] \| sort\) == public_profiles[\s\S]*\(\.latest_refresh \| refresh_state\)' 'candidate deploy baseline must contain every exact public profile and typed refresh state'
 require_match "$candidate_predeployment_filter" '\.wall_time_micros <= 2000000[\s\S]*\.sqlite_statements > 0[\s\S]*\.catalog_file_opens == 0[\s\S]*\.catalog_bytes_read == 0' 'candidate deploy baseline enforces its latency and zero-catalog-read budget'
@@ -484,7 +597,7 @@ require_match "$candidate_postdeployment_filter" 'def same_fencing_authority\(\$
 require_match "$candidate_postdeployment_filter" '\.candidate_verification\.mode == "publication_attested"[\s\S]*\.candidate_verification\.completed_after[\s\S]*== \$final\.deployment\.transition_completed_at[\s\S]*\.candidate_verification\.catalog_files_reopened == 0[\s\S]*\.candidate_verification\.catalog_bytes_hashed == 0[\s\S]*\.candidate_verification\.catalog_bytes_integrity_checked == 0[\s\S]*\.repository_refreshes\[0\][\s\S]*\.scope == \{kind: "all"\}[\s\S]*\.finished_at > \$final\.deployment\.transition_completed_at[\s\S]*\.latest_refresh\.run_id == \.run_id[\s\S]*\.latest_refresh\.finished_at[\s\S]*> \$final\.deployment\.transition_completed_at\)\)[\s\S]*\.successful_profiles \| index\(\$profile\)[\s\S]*if same_fencing_authority\(\$before; \$final\) then[\s\S]*> fencing_epoch\(\$before; \$profile\)[\s\S]*else[\s\S]*fencing_epoch\(\$final; \$profile\) > 0' 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deploy-remi "\$1" "\$2" "\$3" "\$4"[\s\S]*verify-ingress[\s\S]*capture_completion_inspection "\$requirement"[\s\S]*verify-ingress' 'candidate deploy verifies static ingress after mutation and completion'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'if \[\[ "\$COMPLETION_MODE" == "active-repopulation" \]\]; then[\s\S]*\.ready == true[\s\S]*ready_status=.*curl[\s\S]*"200" \|\| "\$ready_status" == "503"[\s\S]*\.ready \| type == "boolean"' 'candidate deploy mode-specific public readiness contract'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'set \+e[\s\S]*ssh \$ssh_opts "\$target" bash -s[\s\S]*> remi-deployment-inspection\.json <<.REMOTE_EOF.[\s\S]*deployment_inspection_is_typed\(\)[\s\S]*capture_completion_inspection\(\)[\s\S]*helper_args=\(inspect-remi "\$requirement"\)[\s\S]*"\$\{helper_args\[@\]\}" 2>/dev/null[\s\S]*inspection_failure=predicate-unsatisfied[\s\S]*inspection_failure=command-failed[\s\S]*inspection_failure=invalid-typed-output[\s\S]*emit_captured_inspection_if_typed[\s\S]*attempt < 120[\s\S]*deploy_status=\$\?[\s\S]*latest_refresh\.run_id[\s\S]*latest_refresh\.redactions[\s\S]*exit "\$deploy_status"' 'candidate deploy retains one validated final typed inspection with channel-separated diagnostics'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'set \+e[\s\S]*ssh "\$\{ssh_opts\[@\]\}" "\$target" bash -s[\s\S]*> remi-deployment-inspection\.json <<.REMOTE_EOF.[\s\S]*deployment_inspection_is_typed\(\)[\s\S]*capture_completion_inspection\(\)[\s\S]*helper_args=\(inspect-remi "\$requirement"\)[\s\S]*"\$\{helper_args\[@\]\}" 2>/dev/null[\s\S]*inspection_failure=predicate-unsatisfied[\s\S]*inspection_failure=command-failed[\s\S]*inspection_failure=invalid-typed-output[\s\S]*emit_captured_inspection_if_typed[\s\S]*attempt < 120[\s\S]*deploy_status=\$\?[\s\S]*latest_refresh\.run_id[\s\S]*latest_refresh\.redactions[\s\S]*exit "\$deploy_status"' 'candidate deploy retains one validated final typed inspection with channel-separated diagnostics'
 forbid_match "$candidate_deploy_workflow" '"\$\{helper_args\[@\]\}" 2>&1' 'candidate deployment inspection JSON mixed with stderr diagnostics'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deployment_evidence_schema_version: 3[\s\S]*repository_refreshes[\s\S]*start_phase database-transition-and-restart[\s\S]*start_phase ingress-after-transition[\s\S]*start_phase forced-refresh-all[\s\S]*start_phase "forced-refresh-\$\{profile\}"[\s\S]*start_phase private-candidate-inspection[\s\S]*start_phase ingress-after-completion[\s\S]*failure_phase: "remote-session-or-transport"[\s\S]*\.deployment\.outcome == \$expected_outcome[\s\S]*\.deployment\.phases[\s\S]*\.duration_ms >= 0' 'candidate deploy retains typed refresh generations, phase timing, and early-failure evidence'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'inspect-remi-storage[\s\S]*> remi-predeployment-storage\.json[\s\S]*\.filesystem\.available_bytes[\s\S]*\.database\.logical_bytes[\s\S]*\.database\.allocated_bytes[\s\S]*\.transition_backups\.directories[\s\S]*> remi-deployment-storage\.json[\s\S]*Storage evidence \(before -> after\)[\s\S]*remi-deployment-storage\.json[\s\S]*remi-predeployment-storage\.json' 'candidate deploy retains before-and-after numeric storage evidence'
@@ -498,7 +611,7 @@ require_job_match "$native_oracle_export_workflow" export 'actions/runs/\$\{DEPL
 require_job_match "$native_oracle_export_workflow" export 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c[\s\S]*name: remi-deployment-inspection-\$\{\{ inputs\.deployment_run_id \}\}[\s\S]*run-id: \$\{\{ inputs\.deployment_run_id \}\}[\s\S]*deployment_evidence_schema_version == 3[\s\S]*completion_mode == "private-candidates"[\s\S]*repository_refreshes[\s\S]*map\(\.profile\)[\s\S]*\["fedora-44", "ubuntu-26\.04", "arch"\][\s\S]*latest_refresh\.finished_at[\s\S]*transition_completed_at' 'native-oracle export reopens the exact refresh-bound complete private-candidate inspection'
 require_job_match "$native_oracle_export_workflow" export '\.deployment\.commit_sha \| test[\s\S]*deployed_commit=.*\.deployment\.commit_sha.*inspection[\s\S]*git merge-base --is-ancestor "\$deployed_commit" origin/main[\s\S]*deployed_commit=\$deployed_commit' 'native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence'
 require_job_match "$native_oracle_export_workflow" export 'DEPLOYED_COMMIT_SHA: \$\{\{ steps\.candidates\.outputs\.deployed_commit \}\}' 'native-oracle export reports the exact deployed candidate rather than the workflow head'
-require_job_match "$native_oracle_export_workflow" export 'REMI_SSH_KNOWN_HOSTS: \$\{\{ secrets\.REMI_SSH_KNOWN_HOSTS \}\}[\s\S]*REMI_SSH_KNOWN_HOSTS is required[\s\S]*ssh-keygen -F "\$host" -f "\$known_hosts"[\s\S]*UserKnownHostsFile="\$known_hosts"[\s\S]*protected-pinned-known-hosts-v1[\s\S]*native-oracle-export-operator-v1\.json' 'native-oracle export pinned production SSH and typed operator attestation'
+require_job_match "$native_oracle_export_workflow" export 'REMI_SSH_CONFIG: \$\{\{ steps\.production-ssh\.outputs\.config-path \}\}[\s\S]*ssh_opts=\(-F "\$REMI_SSH_CONFIG"\)[\s\S]*protected-pinned-known-hosts-v1[\s\S]*native-oracle-export-operator-v1\.json' 'native-oracle export pinned production SSH and typed operator attestation'
 require_job_match "$native_oracle_export_workflow" export 'ssh_opts=\([\s\S]*git fetch --no-tags origin main[\s\S]*git rev-parse origin/main[\s\S]*WORKFLOW_SHA[\s\S]*conary-remi-deploy verify-access[\s\S]*conary-remi-deploy export-native-oracle-inputs' 'native-oracle export revalidates exact current main immediately before SSH'
 require_job_match "$native_oracle_export_workflow" export 'conary-remi-deploy export-native-oracle-inputs[\s\S]*FEDORA_CANDIDATE[\s\S]*UBUNTU_CANDIDATE[\s\S]*ARCH_CANDIDATE[\s\S]*sha256sum "\$local_transport"[\s\S]*verify-native-oracle-input-transport\.py[\s\S]*--expected-candidate "fedora-44=\$\{FEDORA_CANDIDATE\}"[\s\S]*--expected-candidate "ubuntu-26\.04=\$\{UBUNTU_CANDIDATE\}"[\s\S]*--expected-candidate "arch=\$\{ARCH_CANDIDATE\}"' 'native-oracle export fixed helper and independent exact transport verification'
 require_job_match "$native_oracle_export_workflow" export 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*native-oracle-export-operator-v1\.json[\s\S]*native-oracle-input-verification\.json[\s\S]*remi-deployment-inspection\.json[\s\S]*compression-level: 0[\s\S]*retention-days: 7' 'native-oracle export exact short-lived handoff artifact'
@@ -542,12 +655,12 @@ require_literal_count "$resolution_survey_workflow" "[[ \"sha256:\$(sha256sum \"
 require_literal_count "$resolution_survey_workflow" "[[ \"\$(sha256sum \"\$lane_archive\" | cut -d ' ' -f 1)\" == \"\$artifact_sha256\" ]] || {" 1 'resolution survey independently authenticates every assembled strict lane artifact'
 require_job_match "$resolution_survey_workflow" survey 'rm -f -- "\$set_archive"[\s\S]*rm -f -- "\$lane_archive"[\s\S]*--consume-lane-files[\s\S]*rm -rf -- "\$RUNNER_TEMP/oracles"' 'resolution survey releases authenticated lane archives and members while building its transport'
 require_job_match "$resolution_survey_workflow" survey 'Download exact export and deployment evidence[\s\S]*remi-resolution-survey-transport\.py build-input[\s\S]*--workflow-commit "\$WORKFLOW_SHA"[\s\S]*--assembly-evidence[\s\S]*--lane "fedora-44=[\s\S]*--lane "ubuntu-26\.04=[\s\S]*--lane "arch=[\s\S]*git merge-base --is-ancestor "\$deployed_commit" origin/main[\s\S]*git merge-base --is-ancestor "\$deployed_commit" "\$producer_commit"[\s\S]*git merge-base --is-ancestor "\$producer_commit" origin/main' 'resolution survey downloads and authenticates every exact current-operator assembled input'
-require_job_match "$resolution_survey_workflow" survey 'REMI_SSH_KNOWN_HOSTS: \$\{\{ secrets\.REMI_SSH_KNOWN_HOSTS \}\}[\s\S]*REMI_SSH_KNOWN_HOSTS is required[\s\S]*printf .*REMI_SSH_KNOWN_HOSTS.*known_hosts[\s\S]*ssh-keygen -F "\$host" -f "\$known_hosts"[\s\S]*UserKnownHostsFile="\$known_hosts"' 'resolution survey requires the protected pinned production SSH host identity'
+require_job_match "$resolution_survey_workflow" survey 'REMI_SSH_CONFIG: \$\{\{ steps\.production-ssh\.outputs\.config-path \}\}[\s\S]*ssh_opts=\(-F "\$REMI_SSH_CONFIG"\)' 'resolution survey requires the protected pinned production SSH host identity'
 require_job_match "$resolution_survey_workflow" survey 'git show "\$\{WORKFLOW_SHA\}:deploy/remi-deploy-helper\.sh"[\s\S]*helper_sha256=[\s\S]*conary-remi-deploy verify-access[\s\S]*scp .*"\$helper"[\s\S]*conary-remi-deploy install-helper .*\$helper_sha256.*\$remote_helper[\s\S]*scp .*"\$INPUT_TRANSPORT"' 'resolution survey installs its exact protected helper before staging survey input'
 require_job_match "$resolution_survey_workflow" survey 'git fetch --no-tags origin main[\s\S]*git show "origin/main:deploy/remi-deploy-helper\.sh"[\s\S]*current_helper_sha256=[\s\S]*"\$helper_sha256" == "\$current_helper_sha256"[\s\S]*scp .*"\$helper"[\s\S]*git fetch --no-tags origin main[\s\S]*git show "origin/main:deploy/remi-deploy-helper\.sh"[\s\S]*preinstall_helper_sha256=[\s\S]*"\$helper_sha256" == "\$preinstall_helper_sha256"[\s\S]*conary-remi-deploy install-helper' 'resolution survey revalidates protected main immediately before helper installation'
 require_literal_count "$resolution_survey_workflow" 'git fetch --no-tags origin main' 3 'resolution survey initial and pre-install protected-main helper checks'
 require_literal_count "$resolution_survey_workflow" '[[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' 3 'resolution survey rejects stale workflow and verifier revisions at every main fetch'
-require_job_match "$resolution_survey_workflow" survey 'ssh_opts=\([\s\S]*BatchMode=yes[\s\S]*ConnectTimeout=30[\s\S]*IdentitiesOnly=yes[\s\S]*StrictHostKeyChecking=yes[\s\S]*ServerAliveInterval=30[\s\S]*ServerAliveCountMax=6[\s\S]*conary-remi-deploy survey-resolution[\s\S]*sha256sum "\$local_output"[\s\S]*remi-resolution-survey-transport\.py verify-output[\s\S]*--input-evidence resolution-survey-input-verification\.json[\s\S]*--oracle-transport "\$ORACLE_TRANSPORT"' 'resolution survey fixed helper, fail-closed SSH, and independent output verification'
+require_job_match "$resolution_survey_workflow" survey 'ssh_opts=\(-F "\$REMI_SSH_CONFIG"\)[\s\S]*conary-remi-deploy survey-resolution[\s\S]*sha256sum "\$local_output"[\s\S]*remi-resolution-survey-transport\.py verify-output[\s\S]*--input-evidence resolution-survey-input-verification\.json[\s\S]*--oracle-transport "\$ORACLE_TRANSPORT"' 'resolution survey fixed helper, fail-closed SSH, and independent output verification'
 require_job_match "$resolution_survey_workflow" survey 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*resolution-survey-verification\.json[\s\S]*resolution-survey-input-verification\.json[\s\S]*resolution-survey-oracle-set\.json[\s\S]*compression-level: 0[\s\S]*retention-days: 7[\s\S]*Record resolution survey counts and histograms[\s\S]*error_histogram[\s\S]*mismatch_histogram[\s\S]*outcome_histogram' 'resolution survey short-lived verified artifact and typed summary'
 require_literal_count "$resolution_survey_workflow" 'echo "- oracle run: \`$ORACLE_RUN_ID\`"' 1 'resolution survey escaped oracle run summary binding'
 require_literal_count "$resolution_survey_workflow" 'echo "- GitHub artifact: \`$ARTIFACT_ID\`"' 1 'resolution survey escaped artifact summary binding'
@@ -607,7 +720,7 @@ forbid_match "$deploy_workflow" 'bootstrap_exception' 'retired bootstrap excepti
 require_match "$artifact_proof_workflow" 'workflow_call:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'reusable published-artifact proof input'
 require_match "$artifact_proof_workflow" 'workflow_dispatch:[\s\S]*tag_name:[\s\S]*required: true[\s\S]*type: string' 'manual published-artifact proof input'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'actions/checkout@[0-9a-f]+[\s\S]*ref: \$\{\{ inputs\.tag_name \}\}[\s\S]*fetch-depth: 0[\s\S]*persist-credentials: false' 'published artifact proof must run the exact tag harness'
-require_job_match "$artifact_proof_workflow" native-package-lifecycle "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Require the hosted container runtime" 'published artifact proof exact Rust toolchain'
+require_job_match "$artifact_proof_workflow" native-package-lifecycle "uses: \\./workflow-authority/\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Require the hosted container runtime" 'published artifact proof exact Rust toolchain'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'distro: fedora44[\s\S]*native_format: rpm[\s\S]*distro: ubuntu-26\.04[\s\S]*native_format: deb[\s\S]*distro: arch[\s\S]*native_format: arch' 'published-artifact three-distro typed matrix'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'release-matrix\.sh resolve-tag "\$RELEASE_TAG"[\s\S]*resolved_version=.*\^version=[\s\S]*git cat-file -t "\$RELEASE_TAG"[\s\S]*== "tag"[\s\S]*git worktree add --detach "\$tag_tree"[\s\S]*"\$version" == "\$resolved_version"[\s\S]*"\$tag_tree/scripts/release-matrix\.sh" assert-owned-version suite "\$version"' 'published artifact proof must bind metadata to the annotated tag version and suite authority'
 require_job_match "$artifact_proof_workflow" native-package-lifecycle 'gh api[\s\S]*X-GitHub-Api-Version: 2026-03-10[\s\S]*releases/tags/\$\{RELEASE_TAG\}[\s\S]*\$\(jq -r '\''\.draft'\'' <<< "\$release_state"\)" == "false"[\s\S]*\$\(jq -r '\''\.immutable'\'' <<< "\$release_state"\)" == "true"' 'published artifact proof must reject a draft, mutable, or mismatched GitHub release'
@@ -636,5 +749,8 @@ require_match "$artifact_matrix" 'checksums|SHA-256' 'suite checksum evidence co
 require_match "$artifact_matrix" 'signature' 'per-artifact signature evidence contract'
 require_match "$artifact_matrix" 'SBOM' 'per-artifact SBOM evidence contract'
 require_match "$artifact_matrix" 'provenance' 'per-artifact provenance evidence contract'
+
+check_historical_checkout_local_action_authority ||
+    fail "historical checkout local-action authority"
 
 echo "Release matrix workflow checks passed."

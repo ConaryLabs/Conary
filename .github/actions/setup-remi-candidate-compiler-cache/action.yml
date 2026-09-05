@@ -21,6 +21,7 @@ runs:
       id: policy
       shell: bash
       env:
+        ACTION_DEFINITION: ${{ github.action_path }}/action.yml
         SOURCE_SHA: ${{ inputs.source-sha }}
       run: |
         set -euo pipefail
@@ -47,7 +48,7 @@ runs:
             printf 'target=%s\n' "$(rustc -vV | sed -n 's/^host: //p')"
             printf 'cc=%s\n' "$(cc --version | sed -n '1p')"
             printf 'native_abi=%s\n' "$native_abi"
-            printf 'cache_action=%s\n' "$(sha256sum .github/actions/setup-remi-candidate-compiler-cache/action.yml | cut -d ' ' -f 1)"
+            printf 'cache_action=%s\n' "$(sha256sum "$ACTION_DEFINITION" | cut -d ' ' -f 1)"
             printf 'profile=release\n'
             printf 'features=default\n'
             printf 'rustflags=%s\n' "${RUSTFLAGS:-}"

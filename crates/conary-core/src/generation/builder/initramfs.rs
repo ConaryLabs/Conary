@@ -11,6 +11,8 @@ const CONARY_DRACUT_INIT: &str =
     include_str!("../../../../../packaging/dracut/90conary/conary-init.sh");
 const CONARY_DRACUT_GENERATOR: &str =
     include_str!("../../../../../packaging/dracut/90conary/conary-generator.sh");
+const CONARY_DRACUT_VERITY_POLICY: &str =
+    include_str!("../../../../../packaging/dracut/90conary/conary-verity.sh");
 pub(super) const RUNTIME_DRACUT_ADD_MODULES: &str = "conary";
 pub(super) const RUNTIME_DRACUT_OMIT_MODULES: &str = "systemd";
 
@@ -55,6 +57,10 @@ pub(super) fn generate_runtime_initramfs(
     write_dracut_module_file(
         &module_dir.join("conary-generator.sh"),
         CONARY_DRACUT_GENERATOR,
+    )?;
+    write_dracut_module_file(
+        &module_dir.join("conary-verity.sh"),
+        CONARY_DRACUT_VERITY_POLICY,
     )?;
 
     let output = std::process::Command::new(dracut)
@@ -334,10 +340,12 @@ mod tests {
     #[test]
     fn conary_runtime_scripts_only_invoke_declared_module_tools() {
         let declared = declared_module_tools();
+        let generator_with_verity_policy =
+            format!("{CONARY_DRACUT_VERITY_POLICY}\n{CONARY_DRACUT_GENERATOR}");
 
         for (name, script) in [
             ("conary-init", CONARY_DRACUT_INIT),
-            ("conary-generator", CONARY_DRACUT_GENERATOR),
+            ("conary-generator", generator_with_verity_policy.as_str()),
         ] {
             let functions = shell_function_names(script);
             let invocations =
@@ -357,6 +365,20 @@ mod tests {
                 "{name} directly invokes initramfs tools that the Conary dracut module does not declare: {missing:?}"
             );
         }
+    }
+
+    #[test]
+    fn posix_dot_is_an_initramfs_shell_builtin() {
+        let invocations = extract_invocations_from_shell_text(
+            "conary-generator-source",
+            ". /usr/lib/conary/conary-verity.sh",
+            Some("initramfs"),
+        )
+        .unwrap();
+
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].command, ".");
+        assert!(shell_builtin(&invocations[0].command));
     }
 
     fn declared_module_tools() -> BTreeSet<String> {
@@ -421,7 +443,8 @@ mod tests {
     fn shell_builtin(command: &str) -> bool {
         matches!(
             command,
-            "!" | ":"
+            "!" | "."
+                | ":"
                 | "["
                 | "break"
                 | "command"

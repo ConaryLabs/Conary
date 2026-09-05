@@ -2,14 +2,12 @@
 //! Generation builder — CLI wrapper around conary_core::generation::builder.
 //!
 //! This module handles CLI-specific concerns (convergence intent checks,
-//! composefs preflight, fs-verity enablement, progress output) and delegates
+//! composefs preflight, progress output) and delegates
 //! the actual EROFS image building to the core library.
 
 use super::composefs::preflight_composefs;
-use super::metadata::GenerationMetadata;
 use anyhow::{Context, Result, anyhow};
 use conary_core::db::models::{InstallSource, Trove};
-use conary_core::filesystem::fsverity::{FsVerityError, enable_fsverity};
 use conary_core::generation::builder as core_builder;
 use conary_core::model;
 use conary_core::model::ConvergenceIntent;
@@ -22,7 +20,7 @@ pub(crate) fn requested_generation_verity(digest: Option<&str>, fsverity_enabled
 }
 
 pub(crate) fn enable_generation_rootfs_verity(gen_dir: &Path, image_path: &Path) -> Result<()> {
-    enable_generation_rootfs_verity_with(gen_dir, image_path, enable_fsverity)
+    core_builder::enable_generation_rootfs_verity(gen_dir, image_path).map_err(Into::into)
 }
 
 fn ensure_generation_cas_layout(generations_root: &Path, objects_dir: &Path) -> Result<()> {
@@ -176,58 +174,6 @@ fn absolute_normal_components(path: &Path) -> Option<Vec<std::ffi::OsString>> {
     saw_root.then_some(components)
 }
 
-fn enable_generation_rootfs_verity_with<F>(
-    gen_dir: &Path,
-    image_path: &Path,
-    enable: F,
-) -> Result<()>
-where
-    F: FnOnce(&Path) -> std::result::Result<bool, FsVerityError>,
-{
-    let enable_outcome = enable(image_path).map_err(|error| match error {
-        FsVerityError::Open { path, source } => anyhow!(
-            "Failed to open generation image {} for fs-verity enablement: {source}",
-            path.display()
-        ),
-        FsVerityError::NotSupported(path) => anyhow!(
-            "Generation image {} is on a filesystem without fs-verity support; refusing to build a composefs generation that would remount without truthful verity protection",
-            path.display()
-        ),
-        FsVerityError::IoctlFailed { path, source } => anyhow!(
-            "Failed to enable fs-verity on generation image {}: {source}",
-            path.display()
-        ),
-    })?;
-
-    let mut metadata = GenerationMetadata::read_from(gen_dir).with_context(|| {
-        format!(
-            "Failed to read generation metadata from {}",
-            gen_dir.display()
-        )
-    })?;
-    metadata.fsverity_enabled = true;
-    metadata.write_to(gen_dir).with_context(|| {
-        format!(
-            "Failed to update generation metadata after enabling fs-verity on {}",
-            image_path.display()
-        )
-    })?;
-
-    if enable_outcome {
-        info!(
-            "Enabled fs-verity on generation image {}",
-            image_path.display()
-        );
-    } else {
-        debug!(
-            "Generation image {} already had fs-verity enabled",
-            image_path.display()
-        );
-    }
-
-    Ok(())
-}
-
 /// Build a new generation as an EROFS image from the current system state.
 ///
 /// This is the CLI entry point that wraps `conary_core::generation::builder`.
@@ -333,66 +279,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn test_metadata() -> GenerationMetadata {
-        GenerationMetadata {
-            generation: 7,
-            format: conary_core::generation::metadata::GENERATION_FORMAT.to_string(),
-            erofs_size: Some(4096),
-            cas_objects_referenced: Some(3),
-            fsverity_enabled: false,
-            erofs_verity_digest: Some("ab".repeat(32)),
-            artifact_manifest_sha256: None,
-            security_capability_xattr_count: None,
-            created_at: "2026-04-21T00:00:00Z".to_string(),
-            package_count: 2,
-            kernel_version: Some("6.16.1".to_string()),
-            summary: "test generation".to_string(),
-        }
-    }
-
     #[test]
     fn requested_generation_verity_requires_both_digest_and_fsverity_ready_image() {
         assert!(!requested_generation_verity(None, true));
         assert!(!requested_generation_verity(Some("ab"), false));
         assert!(requested_generation_verity(Some("ab"), true));
-    }
-
-    #[test]
-    fn enable_generation_rootfs_verity_marks_metadata_enabled_after_success() {
-        let tmp = TempDir::new().unwrap();
-        let gen_dir = tmp.path();
-        let image_path = gen_dir.join("root.erofs");
-        std::fs::write(&image_path, b"erofs-image").unwrap();
-        test_metadata().write_to(gen_dir).unwrap();
-
-        enable_generation_rootfs_verity_with(gen_dir, &image_path, |_| Ok(true)).unwrap();
-
-        let metadata = GenerationMetadata::read_from(gen_dir).unwrap();
-        assert!(
-            metadata.fsverity_enabled,
-            "generation metadata must only advertise verity after root.erofs is actually finalized"
-        );
-    }
-
-    #[test]
-    fn enable_generation_rootfs_verity_keeps_metadata_false_on_failure() {
-        let tmp = TempDir::new().unwrap();
-        let gen_dir = tmp.path();
-        let image_path = gen_dir.join("root.erofs");
-        std::fs::write(&image_path, b"erofs-image").unwrap();
-        test_metadata().write_to(gen_dir).unwrap();
-
-        let err = enable_generation_rootfs_verity_with(gen_dir, &image_path, |_| {
-            Err(FsVerityError::NotSupported(image_path.clone()))
-        })
-        .unwrap_err();
-
-        assert!(err.to_string().contains("fs-verity support"));
-        let metadata = GenerationMetadata::read_from(gen_dir).unwrap();
-        assert!(
-            !metadata.fsverity_enabled,
-            "metadata must stay false when root.erofs could not be protected"
-        );
     }
 
     #[cfg(unix)]

@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 65
+revision: 69
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -504,6 +504,39 @@ Generation-aware package mutation
        |
   validated manifests + carrier capabilities + CAS -> exact state/security projection -> staged ESP/rootfs
 ```
+
+The single boot verification policy owner is conary-core's
+`generation::verity_policy::VerityPolicy`. Absence or exact `conary.verity=on`
+requires a verified composefs mount; only exact `conary.verity=off` permits an
+unverified mount and prints a console warning. The last occurrence wins, with
+presence tracked separately: an empty or otherwise invalid final value fails
+activation. A failed verified mount is fatal and is never retried without
+verification. Recovery rejects generation metadata lacking the fs-verity flag
+or EROFS verity digest with a typed error under the verified policy.
+When recovery rebuilds a missing or damaged selected image, it finalizes
+fs-verity and persists the flag alongside the builder's digest before mounting.
+`generation::builder::verity` owns this finalization for both normal publication
+and recovery; an explicit `off` rebuild skips enablement and mounts unverified.
+Artifact fallback scanning proceeds in descending generation order and selects
+the highest intact artifact eligible under the active policy. A plain artifact
+is skipped under verified policy, never mounted as a fallback. Boot recovery
+returns `RecoveryEvidence` with the selected generation and typed skipped-artifact
+reasons; exhausted scans preserve those reasons in `RecoveryScanExhausted`.
+Policy-ineligible candidates can be skipped, but a verified mount failure remains
+fatal and does not trigger further selection or an unverified retry.
+
+The deployed-system `deploy/dracut` hook invokes `conary system generation
+recover`, which consumes this Rust policy before repair, artifact scanning or
+mount reuse. The `packaging/dracut/90conary` generator and bootstrap-generated
+`/init` cannot execute conary before switch_root: neither image installs the
+binary. Core reports the validated typed policy to the CLI before recovery work;
+the CLI renders the explicit-off warning through its UI, without relying on
+tracing filters. Both binary-free boot paths use the same shell adapter, tested
+against the Rust policy for argument precedence, rejection, mount options and
+downgrade warnings. These are execution adapters, not independent policy owners.
+Consolidating all three
+initramfs implementations and their tool inventories is tracked in
+[#863](https://github.com/FieldmouseWorks/Conary/issues/863).
 
 ### Generation Lifecycle
 

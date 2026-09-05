@@ -331,6 +331,13 @@ jobs:
               }
             ' > remi-conversion-source-verification-v1.json
 
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_SSH_TARGET }}
       - name: Run through the fixed production helper
         id: benchmark
         env:
@@ -339,8 +346,9 @@ jobs:
           DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
           PACKAGE_KEY_SHA256: ${{ inputs.package_key_sha256 }}
           PROFILE: ${{ inputs.profile }}
-          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
+          REMI_SSH_KEY_PATH: ${{ steps.production-ssh.outputs.key-path }}
+          REMI_SSH_KNOWN_HOSTS_PATH: ${{ steps.production-ssh.outputs.known-hosts-path }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           REMI_VERSION: ${{ steps.authority.outputs.version }}
           REVISION: ${{ steps.authority.outputs.revision }}
@@ -353,19 +361,7 @@ jobs:
         run: |
           set -euo pipefail
           export LC_ALL=C
-          [[ -n "${REMI_SSH_KEY:-}" ]] || {
-            echo "REMI_SSH_KEY is required" >&2
-            exit 1
-          }
-          [[ -n "${REMI_SSH_KNOWN_HOSTS:-}" ]] || {
-            echo "REMI_SSH_KNOWN_HOSTS is required" >&2
-            exit 1
-          }
-          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          [[ "$target" =~ ^[A-Za-z_][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*$ ]] || {
-            echo "REMI_SSH_TARGET must be one explicit user and DNS host" >&2
-            exit 1
-          }
+          target="$REMI_SSH_TARGET"
           for digest in "$BINARY_SHA256" "$REVISION" "$PACKAGE_KEY_SHA256" "$SOURCE_SHA256"; do
             [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
               echo "benchmark authority contains a malformed SHA-256" >&2
@@ -387,8 +383,8 @@ jobs:
           local_source="${RUNNER_TEMP}/remi-conversion-source.native"
           local_transport="${RUNNER_TEMP}/remi-conversion-benchmark-${benchmark_id}.json"
           helper="${RUNNER_TEMP}/remi-deploy-helper-${benchmark_id}"
-          key="${RUNNER_TEMP}/remi-conversion-benchmark-key"
-          known_hosts="${RUNNER_TEMP}/remi-conversion-benchmark-known-hosts"
+          key="$REMI_SSH_KEY_PATH"
+          known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
           helper_stdout="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stdout"
           helper_stderr="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stderr"
           failure_record="remi-conversion-benchmark-failure-v1.json"
@@ -435,27 +431,7 @@ jobs:
           }
           helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
 
-          umask 077
-          install -d -m 0700 "$HOME/.ssh"
-          printf '%s\n' "$REMI_SSH_KEY" > "$key"
-          ssh-keygen -y -f "$key" >/dev/null
-          host="${target#*@}"
-          printf '%s\n' "$REMI_SSH_KNOWN_HOSTS" > "$known_hosts"
-          chmod 0600 "$key" "$known_hosts"
-          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then
-            echo "pinned production SSH host identity does not bind $host" >&2
-            exit 1
-          fi
-          ssh_opts=(
-            -i "$key"
-            -o IdentitiesOnly=yes
-            -o BatchMode=yes
-            -o ConnectTimeout=30
-            -o ServerAliveInterval=15
-            -o ServerAliveCountMax=4
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$known_hosts"
-          )
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
 
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"

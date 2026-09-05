@@ -38,6 +38,14 @@ jobs:
           ref: ${{ github.event_name == 'push' && github.sha || inputs.commit_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
       - name: Bind exact protected-main source
         id: candidate
         env:
@@ -58,7 +66,8 @@ jobs:
             echo "candidate must already be merged into origin/main" >&2
             exit 1
           }
-          [[ -z "$(git status --porcelain --untracked-files=all)" ]] || {
+          [[ -z "$(git status --porcelain --untracked-files=all -- . \
+            ':(exclude)workflow-authority')" ]] || {
             echo "candidate checkout is not clean" >&2
             exit 1
           }
@@ -67,7 +76,7 @@ jobs:
         id: setup-start
         shell: bash
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/setup-rust-workspace
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           toolchain: 1.98.0
       - name: Finish dependency setup clock
@@ -85,7 +94,7 @@ jobs:
         run: echo "started_ns=$(date -u +%s%N)" >> "$GITHUB_OUTPUT"
       - name: Restore and activate Remi compiler-cache policy
         id: remi-cache
-        uses: ./.github/actions/setup-remi-candidate-compiler-cache
+        uses: ./workflow-authority/.github/actions/setup-remi-candidate-compiler-cache
         with:
           source-sha: ${{ steps.candidate.outputs.sha }}
       - name: Finish compiler-cache setup clock

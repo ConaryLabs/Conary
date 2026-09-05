@@ -258,6 +258,7 @@ create_release_policy_fixture() {
     mkdir -p \
         "$repo/scripts" \
         "$repo/.github/actions/setup-exact-ownership-tests" \
+        "$repo/.github/actions/setup-pinned-production-ssh" \
         "$repo/.github/actions/setup-remi-candidate-compiler-cache" \
         "$repo/.github/actions/setup-rust-workspace" \
         "$repo/.github/ISSUE_TEMPLATE" \
@@ -326,6 +327,8 @@ create_release_policy_fixture() {
     cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
     cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
         "$repo/.github/actions/setup-exact-ownership-tests/action.yml"
+    cp "$REPO_ROOT/.github/actions/setup-pinned-production-ssh/action.yml" \
+        "$repo/.github/actions/setup-pinned-production-ssh/action.yml"
     cp "$REPO_ROOT/.github/actions/setup-rust-workspace/action.yml" \
         "$repo/.github/actions/setup-rust-workspace/action.yml"
     cp "$REPO_ROOT/.github/actions/setup-remi-candidate-compiler-cache/action.yml" \
@@ -1491,13 +1494,65 @@ test_check_release_matrix_rejects_unbounded_candidate_transport() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '-o ServerAliveInterval=15' \
-        '-o ServerAliveInterval=0'
+        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
+        "          printf '  ServerAliveInterval 30\\n'" \
+        "          printf '  ServerAliveInterval 0\\n'"
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "candidate deploy must keep every authenticated remote operation noninteractive, bounded, and alive"
+        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
+}
+
+test_check_release_matrix_rejects_global_known_hosts_fallback() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
+        "          printf '  GlobalKnownHostsFile /dev/null\\n'" \
+        "          printf '  GlobalKnownHostsFile /etc/ssh/ssh_known_hosts\\n'"
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
+}
+
+test_check_release_matrix_rejects_empty_known_hosts_acceptance() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
+        '        [[ -n "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }' \
+        '        [[ -z "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "fail closed clearly when the known-hosts input is empty"
+}
+
+test_check_release_matrix_requires_production_environment_for_ssh_jobs() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        '    environment: production' \
+        '    environment: staging'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "production SSH job must use the production environment for its protected known-hosts secret"
+}
+
+test_check_release_matrix_rejects_literal_ssh_target_fallback() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-remi-candidate.yml" \
+        '          target="$REMI_SSH_TARGET"' \
+        '          target="${REMI_SSH_TARGET:-operator@ssh.example.test}"'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "literal user@host fallback"
 }
 
 test_check_release_matrix_rejects_loose_artifact_latency_budget() {
@@ -1839,25 +1894,45 @@ test_check_release_matrix_requires_pinned_native_oracle_export_host() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle export pinned production SSH and typed operator attestation"
+        "protected production SSH known-hosts secret"
 }
 
-test_check_release_matrix_rejects_live_native_oracle_export_host_discovery() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          ssh_opts=(' \
-        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
+test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow() {
+    local relative repo
+    local -a workflows=(
+        deploy-and-verify.yml
+        deploy-remi-candidate.yml
+        deploy-site.yml
+        export-remi-native-oracle-inputs.yml
+        remi-conversion-benchmark.yml
+        remi-r2-durability.yml
+        survey-remi-resolution.yml
+    )
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export live SSH host-key discovery"
+    for relative in "${workflows[@]}"; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$relative" \
+            '      - name: Configure pinned production SSH' \
+            $'      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH'
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "live SSH host-key discovery"
+
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$relative" \
+            '      - name: Configure pinned production SSH' \
+            $'      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH'
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "SSH trust on first use"
+    done
 }
 
 test_check_release_matrix_rejects_unattested_native_oracle_export() {
@@ -1896,7 +1971,7 @@ test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle export exact current protected-main operator boundary"
+        "production SSH job must use the production environment for its protected known-hosts secret"
 }
 
 test_check_release_matrix_rejects_unserialized_native_oracle_export() {
@@ -2255,25 +2330,12 @@ test_check_release_matrix_requires_pinned_resolution_survey_host() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "resolution survey requires the protected pinned production SSH host identity"
-}
-
-test_check_release_matrix_rejects_live_resolution_survey_host_discovery() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          ssh_opts=(' \
-        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey live SSH host-key discovery"
+        "protected production SSH known-hosts secret"
 }
 
 test_check_release_matrix_rejects_unbound_resolution_survey_output() {
@@ -2725,7 +2787,7 @@ test_check_release_matrix_rejects_nonproduction_conversion_benchmark() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "conversion benchmark protected merged-main operator boundary"
+        "production SSH job must use the production environment for its protected known-hosts secret"
 }
 
 test_check_release_matrix_rejects_unserialized_conversion_benchmark() {
@@ -3227,25 +3289,12 @@ test_check_release_matrix_requires_pinned_conversion_benchmark_host() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KEY }}'
+        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
+        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "conversion benchmark pinned production SSH host identity"
-}
-
-test_check_release_matrix_rejects_live_conversion_benchmark_host_discovery() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          ssh_opts=(' \
-        $'          ssh-keyscan "$host" >> "$known_hosts"\n          ssh_opts=('
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+        "protected production SSH known-hosts secret"
 }
 
 test_check_release_matrix_rejects_commented_conversion_benchmark_permissions() {
@@ -3291,13 +3340,13 @@ test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin() {
     local repo
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then' \
-        $'          if ! true; then\n            # if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then'
+        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
+        '        if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then' \
+        $'        if ! true; then\n        # if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then'
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
+        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
 }
 
 test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority() {
@@ -3347,8 +3396,8 @@ test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/.github/workflows/deploy-and-verify.yml" \
-        $'            sha256sum -c SHA256SUMS\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          [[ -n "${REMI_SSH_KEY:-}" ]]' \
-        $'            echo "suite checksum verification removed"\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          [[ -n "${REMI_SSH_KEY:-}" ]]'
+        $'            sha256sum -c SHA256SUMS\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"' \
+        $'            echo "suite checksum verification removed"\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"'
 
     assert_check_release_matrix_fails "$repo" "Remi deployment must verify the complete suite checksums before staging its bundle"
 }
@@ -3810,6 +3859,109 @@ test_check_release_matrix_rejects_non_tag_static_site_checkout() {
     assert_check_release_matrix_fails "$repo" "static-site checkout must use the serialized release tag"
 }
 
+test_check_release_matrix_rejects_missing_local_action_checkout() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        '          ref: ${{ github.workflow_sha }}' \
+        '          ref: ${{ github.sha }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "check out the exact workflow repository before using the local SSH action"
+}
+
+test_check_release_matrix_rejects_release_tag_local_ssh_action() {
+    local repo
+    repo="$(create_release_policy_fixture)"
+    replace_fixture_text_once \
+        "$repo/.github/workflows/deploy-and-verify.yml" \
+        $'      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ github.workflow_sha }}' \
+        $'      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ needs.resolve.outputs.tag_name }}'
+
+    assert_check_release_matrix_fails \
+        "$repo" \
+        "load the local SSH action from the workflow revision after checking out the release tag"
+}
+
+test_check_release_matrix_rejects_historical_local_action_authority() {
+    local relative repo
+    local -a workflows=(
+        build-remi-candidate.yml
+        deploy-remi-candidate.yml
+        release-artifact-proof.yml
+        remi-r2-durability.yml
+    )
+
+    for relative in "${workflows[@]}"; do
+        repo="$(create_release_policy_fixture)"
+        replace_fixture_text_once \
+            "$repo/.github/workflows/$relative" \
+            '          ref: ${{ github.workflow_sha }}' \
+            '          ref: ${{ github.sha }}'
+
+        assert_check_release_matrix_fails \
+            "$repo" \
+            "historical checkout local-action authority"
+    done
+}
+
+test_check_release_matrix_rejects_reversed_authority_checkout_order() {
+    local target relative job mutation repo expected
+    for target in \
+        build-remi-candidate.yml:build-remi-candidate \
+        deploy-remi-candidate.yml:deploy-remi-candidate \
+        release-artifact-proof.yml:native-package-lifecycle \
+        remi-r2-durability.yml:inventory \
+        deploy-and-verify.yml:deploy-conary \
+        deploy-and-verify.yml:deploy-remi; do
+        relative="${target%%:*}"
+        job="${target#*:}"
+        for mutation in authority-first authority-after-action; do
+            repo="$(create_release_policy_fixture)"
+            python3 - "$repo/.github/workflows/$relative" "$job" "$mutation" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+job_start = text.index(f"  {sys.argv[2]}:\n")
+steps_start = text.index("    steps:\n", job_start) + len("    steps:\n")
+root_end = text.index("      - ", steps_start + len("      - "))
+authority_end = text.index("      - ", root_end + len("      - "))
+root = text[steps_start:root_end]
+authority = text[root_end:authority_end]
+assert "path: workflow-authority" in authority
+assert "path: workflow-authority" not in root
+if sys.argv[3] == "authority-first":
+    # Reproduce the broken fresh-runner sequence, including its ineffective
+    # clean:false workaround. Preserve formatting for unrelated policy checks.
+    text = text[:steps_start] + authority + root.rstrip() + "\n          clean: false\n" + text[authority_end:]
+else:
+    action_start = text.index("uses: ./workflow-authority/", authority_end)
+    action_end = text.index("      - ", action_start)
+    text = text[:root_end] + text[authority_end:action_end] + authority + text[action_end:]
+path.write_text(text)
+PY
+            expected="historical checkout local-action authority"
+            if [[ "$mutation" == authority-after-action ]]; then
+                case "$job" in
+                    deploy-conary)
+                        expected="check out the exact workflow repository before using the local SSH action"
+                        ;;
+                    deploy-remi)
+                        expected="load the local SSH action from the workflow revision after checking out the release tag"
+                        ;;
+                esac
+            fi
+            assert_check_release_matrix_fails \
+                "$repo" \
+                "$expected"
+        done
+    done
+}
+
 test_check_release_matrix_rejects_single_static_site_deploy() {
     local repo
     repo="$(create_release_policy_fixture)"
@@ -3892,6 +4044,10 @@ main() {
         test_check_release_matrix_rejects_per_object_candidate_cache
         test_check_release_matrix_rejects_cold_candidate_rebuild
         test_check_release_matrix_rejects_unbounded_candidate_transport
+        test_check_release_matrix_rejects_global_known_hosts_fallback
+        test_check_release_matrix_rejects_empty_known_hosts_acceptance
+        test_check_release_matrix_requires_production_environment_for_ssh_jobs
+        test_check_release_matrix_rejects_literal_ssh_target_fallback
         test_check_release_matrix_rejects_loose_artifact_latency_budget
         test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
         test_check_release_matrix_rejects_unforced_post_deploy_candidates
@@ -3918,7 +4074,7 @@ main() {
         test_check_release_matrix_rejects_stale_native_oracle_export_operator
         test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh
         test_check_release_matrix_requires_pinned_native_oracle_export_host
-        test_check_release_matrix_rejects_live_native_oracle_export_host_discovery
+        test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow
         test_check_release_matrix_rejects_unattested_native_oracle_export
         test_check_release_matrix_rejects_unattested_native_oracle_production_input
         test_check_release_matrix_rejects_nonproduction_native_oracle_export
@@ -3950,7 +4106,6 @@ main() {
         test_check_release_matrix_rejects_caller_authorized_helper_update
         test_check_release_matrix_rejects_resolution_survey_helper_downgrade
         test_check_release_matrix_requires_pinned_resolution_survey_host
-        test_check_release_matrix_rejects_live_resolution_survey_host_discovery
         test_check_release_matrix_rejects_unbound_resolution_survey_output
         test_check_release_matrix_rejects_unbound_resolution_survey_assembly
         test_check_release_matrix_rejects_resolution_survey_set_digest_bypass
@@ -4025,7 +4180,6 @@ main() {
         test_check_release_matrix_rejects_unsanitized_conversion_failure_stage
         test_check_release_matrix_rejects_preupload_conversion_failure_exit
         test_check_release_matrix_requires_pinned_conversion_benchmark_host
-        test_check_release_matrix_rejects_live_conversion_benchmark_host_discovery
         test_check_release_matrix_rejects_commented_conversion_benchmark_permissions
         test_check_release_matrix_rejects_commented_conversion_benchmark_input
         test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref
@@ -4069,6 +4223,10 @@ main() {
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair
         test_check_release_matrix_rejects_non_tag_static_site_checkout
+        test_check_release_matrix_rejects_missing_local_action_checkout
+        test_check_release_matrix_rejects_release_tag_local_ssh_action
+        test_check_release_matrix_rejects_historical_local_action_authority
+        test_check_release_matrix_rejects_reversed_authority_checkout_order
         test_check_release_matrix_rejects_single_static_site_deploy
     )
 

@@ -203,7 +203,8 @@ pub fn bootstrap_initramfs_input_paths() -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
-const INITRAMFS_INIT: &str = r#"#!/bin/sh
+const INITRAMFS_INIT: &str = concat!(
+    r#"#!/bin/sh
 PATH=/usr/bin:/usr/sbin:/bin:/sbin
 export PATH
 
@@ -211,6 +212,10 @@ fail() {
     echo "conary-initramfs: $*" >&2
     exec /bin/sh
 }
+
+"#,
+    include_str!("../../../../packaging/dracut/90conary/conary-verity.sh"),
+    r#"
 
 expose_generation_usr() {
     usr_source="/sysroot/conary/mnt/usr"
@@ -262,6 +267,7 @@ for opt in $(cat /proc/cmdline); do
         conary.carrier=*) CONARY_CARRIER="${opt#conary.carrier=}" ;;
     esac
 done
+CONARY_VERITY="$(conary_read_verity /proc/cmdline)"
 
 if [ -z "$ROOT_FLAGS" ]; then
     if [ "$CONARY_CARRIER" = "readonly" ]; then
@@ -293,8 +299,9 @@ if [ -n "$CONARY_GEN" ]; then
 
     [ -f "$EROFS_IMG" ] || fail "generation $CONARY_GEN is missing root.erofs"
     mkdir -p /sysroot/conary/mnt
-    mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR,verity_check=1" 2>/dev/null ||
-        mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "basedir=$CAS_DIR" ||
+    COMPOSEFS_OPTIONS="$(conary_composefs_options "$CONARY_VERITY" "$CAS_DIR")" ||
+        fail "invalid composefs verification policy"
+    mount -t composefs "$EROFS_IMG" /sysroot/conary/mnt -o "$COMPOSEFS_OPTIONS" ||
         fail "composefs mount failed for generation $CONARY_GEN"
 
     if [ -d /sysroot/conary/mnt/usr ]; then
@@ -326,7 +333,8 @@ mount --move /proc /sysroot/proc 2>/dev/null || true
 mount --move /sys /sysroot/sys 2>/dev/null || true
 exec switch_root /sysroot /usr/lib/systemd/systemd
 fail "switch_root failed"
-"#;
+"#,
+);
 
 /// Write the Conary bootstrap initramfs used by generation-aware boot entries.
 ///

@@ -53,7 +53,15 @@ jobs:
           ref: ${{ inputs.tag_name }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: ./.github/actions/setup-rust-workspace
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           toolchain: 1.98.0
       - name: Require the hosted container runtime
@@ -186,7 +194,7 @@ jobs:
 
           echo "native_package=${package}" >> "$GITHUB_OUTPUT"
           echo "asset=${asset}" >> "$GITHUB_OUTPUT"
-      - uses: ./.github/actions/build-static-conary
+      - uses: ./workflow-authority/.github/actions/build-static-conary
       - name: Build the lifecycle harness
         run: cargo build -p conary -p conary-test
       - name: Prove the signed bootstrap in a clean supported host
@@ -223,7 +231,7 @@ jobs:
               esac
               /tmp/install-conary-preview.sh --manifest-url "$MANIFEST_URL" --apply --yes
             '
-      - uses: ./.github/actions/cache-base-image
+      - uses: ./workflow-authority/.github/actions/cache-base-image
         with:
           distro: ${{ matrix.distro }}
       - name: Install the published native package in the test image

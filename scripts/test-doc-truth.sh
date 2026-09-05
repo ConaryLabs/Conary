@@ -808,6 +808,11 @@ break_live_doc_location_claim() {
     printf '\nActive designs live under `docs/missing-live-location/`.\n' >> "$1/AGENTS.md"
 }
 
+break_tracked_admin_login() {
+    printf '\nUse %s@%s for production access.\n' 'exampleadmin' 'ssh.conary.io' \
+        >> "$1/docs/operations/external-tester-outreach.md"
+}
+
 break_frontmatter_revision() {
     sed -i '/^revision:/d' "$1/docs/ARCHITECTURE.md"
 }
@@ -880,6 +885,7 @@ expect_failure "mandatory provider skill" break_mandatory_provider_skill 'neutra
 expect_failure "retired plan directory" break_retired_plan_directory 'neutral layout.*retired design/plan path'
 expect_failure "retired design directory" break_retired_design_directory 'neutral layout.*retired design/plan path'
 expect_failure "missing live documentation directory" break_live_doc_location_claim 'names missing live documentation directory'
+expect_failure "tracked admin login" break_tracked_admin_login 'publishes a concrete ssh.conary.io login'
 expect_failure "missing frontmatter revision" break_frontmatter_revision 'frontmatter requires a positive integer revision'
 expect_failure "frontmatter summary budget" break_frontmatter_summary_budget 'frontmatter summary exceeds 40 words: 41'
 expect_failure "missing backticked repository path" break_backticked_repo_path 'names missing repository path: docs/missing-guide.md'

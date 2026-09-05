@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-03
-revision: 93
+revision: 94
 summary: Document non-secret CI, release, deployment, hosting, agent-operation, and production evidence workflows; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -80,9 +80,10 @@ workflow.
 ### Remi
 
 - Use the direct origin hostname `ssh.conary.io` for SSH and rsync.
-- Use the normal admin account (`<admin>@ssh.conary.io`) plus passwordless,
-  least-privilege `sudo`; root SSH login is not part of the supported deploy
-  path.
+- Use the normal admin account (`<admin>@ssh.conary.io`) recorded in the ignored
+  `docs/operations/LOCAL_ACCESS.md`, <!-- repo-path: local --> plus passwordless,
+  least-privilege `sudo`;
+  root SSH login is not part of the supported deploy path.
 - Exclude `target/`, `.git/`, and `.worktrees/`
 - The durable deploy entry point is the root-owned helper installed at
   `/usr/local/sbin/conary-remi-deploy`, with the sudo policy tracked in
@@ -525,6 +526,46 @@ workflow.
   site deployment. It shares the non-cancelling `deploy-and-verify` concurrency
   group so publication and its Remi probes cannot overlap any other production
   host transition or stopped-service benchmark.
+
+#### Direct static-site deployment
+
+The protected `deploy-site` workflow is the normal deployment path. Authorized
+operators may run `deploy/deploy-sites.sh` directly for recovery or debugging,
+but the script deliberately refuses a bare invocation. Record the real admin
+login, private-key path, and pinned `known_hosts` entry in the ignored
+`docs/operations/LOCAL_ACCESS.md`. <!-- repo-path: local --> Create a dedicated SSH
+configuration from those values; never discover the live key during deployment:
+
+```bash
+identity_file=/absolute/path/to/production_identity
+known_hosts_file=/absolute/path/to/production_known_hosts
+ssh_config_file="$(mktemp)"
+
+# Populate known_hosts_file only from the reviewed pin in LOCAL_ACCESS.md.
+test -s "$known_hosts_file"
+chmod 600 "$known_hosts_file"
+cat >"$ssh_config_file" <<EOF
+Host ssh.conary.io
+  UserKnownHostsFile $known_hosts_file
+  GlobalKnownHostsFile /dev/null
+  IdentityFile $identity_file
+  IdentitiesOnly yes
+  BatchMode yes
+  StrictHostKeyChecking yes
+EOF
+chmod 600 "$ssh_config_file"
+ssh-keygen -F ssh.conary.io -f "$known_hosts_file" >/dev/null
+
+export REMI_HOST='<admin>@ssh.conary.io'
+export REMI_SSH_CONFIG="$ssh_config_file"
+bash deploy/deploy-sites.sh both  # or: site, packages
+```
+
+Delete the temporary SSH configuration after the deployment. `REMI_HOST` names
+the login target; `REMI_SSH_CONFIG` is mandatory so every `ssh` and `rsync`
+operation uses only the reviewed host-identity pin and ignores global host
+files.
+
 - `deploy/configure-site-routing.sh` owns the host-side transition from the old
   SPA fallback to static routing. It requires one unambiguous nginx server for
   `conary.io` rooted at `/conary/site`, backs up the config, changes missing

@@ -1,6 +1,6 @@
 #!/bin/bash
 # packaging/dracut/90conary/conary-generator.sh
-# Pre-pivot hook: mount Conary generation via composefs
+# Initramfs generation activator: mount Conary generation via composefs
 
 SYSROOT="${CONARY_SYSROOT:-/sysroot}"
 CMDLINE_FILE="${CONARY_CMDLINE_FILE:-/proc/cmdline}"
@@ -42,19 +42,26 @@ ensure_root_symlink() {
 
 read_kernel_value() {
     local key="$1"
+    local value=""
+    local found=1
 
     if [ ! -r "$CMDLINE_FILE" ]; then
-        return 0
+        return 1
     fi
 
+    # Kernel command-line arguments are whitespace-delimited, not line-delimited.
+    # shellcheck disable=SC2013
     for opt in $(cat "$CMDLINE_FILE"); do
         case "$opt" in
             "$key"=*)
-                printf '%s\n' "${opt#*=}"
-                return 0
+                value="${opt#*=}"
+                found=0
                 ;;
         esac
     done
+
+    [ "$found" -eq 0 ] || return 1
+    printf '%s\n' "$value"
 }
 
 read_kernel_generation() {
@@ -142,6 +149,15 @@ if [ -z "$CONARY_GEN" ]; then
     exit 0  # No generation system configured
 fi
 
+verity_policy_path="${CONARY_VERITY_POLICY_PATH:-/usr/lib/conary/conary-verity.sh}"
+[ -r "$verity_policy_path" ] || {
+    echo "conary: composefs verity policy missing at $verity_policy_path" >&2
+    exit 1
+}
+# shellcheck source=packaging/dracut/90conary/conary-verity.sh
+. "$verity_policy_path"
+CONARY_VERITY="$(conary_read_verity "$CMDLINE_FILE")"
+
 prepare_readonly_var_state || exit 1
 
 GEN_DIR="${SYSROOT}/conary/generations/${CONARY_GEN}"
@@ -156,10 +172,9 @@ CAS_DIR="${SYSROOT}/conary/objects"
 
 # Mount composefs at staging point
 mkdir -p "${SYSROOT}/conary/mnt"
+COMPOSEFS_OPTIONS="$(conary_composefs_options "$CONARY_VERITY" "$CAS_DIR")" || exit 1
 mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
-    -o "basedir=${CAS_DIR},verity_check=1" 2>/dev/null || \
-mount -t composefs "$EROFS_IMG" "${SYSROOT}/conary/mnt" \
-    -o "basedir=${CAS_DIR}" || {
+    -o "$COMPOSEFS_OPTIONS" || {
     echo "conary: composefs mount failed for $EROFS_IMG" >&2
     exit 1
 }

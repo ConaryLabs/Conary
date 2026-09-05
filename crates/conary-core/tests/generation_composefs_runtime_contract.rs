@@ -573,6 +573,9 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
         "packaging/dracut/90conary/conary-generator.sh",
     ))
     .expect("failed to read conary dracut generator");
+    let verity_policy =
+        fs::read_to_string(workspace_file("packaging/dracut/90conary/conary-verity.sh"))
+            .expect("failed to read shared composefs verity policy");
     let dracut_init =
         fs::read_to_string(workspace_file("packaging/dracut/90conary/conary-init.sh"))
             .expect("failed to read conary dracut init");
@@ -610,8 +613,19 @@ fn dracut_generator_is_the_single_generation_activation_authority() {
         "the Conary init script must be able to invoke the generator directly"
     );
     assert!(
-        dracut_module.contains("/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"),
-        "the generated module must still support dracut's normal pre-pivot hook path"
+        dracut_module.contains(
+            "install_conary_script \"$moddir/conary-verity.sh\" \"/usr/lib/conary/conary-verity.sh\""
+        ),
+        "the runtime initramfs must install the shared composefs verification policy"
+    );
+    assert!(
+        dracut_generator.contains("conary_composefs_options")
+            && verity_policy.contains("conary_composefs_options()"),
+        "the dracut generator must delegate its composefs verification options to the shared policy"
+    );
+    assert!(
+        !dracut_module.contains("/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"),
+        "the Conary-owned /init path must not install an unreachable pre-pivot generator copy"
     );
     assert!(
         dracut_init.contains("exec switch_root \"$SYSROOT\" /sbin/init"),

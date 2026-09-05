@@ -696,6 +696,12 @@ pub fn cmd_generation_rollback() -> Result<()> {
 
 /// Recover any interrupted transaction using the database at `db_path`.
 pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
+    // Reject an invalid boot policy before pending publication replay can
+    // rebuild an image, swap /conary/current, or touch database state.
+    let verity = conary_core::transaction::host_boot_verity_policy()?;
+    if let Some(warning) = verity.warning() {
+        crate::ui::warn(warning);
+    }
     let conn = crate::commands::open_db(db_path)?;
     let runtime_root = runtime_root_for_generation_db_path(db_path);
 
@@ -722,7 +728,7 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
             ));
         }
     }
-    engine.recover_boot_selection(&conn)?;
+    engine.recover_boot_selection(&conn, &verity)?;
 
     // Restore the /etc overlay after recovery mounts the generation.
     // recover() mounts the composefs image at <root>/mnt; the writable

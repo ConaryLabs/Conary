@@ -12,7 +12,9 @@ entry point is the root-owned helper installed as:
 
 To verify helper access:
 
-  ssh peter@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'
+  Look up the admin account in the ignored docs/operations/LOCAL_ACCESS.md, then run:
+
+  ssh <admin>@ssh.conary.io 'sudo -n /usr/local/sbin/conary-remi-deploy verify-access'
 
 To bootstrap or repair helper access from a privileged shell:
 

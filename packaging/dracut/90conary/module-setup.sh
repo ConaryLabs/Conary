@@ -18,16 +18,20 @@ install_conary_script() {
     src="$1"
     dest="$2"
 
+    # dracut provides initdir and moddir while evaluating this module.
+    # shellcheck disable=SC2154
     mkdir -p "${initdir}/$(dirname "$dest")"
     cp "$src" "${initdir}/${dest}"
     chmod 0755 "${initdir}/${dest}"
 }
 
 install() {
+    # shellcheck disable=SC2154
     install_conary_script "$moddir/conary-init.sh" "/init"
+    # shellcheck disable=SC2154
     install_conary_script "$moddir/conary-generator.sh" "/sbin/conary-generator"
-    install_conary_script "$moddir/conary-generator.sh" \
-        "/var/lib/dracut/hooks/pre-pivot/90-conary-generator.sh"
+    # shellcheck disable=SC2154
+    install_conary_script "$moddir/conary-verity.sh" "/usr/lib/conary/conary-verity.sh"
     # Own the complete executable contract of the runtime scripts instead of
     # relying on incidental tools pulled in by neighboring dracut modules.
     inst_multiple \

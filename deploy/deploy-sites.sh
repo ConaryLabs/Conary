@@ -17,7 +17,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REMI_HOST="${REMI_HOST:-peter@ssh.conary.io}"
+REMI_HOST="${REMI_HOST:?REMI_HOST is required}"
+REMI_SSH_CONFIG="${REMI_SSH_CONFIG:?REMI_SSH_CONFIG is required}"
 REMI_DEPLOY_HELPER="${REMI_DEPLOY_HELPER:-/usr/local/sbin/conary-remi-deploy}"
 
 remote_quote() {
@@ -28,7 +29,7 @@ cleanup_remote_stage() {
     local remote_stage="$1"
     local quoted_stage
     quoted_stage="$(remote_quote "$remote_stage")"
-    ssh "$REMI_HOST" "rm -rf -- $quoted_stage" >/dev/null 2>&1 || true
+    ssh -F "$REMI_SSH_CONFIG" "$REMI_HOST" "rm -rf -- $quoted_stage" >/dev/null 2>&1 || true
 }
 
 stage_and_publish() {
@@ -42,15 +43,15 @@ stage_and_publish() {
         exit 1
     }
 
-    remote_stage="$(ssh "$REMI_HOST" "mktemp -d /tmp/conary-${target}.deploy.XXXXXX")"
-    if ! rsync -avz --delete "${build_dir}/" "$REMI_HOST:${remote_stage}/"; then
+    remote_stage="$(ssh -F "$REMI_SSH_CONFIG" "$REMI_HOST" "mktemp -d /tmp/conary-${target}.deploy.XXXXXX")"
+    if ! rsync -e "ssh -F $REMI_SSH_CONFIG" -avz --delete "${build_dir}/" "$REMI_HOST:${remote_stage}/"; then
         cleanup_remote_stage "$remote_stage"
         exit 1
     fi
 
     quoted_stage="$(remote_quote "$remote_stage")"
     quoted_helper="$(remote_quote "$REMI_DEPLOY_HELPER")"
-    if ! ssh "$REMI_HOST" "sudo -n $quoted_helper deploy-site $target $quoted_stage"; then
+    if ! ssh -F "$REMI_SSH_CONFIG" "$REMI_HOST" "sudo -n $quoted_helper deploy-site $target $quoted_stage"; then
         cleanup_remote_stage "$remote_stage"
         exit 1
     fi

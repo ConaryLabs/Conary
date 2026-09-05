@@ -228,6 +228,17 @@ check_backticked_repo_paths() {
     )
 }
 
+check_tracked_admin_logins() {
+    local file line_no text
+
+    while IFS=: read -r file line_no text; do
+        report_error "$file:$line_no publishes a concrete ssh.conary.io login: $text"
+    done < <(
+        git grep -n -I -E '[a-z]+@ssh\.conary\.io' -- \
+            'docs/*.md' 'docs/**/*.md' || true
+    )
+}
+
 check_assistant_context_budget() {
     local budget path max_lines max_bytes actual_lines actual_bytes
 
@@ -1156,6 +1167,7 @@ check_neutral_planning_layout
 check_third_party_divergence
 check_profile_architecture_authority
 check_live_doc_location_claims
+check_tracked_admin_logins
 check_assistant_context_budget
 check_canonical_doc_frontmatter
 check_backticked_repo_paths

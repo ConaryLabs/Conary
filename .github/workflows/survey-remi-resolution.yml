@@ -318,12 +318,20 @@ jobs:
             echo "transport=$transport"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_SSH_TARGET }}
       - name: Run through the fixed production helper
         id: survey
         env:
           INPUT_TRANSPORT: ${{ steps.input.outputs.transport }}
-          REMI_SSH_KNOWN_HOSTS: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
-          REMI_SSH_KEY: ${{ secrets.REMI_SSH_KEY }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
+          REMI_SSH_KEY_PATH: ${{ steps.production-ssh.outputs.key-path }}
+          REMI_SSH_KNOWN_HOSTS_PATH: ${{ steps.production-ssh.outputs.known-hosts-path }}
           REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
           SURVEY_ID: ${{ steps.input.outputs.survey_id }}
           EXPORT_ID: ${{ steps.input.outputs.export_id }}
@@ -331,27 +339,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ -n "${REMI_SSH_KEY:-}" ]] || {
-            echo "REMI_SSH_KEY is required" >&2
-            exit 1
-          }
-          [[ -n "${REMI_SSH_KNOWN_HOSTS:-}" ]] || {
-            echo "REMI_SSH_KNOWN_HOSTS is required" >&2
-            exit 1
-          }
-          target="${REMI_SSH_TARGET:-peter@ssh.conary.io}"
-          [[ "$target" =~ ^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$ ]] || {
-            echo "REMI_SSH_TARGET must be one explicit user and DNS host" >&2
-            exit 1
-          }
+          target="$REMI_SSH_TARGET"
           remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
           remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
           remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
           helper="${RUNNER_TEMP}/remi-resolution-survey-helper-${SURVEY_ID}"
           current_helper="${helper}.protected-main"
-          key="${RUNNER_TEMP}/remi-resolution-survey-key"
-          known_hosts="${RUNNER_TEMP}/remi-resolution-survey-known-hosts"
+          key="$REMI_SSH_KEY_PATH"
+          known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
           remote_possible=0
           cleanup() {
             status=$?
@@ -394,26 +390,8 @@ jobs:
             exit 1
           }
 
-          umask 077
-          printf '%s\n' "$REMI_SSH_KEY" > "$key"
-          ssh-keygen -y -f "$key" >/dev/null
-          host="${target#*@}"
-          printf '%s\n' "$REMI_SSH_KNOWN_HOSTS" > "$known_hosts"
-          chmod 0600 "$key" "$known_hosts" "$INPUT_TRANSPORT"
-          if ! ssh-keygen -F "$host" -f "$known_hosts" >/dev/null; then
-            echo "pinned production SSH host identity does not bind $host" >&2
-            exit 1
-          fi
-          ssh_opts=(
-            -i "$key"
-            -o BatchMode=yes
-            -o ConnectTimeout=30
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$known_hosts"
-            -o ServerAliveInterval=30
-            -o ServerAliveCountMax=6
-          )
+          chmod 0600 "$INPUT_TRANSPORT"
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
 
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"

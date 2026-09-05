@@ -16,6 +16,12 @@ use crate::error::Error;
 #[cfg(feature = "composefs-rs")]
 use composefs::fsverity::{FsVerityHashValue, Sha256HashValue};
 
+/// The composefs mount option that requires fs-verity for every object, as
+/// supported by the pinned composefs helper. `verity_check=1` is obsolete.
+/// The binary-free initramfs adapter (`packaging/dracut/90conary/conary-verity.sh`)
+/// must emit exactly this token; its conformance test binds it here.
+pub const COMPOSEFS_VERITY_OPTION: &str = "verity";
+
 /// Options for mounting a composefs generation image.
 ///
 /// Encapsulates all parameters needed to invoke `mount -t composefs`.
@@ -64,7 +70,7 @@ impl MountOptions {
         let mut opts = vec![format!("basedir={}", self.basedir.display())];
 
         if self.verity {
-            opts.push("verity".to_string());
+            opts.push(COMPOSEFS_VERITY_OPTION.to_string());
         }
 
         if let Some(digest) = &self.digest {
