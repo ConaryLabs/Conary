@@ -98,3 +98,6 @@ web/static/apple-touch-icon.png
 
 # Delegate work reports stay local
 /REPORT.md
+
+# release-matrix policy test scratch (created in the repo root while scripts/test-release-matrix.sh runs)
+.tmp-release-matrix-run.*/
