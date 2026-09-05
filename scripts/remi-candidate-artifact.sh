@@ -51,7 +51,7 @@ require_regular_file() {
 require_clean_checkout() {
     local dirty
     dirty="$(git status --porcelain --untracked-files=all)"
-    [[ -z "$dirty" ]] || fail "candidate checkout must be clean before packaging"
+    [[ -z "$dirty" ]] || fail "candidate checkout must be clean before packaging; dirty paths: $(tr '\n' ' ' <<<"$dirty")"
 }
 
 package_artifact() {
