@@ -65,8 +65,9 @@ struct Arguments {
 }
 
 fn main() {
+    conary_bootstrap::init_cli_tracing("warn");
     if let Err(error) = run(Arguments::parse()) {
-        eprintln!("conary-rpm-resolution-oracle: {error:#}");
+        tracing::error!("conary-rpm-resolution-oracle: {error:#}");
         std::process::exit(1);
     }
 }

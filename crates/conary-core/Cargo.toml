@@ -12,11 +12,13 @@ build = "build.rs"
 [features]
 default = ["composefs-rs"]
 composefs-rs = ["dep:composefs"]
-native-alpm-oracle = ["dep:alpm", "dep:clap"]
-native-rpm-oracle = ["dep:clap"]
-native-debian-oracle = ["dep:clap"]
+native-alpm-oracle = ["dep:alpm", "dep:clap", "dep:conary-bootstrap"]
+native-rpm-oracle = ["dep:clap", "dep:conary-bootstrap"]
+native-debian-oracle = ["dep:clap", "dep:conary-bootstrap"]
 
 [dependencies]
+# Binary-only terminal diagnostics; the core library never initializes tracing.
+conary-bootstrap = { path = "../conary-bootstrap", optional = true }
 # Database
 rusqlite.workspace = true
 
@@ -221,3 +223,7 @@ harness = false
 [[bench]]
 name = "package_transaction_staging"
 harness = false
+
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"

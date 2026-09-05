@@ -71,6 +71,7 @@ struct WorkerArguments {
 }
 
 fn main() {
+    conary_bootstrap::init_cli_tracing("warn");
     let mut raw = std::env::args_os();
     let program = raw.next().unwrap_or_default();
     if raw
@@ -83,13 +84,13 @@ fn main() {
             &arguments.package_index,
             &arguments.architecture,
         ) {
-            eprintln!("conary-debian-resolution-oracle worker: {error:#}");
+            tracing::error!("conary-debian-resolution-oracle worker: {error:#}");
             std::process::exit(1);
         }
         return;
     }
     if let Err(error) = run(Arguments::parse()) {
-        eprintln!("conary-debian-resolution-oracle: {error:#}");
+        tracing::error!("conary-debian-resolution-oracle: {error:#}");
         std::process::exit(1);
     }
 }

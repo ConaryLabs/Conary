@@ -8,6 +8,9 @@
 //! The broad module exports are for workspace convenience and integration-test
 //! reuse. They are not a stable external public API or SDK contract.
 
+// Production library output belongs to callers; test diagnostics remain available.
+#![cfg_attr(test, allow(clippy::print_stdout, clippy::print_stderr))]
+
 pub mod activation;
 pub mod automation;
 pub mod boot_runtime;
