@@ -163,6 +163,18 @@ sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh ccs |\1con
 expect_failure "release-build ccs proof allowed to fail" "$root"
 
 make_fixture "$root"
+sed -i 's|^\(\s*run: bash scripts/check-release-license-contents.sh rpm .*\)$|\1 \|\| true|' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build rpm proof masked with || true" "$root"
+
+make_fixture "$root"
+sed -i 's|^\(\s*run: bash scripts/check-release-license-contents.sh deb .*\)$|\1; true|' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build deb proof followed by a masking command" "$root"
+
+make_fixture "$root"
+sed -i 's|^\(\s*\)run: bash scripts/check-release-license-contents.sh arch |\1shell: bash {0}\n\1run: bash scripts/check-release-license-contents.sh arch |' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build arch proof under a shell without errexit" "$root"
+
+make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"
 expect_failure "PKGBUILD missing the Apache install" "$root"
 

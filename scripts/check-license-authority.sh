@@ -148,9 +148,20 @@ owners = {
     "client-tar": ["build-conaryd", "build-conary-test"],
     "suite": ["bundle-suite"],
 }
+# The proof must be the complete command on its line: a plain word list with
+# no shell control operators, redirections, or status-masking suffixes, run by
+# a step whose shell keeps errexit (the default or an explicit -e).
+COMMAND = re.compile(r"^\s*bash scripts/check-release-license-contents\.sh (?P<kind>[a-z-]+)(?P<args>( [A-Za-z0-9_./*${}\"-]+)+)\s*$")
+def shell_keeps_errexit(step):
+    shell = step.get("shell")
+    if shell is None:
+        return True
+    shell = str(shell).strip()
+    if shell == "bash":
+        return True
+    return "-e" in shell.split() or "-eo" in shell.split() or "-euo" in shell.split()
 def executes(job_id, kind):
-    """A live step in job_id whose run script executes the proof as a command."""
-    pattern = re.compile(r"^\s*bash scripts/check-release-license-contents\.sh " + re.escape(kind) + r" ")
+    """A live step in job_id whose run script executes the proof as the whole command."""
     for job, step, text in live:
         if job != job_id:
             continue
@@ -159,8 +170,12 @@ def executes(job_id, kind):
         condition = step.get("if")
         if condition is not None and str(condition).strip() in ("false", "${{ false }}"):
             continue
-        if any(pattern.match(line) for line in text.splitlines()):
-            return True
+        if not shell_keeps_errexit(step):
+            continue
+        for line in text.splitlines():
+            match = COMMAND.match(line)
+            if match and match.group("kind") == kind:
+                return True
     return False
 missing = []
 for kind, jobs in owners.items():
