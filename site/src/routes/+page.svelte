@@ -64,9 +64,14 @@
 			<div>
 				<dt>External testing</dt>
 				<dd>
-					Not open yet. No release is assigned as tester authority; the remaining launch
-					gates are tracked in the open in
-					<a href={project.launchStatusUrl}>launch-status.json</a>.
+					{#if previewRelease.testerPinAssigned}
+						Open: {previewRelease.tag} is the assigned tester release. The gate state is
+						tracked in <a href={project.launchStatusUrl}>launch-status.json</a>.
+					{:else}
+						Not open yet. No release is assigned as tester authority; the remaining launch
+						gates are tracked in the open in
+						<a href={project.launchStatusUrl}>launch-status.json</a>.
+					{/if}
 				</dd>
 			</div>
 		</dl>
@@ -165,7 +170,13 @@
 	<div class="container grid-12">
 		<div class="truth-col works">
 			<p class="eyebrow">What works today</p>
-			<h2 class="section-heading">Proven on the three supported hosts.</h2>
+			<h2 class="section-heading">Working on the three supported hosts.</h2>
+			<p class="truth-note">
+				Proof runs in the integration harness on the current tree, and the ordinary-package
+				gate passed after {previewRelease.tag} was cut. That release is immutable
+				install-and-bootstrap evidence; the behaviour below is not a claim about the
+				artifact itself.
+			</p>
 			<ul class="truth-list">
 				<li>Installing RPM, DEB, and Arch artifacts through typed lifecycle, dependency, payload, and configuration contracts, on any of the three hosts.</li>
 				<li>Installing native CCS packages and Remi-converted RPM, DEB, and Arch packages with Conary as package authority.</li>
@@ -198,7 +209,8 @@
 			<p class="section-copy">
 				Pick a source whose package format differs from the host. Every dry-run shows the
 				package's typed lifecycle, dependencies, payload, and required host capabilities
-				before anything is mutated. Every mutation wants an explicit <code>--yes</code>.
+				before anything is mutated. Commands that change packages, files, or generation
+				state require an explicit <code>--yes</code>.
 			</p>
 
 			<div class="authority-summary">
@@ -255,11 +267,12 @@
 <section class="section final-cta">
 	<div class="container cta-box">
 		<div>
-			<p class="eyebrow">Try it on a disposable host</p>
-			<h2>Install a package your distro did not ship.</h2>
+			<p class="eyebrow">Inspect it on a disposable host</p>
+			<h2>Install the pre-alpha and read the plan before you apply it.</h2>
 			<p>
 				The bootstrap script verifies the signed release manifest and the package for
-				your host before it touches anything, and previews by default.
+				your host before it touches anything, and previews by default. The external
+				tester loop stays inactive until a release is pinned.
 			</p>
 		</div>
 		<div class="button-row">
@@ -534,6 +547,13 @@
 
 	.truth-col .section-heading {
 		max-width: 18ch;
+	}
+
+	.truth-note {
+		max-width: 60ch;
+		margin: 0;
+		color: var(--color-muted);
+		font-size: 0.93rem;
 	}
 
 	.truth-list {

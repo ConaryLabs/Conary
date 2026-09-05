@@ -61,7 +61,11 @@
 			<span class="status-item">
 				latest release <a href={previewRelease.releaseUrl}>{previewRelease.tag}</a>
 			</span>
-			<span class="status-item status-wide">no external tester pin assigned</span>
+			{#if previewRelease.testerPinAssigned}
+				<span class="status-item status-wide">external tester release pinned</span>
+			{:else}
+				<span class="status-item status-wide">no external tester pin assigned</span>
+			{/if}
 			<a class="status-link" href="/install/">what that means</a>
 		</div>
 	</aside>

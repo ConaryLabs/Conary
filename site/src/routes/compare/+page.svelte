@@ -27,7 +27,7 @@
 				<div class="matrix-meta">
 					<span>Competitor columns reviewed</span>
 					<strong>2026-07-25</strong>
-					<p>Documentation snapshot · default first-party behavior unless a cell says otherwise · Conary column reflects {previewRelease.tag}</p>
+					<p>Documentation snapshot · default first-party behavior unless a cell says otherwise · Conary column reflects current roadmap maturity, not only the {previewRelease.tag} artifact</p>
 				</div>
 			</div>
 

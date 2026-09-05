@@ -3,18 +3,22 @@
 	import PageMeta from '$lib/components/PageMeta.svelte';
 	import TerminalFrame from '$lib/components/TerminalFrame.svelte';
 	import { previewRelease, project } from '$lib/preview-release';
+
+	const pinned = previewRelease.testerPinAssigned;
 </script>
 
 <PageMeta
 	title="Install the Conary pre-alpha — Conary"
-	description={`Install the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script, then run the bounded cross-distro package loop.`}
+	description={`Inspect the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The external tester loop stays inactive until a release is pinned.`}
 	path="/install/"
 />
 
 <PageIntro
 	eyebrow="Install · pre-alpha"
 	title="Install the preview on a host you can afford to break."
-	description={`The latest immutable release is ${previewRelease.tag}. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only. No release is assigned as external tester authority yet, so treat every run as an early look rather than a supported evaluation.`}
+	description={pinned
+		? `${previewRelease.tag} is the assigned external tester release. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only.`
+		: `The latest immutable release is ${previewRelease.tag}. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only. No release is assigned as external tester authority yet: you may inspect it on a disposable host, and the tester loop itself stays inactive until one is.`}
 />
 
 <section class="install-section">
@@ -26,7 +30,8 @@
 				<li>Use a VM, a snapshot, or a host you do not need.</li>
 				<li>Match Fedora 44, Ubuntu 26.04 LTS, or Arch Linux on x86_64.</li>
 				<li>Read every script and command before running it.</li>
-				<li>Prefer <code>--dry-run</code> first; every mutation needs <code>--yes</code>.</li>
+				<li>Use <code>--dry-run</code> wherever a command offers it.</li>
+				<li>Commands that change packages, files, or generation state need <code>--yes</code>; repository sync, adoption, and self-update change state without it.</li>
 				<li>Expect failures, and report them.</li>
 				<li>Nothing here is a daily driver.</li>
 			</ul>
@@ -38,20 +43,31 @@
 		<div class="install-content">
 			<section class="status-panel" aria-labelledby="status-panel-title">
 				<p class="eyebrow">Where things stand</p>
-				<h2 id="status-panel-title">Released, not yet open for external testing.</h2>
-				<p>
-					{previewRelease.tag} is a real, immutable, signed release, and the bounded loop
-					below has been proven on all three hosts. What is missing is a tester pin: the
-					project has not assigned any release as the one it asks strangers to evaluate,
-					because the remaining launch gates are still open. You are welcome to try it; the
-					result is early feedback, not a milestone completion.
-				</p>
+				{#if pinned}
+					<h2 id="status-panel-title">A tester release is pinned.</h2>
+					<p>
+						{previewRelease.tag} is the release the project asks external testers to
+						evaluate. The tester guide names the same release and is active; the loop below
+						is the one it describes.
+					</p>
+				{:else}
+					<h2 id="status-panel-title">Released, not yet open for external testing.</h2>
+					<p>
+						{previewRelease.tag} is a real, immutable, signed release whose packages
+						installed through the signed bootstrap protocol on all three hosts. It is
+						historical release evidence: the ordinary-package gate passed on the tree
+						after it was cut, and the suite predates the current signed-universe client.
+						No release is assigned as tester authority while the remaining launch gates
+						are open. Inspecting it on a disposable host is fine; it is not a tester run
+						and does not count toward the milestone.
+					</p>
+				{/if}
 				<div class="button-row">
 					<a href={previewRelease.releaseUrl} class="btn btn-secondary">
 						Inspect the {previewRelease.tag} release <span aria-hidden="true">↗</span>
 					</a>
 					<a href={project.launchStatusUrl} class="btn btn-secondary">
-						See the open launch gates <span aria-hidden="true">↗</span>
+						See the launch gates <span aria-hidden="true">↗</span>
 					</a>
 				</div>
 			</section>
@@ -65,7 +81,8 @@
 							The script downloads the release manifest and its detached signature, verifies
 							the Ed25519 signature against the embedded release key before it reads any
 							selection field, picks the one package for this host, downloads it, and checks
-							its size and SHA-256. Without <code>--apply</code> it only prints the plan.
+							its size and SHA-256 against the signed manifest. Without <code>--apply</code>
+							it only prints the plan.
 						</p>
 					</div>
 				</div>
@@ -79,7 +96,11 @@
 				<div class="boundary-note step-note">
 					<strong>Do not pipe the URL into a shell.</strong>
 					Read the script. It is short, fails closed on anything it does not recognise, and
-					refuses to run on a host or architecture outside the supported set.
+					refuses to run on a host or architecture outside the supported set. It is the only
+					supported install path: a plain <code>SHA256SUMS</code> check against the same
+					origin as the packages is not a substitute for the signed manifest. The
+					<a href={previewRelease.matrixUrl}>release matrix</a> records every asset digest
+					if you want to cross-check by hand.
 				</div>
 			</section>
 
@@ -104,72 +125,76 @@
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">conary --version</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary repo list</span></span>
 				</TerminalFrame>
-
-				<details class="manual-path">
-					<summary>Prefer to verify by hand? Download one package and check it yourself.</summary>
-					<p class="manual-intro">
-						Create a clean directory, fetch only the package for this host together with
-						<code>SHA256SUMS</code>, and confirm the checksum prints <strong>OK</strong> before
-						installing it with the native package manager.
-					</p>
-					<TerminalFrame title="clean preview directory">
-						<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">mkdir -p "{previewRelease.workDirectory}" && cd "{previewRelease.workDirectory}"</span></span>
-						<span class="terminal-line"><span class="terminal-command">base="{previewRelease.downloadBaseUrl}"</span></span>
-						<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">curl -fLO "$base/SHA256SUMS"</span></span>
-					</TerminalFrame>
-					<div class="download-grid">
-						{#each previewRelease.targets as target}
-							<article class="download-lane">
-								<div class="lane-heading">
-									<span>{target.name}</span>
-									<code>{target.asset}</code>
-								</div>
-								<TerminalFrame title={`${target.name} download, verify, install`}>
-									<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">curl -fLO "$base/{target.asset}"</span></span>
-									<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sha256sum -c SHA256SUMS --ignore-missing</span></span>
-									<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">{target.installCommand}</span></span>
-								</TerminalFrame>
-							</article>
-						{/each}
-					</div>
-				</details>
 			</section>
 
 			<section class="install-step" id="tester-loop">
 				<div class="step-heading">
 					<span class="step-number">03</span>
 					<div>
-						<h2>Run the bounded cross-distro loop in order</h2>
-						<p>
-							Sync Remi, then choose a source whose package format differs from the host's.
-							Review every dry-run before the command that carries <code>--yes</code>.
-						</p>
+						<h2>The bounded cross-distro loop</h2>
+						{#if pinned}
+							<p>
+								Sync Remi, then choose a source whose package format differs from the host's.
+								Review every dry-run before the command that carries <code>--yes</code>.
+							</p>
+						{:else}
+							<p>
+								This is the loop the external tester milestone measures. The
+								<a href={previewRelease.testerGuideUrl}>tester guide</a> that owns it is
+								paused and says not to run it until <code>launch-status.json</code> assigns
+								an exact tester release. The commands are kept here so the shape is visible,
+								folded away so the site does not become a second execution authority.
+							</p>
+						{/if}
 					</div>
 				</div>
 
-				<div class="loop-legend" aria-label="Command intent legend">
-					<span><i class="intent-mark dry" aria-hidden="true"></i>inspect first</span>
-					<span><i class="intent-mark live" aria-hidden="true"></i>live mutation</span>
-					<span><i class="intent-mark read" aria-hidden="true"></i>read-only check</span>
-				</div>
+				{#if pinned}
+					<div class="loop-legend" aria-label="Command intent legend">
+						<span><i class="intent-mark dry" aria-hidden="true"></i>inspect first</span>
+						<span><i class="intent-mark live" aria-hidden="true"></i>live mutation</span>
+						<span><i class="intent-mark read" aria-hidden="true"></i>read-only check</span>
+					</div>
 
-				<TerminalFrame title="first cross-distro loop">
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary repo sync remi</span></span>
-					<span class="terminal-line intent-read"><span class="intent-label">choose</span><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
-					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
-					<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
-					<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
-					<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
-				</TerminalFrame>
+					<TerminalFrame title="first cross-distro loop">
+						<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary repo sync remi</span></span>
+						<span class="terminal-line intent-read"><span class="intent-label">choose</span><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+						<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+						<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
+						<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
+						<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
+						<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
+						<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
+					</TerminalFrame>
+				{:else}
+					<details class="retained-loop">
+						<summary>Retained tester loop — inactive until a release is pinned; do not run as a tester run</summary>
+						<div class="loop-legend" aria-label="Command intent legend">
+							<span><i class="intent-mark dry" aria-hidden="true"></i>inspect first</span>
+							<span><i class="intent-mark live" aria-hidden="true"></i>live mutation</span>
+							<span><i class="intent-mark read" aria-hidden="true"></i>read-only check</span>
+						</div>
+
+						<TerminalFrame title="retained cross-distro loop (inactive)">
+							<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary repo sync remi</span></span>
+							<span class="terminal-line intent-read"><span class="intent-label">choose</span><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+							<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+							<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
+							<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
+							<span class="terminal-line intent-read"><span class="intent-label">read</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
+							<span class="terminal-line intent-dry"><span class="intent-label">inspect</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
+							<span class="terminal-line intent-live"><span class="intent-label">live</span><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
+						</TerminalFrame>
+					</details>
+				{/if}
 
 				<div class="boundary-note step-note">
 					<strong>Capability preflight is automatic and has no bypass.</strong>
-					Conary validates the package's exact declared requirements against the host
+					Conary validates a package's exact declared requirements against the host
 					before mutation and rejects anything the host cannot satisfy. A local
-					<code>.rpm</code>, <code>.deb</code>, or <code>.pkg.tar.zst</code> file works the
-					same way: <code>sudo conary install ./package.deb --dry-run</code>.
+					<code>.rpm</code>, <code>.deb</code>, or <code>.pkg.tar.zst</code> file can be
+					inspected the same way on an installed host:
+					<code>sudo conary install ./package.deb --dry-run</code>.
 				</div>
 			</section>
 
@@ -180,7 +205,8 @@
 						<h2>Optionally, let Conary see what the host already has</h2>
 						<p>
 							Adoption records packages that stay owned by dnf, apt, or pacman. It transfers
-							nothing. Unadoption removes the tracking and deletes no files.
+							nothing, and it changes Conary's database without a <code>--yes</code>, so
+							run the dry-run first. Unadoption removes the tracking and deletes no files.
 						</p>
 					</div>
 				</div>
@@ -201,7 +227,7 @@
 						<h2>Report what happened, including the boring parts</h2>
 						<p>
 							An exact capability error, a lifecycle defect, or a slow first conversion is
-							useful evidence. A loop that simply worked is evidence too. Keep the public
+							useful evidence. An install that simply worked is evidence too. Keep the public
 							report concise.
 						</p>
 					</div>
@@ -215,7 +241,7 @@
 							<li>Distribution, kernel, architecture, and Conary version.</li>
 							<li>Source package format and the host's native package format.</li>
 							<li>Release tag, exact package filename, and checksum result.</li>
-							<li>Whether the loop completed and where a partial run stopped.</li>
+							<li>Where a partial run stopped.</li>
 							<li>Anything confusing, slow, scary, or unexpectedly good.</li>
 						</ul>
 					</div>
@@ -235,7 +261,7 @@
 						Open pre-alpha feedback <span aria-hidden="true">↗</span>
 					</a>
 					<a href={previewRelease.testerGuideUrl} class="btn btn-secondary">
-						Read the tester guide <span aria-hidden="true">↗</span>
+						{pinned ? 'Read the tester guide' : 'Read the tester guide (paused)'} <span aria-hidden="true">↗</span>
 					</a>
 				</div>
 			</section>
@@ -384,8 +410,7 @@
 
 	.step-heading p,
 	.contributor-panel > div > p:last-child,
-	.profile-note,
-	.manual-intro {
+	.profile-note {
 		max-width: 68ch;
 		margin: 0;
 		color: var(--color-mist);
@@ -396,54 +421,21 @@
 		margin-top: 1.25rem;
 	}
 
-	.manual-path {
-		margin-top: 1.5rem;
+	.retained-loop {
 		padding: 1rem 1.1rem;
 		border: 1px solid var(--color-border);
 		background: rgb(16 29 48 / 45%);
 	}
 
-	.manual-path summary {
-		color: var(--color-cyan);
+	.retained-loop summary {
+		color: var(--color-muted);
 		cursor: pointer;
 		font-family: var(--font-mono);
 		font-size: 0.8rem;
 	}
 
-	.manual-intro {
-		margin: 1rem 0 !important;
-	}
-
-	.manual-intro strong {
-		color: var(--color-ivory);
-	}
-
-	.download-grid {
-		display: grid;
-		gap: 1rem;
+	.retained-loop .loop-legend {
 		margin-top: 1rem;
-	}
-
-	.download-lane {
-		min-width: 0;
-	}
-
-	.lane-heading {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 1rem;
-		margin-bottom: 0.6rem;
-	}
-
-	.lane-heading span {
-		font-weight: 600;
-	}
-
-	.lane-heading code {
-		max-width: 65%;
-		overflow-wrap: anywhere;
-		text-align: right;
 	}
 
 	.loop-legend {
@@ -585,16 +577,6 @@
 	}
 
 	@media (max-width: 680px) {
-		.lane-heading {
-			align-items: flex-start;
-			flex-direction: column;
-		}
-
-		.lane-heading code {
-			max-width: 100%;
-			text-align: left;
-		}
-
 		.report-grid,
 		.contributor-panel {
 			grid-template-columns: 1fr;

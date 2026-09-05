@@ -1,13 +1,5 @@
 import launchStatus from '../../../docs/roadmaps/launch-status.json';
 
-export type PreviewTarget = {
-	id: 'fedora' | 'ubuntu' | 'arch';
-	name: string;
-	profile: string;
-	asset: string;
-	installCommand: string;
-};
-
 const version = launchStatus.published_release.version;
 const tag = launchStatus.published_release.tag;
 
@@ -51,33 +43,11 @@ export const previewRelease = {
 	downloadBaseUrl: `${repoUrl}/releases/download/${tag}`,
 	matrixUrl: `${mainBlobUrl}/docs/operations/release-artifact-matrix.md`,
 	testerAuthority: launchStatus.tester_authority.state,
+	/** True only once launch-status.json assigns an exact external tester release. */
+	testerPinAssigned: launchStatus.tester_authority.state === 'assigned',
 	testerAuthorityReason: launchStatus.tester_authority.reason,
 	announcementClaim: launchStatus.announcement_claim,
 	testerGuideUrl: `${mainBlobUrl}/docs/guides/agent-assisted-tester-loop.md`,
 	feedbackUrl: `${repoUrl}/issues/new?template=pre_alpha_feedback.md`,
-	bootstrapScriptUrl: 'https://conary.io/install-conary-preview.sh',
-	workDirectory: `$HOME/conary-preview-${tag}`,
-	targets: [
-		{
-			id: 'fedora',
-			name: 'Fedora 44',
-			profile: 'fedora-44',
-			asset: `conary-${version}-1.fc44.x86_64.rpm`,
-			installCommand: `sudo dnf install ./conary-${version}-1.fc44.x86_64.rpm`
-		},
-		{
-			id: 'ubuntu',
-			name: 'Ubuntu 26.04 LTS',
-			profile: 'ubuntu-26.04',
-			asset: `conary_${version}-1_amd64.deb`,
-			installCommand: `sudo apt install ./conary_${version}-1_amd64.deb`
-		},
-		{
-			id: 'arch',
-			name: 'Arch Linux',
-			profile: 'arch',
-			asset: `conary-${version}-1-x86_64.pkg.tar.zst`,
-			installCommand: `sudo pacman -U ./conary-${version}-1-x86_64.pkg.tar.zst`
-		}
-	] satisfies PreviewTarget[]
+	bootstrapScriptUrl: 'https://conary.io/install-conary-preview.sh'
 } as const;

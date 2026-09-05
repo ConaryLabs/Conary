@@ -13,7 +13,7 @@
 <PageIntro
 	eyebrow="Capability map"
 	title="What works, what is early, and what is not there yet."
-	description="Every capability below carries the label the roadmap gives it, not the one marketing would prefer. Proven means exercised on installed release packages across Fedora 44, Ubuntu 26.04 LTS, and Arch Linux."
+	description="Every capability below carries the label the roadmap gives it, not the one marketing would prefer. Proven means exercised by the integration harness on the current tree across Fedora 44, Ubuntu 26.04 LTS, and Arch Linux."
 />
 
 <nav class="category-index" aria-label="Feature maturity groups">
@@ -34,9 +34,10 @@
 				<span class="category-status preview">proven · three hosts</span>
 				<h2 class="category-title">The cross-distro package loop</h2>
 				<p>
-					Exercised on the installed {previewRelease.tag} packages on all three supported
-					hosts. Still pre-alpha: proven means it ran, not that it is safe on a machine
-					you rely on.
+					Exercised by the integration harness on all three supported hosts; the
+					ordinary-package gate passed on the tree after {previewRelease.tag} was cut. That
+					release is immutable install-and-bootstrap evidence and predates this proof. Still
+					pre-alpha: proven means it ran, not that it is safe on a machine you rely on.
 				</p>
 			</div>
 
@@ -373,9 +374,9 @@
 
 		<section class="features-cta">
 			<div>
-				<p class="eyebrow">Start with the proven part</p>
-				<h2>Install one package your distro did not ship.</h2>
-				<p>The install guide pins the release, verifies it, and walks the bounded loop in order.</p>
+				<p class="eyebrow">Start with the install path</p>
+				<h2>Install the pre-alpha on a disposable host.</h2>
+				<p>The install guide verifies the signed release before anything is applied and shows where the tester loop stands.</p>
 			</div>
 			<a href="/install/" class="btn btn-primary">Open the install guide</a>
 		</section>
