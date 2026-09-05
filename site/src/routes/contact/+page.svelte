@@ -12,7 +12,7 @@
 			href: project.securityAdvisoryUrl,
 			action: 'Open a private advisory'
 		},
-		previewRelease.testerPinAssigned
+		previewRelease.loopOpen
 			? {
 					label: 'tester run',
 					tone: 'normal',
@@ -21,14 +21,23 @@
 					href: previewRelease.feedbackUrl,
 					action: 'Open pre-alpha feedback'
 				}
-			: {
-					label: 'preview feedback',
-					tone: 'normal',
-					title: 'Report early feedback',
-					body: 'No tester release is pinned, so nothing you run today is a qualifying tester-loop run. Findings from inspecting the signed bootstrap, a dry-run of a local RPM, DEB, or Arch artifact, or adoption on a disposable host are still welcome through the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, and source package format.',
-					href: previewRelease.feedbackUrl,
-					action: 'Open pre-alpha feedback'
-				},
+			: previewRelease.testerAssigned
+				? {
+						label: 'preview feedback',
+						tone: 'normal',
+						title: 'Report early feedback',
+						body: `${previewRelease.tag} is assigned as the tester release, but the tester guide that owns the loop is not yet active, so nothing you run today is a qualifying tester-loop run. Findings from inspecting the signed bootstrap, a dry-run of a local RPM, DEB, or Arch artifact, or adoption on a disposable host are still welcome through the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, and source package format.`,
+						href: previewRelease.feedbackUrl,
+						action: 'Open pre-alpha feedback'
+					}
+				: {
+						label: 'preview feedback',
+						tone: 'normal',
+						title: 'Report early feedback',
+						body: 'No tester release is pinned, so nothing you run today is a qualifying tester-loop run. Findings from inspecting the signed bootstrap, a dry-run of a local RPM, DEB, or Arch artifact, or adoption on a disposable host are still welcome through the pre-alpha feedback template: exact commands, exit statuses, distribution, architecture, Conary version, and source package format.',
+						href: previewRelease.feedbackUrl,
+						action: 'Open pre-alpha feedback'
+					},
 		{
 			label: 'bug',
 			tone: 'normal',

@@ -5,23 +5,28 @@
 	import { commandRisk } from '$lib/command-risk';
 	import { previewRelease, project } from '$lib/preview-release';
 
-	const pinned = previewRelease.testerPinAssigned;
+	const state = previewRelease.testerState;
+	const loopOpen = previewRelease.loopOpen;
 </script>
 
 <PageMeta
 	title="Install the Conary pre-alpha — Conary"
-	description={pinned
+	description={loopOpen
 		? `Install the ${previewRelease.tag} external tester release on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script, then run the bounded cross-distro loop.`
-		: `Inspect the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The external tester loop stays inactive until a release is pinned.`}
+		: state === 'assigned_guide_paused'
+			? `Install the ${previewRelease.tag} pre-alpha, the assigned tester release, on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The tester loop opens when the tester guide is resumed.`
+			: `Inspect the ${previewRelease.tag} pre-alpha on a disposable Fedora 44, Ubuntu 26.04 LTS, or Arch Linux host through the signed bootstrap script. The external tester loop stays inactive until a release is pinned.`}
 	path="/install/"
 />
 
 <PageIntro
 	eyebrow="Install · pre-alpha"
 	title="Install the preview on a host you can afford to break."
-	description={pinned
-		? `${previewRelease.tag} is the assigned external tester release. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only.`
-		: `The latest immutable release is ${previewRelease.tag}. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only. No release is assigned as external tester authority yet: you may inspect it on a disposable host, and the tester loop itself stays inactive until one is.`}
+	description={loopOpen
+		? `${previewRelease.tag} is the assigned external tester release and the tester guide is active. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only.`
+		: state === 'assigned_guide_paused'
+			? `${previewRelease.tag} is assigned as the external tester release, but the tester guide that owns the loop is still paused. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only; the loop opens when the guide is resumed.`
+			: `The latest immutable release is ${previewRelease.tag}. It installs through a signed bootstrap script on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux, x86_64 only. No release is assigned as external tester authority yet: you may inspect it on a disposable host, and the tester loop itself stays inactive until one is.`}
 />
 
 <section class="install-section">
@@ -46,12 +51,22 @@
 		<div class="install-content">
 			<section class="status-panel" aria-labelledby="status-panel-title">
 				<p class="eyebrow">Where things stand</p>
-				{#if pinned}
-					<h2 id="status-panel-title">A tester release is pinned.</h2>
+				{#if loopOpen}
+					<h2 id="status-panel-title">A tester release is pinned and the loop is open.</h2>
 					<p>
 						{previewRelease.tag} is the release the project asks external testers to
 						evaluate. The tester guide names the same release and is active; the loop below
 						is the one it describes.
+					</p>
+				{:else if state === 'assigned_guide_paused'}
+					<h2 id="status-panel-title">A tester release is assigned; the loop is not yet open.</h2>
+					<p>
+						<a href={project.launchStatusUrl}>launch-status.json</a> names
+						{previewRelease.tag} as the external tester release, but the
+						<a href={previewRelease.testerGuideUrl}>tester guide</a> that owns the loop is
+						still paused and says not to run it. Installing the release on a disposable host
+						is fine; a loop run made now is not a qualifying tester run and does not count
+						toward the milestone. The loop opens here when the guide is resumed.
 					</p>
 				{:else}
 					<h2 id="status-panel-title">Released, not yet open for external testing.</h2>
@@ -184,10 +199,18 @@
 					<span class="step-number">03</span>
 					<div>
 						<h2>The bounded cross-distro loop</h2>
-						{#if pinned}
+						{#if loopOpen}
 							<p>
 								Sync Remi, then choose a source whose package format differs from the host's.
 								Review every dry-run before the command that carries <code>--yes</code>.
+							</p>
+						{:else if state === 'assigned_guide_paused'}
+							<p>
+								This is the loop the external tester milestone measures. {previewRelease.tag}
+								is assigned, but the <a href={previewRelease.testerGuideUrl}>tester guide</a>
+								that owns the loop is still paused and says not to run it. The commands are
+								kept here so the shape is visible, folded away so the site does not become a
+								second execution authority.
 							</p>
 						{:else}
 							<p>
@@ -201,7 +224,7 @@
 					</div>
 				</div>
 
-				{#if pinned}
+				{#if loopOpen}
 					<div class="loop-legend" aria-label="Command intent legend">
 						<span><i class="intent-mark dry" aria-hidden="true"></i>inspect first</span>
 						<span><i class="intent-mark live" aria-hidden="true"></i>live mutation</span>
@@ -220,7 +243,7 @@
 					</TerminalFrame>
 				{:else}
 					<details class="retained-loop">
-						<summary>Retained tester loop — inactive until a release is pinned; do not run as a tester run</summary>
+						<summary>Retained tester loop — inactive until the tester guide is active; do not run as a tester run</summary>
 						<div class="loop-legend" aria-label="Command intent legend">
 							<span><i class="intent-mark dry" aria-hidden="true"></i>inspect first</span>
 							<span><i class="intent-mark live" aria-hidden="true"></i>live mutation</span>
@@ -314,7 +337,7 @@
 						Open pre-alpha feedback <span aria-hidden="true">↗</span>
 					</a>
 					<a href={previewRelease.testerGuideUrl} class="btn btn-secondary">
-						{pinned ? 'Read the tester guide' : 'Read the tester guide (paused)'} <span aria-hidden="true">↗</span>
+						{loopOpen ? 'Read the tester guide' : 'Read the tester guide (paused)'} <span aria-hidden="true">↗</span>
 					</a>
 				</div>
 			</section>

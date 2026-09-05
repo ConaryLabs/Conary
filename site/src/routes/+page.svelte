@@ -65,9 +65,14 @@
 			<div>
 				<dt>External testing</dt>
 				<dd>
-					{#if previewRelease.testerPinAssigned}
-						Open: {previewRelease.tag} is the assigned tester release. The gate state is
-						tracked in <a href={project.launchStatusUrl}>launch-status.json</a>.
+					{#if previewRelease.testerState === 'assigned_guide_active'}
+						Open: {previewRelease.tag} is the assigned tester release and the tester guide
+						is active. The gate state is tracked in
+						<a href={project.launchStatusUrl}>launch-status.json</a>.
+					{:else if previewRelease.testerState === 'assigned_guide_paused'}
+						Assigned, not yet open: <a href={project.launchStatusUrl}>launch-status.json</a>
+						names {previewRelease.tag} as the tester release, but the tester guide that
+						owns the loop is still paused. Runs made now are not qualifying tester runs.
 					{:else}
 						Not open yet. No release is assigned as tester authority; the remaining launch
 						gates are tracked in the open in
@@ -206,7 +211,9 @@
 <section class="section section-band evidence">
 	<div class="container grid-12">
 		<div class="evidence-copy">
-			<p class="eyebrow">{previewRelease.testerPinAssigned ? 'The bounded loop' : 'The bounded loop · inactive until a release is pinned'}</p>
+			<p class="eyebrow">
+				{#if previewRelease.loopOpen}The bounded loop{:else if previewRelease.testerAssigned}The bounded loop · assigned, not yet open{:else}The bounded loop · inactive until a release is pinned{/if}
+			</p>
 			<h2 class="section-heading">Cross the format boundary, then prove you can come back.</h2>
 			<p class="section-copy">
 				Pick a source whose package format differs from the host. Every dry-run shows the
@@ -229,7 +236,7 @@
 		</div>
 
 		<div class="evidence-terminal">
-			{#if previewRelease.testerPinAssigned}
+			{#if previewRelease.loopOpen}
 				<TerminalFrame title="cross-distro package loop">
 					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
@@ -244,8 +251,8 @@
 					captured demo is open work, not something the site pretends to have.
 				</p>
 			{:else}
-				<!-- The live loop is owned by the paused tester guide; while no release is
-				     pinned the homepage shows only the non-mutating inspection commands. -->
+				<!-- The live loop is owned by the tester guide; until that guide is active
+				     the homepage shows only the non-mutating inspection commands. -->
 				<TerminalFrame title="inspection only · tester loop inactive">
 					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
@@ -255,8 +262,9 @@
 				</TerminalFrame>
 				<p class="evidence-note">
 					Dry-run inspection only. The live install, update, and remove loop is owned by
-					the tester guide, which is paused until a release is pinned; the
-					<a href="/install/#tester-loop">install page</a> keeps its retained commands
+					the tester guide, which is
+					{#if previewRelease.testerAssigned}still paused even though {previewRelease.tag} is assigned{:else}paused until a release is pinned{/if};
+					the <a href="/install/#tester-loop">install page</a> keeps its retained commands
 					folded away. No output is shown because it varies by host.
 				</p>
 			{/if}
@@ -293,8 +301,11 @@
 			<p>
 				The bootstrap script verifies the signed release manifest and the package for
 				your host before it touches anything, and previews by default.
-				{#if previewRelease.testerPinAssigned}
-					{previewRelease.tag} is the assigned external tester release.
+				{#if previewRelease.loopOpen}
+					{previewRelease.tag} is the assigned external tester release and the loop is open.
+				{:else if previewRelease.testerAssigned}
+					{previewRelease.tag} is assigned as the tester release; the loop opens when the
+					tester guide is resumed.
 				{:else}
 					The external tester loop stays inactive until a release is pinned.
 				{/if}

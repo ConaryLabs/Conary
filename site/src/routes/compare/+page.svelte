@@ -223,8 +223,11 @@
 					<h3>Where Conary is still early</h3>
 					<p>
 						Conary {previewRelease.version} is pre-alpha and a single-maintainer project.
-						{#if previewRelease.testerPinAssigned}
-							{previewRelease.tag} is the assigned external tester release.
+						{#if previewRelease.loopOpen}
+							{previewRelease.tag} is the assigned external tester release and the loop is open.
+						{:else if previewRelease.testerAssigned}
+							{previewRelease.tag} is assigned as the tester release, but the tester guide
+							is not yet active, so the loop is not open.
 						{:else}
 							No release is assigned as external tester authority yet.
 						{/if}
@@ -260,7 +263,7 @@
 				<p class="eyebrow">The useful question</p>
 				<h2>Would one package engine across distro boundaries solve a real problem for you?</h2>
 			</div>
-			<a href="/install/" class="btn btn-primary">{previewRelease.testerPinAssigned ? 'Try the bounded loop' : 'Inspect the preview'}</a>
+			<a href="/install/" class="btn btn-primary">{previewRelease.loopOpen ? 'Try the bounded loop' : 'Inspect the preview'}</a>
 		</div>
 	</div>
 </section>

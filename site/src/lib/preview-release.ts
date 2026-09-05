@@ -65,6 +65,31 @@ const testerGuide = readTesterGuidePin(Object.values(testerGuideFiles)[0]);
 const testerGuideStatus = testerGuide.status;
 const testerGuideActive = testerGuide.status === 'active' && testerGuide.release === tag;
 
+/**
+ * External tester state, derived from launch-status plus the guide's typed pin.
+ * Assignment and activation are distinct events, so the middle state is
+ * explicit rather than hidden inside one boolean:
+ *
+ * - `unassigned`: launch-status assigns no tester authority.
+ * - `assigned_guide_paused`: launch-status assigns the published release, but
+ *   the tester guide (the loop's execution authority) is still paused or
+ *   absent. Routes name the assigned release and say the loop is not yet
+ *   open; no loop invitation, no "runs count".
+ * - `assigned_guide_active`: both agree on the same tag; the loop is open.
+ *
+ * The contradictory combinations (guide active while launch-status is
+ * unassigned, or active for a different tag) fail the build in
+ * `readTesterGuidePin` and never reach here.
+ */
+export type TesterState = 'unassigned' | 'assigned_guide_paused' | 'assigned_guide_active';
+
+const testerState: TesterState =
+	launchStatus.tester_authority.state !== 'assigned'
+		? 'unassigned'
+		: testerGuideActive
+			? 'assigned_guide_active'
+			: 'assigned_guide_paused';
+
 const orgUrl = 'https://github.com/FieldmouseWorks';
 const repoUrl = `${orgUrl}/Conary`;
 const mainBlobUrl = `${repoUrl}/blob/main`;
@@ -106,11 +131,11 @@ export const previewRelease = {
 	matrixUrl: `${mainBlobUrl}/docs/operations/release-artifact-matrix.md`,
 	testerAuthority: launchStatus.tester_authority.state,
 	testerGuideStatus,
-	/**
-	 * True only once launch-status.json assigns an exact external tester release
-	 * and the tester guide's typed frontmatter pin is active for that same tag.
-	 */
-	testerPinAssigned: launchStatus.tester_authority.state === 'assigned' && testerGuideActive,
+	testerState,
+	/** launch-status assigns the published release as tester authority. */
+	testerAssigned: testerState !== 'unassigned',
+	/** The tester guide is active for that same release: the loop is open. */
+	loopOpen: testerState === 'assigned_guide_active',
 	testerAuthorityReason: launchStatus.tester_authority.reason,
 	announcementClaim: launchStatus.announcement_claim,
 	testerGuideUrl: `${mainBlobUrl}/docs/guides/agent-assisted-tester-loop.md`,

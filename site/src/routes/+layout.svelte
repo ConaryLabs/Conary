@@ -61,8 +61,10 @@
 			<span class="status-item">
 				latest release <a href={previewRelease.releaseUrl}>{previewRelease.tag}</a>
 			</span>
-			{#if previewRelease.testerPinAssigned}
-				<span class="status-item status-wide">external tester release pinned</span>
+			{#if previewRelease.testerState === 'assigned_guide_active'}
+				<span class="status-item status-wide">external tester release pinned · loop open</span>
+			{:else if previewRelease.testerState === 'assigned_guide_paused'}
+				<span class="status-item status-wide">tester release assigned · loop not yet open</span>
 			{:else}
 				<span class="status-item status-wide">no external tester pin assigned</span>
 			{/if}
