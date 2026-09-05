@@ -2,6 +2,8 @@
 # scripts/bootstrap-manifest.sh -- Build the signed-input manifest for release bootstrap.
 set -euo pipefail
 
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 die() {
     printf 'bootstrap manifest: %s\n' "$1" >&2
     exit 1
@@ -16,7 +18,8 @@ version="$2"
 release_directory="$3"
 output="$4"
 
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid suite version: $version"
+bash "$REPO_ROOT/scripts/release-matrix.sh" validate-version "$version" >/dev/null 2>&1 ||
+    die "invalid suite version: $version"
 [[ "$tag" == "v${version}" ]] || die "tag $tag does not bind suite version $version"
 [[ -d "$release_directory" && ! -L "$release_directory" ]] ||
     die "release directory must be a real directory"

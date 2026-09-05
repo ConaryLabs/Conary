@@ -14,6 +14,7 @@ fi
 workspace_manifest="Cargo.toml"
 release_matrix_script="scripts/release-matrix.sh"
 release_build=".github/workflows/release-build.yml"
+nightly_release=".github/workflows/nightly-release.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 site_deploy_workflow=".github/workflows/deploy-site.yml"
 candidate_build_workflow=".github/workflows/build-remi-candidate.yml"
@@ -254,6 +255,7 @@ required_files=(
     "$workspace_manifest"
     "$release_matrix_script"
     "$release_build"
+    "$nightly_release"
     "$deploy_workflow"
     "$site_deploy_workflow"
     "$candidate_build_workflow"
@@ -410,24 +412,39 @@ require_match "$release_build" 'scripts/release-matrix\.sh resolve-tag' 'helper-
 require_match "$release_build" 'scripts/release-matrix\.sh metadata-json' 'helper-based metadata serialization'
 require_job_match "$release_build" bundle-suite '\.schema_version == 1[\s\S]*\(\.dry_run \| type\) == "boolean"' 'suite publication metadata schema and boolean dry-run validation'
 require_match "$release_build" 'workflow_dispatch is dry-run only; push the canonical tag for live releases' 'manual live-release guardrail'
-require_match "$release_build" 'Prepare dry-run release tree' 'dry-run release tree preparation step'
-require_match "$release_build" '\./scripts/release\.sh "\$release" --prepare-only --target "\$version"' 'dry-run release tree should be prepared by the canonical suite release script'
+require_match "$release_build" 'Prepare release tree' 'dry-run and nightly release tree preparation step'
+require_match "$release_build" '\./scripts/release\.sh "\$release" --prepare-only --target "\$stable_version"' 'release tree should be prepared from the stable base by the canonical suite release script'
 require_match "$release_build" 'CONARY_RELEASE_LOCKFILE_MODE: online' 'dry-run release tree should allow online lockfile refreshes in CI'
 require_match "$release_build" 'git config --global --add safe\.directory "\$\(pwd\)"' 'dry-run release tree should mark the checked-out repo as a safe git directory'
 require_match "$release_build" '\[\[ "\$tag_name" == "v\$\{version\}" \]\]' 'dry-run preparation should bind the target version to the suite tag'
-require_job_match "$release_build" prepare 'if \[\[ "\$dry_run" != "true" \]\]; then[\s\S]*scripts/release-matrix\.sh assert-owned-version "\$release" "\$version"' 'live suite tag must match the workspace-owned version'
-require_job_match "$release_build" prepare 'git cat-file -t "refs/tags/\$\{tag_name\}"[\s\S]*== "tag"[\s\S]*git rev-parse HEAD[\s\S]*refs/tags/\$\{tag_name\}\^\{\}' 'live suite build must require an annotated tag at the exact checkout'
+require_job_match "$release_build" prepare 'if \[\[ "\$channel" == "stable" \]\]; then[\s\S]*scripts/release-matrix\.sh assert-owned-version "\$release" "\$version"' 'live stable suite tag must match the workspace-owned version'
+require_job_match "$release_build" prepare 'git cat-file -t "refs/tags/\$\{tag_name\}"[\s\S]*== "tag"[\s\S]*tag_commit=.*refs/tags/\$\{tag_name\}\^\{\}[\s\S]*git rev-parse HEAD.*!= "\$tag_commit"' 'live stable suite build must require an annotated tag at the exact checkout'
 require_job_match "$release_build" prepare 'git fetch --no-tags origin[\s\S]*refs/heads/main:refs/remotes/origin/main[\s\S]*git merge-base --is-ancestor "refs/tags/\$\{tag_name\}\^\{\}" origin/main' 'live suite tag must already be reachable from a freshly fetched main'
 require_literal_count "$release_build" 'bash scripts/release-matrix.sh assert-owned-version "$release" "$version"' 8 'live and dry-run suite-version assertions'
 require_job_match "$release_build" build-rpm "image: ${fedora_release_image}" 'release-build RPM builder must use the pinned Fedora 44 image'
 require_job_match "$release_build" build-deb "image: ${ubuntu_release_image}" 'release-build DEB builder must use the pinned Ubuntu 26.04 image'
 require_job_match "$release_build" build-arch "image: ${arch_release_image}" 'release-build Arch builder must use the pinned Arch image'
-require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare dry-run release tree' 'release-build CCS dry-run prerequisites must be installed before release preparation'
+require_job_match "$release_build" build-ccs 'name: Install build dependencies[\s\S]*name: Prepare release tree' 'release-build CCS prerequisites must be installed before release preparation'
 require_match "$workspace_setup_action" "toolchain:[\\s\\S]*default: ${workspace_rust_pattern}[\\s\\S]*toolchain: \\\$\\{\\{ inputs\\.toolchain \\}\\}" 'shared workspace setup exact workspace Rust default and typed toolchain input'
 for product_job in build-remi build-conaryd build-conary-test; do
-    require_job_match "$release_build" "$product_job" "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Prepare dry-run release tree" "$product_job exact workspace toolchain must precede Cargo-backed release preparation"
+    require_job_match "$release_build" "$product_job" "uses: \\./workflow-authority/\\.github/actions/setup-rust-workspace[\\s\\S]*toolchain: ${workspace_rust_pattern}[\\s\\S]*name: Prepare release tree" "$product_job exact workspace toolchain must precede Cargo-backed release preparation"
 done
-require_job_match "$release_build" workspace-validation "uses: \\./\\.github/actions/setup-rust-workspace[\\s\\S]*components: clippy,rustfmt[\\s\\S]*toolchain: ${workspace_rust_pattern}" 'release workspace validation exact Rust toolchain'
+require_job_match "$release_build" workspace-validation "uses: \\./workflow-authority/\\.github/actions/setup-rust-workspace[\\s\\S]*components: clippy,rustfmt[\\s\\S]*toolchain: ${workspace_rust_pattern}" 'release workspace validation exact Rust toolchain'
+
+require_match "$release_build" 'workflow_call:[\s\S]*tag_name:[\s\S]*type: string[\s\S]*channel:[\s\S]*type: string' 'typed reusable release channel inputs'
+require_job_match "$release_build" prepare 'workflow_call is live only for the nightly channel[\s\S]*"\$channel" == "\$requested_channel"' 'reusable release build nightly channel gate'
+require_job_match "$release_build" bundle-suite 'if \[\[ "\$CHANNEL" == "nightly" \]\]; then[\s\S]*release_flags\+=\(--prerelease\)[\s\S]*gh release create "\$TAG_NAME"[\s\S]*"\$\{release_flags\[@\]\}"' 'nightly publication prerelease flag'
+require_job_match "$release_build" bundle-suite 'previous_nightly=[\s\S]*refs/tags/v\*-nightly\.\*[\s\S]*previous_tag_name="\$previous_nightly"' 'nightly notes previous-tag boundary'
+require_job_match "$release_build" prove-nightly-release 'channel == '\''nightly'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name:' 'nightly terminal release-artifact proof'
+require_match "$nightly_release" "cron: '30 6 \\* \\* \\*'" 'nightly release schedule'
+require_match "$nightly_release" 'permissions:[\s\S]*actions: read[\s\S]*contents: write' 'nightly GitHub API permissions'
+require_job_match "$nightly_release" select-green-main 'actions/workflows/merge-validation\.yml/runs[\s\S]*branch=main[\s\S]*status=success[\s\S]*release\.sh suite --dry-run[\s\S]*Next version' 'nightly newest green-main selection and stable-base resolution'
+require_job_match "$nightly_release" select-green-main 'outcome=skipped[\s\S]*git/tags[\s\S]*git/refs[\s\S]*outcome=created' 'nightly typed skip and annotated REST tag creation'
+require_job_match "$nightly_release" build-and-publish 'outcome == '\''created'\''[\s\S]*uses: \./\.github/workflows/release-build\.yml[\s\S]*channel: nightly' 'nightly channel-gated live build'
+require_job_match "$nightly_release" retain-nightly-releases "date -u -d '14 days ago'" 'nightly release retention'
+require_job_match "$nightly_release" retain-nightly-releases 'tag_name \| test\([\s\S]*nightly[\s\S]*published_at' 'nightly typed release selection'
+require_job_match "$nightly_release" retain-nightly-releases '--method DELETE[\s\S]*releases/\$\{release_id\}' 'nightly release-only deletion'
+forbid_job_match "$nightly_release" retain-nightly-releases '--method DELETE[\s\S]*(git/refs|tags/)' 'nightly tag deletion'
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
@@ -449,8 +466,8 @@ require_job_match "$release_build" build-deb "$rustup_flow_pattern" 'release-bui
 require_match "$rpm_containerfile" "$rustup_flow_pattern" 'RPM Containerfile checksum-pinned rustup-init flow'
 require_match "$deb_containerfile" "$rustup_flow_pattern" 'DEB Containerfile checksum-pinned rustup-init flow'
 require_job_match "$release_build" build-ccs "toolchain: ${workspace_rust_pattern}" 'release-build CCS builder pinned Rust toolchain'
-require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY: \$\{\{ secrets\.RELEASE_SIGNING_KEY \}\}[\s\S]*cargo build[\s\S]*--target-dir target[\s\S]*sign_hash --write-ccs-authority "\$authority_dir"[\s\S]*packaging/ccs/build\.sh[\s\S]*--version "\$VERSION"[\s\S]*--key "\$authority_dir/release\.private"' 'CCS build must derive embedded authority from the configured release seed'
-require_job_match "$release_build" build-ccs 'conary ccs verify[\s\S]*packaging/ccs/output/conary-\$\{VERSION\}\.ccs[\s\S]*--policy "\$authority_dir/trust-policy\.toml"' 'CCS build must verify its embedded release authority'
+require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY: \$\{\{ secrets\.RELEASE_SIGNING_KEY \}\}[\s\S]*cargo build[\s\S]*--target-dir target[\s\S]*sign_hash --write-ccs-authority "\$authority_dir"[\s\S]*packaging/ccs/build\.sh[\s\S]*--version "\$STABLE_VERSION"[\s\S]*--key "\$authority_dir/release\.private"' 'CCS build must derive embedded authority from the configured release seed'
+require_job_match "$release_build" build-ccs 'conary ccs verify[\s\S]*packaging/ccs/output/conary-\$\{STABLE_VERSION\}\.ccs[\s\S]*--policy "\$authority_dir/trust-policy\.toml"' 'CCS build must verify its embedded release authority'
 require_job_match "$release_build" build-ccs 'RELEASE_SIGNING_KEY must be configured for embedded CCS release authority' 'live CCS build must fail without its release authority'
 require_job_match "$release_build" build-arch "rustup default ${workspace_rust_pattern}[\\s\\S]*runuser -u builder -- rustup default ${workspace_rust_pattern}" 'release-build Arch builder pinned Rust toolchain'
 require_match "$arch_containerfile" "^RUN rustup default ${workspace_rust_pattern}$" 'Arch Containerfile pinned Rust toolchain'
@@ -494,17 +511,19 @@ require_match "$exact_ownership_action" 'sudo sysctl -w kernel\.apparmor_restric
 require_match "$exact_ownership_action" 'unshare --user --map-root-user --mount --propagation private /bin/true' 'exact ownership namespace proof'
 require_literal_count "$exact_ownership_action" 'sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0' 1 'centralized AppArmor namespace setup'
 require_literal_count "$exact_ownership_action" 'unshare --user --map-root-user --mount --propagation private /bin/true' 1 'centralized namespace proof'
-for workflow in "$pr_workflow" "$merge_workflow" "$release_build"; do
+for workflow in "$pr_workflow" "$merge_workflow"; do
     require_literal_count "$workflow" 'uses: ./.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
     forbid_match "$workflow" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 done
+require_literal_count "$release_build" 'uses: ./workflow-authority/.github/actions/setup-exact-ownership-tests' 1 'shared exact ownership setup'
+forbid_match "$release_build" 'apparmor_restrict_unprivileged_userns|unshare --user' 'inline exact ownership namespace setup'
 namespace_before_shards_pattern="uses: \\./\\.github/actions/setup-exact-ownership-tests[\\s\\S]*conary\\)[\\s\\S]*cargo test -p conary --no-default-features --test test_hook_ownership --verbose[\\s\\S]*cargo test -p conary --features test-hooks --verbose[\\s\\S]*conary-core-repository\\) cargo test -p conary-core --lib repository:: --verbose[\\s\\S]*cargo test -p conary-core --lib --verbose -- --skip repository::[\\s\\S]*conary-core-targets\\) cargo test -p conary-core --bins --test '\\*' --verbose[\\s\\S]*cargo test --workspace --exclude conary-test[\\s\\S]*--exclude conary --exclude conary-core --verbose"
 require_job_match "$pr_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'PR workspace test shards and ownership setup order'
 require_job_match "$merge_workflow" workspace-test-shards "$namespace_before_shards_pattern" 'merge workspace test shards and ownership setup order'
 workspace_aggregate_pattern='needs: workspace-test-shards[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*SHARDS_RESULT: \$\{\{ needs\.workspace-test-shards\.result \}\}[\s\S]*test "\$SHARDS_RESULT" = success'
 require_job_match "$pr_workflow" workspace-tests "$workspace_aggregate_pattern" 'PR stable workspace aggregate gate'
 require_job_match "$merge_workflow" workspace-tests "$workspace_aggregate_pattern" 'merge stable workspace aggregate gate'
-namespace_before_tests_pattern='uses: \./\.github/actions/setup-exact-ownership-tests[\s\S]*cargo test --workspace --exclude conary-test --verbose'
+namespace_before_tests_pattern='uses: \./workflow-authority/\.github/actions/setup-exact-ownership-tests[\s\S]*cargo test --workspace --exclude conary-test --verbose'
 require_job_match "$release_build" workspace-validation "$namespace_before_tests_pattern" 'release workspace validation exact ownership setup order'
 alpm_parity_pattern="${arch_release_image}[\s\S]*DisableDownloadTimeout[\s\S]*${arch_archive_pattern}[\s\S]*rustup default 1\.98\.0[\s\S]*cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose[\s\S]*cargo clippy -p conary-core --features native-alpm-oracle --lib --bin conary-alpm-oracle --bin conary-alpm-resolution-oracle -- -D warnings"
 require_job_match "$pr_workflow" alpm-parity-producer "$alpm_parity_pattern" 'hosted PR ALPM parity producer proof'
@@ -531,7 +550,7 @@ require_job_match "$release_build" bundle-suite 'verify_release_tag\(\)[\s\S]*gi
 require_literal_count "$release_build" 'verify_release_tag "before draft mutation"' 1 'suite tag validation before draft mutation'
 require_literal_count "$release_build" 'verify_release_tag "before publication"' 1 'suite tag validation before publication'
 require_job_match "$release_build" bundle-suite 'gh release edit "\$TAG_NAME" --draft=false[\s\S]*X-GitHub-Api-Version: 2026-03-10[\s\S]*releases/tags/\$\{TAG_NAME\}[\s\S]*\.tag_name == \$tag and \.draft == false and \.immutable == true' 'suite publisher must prove exact immutable state after publication'
-immutable_publish_pattern='verify_release_tag "before draft mutation"[\s\S]*if gh release view "\$TAG_NAME" >/dev/null 2>&1; then[\s\S]*--json isDraft --jq[\s\S]*release \$TAG_NAME is already published; refusing to replace immutable assets[\s\S]*else[\s\S]*gh release create "\$TAG_NAME"[\s\S]*--draft[\s\S]*--generate-notes[\s\S]*--verify-tag[\s\S]*fi[\s\S]*gh release edit "\$TAG_NAME" --notes-file "\$release_notes"[\s\S]*gh release upload "\$TAG_NAME" suite-packages/\* --clobber[\s\S]*diff -u "\$local_names" "\$remote_names"[\s\S]*draft release digest[\s\S]*verify_release_tag "before publication"[\s\S]*gh release edit "\$TAG_NAME" --draft=false[\s\S]*\.immutable == true'
+immutable_publish_pattern='verify_release_tag "before draft mutation"[\s\S]*if gh release view "\$TAG_NAME" >/dev/null 2>&1; then[\s\S]*--json isDraft --jq[\s\S]*release \$TAG_NAME is already published; refusing to replace immutable assets[\s\S]*else[\s\S]*release_flags\+=\(--generate-notes\)[\s\S]*gh release create "\$TAG_NAME"[\s\S]*--draft[\s\S]*--verify-tag[\s\S]*fi[\s\S]*gh release edit "\$TAG_NAME" --notes-file "\$release_notes"[\s\S]*gh release upload "\$TAG_NAME" suite-packages/\* --clobber[\s\S]*diff -u "\$local_names" "\$remote_names"[\s\S]*draft release digest[\s\S]*verify_release_tag "before publication"[\s\S]*gh release edit "\$TAG_NAME" --draft=false[\s\S]*\.immutable == true'
 require_job_match "$release_build" bundle-suite "$immutable_publish_pattern" 'immutable-compatible single suite publication sequence'
 require_literal_count "$release_build" 'gh release create "$TAG_NAME"' 1 'single draft release creation command'
 require_literal_count "$release_build" 'gh release upload "$TAG_NAME" suite-packages/* --clobber' 1 'single suite asset upload command'

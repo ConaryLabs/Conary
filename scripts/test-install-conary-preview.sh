@@ -161,7 +161,7 @@ run_installer() {
             FIXTURE_DOWNLOAD_DIR="$downloads" \
             MOCK_INSTALL_LOG="$install_log" \
             MOCK_INSTALLED_STATE="$installed_state" \
-            MOCK_VERSION="$version" \
+            MOCK_VERSION="${mock_version:-$version}" \
             MOCK_UNAME="${MOCK_UNAME:-x86_64}" \
             MOCK_INSTALL_FAIL="${MOCK_INSTALL_FAIL:-0}" \
             MOCK_HEALTH_FAIL="${MOCK_HEALTH_FAIL:-0}" \
@@ -290,5 +290,25 @@ assert_contains "$output" "package-owned repository health check failed"
 run_installer "$fedora_os" --apply
 [[ "$status" -ne 0 ]] || fail "apply without confirmation unexpectedly passed"
 assert_contains "$output" "requires explicit --apply --yes confirmation"
+
+version=9.8.8-nightly.20260228
+mock_version=9.8.8
+tag="v${version}"
+rpm="conary-${version}-1.fc44.x86_64.rpm"
+deb="conary_${version}-1_amd64.deb"
+arch="conary-${version}-1-x86_64.pkg.tar.zst"
+printf 'nightly rpm release bytes\n' > "${release_files}/${rpm}"
+printf 'nightly deb release bytes\n' > "${release_files}/${deb}"
+printf 'nightly arch release bytes\n' > "${release_files}/${arch}"
+rm -f -- "$manifest" "${manifest}.sig"
+bash "$MANIFEST_BUILDER" "$tag" "$version" "$release_files" "$manifest"
+cp "${release_files}/${rpm}" "${downloads}/${rpm}"
+cp "${release_files}/${deb}" "${downloads}/${deb}"
+cp "${release_files}/${arch}" "${downloads}/${arch}"
+sign_manifest
+rm -f -- "$install_log" "$installed_state"
+run_installer "$fedora_os" --apply --yes
+[[ "$status" -eq 0 ]] || fail "nightly apply failed: $output"
+assert_contains "$output" "Conary ${version} is installed"
 
 printf 'release bootstrap installer tests passed\n'

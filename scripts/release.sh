@@ -29,10 +29,6 @@ EOF
     exit 1
 }
 
-is_release_version() {
-    [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-}
-
 version_max() {
     printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1
 }
@@ -293,7 +289,7 @@ main() {
 
     [[ -n "$mode" ]] || die "select exactly one of --dry-run or --prepare-only"
     if [[ -n "$target_version" ]]; then
-        is_release_version "$target_version" ||
+        bash "$MATRIX" validate-version "$target_version" stable >/dev/null 2>&1 ||
             die "release target must be an exact MAJOR.MINOR.PATCH version"
     fi
 

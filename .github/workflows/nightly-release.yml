@@ -1,0 +1,165 @@
+name: nightly-release
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  select-green-main:
+    name: select-green-main
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.nightly.outputs.commit_sha }}
+      tag_name: ${{ steps.nightly.outputs.tag_name }}
+      outcome: ${{ steps.nightly.outputs.outcome }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and tag the newest green main commit
+        id: nightly
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          commit_sha="$(
+            gh api --method GET \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/merge-validation.yml/runs" \
+              -f branch=main \
+              -f status=success \
+              -f per_page=100 \
+              --jq '.workflow_runs[0].head_sha'
+          )"
+          [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "no successful merge-validation run for main" >&2
+            exit 1
+          }
+
+          git fetch --force --tags origin \
+            refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$commit_sha" origin/main || {
+            echo "successful merge-validation commit is no longer on main: ${commit_sha}" >&2
+            exit 1
+          }
+          git checkout --detach "$commit_sha"
+
+          stable_version="$(
+            ./scripts/release.sh suite --dry-run \
+              | sed -n 's/^  Next version: //p'
+          )"
+          [[ -n "$stable_version" ]] || {
+            echo "release dry-run did not report the next stable version" >&2
+            exit 1
+          }
+          ./scripts/release-matrix.sh validate-version "$stable_version" stable >/dev/null
+
+          version="${stable_version}-nightly.$(date -u +%Y%m%d)"
+          tag_name="v${version}"
+          ./scripts/release-matrix.sh validate-version "$version" nightly >/dev/null
+
+          while IFS= read -r existing_tag; do
+            [[ -n "$existing_tag" ]] || continue
+            if [[ "$(git rev-parse "refs/tags/${existing_tag}^{}")" == "$commit_sha" ]]; then
+              echo "outcome=skipped" >> "$GITHUB_OUTPUT"
+              echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+              echo "tag_name=${existing_tag}" >> "$GITHUB_OUTPUT"
+              echo "Nightly ${existing_tag} already peels to ${commit_sha}; skipping." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          done < <(git tag --list 'v*-nightly.*')
+
+          if git rev-parse --verify --quiet "refs/tags/${tag_name}" >/dev/null; then
+            echo "nightly tag ${tag_name} already exists for a different commit" >&2
+            exit 1
+          fi
+
+          tag_object="$(
+            gh api --method POST \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/git/tags" \
+              -f tag="$tag_name" \
+              -f message="Conary ${tag_name} automated nightly pre-release" \
+              -f object="$commit_sha" \
+              -f type=commit \
+              --jq '.sha'
+          )"
+          [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "GitHub did not return an annotated tag object" >&2
+            exit 1
+          }
+          gh api --method POST \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/git/refs" \
+            -f ref="refs/tags/${tag_name}" \
+            -f sha="$tag_object" >/dev/null
+
+          echo "outcome=created" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "Created annotated nightly tag ${tag_name} at ${commit_sha}." >> "$GITHUB_STEP_SUMMARY"
+
+  build-and-publish:
+    name: build-and-publish
+    needs: select-green-main
+    if: ${{ needs.select-green-main.outputs.outcome == 'created' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      tag_name: ${{ needs.select-green-main.outputs.tag_name }}
+      channel: nightly
+    secrets: inherit
+
+  retain-nightly-releases:
+    name: retain-nightly-releases
+    needs: [select-green-main, build-and-publish]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Delete nightly releases older than 14 days
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          cutoff="$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+          release_ids="$(
+            gh api --method GET --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | jq -r --arg cutoff "$cutoff" '
+                  .[][]
+                  | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.[0-9]{8}$"))
+                  | select(.published_at != null and .published_at < $cutoff)
+                  | .id
+                '
+          )"
+
+          while IFS= read -r release_id; do
+            [[ -n "$release_id" ]] || continue
+            gh api --method DELETE \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}"
+          done <<< "$release_ids"

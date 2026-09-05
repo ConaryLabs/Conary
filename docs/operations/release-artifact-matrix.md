@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 29
-summary: Record immutable v0.16.1 historical evidence, build-once exact-main Remi candidates with bulk compiler reuse and attributable timings, and the unassigned external tester authority
+last_updated: 2026-09-05
+revision: 30
+summary: Add typed nightly pre-releases from the newest merge-validated main commit while retaining stable suite authority and deployment boundaries
 ---
 
 # Release Artifact Matrix
@@ -63,6 +63,32 @@ and released-artifact proof both completed the clean three-host bootstrap path.
 Workspace version `0.16.1` and the published release are synchronized.
 Protected tag `v0.16.0` remains reserved evidence for a failed
 version-validation run and has no GitHub release; it was not moved or reused.
+
+## Nightly Pre-Release Channel
+
+The typed `stable` channel uses `MAJOR.MINOR.PATCH`. The typed `nightly`
+channel uses `MAJOR.MINOR.PATCH-nightly.YYYYMMDD`, and the suffix must name a
+real UTC calendar date. At `30 6 * * *`, or on manual dispatch,
+`.github/workflows/nightly-release.yml` selects the newest `main` commit whose
+`merge-validation` run concluded successfully. It computes the next stable
+base from `scripts/release.sh suite --dry-run`, creates one annotated
+`v<version>` tag through the GitHub REST API, and calls the shared release
+build with `channel: nightly`.
+
+Nightly package construction first runs `scripts/release.sh suite
+--prepare-only --target <stable-base>` in the runner checkout. The five
+checked-in version authorities therefore remain the stable base; a nightly
+never rewrites or commits them on `main`. Release metadata records both the
+full nightly version and its stable base. The published GitHub release is
+marked as a prerelease, its notes list merged pull-request titles since the
+previous nightly tag, and `release-artifact-proof` runs against the published
+tag. Tags created with `GITHUB_TOKEN` intentionally do not trigger the
+tag-push release workflow a second time.
+
+The nightly workflow deletes nightly GitHub release records older than 14
+days. It never deletes their protected tags. A nightly is automated validation
+evidence and is not a production candidate: it does not deploy Conary, Remi,
+conaryd, or conary-test, and it does not become external-tester authority.
 
 Between suite releases, `.github/workflows/build-remi-candidate.yml` constructs
 one exact release-profile Remi artifact for every protected `main` commit. Its
