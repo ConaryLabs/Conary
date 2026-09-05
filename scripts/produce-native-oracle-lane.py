@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+from enum import Enum
 import hashlib
 import json
 import os
@@ -29,6 +30,21 @@ from native_oracle_common import (
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
+
+
+class ResolutionLaneOutcome(Enum):
+    COMPLETE = "complete"
+    ROOT_FAILURES = "root_failures"
+    STRICT_FINALIZATION_FAILED = "strict_finalization_failed"
+
+
+class StrictResolutionFinalizationFailed(RuntimeError):
+    def __init__(self):
+        message = "strict resolution finalization failed; completed survey and implementation evidence retained"
+        self.state = {"status": "failed",
+                      "reason": ResolutionLaneOutcome.STRICT_FINALIZATION_FAILED.value,
+                      "message": message}
+        super().__init__(message)
 
 
 class ResolutionBundleRebuildRequired(ValueError):
@@ -362,7 +378,7 @@ def write_resolution_survey(
     profile: dict[str, Any],
     lane: dict[str, Any],
     package_manifest_sha256: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], ResolutionLaneOutcome]:
     result = subprocess.run(command, check=False)
     survey = resolution_survey_evidence(
         survey_path,
@@ -370,11 +386,17 @@ def write_resolution_survey(
         lane,
         package_manifest_sha256,
     )
-    if (result.returncode == 0) != (survey["total_failures"] == 0):
+    if result.returncode == 0 and survey["total_failures"] != 0:
         raise RuntimeError(
             "native resolution survey exit status disagrees with its failure inventory"
         )
-    return survey
+    if survey["total_failures"] != 0:
+        outcome = ResolutionLaneOutcome.ROOT_FAILURES
+    elif result.returncode != 0:
+        outcome = ResolutionLaneOutcome.STRICT_FINALIZATION_FAILED
+    else:
+        outcome = ResolutionLaneOutcome.COMPLETE
+    return survey, outcome
 
 
 def resolution_implementation_evidence(path: Path) -> dict[str, Any]:
@@ -504,7 +526,6 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="native-oracle-lane-", dir=output_root.parent) as temporary:
         staging = Path(temporary)
         resolution_implementation_path = staging / "resolution-implementation.json"
-        survey_implementation_path = staging / "survey-resolution-implementation.json"
         profile_manifest = staging / "profile.json"
         profile_manifest.write_bytes(canonical_json(profile["revision"]))
         source_paths: list[Path] = []
@@ -538,17 +559,18 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
             "--survey", str(survey_path),
-            "--implementation-evidence", str(survey_implementation_path),
+            "--output", str(resolution_output),
+            "--implementation-evidence", str(resolution_implementation_path),
         ]
-        survey = write_resolution_survey(
+        survey, lane_outcome = write_resolution_survey(
             survey_command,
             survey_path,
             profile,
             lane,
             package["manifest_sha256"],
         )
-        survey_implementation = resolution_implementation_evidence(
-            survey_implementation_path
+        resolution_implementation = resolution_implementation_evidence(
+            resolution_implementation_path
         )
         survey_manifest = {
             "schema_version": NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA,
@@ -570,21 +592,22 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "target_architecture": target_architecture,
             "package_oracle": package,
             "survey": survey,
-            "resolution_implementation": survey_implementation,
+            "resolution_implementation": resolution_implementation,
         }
         (survey_output_root / "manifest.json").write_bytes(
             canonical_json(survey_manifest)
         )
-        resolution_command.extend((
-            "--package-oracle", str(package_output),
-            "--architecture", arguments.architecture,
-            "--output", str(resolution_output),
-            "--implementation-evidence", str(resolution_implementation_path),
-        ))
-        invoke(resolution_command, "native resolution producer")
-        resolution_implementation = resolution_implementation_evidence(
-            resolution_implementation_path
-        )
+        if survey["total_failures"] != 0:
+            if resolution_output.exists():
+                raise RuntimeError("failed resolution walk left a strict output directory")
+            raise RuntimeError(
+                f"native resolution survey recorded {survey['total_failures']} failed roots"
+            )
+        if (
+            lane_outcome is ResolutionLaneOutcome.STRICT_FINALIZATION_FAILED
+            or not resolution_output.exists()
+        ):
+            raise StrictResolutionFinalizationFailed()
 
     if package_binary != producer_binary(
         arguments.package_producer,
@@ -665,6 +688,9 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     try:
         evidence = produce(parse_arguments())
+    except StrictResolutionFinalizationFailed as error:
+        print(json.dumps(error.state, sort_keys=True, separators=(",", ":")), file=sys.stderr)
+        raise SystemExit(1) from error
     except ResolutionBundleRebuildRequired as error:
         print(json.dumps(error.state, sort_keys=True, separators=(",", ":")), file=sys.stderr)
         raise SystemExit(3) from error

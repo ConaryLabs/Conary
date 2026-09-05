@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-09-04
-revision: 65
-summary: Document local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
+last_updated: 2026-09-05
+revision: 66
+summary: Document typed change-scope matrix skips, local security-advisory authority, trusted-main compiler seeds, isolated hosted-Ubuntu CI package bootstrap, attributable daily-driver same-name provides, configuration upgrade, payload topology, typed corpus coverage, and native lifecycle gates
 ---
 
 # Integration Testing
@@ -570,7 +570,12 @@ reports the exec complete. This does not depend on shell-specific trap
 scheduling. If cleanup cannot be proved, the harness kills the exact test
 container and fails closed. The PR gate runs this timeout regression and the
 full 13-test suite on Fedora 44, Ubuntu 26.04, and Arch; the stable
-`native-pm-parity` context requires all three lanes.
+`native-pm-parity` context requires all three lanes. The only exception is a
+typed change-scope skip: `scripts/pr-gate-scope.sh` lets the gate skip the
+native container matrices when every changed path is Markdown, a license, or
+an issue/PR template, and the gate contexts accept that intentional skip and
+nothing else. Any other path, an empty change list, or a manual dispatch runs
+the full matrix.
 
 `TNPM02X` exports
 one lifecycle-bearing v1/v2 fixture as RPM, DEB, and Arch artifacts on every

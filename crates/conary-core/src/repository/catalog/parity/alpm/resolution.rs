@@ -35,7 +35,7 @@ use crate::repository::catalog::parity::resolution_parallel::{
     ResolutionExplanationLimits, ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest,
 };
 use crate::repository::catalog::parity::resolution_producer::{
-    NativeResolutionEcosystem, Oracle, ResolutionContext, Survey, produce_resolution,
+    Both, NativeResolutionEcosystem, Oracle, ResolutionContext, Survey, produce_resolution,
     resolution_producers,
 };
 use crate::repository::catalog::parity::resolution_survey::{
@@ -59,7 +59,8 @@ resolution_producers!(
     produce_alpm_resolution_oracle,
     produce_alpm_resolution_oracle_with_workers,
     produce_alpm_resolution_survey,
-    produce_alpm_resolution_survey_with_workers
+    produce_alpm_resolution_survey_with_workers,
+    produce_alpm_resolution_walk_with_workers
 );
 
 struct AlpmEcosystem;

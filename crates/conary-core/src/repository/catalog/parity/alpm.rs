@@ -35,7 +35,7 @@ mod resolution;
 pub use resolution::{
     ALPM_RESOLUTION_PROJECTION_SCHEMA_V3, produce_alpm_resolution_oracle,
     produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
-    produce_alpm_resolution_survey_with_workers,
+    produce_alpm_resolution_survey_with_workers, produce_alpm_resolution_walk_with_workers,
 };
 
 pub const ALPM_PARITY_PROJECTION_SCHEMA_V1: u32 = 1;

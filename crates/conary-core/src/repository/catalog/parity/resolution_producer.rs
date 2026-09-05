@@ -4,10 +4,13 @@
 
 use std::path::Path;
 
+mod progress;
+pub(super) use progress::ResolutionProgress;
+
 use super::resolution_parallel::{
     OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
     ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
-    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
+    detected_cpu_limit, resolution_walk_memory_budget_bytes, walk_ordered_parallel,
 };
 use super::resolution_survey::{
     NativeResolutionSurveyCollector, NativeRootResolutionResult, RootOutcomeSink,
@@ -64,8 +67,9 @@ pub(super) trait NativeResolutionEcosystem<'a>: Sized {
         package_oracle: &NativeParityOracleReader,
         sink: RootOutcomeSink<'_>,
         workers: ResolutionWorkerCount,
+        progress: &ResolutionProgress,
     ) -> Result<OrderedResolutionMetrics> {
-        walk_resolution_roots::<Self>(context, prepared, package_oracle, sink, workers)
+        walk_resolution_roots::<Self>(context, prepared, package_oracle, sink, workers, progress)
     }
 }
 
@@ -75,6 +79,7 @@ pub(super) fn walk_resolution_roots<'a, E: NativeResolutionEcosystem<'a>>(
     package_oracle: &NativeParityOracleReader,
     mut sink: RootOutcomeSink<'_>,
     workers: ResolutionWorkerCount,
+    progress: &ResolutionProgress,
 ) -> Result<OrderedResolutionMetrics> {
     walk_ordered_parallel(
         package_oracle,
@@ -83,7 +88,9 @@ pub(super) fn walk_resolution_roots<'a, E: NativeResolutionEcosystem<'a>>(
         |_| E::open_worker(context, prepared),
         |worker, root, limits| E::resolve_root(context, worker, root, limits),
         |root, result| {
-            sink.root(root, result?)?;
+            let result = sink.root(root, result?);
+            progress.root();
+            result?;
             Ok(sink.explanation_limits())
         },
     )
@@ -111,6 +118,124 @@ pub(super) trait ResolutionDestination {
 
 pub(super) struct Oracle<'a>(pub &'a Path);
 pub(super) struct Survey<'a>(pub &'a Path);
+pub(super) struct Both<'a> {
+    pub survey: &'a Path,
+    pub oracle: &'a Path,
+}
+
+/// Strict authority is independent of a completed diagnostic survey.
+#[derive(Debug, thiserror::Error)]
+pub enum NativeResolutionStrictError {
+    #[error("resolution survey recorded {total_failures} failed roots")]
+    FailedRoots { total_failures: u64 },
+    #[error("strict resolution finalization failed: {source}")]
+    Finalization {
+        #[source]
+        source: Box<Error>,
+    },
+}
+
+pub type NativeResolutionStrictResult =
+    std::result::Result<NativeResolutionOracleV1, NativeResolutionStrictError>;
+
+pub(super) struct BothCollector {
+    writer: Option<NativeResolutionOracleWriter>,
+    collector: NativeResolutionSurveyCollector,
+    staging: tempfile::TempDir,
+}
+
+impl ResolutionDestination for Both<'_> {
+    type Output = (NativeResolutionSurveyV1, NativeResolutionStrictResult);
+    type Collector = BothCollector;
+
+    fn open(
+        &self,
+        profile: &ProfileRevisionV2,
+        package_oracle: &NativeParityOracleReader,
+        implementation: NativeParityImplementationV1,
+        policy: NativeResolutionPolicyV1,
+    ) -> Result<Self::Collector> {
+        if self.oracle.try_exists()? {
+            return Err(Error::ConfigError(
+                "resolution output already exists".to_string(),
+            ));
+        }
+        let parent = self
+            .oracle
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let staging = tempfile::Builder::new()
+            .prefix(".conary-resolution-")
+            .tempdir_in(parent)?;
+        let writer = Oracle(&staging.path().join("oracle")).open(
+            profile,
+            package_oracle,
+            implementation.clone(),
+            policy.clone(),
+        )?;
+        let collector =
+            Survey(self.survey).open(profile, package_oracle, implementation, policy)?;
+        Ok(BothCollector {
+            writer: Some(writer),
+            collector,
+            staging,
+        })
+    }
+
+    fn sink(collector: &mut Self::Collector) -> RootOutcomeSink<'_> {
+        RootOutcomeSink::Both {
+            writer: &mut collector.writer,
+            collector: &mut collector.collector,
+        }
+    }
+
+    fn finish(
+        self,
+        collector: Self::Collector,
+        profile: &ProfileRevisionV2,
+        package_oracle: &NativeParityOracleReader,
+        ecosystem: &str,
+    ) -> Result<Self::Output> {
+        let BothCollector {
+            writer,
+            collector,
+            staging,
+        } = collector;
+        // Publish diagnostics before attempting strict finalization.
+        let survey = Survey(self.survey).finish(collector, profile, package_oracle, ecosystem)?;
+        let strict = if survey.total_failures == 0 {
+            let finalize = || -> Result<NativeResolutionOracleV1> {
+                let writer = writer.ok_or_else(|| {
+                    Error::InternalError(
+                        "successful resolution walk lost its strict writer".to_string(),
+                    )
+                })?;
+                let staged = staging.path().join("oracle");
+                let manifest =
+                    Oracle(&staged).finish(writer, profile, package_oracle, ecosystem)?;
+                // Never replace an output another producer created during the walk.
+                nix::fcntl::renameat2(
+                    nix::fcntl::AT_FDCWD,
+                    staged.as_path(),
+                    nix::fcntl::AT_FDCWD,
+                    self.oracle,
+                    nix::fcntl::RenameFlags::RENAME_NOREPLACE,
+                )
+                .map_err(std::io::Error::from)?;
+                Ok(manifest)
+            };
+            finalize().map_err(|source| NativeResolutionStrictError::Finalization {
+                source: Box::new(source),
+            })
+        } else {
+            Err(NativeResolutionStrictError::FailedRoots {
+                total_failures: survey.total_failures,
+            })
+        };
+        Ok((survey, strict))
+    }
+}
 
 impl ResolutionDestination for Oracle<'_> {
     type Output = NativeResolutionOracleV1;
@@ -230,13 +355,21 @@ pub(super) fn produce_resolution<'a, E: NativeResolutionEcosystem<'a>, D: Resolu
         E::implementation(),
         policy.clone(),
     )?;
+    let progress = ResolutionProgress::start(
+        workers.get(),
+        detected_cpu_limit()?,
+        memory_budget_bytes,
+        package_oracle.manifest().artifact.counts.packages,
+    );
     let metrics = E::walk(
         &context,
         &prepared,
         &package_oracle,
         D::sink(&mut collector),
         workers,
+        &progress,
     )?;
+    drop(progress);
     let output = destination.finish(collector, profile, &package_oracle, E::LABEL)?;
     let evidence = ResolutionWalkImplementationEvidenceV1::new(
         workers,
@@ -249,10 +382,32 @@ pub(super) fn produce_resolution<'a, E: NativeResolutionEcosystem<'a>, D: Resolu
 
 // Keep the callable ecosystem entry names while defining their signatures and
 // forwarding bodies once. No native behavior belongs in these wrappers.
+#[cfg(any(
+    feature = "native-rpm-oracle",
+    feature = "native-debian-oracle",
+    feature = "native-alpm-oracle"
+))]
 macro_rules! resolution_producers {
-    ($ecosystem:ty, $input:ident, $oracle:ident, $oracle_workers:ident, $survey:ident, $survey_workers:ident) => {
+    ($ecosystem:ty, $input:ident, $oracle:ident, $oracle_workers:ident, $survey:ident, $survey_workers:ident, $walk_workers:ident) => {
         resolution_producers!(@destination $ecosystem, $input, $oracle, $oracle_workers, Oracle, NativeResolutionOracleV1);
         resolution_producers!(@destination $ecosystem, $input, $survey, $survey_workers, Survey, NativeResolutionSurveyV1);
+
+        /// Produce a survey and, only for a failure-free walk, a strict bundle.
+        pub fn $walk_workers(
+            profile: &ProfileRevisionV2,
+            inputs: &[$input<'_>],
+            package_oracle_directory: &Path,
+            architecture: &str,
+            survey: &Path,
+            output: &Path,
+            worker_request: ResolutionWorkerRequest,
+        ) -> Result<(NativeResolutionSurveyV1, $crate::repository::catalog::NativeResolutionStrictResult, ResolutionWalkImplementationEvidenceV1)> {
+            let ((survey, oracle), evidence) = produce_resolution::<$ecosystem, _>(
+                profile, inputs, package_oracle_directory, architecture,
+                Both { survey, oracle: output }, worker_request,
+            )?;
+            Ok((survey, oracle, evidence))
+        }
     };
     (@destination $ecosystem:ty, $input:ident, $automatic:ident, $workers:ident, $destination:ident, $output:ident) => {
         /// Produce native resolution evidence with capacity-derived workers.
@@ -279,4 +434,9 @@ macro_rules! resolution_producers {
         }
     };
 }
+#[cfg(any(
+    feature = "native-rpm-oracle",
+    feature = "native-debian-oracle",
+    feature = "native-alpm-oracle"
+))]
 pub(super) use resolution_producers;

@@ -11,7 +11,7 @@ use conary_core::repository::catalog::{
     AlpmParityMemberInput, ProfileRevisionV2, ResolutionWorkerCount, ResolutionWorkerRequest,
     SourceSnapshotV1, ensure_resolution_walk_evidence_outside_bundle,
     produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey_with_workers,
-    write_resolution_walk_implementation_evidence,
+    produce_alpm_resolution_walk_with_workers, write_resolution_walk_implementation_evidence,
 };
 use serde::de::DeserializeOwned;
 
@@ -19,8 +19,8 @@ const MAX_INPUT_MANIFEST_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Parser)]
 #[command(
-    about = "Produce a strict libalpm resolution bundle or diagnostics survey",
-    group(ArgGroup::new("destination").required(true).multiple(false).args(["output", "survey"]))
+    about = "Produce a strict libalpm resolution bundle and/or diagnostics survey",
+    group(ArgGroup::new("destination").required(true).multiple(true).args(["output", "survey"]))
 )]
 struct Arguments {
     /// Exact ProfileRevisionV2 manifest.
@@ -61,7 +61,7 @@ struct Arguments {
 }
 
 fn main() {
-    conary_bootstrap::init_cli_tracing("warn");
+    conary_bootstrap::init_cli_tracing("info");
     if let Err(error) = run(Arguments::parse()) {
         tracing::error!("conary-alpm-resolution-oracle: {error:#}");
         std::process::exit(1);
@@ -99,6 +99,7 @@ fn run(arguments: Arguments) -> Result<()> {
         ResolutionWorkerRequest::explicit,
     );
     let mut survey_failures = None;
+    let mut strict_failure = None;
     let evidence = match (arguments.output, arguments.survey) {
         (Some(output), None) => {
             let (_, evidence) = produce_alpm_resolution_oracle_with_workers(
@@ -127,7 +128,25 @@ fn run(arguments: Arguments) -> Result<()> {
             }
             evidence
         }
-        _ => unreachable!("clap requires exactly one resolution destination"),
+        (Some(output), Some(survey_path)) => {
+            let (survey, strict, evidence) = produce_alpm_resolution_walk_with_workers(
+                &profile,
+                &inputs,
+                &arguments.package_oracle,
+                &arguments.architecture,
+                &survey_path,
+                &output,
+                worker_request,
+            )
+            .context("produce ALPM resolution survey and oracle")?;
+            if survey.total_failures != 0 {
+                survey_failures = Some((survey.total_failures, survey_path));
+            } else if let Err(error) = strict {
+                strict_failure = Some(error);
+            }
+            evidence
+        }
+        (None, None) => unreachable!("clap requires at least one resolution destination"),
     };
     write_resolution_walk_implementation_evidence(&arguments.implementation_evidence, &evidence)
         .context("write ALPM resolution implementation evidence")?;
@@ -136,6 +155,9 @@ fn run(arguments: Arguments) -> Result<()> {
             "ALPM resolution survey recorded {failures} failed roots; inventory written to {}",
             output.display()
         );
+    }
+    if let Some(error) = strict_failure {
+        bail!("ALPM {error}; survey and implementation evidence written");
     }
     Ok(())
 }
