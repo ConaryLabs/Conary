@@ -796,6 +796,9 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_raw_survey_ssh_artifact', 'replace', '.github/workflows/survey-remi-resolution.yml', '--argjson stderr "$(sanitize_helper_stderr)"', '--rawfile stderr "$helper_stderr"', 'resolution survey sanitizes connection identifiers before constructing failure artifacts'),
+    ('test_check_release_matrix_rejects_missing_survey_ssh_identity_inventory', 'replace', '.github/workflows/survey-remi-resolution.yml', '--stderr "$helper_stderr" --ssh-config "$REMI_SSH_CONFIG"', '--stderr "$helper_stderr"', 'resolution survey sanitizes connection identifiers before constructing failure artifacts'),
+    ('test_check_release_matrix_rejects_residual_survey_ssh_identifiers', 'replace', 'scripts/remi-survey-ssh-diagnostic.py', 'if remaining_identifier(message, identifiers):', 'if False:', 'resolution survey withholds residual connection identifiers after redaction'),
     ('test_check_release_matrix_rejects_included_empty_recovery_member', 'replace', 'scripts/remi-resolution-survey-transport.py', 'exact_positive_int(item["size"], "survey recovery file size")', 'exact_nonnegative_int(item["size"], "survey recovery file size")', 'resolution survey recovery requires positive included sizes and typed withheld reasons'),
     ('test_check_release_matrix_rejects_archived_empty_recovery_member', 'replace', 'deploy/remi-deploy-helper.sh', 'if (( size == 0 )); then', 'if (( size < 0 )); then', 'resolution survey recovery withholds empty and unsafe JSON before archiving'),
     ('test_check_release_matrix_rejects_unredirected_survey_recovery_stderr', 'replace', '.github/workflows/survey-remi-resolution.yml', '>"$recovery_archive" 2>"$recovery_stderr"; then', '>"$recovery_archive"; then', 'resolution survey recovery export confines stderr privately and reports a sanitized failure'),

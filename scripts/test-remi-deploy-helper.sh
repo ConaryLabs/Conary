@@ -1695,7 +1695,7 @@ test_resolution_survey_recovers_surviving_production_evidence() {
 
 test_resolution_survey_workflow_recovers_without_a_report() {
     local survey_id="$1" export_id="$2" fake_root="$3" recovery="$4"
-    local root script runner mode status
+    local root script runner mode status diagnostic
     root="$(pwd)"
     script="${tmpdir}/recovery-workflow.sh"
     cat >"$script" <<'SCRIPT'
@@ -1704,6 +1704,10 @@ set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" source_recovery="$3" export_status="$4" fixture_root="$5"
 RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
 REMI_SSH_KEY_PATH="$PWD/key" REMI_SSH_KNOWN_HOSTS_PATH="$PWD/known-hosts"
+REMI_SSH_CONFIG="$PWD/config"
+export REMI_SSH_TARGET=surveyoperator@fixture
+printf 'Host fixture\n HostName fixture\n' >"$REMI_SSH_CONFIG"
+printf 'fixture ssh-ed25519 synthetic-key\n' >"$REMI_SSH_KNOWN_HOSTS_PATH"
 key="$REMI_SSH_KEY_PATH" known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
 helper="$PWD/helper" current_helper="$PWD/current-helper"
 touch "$key" "$known_hosts" "$helper" "$current_helper"
@@ -1730,21 +1734,40 @@ PY
     cat >>"$script" <<'SCRIPT'
 helper_invoked=1
 helper_status=1
-printf 'remi deploy helper: outcome.document_count; /private/path redacted\n' >"$helper_stderr"
+case "${6:-helper}" in
+    helper) printf 'remi deploy helper: outcome.document_count; /private/path redacted\n' >"$helper_stderr" ;;
+    connect) printf 'ssh: connect to host fixture port 22: Connection timed out\n' >"$helper_stderr" ;;
+    permission) printf 'surveyoperator@fixture: Permission denied (publickey).\n' >"$helper_stderr" ;;
+    host_key) printf 'Host key verification failed for fixture (192.0.2.31).\n' >"$helper_stderr" ;;
+    kex) printf 'kex_exchange_identification: Connection closed by 2001:db8::42 port 22\n' >"$helper_stderr" ;;
+    metadata_missing) printf 'ssh: connect to host fixture port 22\n' >"$helper_stderr"; rm "$REMI_SSH_CONFIG" ;;
+esac
 # No report line or normal transport exists. The actual EXIT trap must recover.
 exit 1
 SCRIPT
     for mode in 0 255; do
-        runner="${tmpdir}/runner-recovery-${survey_id}-${mode}"
+      for diagnostic in helper connect permission host_key kex metadata_missing; do
+        runner="${tmpdir}/runner-recovery-${survey_id}-${mode}-${diagnostic}"
         mkdir "$runner"
         ln -s "$root/scripts" "$runner/scripts"
         status=0
-        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$recovery" "$mode" "$fake_root") || status=$?
+        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$recovery" "$mode" "$fake_root" "$diagnostic") || status=$?
         [[ "$status" == 1 ]] || fail "workflow recovery changed original failure status"
         [[ ! -e "$runner/key" && ! -e "$runner/known-hosts" ]]
         jq -e '.outcome == "helper_failed" and .status == 1 and .workflow_status == 1
-            and (.message | contains("outcome.document_count"))
             and (.message | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+        if [[ "$diagnostic" == metadata_missing ]]; then
+            jq -e '.stderr.outcome == "withheld" and .stderr.reason == "connection_metadata_or_diagnostic_invalid"
+                and (.stderr | has("message") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+        else
+            jq -e '.stderr.outcome == "sanitized"' "$runner/resolution-survey-helper.json" >/dev/null
+        fi
+        if [[ "$diagnostic" == helper ]]; then
+            jq -e '.message | contains("outcome.document_count")' "$runner/resolution-survey-helper.json" >/dev/null
+        fi
+        if grep -E 'surveyoperator|fixture|192\.0\.2\.31|2001:db8::42' "$runner/resolution-survey-helper.json"; then
+            fail "workflow recovery artifact leaked a connection identifier"
+        fi
         if (( mode == 0 )); then
             jq -e '.recovery == "retrieved"' "$runner/resolution-survey-helper.json" >/dev/null
             cmp "$runner/resolution-survey-recovery/outcome.json" \
@@ -1754,6 +1777,7 @@ SCRIPT
             [[ ! -e "$runner/resolution-survey-recovery" ]]
         fi
         grep -Fx 'helper_outcome=helper_failed' "$runner/outputs" >/dev/null
+      done
     done
 }
 
@@ -2637,6 +2661,7 @@ test_rust_resolution_survey_outcome_fixtures() (
 )
 
 main() {
+    python3 scripts/test-remi-survey-ssh-diagnostic.py
     test_rust_resolution_survey_outcome_fixtures
     if (( only_outcome_fixtures == 1 )); then
         return

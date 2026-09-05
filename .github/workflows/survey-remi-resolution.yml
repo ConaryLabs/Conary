@@ -354,6 +354,15 @@ jobs:
           helper_stderr="$RUNNER_TEMP/resolution-survey-helper.stderr"
           : >"$helper_stderr"
           chmod 0600 "$helper_stderr"
+          sanitize_helper_stderr() {
+            local sanitized
+            if ! sanitized="$(python3 scripts/remi-survey-ssh-diagnostic.py \
+              --stderr "$helper_stderr" --ssh-config "$REMI_SSH_CONFIG" \
+              --known-hosts "$known_hosts" 2>/dev/null)"; then
+              sanitized='{"schema_version":1,"outcome":"withheld","reason":"sanitizer_failed"}'
+            fi
+            printf '%s\n' "$sanitized"
+          }
           recover_helper_failure() {
             local workflow_status="$1" recovery_state=fetch_failed
             local observed_status="${helper_status:-$workflow_status}"
@@ -380,12 +389,11 @@ jobs:
             rm -f -- "$recovery_archive" "$recovery_stderr"
             jq -cn --argjson status "$observed_status" --argjson workflow_status "$workflow_status" \
               --arg survey_id "$SURVEY_ID" --arg export_id "$EXPORT_ID" \
-              --arg recovery "$recovery_state" --rawfile stderr "$helper_stderr" '
+              --arg recovery "$recovery_state" --argjson stderr "$(sanitize_helper_stderr)" '
               {schema_version:1,outcome:"helper_failed",status:$status,workflow_status:$workflow_status,
                survey_id:$survey_id,export_id:$export_id,recovery:$recovery,
-               message: (($stderr | split("\n") | map(select(length > 0)) | first)
-                 // "helper returned missing or malformed survey evidence"
-                 | gsub("/[^[:space:]]+"; "<redacted-path>"))}
+               stderr:$stderr,
+               message: ($stderr.message // "survey helper diagnostic withheld")}
             ' > resolution-survey-helper.json
             echo "helper_outcome=helper_failed" >> "$GITHUB_OUTPUT"
           }
@@ -467,7 +475,7 @@ jobs:
             ssh "${ssh_opts[@]}" "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '$SURVEY_ID' '$EXPORT_ID' '$remote_input'" 2>"$helper_stderr"
           })" || helper_status=$?
-          cat "$helper_stderr" >&2
+          sanitize_helper_stderr | jq -r '.message // "survey helper diagnostic withheld"' >&2
           (( helper_status == 0 || helper_status == 1 )) || {
             echo "resolution-survey SSH/helper failed with status $helper_status" >&2
             exit 1
