@@ -78,6 +78,39 @@ describe('readTesterGuidePin', () => {
 			/active while launch-status assigns no tester authority/
 		);
 	});
+
+	it('fails closed on a duplicated status key, even with identical values', () => {
+		expect(() => readTesterGuidePin(guide('status: paused\nstatus: paused'), TAG, false)).toThrow(
+			/duplicate frontmatter key: status/
+		);
+	});
+
+	it('fails closed on a duplicated tester_release key', () => {
+		const text = guide(`status: active\ntester_release: ${TAG}\ntester_release: ${TAG}`);
+		expect(() => readTesterGuidePin(text, TAG, true)).toThrow(/duplicate frontmatter key: tester_release/);
+	});
+
+	it('never opens the loop on conflicting duplicate status values', () => {
+		const activeThenPaused = guide(`status: active\ntester_release: ${TAG}\nstatus: paused`);
+		expect(() => readTesterGuidePin(activeThenPaused, TAG, true)).toThrow(
+			/duplicate frontmatter key: status/
+		);
+		const pausedThenActive = guide(`status: paused\nstatus: active\ntester_release: ${TAG}`);
+		expect(() => readTesterGuidePin(pausedThenActive, TAG, true)).toThrow(
+			/duplicate frontmatter key: status/
+		);
+	});
+
+	it('fails closed on any other duplicated frontmatter key', () => {
+		expect(() => readTesterGuidePin(guide('revision: 18\nstatus: paused\nrevision: 19'), TAG, false)).toThrow(
+			/duplicate frontmatter key: revision/
+		);
+	});
+
+	it('ignores status-shaped lines outside the frontmatter block', () => {
+		const text = guide('status: paused', '\nstatus: active\ntester_release: v0.16.1\n');
+		expect(readTesterGuidePin(text, TAG, true)).toEqual({ status: 'paused', release: undefined });
+	});
 });
 
 describe('deriveTesterState', () => {

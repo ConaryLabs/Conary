@@ -27,13 +27,31 @@ export type TesterState = 'unassigned' | 'assigned_guide_paused' | 'assigned_gui
 const EXACT_TAG = /^v\d+\.\d+\.\d+$/;
 
 /**
+ * Parse the frontmatter block as a flat YAML mapping of `key: value` lines.
+ * A key that appears more than once makes the mapping invalid; the parser
+ * never silently picks the first or last occurrence.
+ */
+function readFrontmatterMapping(block: string): Map<string, string> {
+	const mapping = new Map<string, string>();
+	for (const line of block.split(/\r?\n/)) {
+		const entry = line.match(/^([A-Za-z_][A-Za-z0-9_]*):(.*)$/);
+		if (!entry) continue;
+		const [, key, rawValue] = entry;
+		if (mapping.has(key)) throw new Error(`tester guide: duplicate frontmatter key: ${key}`);
+		mapping.set(key, rawValue);
+	}
+	return mapping;
+}
+
+/**
  * Read the guide's typed pin from its raw Markdown.
  *
  * Throws on every contradictory combination so a build cannot expose the loop
- * by accident: a status other than `paused`/`active`, a malformed
- * `tester_release`, an active guide with no release, an active guide whose
- * release differs from the published tag, or an active guide while
- * launch-status assigns no tester authority.
+ * by accident: a missing frontmatter block, any frontmatter key that appears
+ * more than once (with the same or conflicting values), a status other than
+ * exactly `paused`/`active`, a malformed `tester_release`, an active guide
+ * with no release, an active guide whose release differs from the published
+ * tag, or an active guide while launch-status assigns no tester authority.
  *
  * `status` is `unknown` only when the guide text is absent.
  */
@@ -47,12 +65,16 @@ export function readTesterGuidePin(
 	const frontmatter = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
 	if (!frontmatter) throw new Error('tester guide: missing YAML frontmatter');
 
-	const statusMatch = frontmatter[1].match(/^status: (paused|active)$/m);
-	if (!statusMatch) throw new Error('tester guide: status must be exactly paused or active');
-	const status = statusMatch[1] as TesterGuideStatus;
+	const mapping = readFrontmatterMapping(frontmatter[1]);
 
-	const releaseLine = frontmatter[1].match(/^tester_release: (\S+)$/m);
-	const release = releaseLine?.[1];
+	const statusValue = mapping.get('status');
+	if (statusValue !== ' paused' && statusValue !== ' active') {
+		throw new Error('tester guide: status must be exactly paused or active');
+	}
+	const status = statusValue.trim() as TesterGuideStatus;
+
+	const releaseValue = mapping.get('tester_release');
+	const release = releaseValue === undefined ? undefined : releaseValue.replace(/^ /, '');
 	if (release !== undefined && !EXACT_TAG.test(release)) {
 		throw new Error(`tester guide: tester_release is not an exact v* tag: ${release}`);
 	}
