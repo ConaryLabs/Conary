@@ -444,7 +444,7 @@ require_match "$release_build" 'workflow_call:[\s\S]*tag_name:[\s\S]*type: strin
 require_job_match "$release_build" prepare 'if \[\[ "\$CALL_CHANNEL" == "nightly" && -n "\$CALL_TAG_NAME" \]\]; then[\s\S]*"\$channel" == "\$requested_channel"' 'reusable release build nightly channel gate'
 forbid_job_match "$release_build" prepare 'GITHUB_EVENT_NAME[^\n]*workflow_call' 'caller-event reusable invocation detection'
 require_job_match "$release_build" bundle-suite 'if \[\[ "\$CHANNEL" == "nightly" \]\]; then[\s\S]*release_flags\+=\(--prerelease\)[\s\S]*gh release create "\$TAG_NAME"[\s\S]*"\$\{release_flags\[@\]\}"' 'nightly publication prerelease flag'
-require_job_match "$release_build" bundle-suite 'previous_nightly=[\s\S]*refs/tags/v\*-nightly\.\*[\s\S]*previous_tag_name="\$previous_nightly"' 'nightly notes previous-tag boundary'
+require_job_match "$release_build" bundle-suite 'nightly-release\.py notes-boundary --tag "\$TAG_NAME"[\s\S]*previous_tag_name="\$previous_tag"' 'nightly notes previous-tag boundary'
 require_job_match "$release_build" prove-nightly-release 'channel == '\''nightly'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name:' 'nightly terminal release-artifact proof'
 require_match "$nightly_release" "cron: '30 6 \\* \\* \\*'" 'nightly release schedule'
 require_match "$nightly_release" 'permissions:[\s\S]*actions: read[\s\S]*contents: write' 'nightly GitHub API permissions'

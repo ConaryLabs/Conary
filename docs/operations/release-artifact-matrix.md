@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 33
-summary: Native signed-version downgrade transactions and malformed historical nightly tag non-authority
+revision: 34
+summary: Typed release-notes boundaries skip malformed tags and explicitly fall back to stable
 ---
 
 # Release Artifact Matrix
@@ -36,6 +36,13 @@ are non-authority: `ignored_malformed_tag` and the tag name are recorded in the
 step summary and on stderr. They cannot be selected, deleted by retention, or
 block valid nightly creation/recovery. Explicit requested tags remain strictly
 validated. Resolution stdout remains one typed JSON result for workflow callers.
+Release notes use the same validation through `nightly-release.py notes-boundary`.
+Excluding the current tag, the newest valid nightly by creator timestamp wins;
+ties use the numeric stable version and nightly date, independent of listing
+order. If none is valid, the latest validated stable tag by the same ordering
+is the boundary. The step summary records `previous_tag_name`, `boundary_channel`,
+and `fallback_to_stable`; no valid boundary fails as `notes_boundary_missing`
+instead of delegating selection to GitHub's implicit boundary heuristics.
 
 Issue [#428](https://github.com/FieldmouseWorks/Conary/issues/428) established the
 current hard-cut topology: all eight Cargo packages inherit one root workspace

@@ -725,6 +725,7 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ("test_nightly_notes_typed_boundary", "replace", ".github/workflows/release-build.yml", "nightly-release.py notes-boundary", "nightly-release.py unvalidated-boundary", "nightly notes previous-tag boundary"),
     ("test_nightly_channel_gate", "replace", ".github/workflows/nightly-release.yml", "      channel: nightly", "      channel: stable", "nightly channel-gated live build"),
     ("test_nightly_prerelease_flag", "replace", ".github/workflows/release-build.yml", "              release_flags+=(--prerelease)", "              release_flags+=(--latest)", "nightly publication prerelease flag"),
     ("test_nightly_retention_window", "replace", "scripts/nightly-release.py", "cutoff = now - timedelta(days=14)", "cutoff = now - timedelta(days=30)", "nightly release retention"),

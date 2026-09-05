@@ -184,6 +184,30 @@ def resolve(api, candidate_tag, commit):
             "tag_name": tag, "commit_sha": commit, "release_id": release["id"] if release else None}
 
 
+def notes_boundary(current_tag):
+    if tag_metadata(current_tag)["channel"] != "nightly":
+        raise Failure("invalid_nightly_target")
+    candidates = {"nightly": [], "stable": []}
+    for row in git("for-each-ref", "--format=%(refname:short)%09%(creatordate:unix)", "refs/tags/v*").splitlines():
+        tag, timestamp = row.split("\t")
+        if tag == current_tag:
+            continue
+        metadata = discovered_tag_metadata(tag)
+        channel = metadata["channel"]
+        if channel not in candidates:
+            continue
+        # Grammar has already established the numeric version and real date.
+        version = tuple(int(part) for part in metadata["stable_version"].split("."))
+        date = int(metadata["version"].split("-nightly.")[1]) if channel == "nightly" else 0
+        candidates[channel].append((int(timestamp), version, date, tag))
+    channel = "nightly" if candidates["nightly"] else "stable"
+    if not candidates[channel]:
+        raise Failure("notes_boundary_missing", tag_name=current_tag)
+    return {"schema_version": 1, "outcome": "notes_boundary_selected",
+            "boundary_channel": channel, "fallback_to_stable": channel == "stable",
+            "previous_tag_name": max(candidates[channel])[-1], "tag_name": current_tag}
+
+
 def retain(api, now):
     cutoff = now - timedelta(days=14)
     # Snapshot before deleting: mutation would otherwise shift subsequent pages.
@@ -225,10 +249,15 @@ def main():
     selection.add_argument("--tag", required=True)
     selection.add_argument("--commit", required=True)
     sub.add_parser("retain")
+    notes = sub.add_parser("notes-boundary")
+    notes.add_argument("--tag", required=True)
     receipt = sub.add_parser("receipt")
     receipt.add_argument("--tag", required=True)
     receipt.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.command == "notes-boundary":
+        report(notes_boundary(args.tag))
+        return
     api = GitHub()
     if args.command == "resolve":
         report(resolve(api, args.tag, args.commit))

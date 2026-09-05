@@ -45,6 +45,39 @@ class API:
 
 
 class NightlyTests(unittest.TestCase):
+    def test_notes_boundary_table(self):
+        malformed = "v0.17.0-nightly.preview\t999999"
+        earlier = "v0.17.0-nightly.20260903\t100"
+        latest = "v0.17.0-nightly.20260904\t200"
+        stable = "v0.16.1\t50"
+        cases = (
+            ([malformed, latest, earlier, stable], "v0.17.0-nightly.20260904", "nightly"),
+            ([earlier, latest, malformed, stable], "v0.17.0-nightly.20260904", "nightly"),
+            (["v0.9.0-nightly.20260904\t200", "v0.10.0-nightly.20260904\t200"],
+             "v0.10.0-nightly.20260904", "nightly"),
+            (["v0.17.0-nightly.20260903\t200", latest], "v0.17.0-nightly.20260904", "nightly"),
+            ([malformed, "v0.16.0\t40", stable], "v0.16.1", "stable"),
+        )
+        for rows, expected, channel in cases:
+            with self.subTest(rows=rows), tempfile.TemporaryDirectory() as directory:
+                summary = Path(directory) / "summary"
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch.object(nightly, "git", return_value="\n".join([TAG + "\t1000000", *rows])), \
+                        patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), \
+                        redirect_stdout(stdout), redirect_stderr(stderr):
+                    nightly.report(nightly.notes_boundary(TAG))
+                result = json.loads(stdout.getvalue())
+                self.assertEqual(result["previous_tag_name"], expected)
+                self.assertEqual(result["boundary_channel"], channel)
+                self.assertEqual(result["fallback_to_stable"], channel == "stable")
+                self.assertIn(json.dumps(result, sort_keys=True), summary.read_text())
+                if malformed in rows:
+                    self.assertIn("ignored_malformed_tag", summary.read_text())
+        with patch.object(nightly, "git", return_value=malformed), \
+                redirect_stderr(io.StringIO()), self.assertRaises(nightly.Failure) as error:
+            nightly.notes_boundary(TAG)
+        self.assertEqual(error.exception.record["outcome"], "notes_boundary_missing")
+
     def test_malformed_discovery_is_non_authority(self):
         malformed = "v0.17.0-nightly.preview"
 

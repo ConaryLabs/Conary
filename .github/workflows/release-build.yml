@@ -874,6 +874,15 @@ jobs:
           ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/nightly-release.py
+            scripts/release-matrix.sh
+          sparse-checkout-cone-mode: false
       - name: Download every product bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -1029,28 +1038,14 @@ jobs:
           generated_notes="$(mktemp)"
           release_notes="$(mktemp)"
           if [[ "$CHANNEL" == "nightly" ]]; then
-            previous_nightly="$({
-              git for-each-ref \
-                --sort=-creatordate \
-                --format='%(refname:short)' \
-                'refs/tags/v*-nightly.*' \
-                | grep -Fvx "$TAG_NAME" \
-                | head -n1
-            } || true)"
-            if [[ -n "$previous_nightly" ]]; then
-              gh api --method POST \
-                "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-                -f tag_name="$TAG_NAME" \
-                -f previous_tag_name="$previous_nightly" \
-                --jq '.body' > "$generated_notes"
-              notes_heading="Merged pull requests since ${previous_nightly}"
-            else
-              gh api --method POST \
-                "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-                -f tag_name="$TAG_NAME" \
-                --jq '.body' > "$generated_notes"
-              notes_heading="Merged pull requests in the initial nightly snapshot"
-            fi
+            boundary="$(python3 workflow-authority/scripts/nightly-release.py notes-boundary --tag "$TAG_NAME")"
+            previous_tag="$(jq -er '.previous_tag_name' <<< "$boundary")"
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG_NAME" \
+              -f previous_tag_name="$previous_tag" \
+              --jq '.body' > "$generated_notes"
+            notes_heading="Merged pull requests since ${previous_tag}"
             {
               cat <<EOF
           ## Conary ${TAG_NAME} nightly pre-release
