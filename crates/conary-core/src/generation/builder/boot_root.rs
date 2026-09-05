@@ -13,8 +13,9 @@ pub enum BootRoot {
     Host,
     /// An explicit, writable boot directory (test fixtures, staged targets).
     /// Its runtime files are read as they are and never reused across
-    /// generations; when it lacks the release initramfs or `modules.dep`, the
-    /// builder generates them into this directory with dracut/depmod.
+    /// generations. When it lacks the release initramfs, the builder generates
+    /// one into this directory with dracut, running depmod first if
+    /// `modules.dep` is also missing; an existing initramfs is used unchanged.
     Staged(PathBuf),
 }
 

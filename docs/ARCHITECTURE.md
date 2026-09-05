@@ -605,9 +605,9 @@ rebuild orchestration), builder/carrier_capabilities.rs (persisted target
 capability projection), builder/boot_root.rs (the typed `BootRoot` policy:
 `Host` generates the initramfs from the generation sysroot and may reuse boot
 assets across generations; `Staged` reads runtime boot files from an explicit
-directory and, when that directory lacks the release initramfs or
-`modules.dep`, generates them there with dracut/depmod — the staged
-directory must be writable),
+directory; when that directory lacks the release initramfs it generates one
+there with dracut (running depmod first if `modules.dep` is also missing), so
+the staged directory must be writable),
 builder/boot_assets.rs, builder/boot_reuse.rs,
 builder/initramfs.rs,
 builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
