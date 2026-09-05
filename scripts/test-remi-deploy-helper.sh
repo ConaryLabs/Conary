@@ -2,6 +2,14 @@
 # scripts/test-remi-deploy-helper.sh -- Exercise the Remi deploy helper in a fake root.
 set -euo pipefail
 
+outcome_fixture_dir="apps/remi/tests/fixtures/resolution-survey-outcome"
+only_outcome_fixtures=0
+if [[ "${1:-}" == --outcome-fixtures ]]; then
+    outcome_fixture_dir="$2"
+    only_outcome_fixtures=1
+    shift 2
+fi
+
 helper="${1:-deploy/remi-deploy-helper.sh}"
 test -f "$helper" || {
     echo "missing helper: $helper" >&2
@@ -352,6 +360,10 @@ done
     "fedora-44=$(printf 'a%.0s' {1..64}) ubuntu-26.04=$(printf 'b%.0s' {1..64}) arch=$(printf 'c%.0s' {1..64})" ]]
 [[ "${architectures[*]}" == "fedora-44=x86_64 ubuntu-26.04=amd64 arch=x86_64" ]]
 mkdir -m 0700 "$output"
+if [[ "${CONARY_FAKE_SURVEY_EARLY_FAILURE:-0}" == 1 ]]; then
+    echo 'survey producer failed before writing its outcome' >&2
+    exit 101
+fi
 profile_results_file="${output}.profile-results.jsonl"
 : >"$profile_results_file"
 candidate_failures=0
@@ -523,7 +535,7 @@ for index in 0 1 2; do
         }
     ' >>"$profile_results_file"
 done
-jq -n \
+jq -n >"${output}.outcome.json" \
     --arg output "$output" \
     --argjson failures "$candidate_failures" \
     --argjson mismatches "$comparison_mismatches" \
@@ -539,6 +551,11 @@ jq -n \
       comparison_profiles:$comparison_profiles
     }
 '
+if [[ "${CONARY_FAKE_SURVEY_BAD_OUTCOME:-0}" == 1 ]]; then
+    jq 'del(.profiles)' "${output}.outcome.json"
+else
+    cat "${output}.outcome.json"
+fi
 if [[ -n "${CONARY_FAKE_SURVEY_STATUS:-}" ]]; then
     printf '%s\n' "${CONARY_FAKE_SURVEY_DIAGNOSTIC:-unexpected survey failure}" >&2
     exit "$CONARY_FAKE_SURVEY_STATUS"
@@ -1521,8 +1538,15 @@ test_resolution_survey_restore_outcomes_and_measured_budgets() {
 #!/usr/bin/env bash
 set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" source_report="$3" source_status="$4"
+repository_root="$PWD"
 cd "$5"
 target=fixture
+helper_stderr="$PWD/helper.stderr"
+export REMI_SSH_TARGET=surveyoperator@fixture
+REMI_SSH_CONFIG="$PWD/config" known_hosts="$PWD/known_hosts"
+printf 'Host fixture\n HostName fixture\n' >"$REMI_SSH_CONFIG"
+printf 'fixture ssh-ed25519 synthetic-key\n' >"$known_hosts"
+[[ -e scripts ]] || ln -s "$repository_root/scripts" scripts
 remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
 remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
 remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
@@ -1539,6 +1563,9 @@ workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
 start = workflow.index('          helper_status=0\n')
 end = workflow.index('          scp "${ssh_opts[@]}" "${target}:${remote_output}"', start)
 with Path(sys.argv[1]).open('a') as output:
+    sanitizer_start = workflow.index('          sanitize_helper_stderr() {\n')
+    sanitizer_end = workflow.index('          recover_helper_failure() {\n', sanitizer_start)
+    output.write('\n'.join(line[10:] for line in workflow[sanitizer_start:sanitizer_end].splitlines()) + '\n')
     output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
 PYCODE
     local -a cases=(
@@ -1581,7 +1608,10 @@ PYCODE
         cmp "$restore" "$retained/restore.json"
         mkdir "${tmpdir}/runner-${survey_id}"
         bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" "$status" \
-            "${tmpdir}/runner-${survey_id}" || fail "$name failed the real workflow handoff"
+            "${tmpdir}/runner-${survey_id}" 2>"${tmpdir}/runner-${survey_id}.stderr" || fail "$name failed the real workflow handoff"
+        [[ ! -s "${tmpdir}/runner-${survey_id}.stderr" ]] || fail "empty helper stderr fabricated a diagnostic"
+        jq -e '.stderr == "empty" and (has("message") | not)' \
+            "${tmpdir}/runner-${survey_id}/resolution-survey-helper.json" >/dev/null
         expect_fail "SSH failure cannot become a retained survey result" \
             bash "$runner_script" "$survey_id" "$export_id" "$stdout_file" 255 \
             "${tmpdir}/runner-${survey_id}"
@@ -1652,6 +1682,299 @@ test_deploy_records_readiness_and_reuses_survey_measurement() {
         and .restart_readiness.restart_to_ready_seconds == 30
         and .restart_readiness.last_ready_duration_seconds == 30
     ' >/dev/null || fail "deployment did not reuse survey timing or expose its new measurement"
+}
+
+test_resolution_survey_recovers_surviving_production_evidence() {
+    local fixture="apps/remi/tests/fixtures/resolution-survey-outcome/production-33974396159-recovery.json"
+    local fake_root="${tmpdir}/root-production-recovery" survey_id export_id retained archive
+    survey_id="$(jq -r .recovery.survey_id "$fixture")"
+    export_id="$(jq -r .recovery.export_id "$fixture")"
+    retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}"
+    archive="${tmpdir}/production-recovery.tar"
+    mkdir -p -m 0700 "$retained/survey-output"
+    chmod 0700 "$retained"
+    jq -cS .restore "$fixture" >"$retained/restore.json"
+    chmod 0600 "$retained/restore.json"
+    # The incident's original stdout was deleted. Replay exactly the evidence
+    # that survived; never manufacture a production outcome document.
+    jq -e '.outcome_document == "not_retained"
+        and [.recovery.files[].path] == ["restore.json"]' "$fixture" >/dev/null
+    run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" >"$archive"
+    tar -xOf "$archive" recovery.json | jq -e --slurpfile incident "$fixture" '. == $incident[0].recovery' >/dev/null
+    [[ "$(tar -tf "$archive")" == $'recovery.json\nrestore.json' ]] ||
+        fail "production recovery invented a missing outcome or discarded surviving evidence"
+}
+
+test_resolution_survey_workflow_recovers_without_a_report() {
+    local survey_id="$1" export_id="$2" fake_root="$3" recovery="$4"
+    local root script runner mode status diagnostic
+    root="$(pwd)"
+    script="${tmpdir}/recovery-workflow.sh"
+    cat >"$script" <<'SCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+SURVEY_ID="$1" EXPORT_ID="$2" source_recovery="$3" export_status="$4" fixture_root="$5"
+RUNNER_TEMP="$PWD" GITHUB_OUTPUT="$PWD/outputs"
+REMI_SSH_KEY_PATH="$PWD/key" REMI_SSH_KNOWN_HOSTS_PATH="$PWD/known-hosts"
+REMI_SSH_CONFIG="$PWD/config"
+export REMI_SSH_TARGET=surveyoperator@fixture
+printf 'Host fixture\n HostName fixture\n' >"$REMI_SSH_CONFIG"
+printf 'fixture ssh-ed25519 synthetic-key\n' >"$REMI_SSH_KNOWN_HOSTS_PATH"
+key="$REMI_SSH_KEY_PATH" known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
+helper="$PWD/helper" current_helper="$PWD/current-helper"
+touch "$key" "$known_hosts" "$helper" "$current_helper"
+cp "$fixture_root/survey-input-verification.json" resolution-survey-input-verification.json
+target=fixture
+ssh_opts=()
+remote_possible=0
+remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
+remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+ssh() {
+    if [[ "$*" == *"conary-remi-deploy survey-resolution "* ]]; then
+        printf '%s' "$fixture_report"
+        return "$fixture_status"
+    fi
+    [[ -f "$key" && -f "$known_hosts" ]] || return 99
+    [[ "$*" == "fixture sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" ]] || return 98
+    if (( export_status != 0 )); then return "$export_status"; fi
+    cat "$source_recovery"
+}
+SCRIPT
+    python3 - "$script" <<'PY'
+from pathlib import Path
+import sys
+workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
+start = workflow.index('          helper_invoked=0\n')
+end = workflow.index('          trap cleanup EXIT\n', start) + len('          trap cleanup EXIT\n')
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
+PY
+    cat >>"$script" <<'SCRIPT'
+helper_invoked=1
+helper_status=1
+case "${6:-helper}" in
+    helper) printf 'remi deploy helper: outcome.document_count; /private/path redacted\n' >"$helper_stderr" ;;
+    connect) printf 'ssh: connect to host fixture port 22: Connection timed out\n' >"$helper_stderr" ;;
+    permission) printf 'surveyoperator@fixture: Permission denied (publickey).\n' >"$helper_stderr" ;;
+    host_key) printf 'Host key verification failed for fixture (192.0.2.31).\n' >"$helper_stderr" ;;
+    kex) printf 'kex_exchange_identification: Connection closed by 2001:db8::42 port 22\n' >"$helper_stderr" ;;
+    metadata_missing) printf 'ssh: connect to host fixture port 22\n' >"$helper_stderr"; rm "$REMI_SSH_CONFIG" ;;
+    empty|missing|malformed) ;;
+esac
+# Exercise actual report classification independently of stderr. The EXIT trap
+# must retain its typed reason without manufacturing a diagnostic message.
+if [[ "${6:-helper}" != missing && "${6:-helper}" != malformed ]]; then
+    exit 1
+fi
+fixture_status=0
+fixture_report=""
+[[ "$6" != malformed ]] || fixture_report="invalid report"
+SCRIPT
+    python3 - "$script" <<'PY'
+from pathlib import Path
+import sys
+workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
+start = workflow.index('          helper_status=0\n')
+end = workflow.index('          reported_sha256=', start)
+with Path(sys.argv[1]).open('a') as output:
+    output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
+PY
+    for mode in 0 255; do
+      for diagnostic in helper connect permission host_key kex metadata_missing empty missing malformed; do
+        runner="${tmpdir}/runner-recovery-${survey_id}-${mode}-${diagnostic}"
+        mkdir "$runner"
+        ln -s "$root/scripts" "$runner/scripts"
+        status=0
+        (cd "$runner" && bash "$script" "$survey_id" "$export_id" "$recovery" "$mode" "$fake_root" "$diagnostic") \
+            2>"$runner/workflow.stderr" || status=$?
+        if [[ "$diagnostic" == empty && "$mode" == 0 ]]; then
+            [[ ! -s "$runner/workflow.stderr" ]] || fail "empty failure stderr fabricated a diagnostic"
+        fi
+        [[ "$status" == 1 ]] || fail "workflow recovery changed original failure status"
+        [[ ! -e "$runner/key" && ! -e "$runner/known-hosts" ]]
+        jq -e '.outcome == "helper_failed" and .workflow_status == 1
+            and ((.message // "") | contains("/private/") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+        if [[ "$diagnostic" == empty || "$diagnostic" == missing || "$diagnostic" == malformed ]]; then
+            jq -e '.stderr == "empty" and (has("message") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+            if [[ "$diagnostic" == empty ]]; then
+                jq -e '.status == 1 and .evidence_reason == "not_checked"' "$runner/resolution-survey-helper.json" >/dev/null
+            else
+                jq -e --arg reason "${diagnostic}_survey_evidence" \
+                    '.status == 0 and .evidence_reason == $reason' "$runner/resolution-survey-helper.json" >/dev/null
+            fi
+        elif [[ "$diagnostic" == metadata_missing ]]; then
+            jq -e '.stderr.outcome == "withheld" and .stderr.reason == "connection_metadata_or_diagnostic_invalid"
+                and (.stderr | has("message") | not)' "$runner/resolution-survey-helper.json" >/dev/null
+        else
+            jq -e '.stderr.outcome == "sanitized"' "$runner/resolution-survey-helper.json" >/dev/null
+        fi
+        if [[ "$diagnostic" == helper ]]; then
+            jq -e '.message | contains("outcome.document_count")' "$runner/resolution-survey-helper.json" >/dev/null
+        fi
+        if grep -E 'surveyoperator|fixture|192\.0\.2\.31|2001:db8::42' "$runner/resolution-survey-helper.json"; then
+            fail "workflow recovery artifact leaked a connection identifier"
+        fi
+        if (( mode == 0 )); then
+            jq -e '.recovery == "retrieved"' "$runner/resolution-survey-helper.json" >/dev/null
+            cmp "$runner/resolution-survey-recovery/outcome.json" \
+                "$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}/outcome.json"
+        else
+            jq -e '.recovery == "fetch_failed"' "$runner/resolution-survey-helper.json" >/dev/null
+            [[ ! -e "$runner/resolution-survey-recovery" ]]
+        fi
+        grep -Fx 'helper_outcome=helper_failed' "$runner/outputs" >/dev/null
+      done
+    done
+}
+
+test_resolution_survey_any_failure_retains_recoverable_diagnostics() {
+    local row name early bad survey_id export_id fake_root status stderr_file stdout_file
+    local retained recovery unpacked
+    for row in 'empty|1|0' 'predicate|0|1'; do
+        IFS='|' read -r name early bad <<<"$row"
+        survey_id="survey-helper-failed-${name}-$$"
+        export_id="slice6-export-$$"
+        fake_root="${tmpdir}/root-${survey_id}"
+        stderr_file="${tmpdir}/${survey_id}.stderr"
+        stdout_file="${tmpdir}/${survey_id}.stdout"
+        retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}"
+        recovery="${tmpdir}/${survey_id}.tar"
+        unpacked="${tmpdir}/${survey_id}-recovered"
+        make_survey_fixture "$fake_root" "$survey_id" "$export_id"
+        status=0
+        CONARY_FAKE_SURVEY_EARLY_FAILURE="$early" CONARY_FAKE_SURVEY_BAD_OUTCOME="$bad" \
+            run_survey_helper "$fake_root" "$survey_id" "$export_id" \
+            "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+            >"$stdout_file" 2>"$stderr_file" || status=$?
+        [[ "$status" == 1 && ! -s "$stdout_file" ]] || fail "$name invented a successful helper report"
+        if [[ "$name" == empty ]]; then
+            grep -F 'command status 101' "$stderr_file" >/dev/null
+            grep -F 'outcome.document_count' "$stderr_file" >/dev/null
+            grep -F '"document_state":"empty"' "$stderr_file" >/dev/null
+        else
+            grep -F 'outcome.keys' "$stderr_file" >/dev/null
+            grep -F '"output_dir":"<redacted:private_host_path>"' "$stderr_file" >/dev/null
+        fi
+        if grep -F "$fake_root" "$stderr_file"; then
+            fail "$name outcome diagnostic leaked its private path"
+        fi
+        [[ -f "$retained/outcome.json" && -f "$retained/restore.json" && -f "$retained/helper.json" ]]
+        [[ -f "$retained/diagnostic.log" && "$(stat -c '%a' "$retained/diagnostic.log")" == 600 ]]
+        jq -e '.outcome == "helper_failed" and .status == 1 and (.message | startswith("<redacted:"))' \
+            "$retained/helper.json" >/dev/null
+        # A writer can create an allowlisted file before failing. Neither this
+        # empty member nor a host-local diagnostic may block the useful files.
+        : >"$retained/manifest.json"
+        chmod 0600 "$retained/manifest.json"
+        mkdir -p "$retained/survey-output"
+        chmod 0700 "$retained/survey-output"
+        printf '%s\n' '{"message":"journal: \u002fvar/lib/remi/private"}' \
+            >"$retained/survey-output/arch.comparison-resolution-implementation.json"
+        chmod 0600 "$retained/survey-output/arch.comparison-resolution-implementation.json"
+        run_helper "$fake_root" export-resolution-survey-evidence "$survey_id" "$export_id" >"$recovery"
+        python3 scripts/remi-resolution-survey-transport.py verify-recovery \
+            --survey-id "$survey_id" --export-id "$export_id" \
+            --input-evidence "$fake_root/survey-input-verification.json" \
+            --transport "$recovery" --output "$unpacked"
+        test_resolution_survey_workflow_recovers_without_a_report "$survey_id" "$export_id" "$fake_root" "$recovery"
+        cmp "$retained/outcome.json" "$unpacked/outcome.json"
+        cmp "$retained/restore.json" "$unpacked/restore.json"
+        cmp "$retained/helper.json" "$unpacked/helper.json"
+        jq -e '
+            (.withheld | index({path:"manifest.json",reason:"empty"})) != null
+            and (.withheld | index({path:"survey-output/arch.comparison-resolution-implementation.json",reason:"private_host_path"})) != null
+            and all(.files[]; .size > 0)
+        ' "$unpacked/recovery.json" >/dev/null
+        [[ ! -e "$unpacked/manifest.json" && ! -e "$unpacked/survey-output/arch.comparison-resolution-implementation.json" ]]
+        [[ ! -e "$unpacked/diagnostic.log" && ! -e "$unpacked/outcome.raw.json" ]]
+        [[ -f "$retained/outcome.raw.json" && "$(stat -c '%a' "$retained/outcome.raw.json")" == 600 ]]
+        jq -e '.authority == "diagnostic_only" and .input_binding == "not_retained"' \
+            "$unpacked/recovery-verification.json" >/dev/null
+        jq -e '.input_manifest_sha256 == null
+            and any(.withheld[]; .path == "input-manifest.json")' "$unpacked/recovery.json" >/dev/null
+        if [[ "$name" == predicate ]]; then
+            jq -e 'any(.withheld[]; .path == "survey-output/fedora-44.candidate-resolution-survey.json")' \
+                "$unpacked/recovery.json" >/dev/null
+        fi
+        [[ ! -d "$unpacked/survey-output" ]]
+        local mutation broken
+        for mutation in digest input_binding withheld_input included_empty private_path escaped_path private_key network_path unc_path unknown_string extra_member; do
+            broken="${tmpdir}/${survey_id}-${mutation}.tar"
+            python3 - "$recovery" "$broken" "$mutation" "$(jq -r .manifest_sha256 "$fake_root/survey-input-verification.json")" <<'PYRECOVERY'
+import io
+import hashlib
+import json
+import sys
+import tarfile
+replacement = {
+    'included_empty': b'',
+    'private_path': b'{"message":"journal: /usr/local/bin/remi"}',
+    'escaped_path': br'{"message":"journal: \u002fvar/lib/remi/private"}',
+    'private_key': b'{"/arbitrary-root/private":"diagnostic"}',
+    'network_path': b'{"message":"journal: //private.internal/share"}',
+    'unc_path': json.dumps({'message': r'\\private.internal\share'}).encode(),
+    'unknown_string': b'{"message":"new-shape-not-in-any-denylist"}',
+}.get(sys.argv[3])
+with tarfile.open(sys.argv[1]) as source, tarfile.open(sys.argv[2], 'w') as target:
+    for member in source:
+        if sys.argv[3] == 'withheld_input' and member.name == 'input-manifest.json':
+            continue
+        data = source.extractfile(member).read()
+        if member.name == 'recovery.json':
+            value = json.loads(data)
+            if sys.argv[3] == 'digest':
+                value['files'][0]['sha256'] = '0' * 64
+            elif sys.argv[3] == 'input_binding':
+                value['input_manifest_sha256'] = '0' * 64
+            elif sys.argv[3] == 'withheld_input':
+                value['input_manifest_sha256'] = sys.argv[4]
+                value['files'] = [item for item in value['files'] if item['path'] != 'input-manifest.json']
+                value['withheld'] = [item for item in value['withheld'] if item['path'] != 'input-manifest.json']
+                value['withheld'].append({'path': 'input-manifest.json', 'reason': 'private_host_path'})
+            elif replacement is not None:
+                item = next(item for item in value['files'] if item['path'] == 'helper.json')
+                item['size'] = len(replacement)
+                item['sha256'] = hashlib.sha256(replacement).hexdigest()
+            data = json.dumps(value).encode()
+            member.size = len(data)
+        elif member.name == 'helper.json' and replacement is not None:
+            data = replacement
+            member.size = len(data)
+        target.addfile(member, io.BytesIO(data))
+    if sys.argv[3] == 'extra_member':
+        extra = tarfile.TarInfo('unexpected.json')
+        extra.size = 2
+        target.addfile(extra, io.BytesIO(b'{}'))
+PYRECOVERY
+            if python3 scripts/remi-resolution-survey-transport.py verify-recovery \
+                --survey-id "$survey_id" --export-id "$export_id" \
+                --input-evidence "$fake_root/survey-input-verification.json" \
+                --transport "$broken" --output "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" \
+                > /dev/null 2>"${tmpdir}/recovery-${name}-${mutation}.stderr"; then
+                fail "recovery rejects $mutation unexpectedly succeeded"
+            fi
+            if [[ "$mutation" == withheld_input ]]; then
+                grep -Fq 'survey recovery input binding lacks its retained manifest' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            fi
+            if [[ "$mutation" == included_empty ]]; then
+                grep -Fq 'survey recovery file size must be positive' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            elif [[ "$mutation" == private_path || "$mutation" == escaped_path || "$mutation" == private_key ]]; then
+                grep -Fq 'survey recovery member contains a private host path' \
+                    "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            elif [[ "$mutation" == network_path || "$mutation" == unc_path || "$mutation" == unknown_string ]]; then
+                grep -Fq 'outside the safe grammar' "${tmpdir}/recovery-${name}-${mutation}.stderr"
+            fi
+            [[ ! -e "${tmpdir}/recovery-must-not-publish-${name}-${mutation}" ]]
+        done
+        expect_fail "recovery cannot substitute for a verified survey" \
+            python3 scripts/remi-resolution-survey-transport.py verify-output \
+            --survey-id "$survey_id" --export-id "$export_id" \
+            --input-evidence "$fake_root/survey-input-verification.json" \
+            --oracle-transport "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" \
+            --transport "$recovery" --evidence "${tmpdir}/unexpected-recovery-authority.json"
+    done
 }
 
 test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap() {
@@ -2332,7 +2655,106 @@ test_verify_access_does_not_require_a_running_service() {
     run_helper "$fake_root" verify-access
 }
 
+test_recovery_path_uri_policy() (
+    source "$helper"
+    local fake_root="${tmpdir}/uri-policy-root"
+    local retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-uri-policy"
+    local value key reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
+    mkdir -p "$retained"
+    chmod 0700 "$retained"
+    for name in helper outcome restore; do
+        printf '{}\n' >"$retained/$name.json"
+        chmod 0600 "$retained/$name.json"
+    done
+    while IFS=$'\t' read -r value key reason; do
+        jq -cn --arg value "$value" --arg key "$key" '{($key):$value}' >"$member"
+        [[ "$(survey_recovery_path_reason "$member")" == "$reason" ]] || fail "URI policy classification drifted"
+        if [[ "$reason" == safe ]]; then
+            survey_sanitize_json <"$member" | jq -e --arg value "$value" --arg key "$key" '.[$key] == $value' >/dev/null
+        else
+            survey_sanitize_json <"$member" | jq -e --arg key "$key" --arg reason "$reason" \
+                '.[$key] == ("<redacted:" + $reason + ">")' >/dev/null
+            jq -cn --arg value "$value" '{($value):"ready"}' | survey_sanitize_json \
+                | jq -e 'to_entries | all(.[]; (.key | startswith("<redacted:")) and .value == "ready")' >/dev/null
+        fi
+        install -m 0600 "$member" "$retained/manifest.json"
+        run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy >"$archive"
+        tar -xOf "$archive" recovery.json | jq -e --arg reason "$reason" '
+            if $reason == "safe" then any(.files[]; .path == "manifest.json")
+            else (.withheld | index({path:"manifest.json",reason:$reason})) != null
+                and all(.files[]; .path != "manifest.json") end
+        ' >/dev/null
+        for name in helper outcome restore; do
+            tar -xOf "$archive" "$name.json" | cmp - "$retained/$name.json"
+        done
+    done < <(jq -r '.[] | [.value,(.key // "message"),.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
+)
+
+test_rust_resolution_survey_outcome_fixtures() (
+    source "$helper"
+    local fixture rejected="${tmpdir}/outcome-rejected.json" message
+    for fixture in "$outcome_fixture_dir"/{clean,mixed,failed}.json; do
+        survey_validate_outcome "$fixture" '<survey-output>' >/dev/null ||
+            fail "Rust-serialized outcome was rejected: $fixture"
+    done
+    local row mutation clause
+    local -a mutations=(
+        'del(.profiles)|outcome.keys'
+        '.profiles = []|outcome.profiles'
+        '.roots_walked = 1.5|outcome.integer_counts'
+        '.candidate_failures = "1"|outcome.integer_counts'
+        '.extra = true|outcome.keys'
+        '.profile_results = []|outcome.profile_results'
+        '.profile_results = [.profile_results[2], .profile_results[1], .profile_results[0]]|outcome.profile_order'
+        '.profile_results[0].candidate.counts = []|candidate.counts'
+        '.candidate_failures = 99|aggregate.candidate_failures'
+        'del(.profile_results[1].comparison)|profile.keys'
+        '.profile_results[1].comparison = {}|comparison.null_or_object'
+        '.profile_results[0].candidate.extra = 1|candidate.keys'
+        '.profile_results[0].comparison.total_mismatches = -1|comparison.null_or_object'
+        '.roots_walked = 99|aggregate.roots_walked'
+        '.comparison_profiles = 3|aggregate.comparison_profiles'
+        '.comparison_mismatches = 1|aggregate.comparison_mismatches'
+    )
+    for row in "${mutations[@]}"; do
+        IFS='|' read -r mutation clause <<<"$row"
+        jq "$mutation" "$outcome_fixture_dir/mixed.json" >"$rejected"
+        if message="$(survey_validate_outcome "$rejected" '<survey-output>' 2>&1)"; then
+            fail "outcome drift passed: $mutation"
+        fi
+        grep -F "$clause" <<<"$message" >/dev/null || fail "outcome diagnostic lost clause $clause: $message"
+    done
+    : >"$rejected"
+    if message="$(survey_validate_outcome "$rejected" '<survey-output>' 2>&1)"; then
+        fail "empty command output was accepted as a serialized outcome"
+    fi
+    grep -F 'outcome.document_count' <<<"$message" >/dev/null
+    printf '{broken: "/conary/private/value"}' >"$rejected"
+    if message="$(survey_validate_outcome "$rejected" '<survey-output>' 2>&1)"; then
+        fail "malformed command JSON was accepted"
+    fi
+    [[ "$message" == outcome.json_syntax ]] || fail "JSON syntax failure lost its safe named clause"
+    survey_sanitize_outcome "$rejected" | jq -e '
+        .document_state == "invalid_json" and (.source_sha256 | length == 64)
+    ' >/dev/null
+    local host_path
+    for host_path in '/var/lib/remi/private' '/usr/local/bin/remi' '/arbitrary-root/private' \
+        '/root-secret' 'journal: /var/lib/remi/private' 'file:///opt/remi/private'; do
+        jq -cn --arg path "$host_path" '{message:$path,candidate:{($path):"ready"},output_dir:"https://example.invalid/evidence",reason:"survey-output/arch.json"}' \
+            | survey_sanitize_json | jq -e '
+                .message == "<redacted:private_host_path>" and .candidate["<redacted:private_host_path>"] == "ready"
+                and .output_dir == "<redacted:private_string>" and .reason == "<redacted:private_string>"
+            ' >/dev/null
+    done
+)
+
 main() {
+    test_rust_resolution_survey_outcome_fixtures
+    if (( only_outcome_fixtures == 1 )); then
+        return
+    fi
+    python3 scripts/test-remi-survey-ssh-diagnostic.py
+    test_recovery_path_uri_policy
     test_deploy_conary_accepts_verified_release
     test_deploy_conary_rejects_checksum_mismatch
     test_deploy_conary_requires_ccs_signature
@@ -2356,6 +2778,8 @@ main() {
     test_resolution_survey_findings_restart_and_succeed
     test_resolution_survey_restore_outcomes_and_measured_budgets
     test_deploy_records_readiness_and_reuses_survey_measurement
+    test_resolution_survey_any_failure_retains_recoverable_diagnostics
+    test_resolution_survey_recovers_surviving_production_evidence
     test_resolution_survey_accepts_manifest_bound_sparse_transport_beyond_old_cap
     test_resolution_survey_failure_sanitizes_diagnostic
     test_resolution_survey_inspection_failure_sanitizes_diagnostic

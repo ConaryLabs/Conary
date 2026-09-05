@@ -1,0 +1,79 @@
+{
+  "output_dir": "<survey-output>",
+  "profiles": 3,
+  "profile_results": [
+    {
+      "profile": "fedora-44",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 1,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 1,
+          "error_kinds": [
+            {
+              "kind": {
+                "error_variant": "config_error",
+                "reason": "solver_failed"
+              },
+              "count": 1
+            }
+          ]
+        },
+        "total_failures": 1
+      },
+      "comparison": null
+    },
+    {
+      "profile": "ubuntu-26.04",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 1,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 1,
+          "error_kinds": [
+            {
+              "kind": {
+                "error_variant": "config_error",
+                "reason": "solver_failed"
+              },
+              "count": 1
+            }
+          ]
+        },
+        "total_failures": 1
+      },
+      "comparison": null
+    },
+    {
+      "profile": "arch",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 1,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 1,
+          "error_kinds": [
+            {
+              "kind": {
+                "error_variant": "config_error",
+                "reason": "solver_failed"
+              },
+              "count": 1
+            }
+          ]
+        },
+        "total_failures": 1
+      },
+      "comparison": null
+    }
+  ],
+  "roots_walked": 12,
+  "candidate_failures": 3,
+  "comparison_mismatches": 0,
+  "comparison_profiles": 0
+}

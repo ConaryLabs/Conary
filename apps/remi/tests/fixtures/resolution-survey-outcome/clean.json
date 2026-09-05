@@ -1,0 +1,85 @@
+{
+  "output_dir": "<survey-output>",
+  "profiles": 3,
+  "profile_results": [
+    {
+      "profile": "fedora-44",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 2,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 0,
+          "error_kinds": []
+        },
+        "total_failures": 0
+      },
+      "comparison": {
+        "candidate_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "counts": {
+          "roots_walked": 4,
+          "matching_roots": 4,
+          "mismatched_roots": 0,
+          "mismatch_kinds": [],
+          "outcome_kind_pairs": []
+        },
+        "total_mismatches": 0
+      }
+    },
+    {
+      "profile": "ubuntu-26.04",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 2,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 0,
+          "error_kinds": []
+        },
+        "total_failures": 0
+      },
+      "comparison": {
+        "candidate_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "counts": {
+          "roots_walked": 4,
+          "matching_roots": 4,
+          "mismatched_roots": 0,
+          "mismatch_kinds": [],
+          "outcome_kind_pairs": []
+        },
+        "total_mismatches": 0
+      }
+    },
+    {
+      "profile": "arch",
+      "candidate": {
+        "counts": {
+          "roots_walked": 4,
+          "resolved_roots": 2,
+          "unresolved_roots": 1,
+          "not_installable_roots": 1,
+          "failed_roots": 0,
+          "error_kinds": []
+        },
+        "total_failures": 0
+      },
+      "comparison": {
+        "candidate_manifest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "counts": {
+          "roots_walked": 4,
+          "matching_roots": 4,
+          "mismatched_roots": 0,
+          "mismatch_kinds": [],
+          "outcome_kind_pairs": []
+        },
+        "total_mismatches": 0
+      }
+    }
+  ],
+  "roots_walked": 12,
+  "candidate_failures": 0,
+  "comparison_mismatches": 0,
+  "comparison_profiles": 3
+}

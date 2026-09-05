@@ -1,0 +1,164 @@
+[
+  {
+    "value": "FILE:///var/lib/remi/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "File:///var/lib/remi/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "file%3A%2F%2Fvar/lib/remi/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "SsH://operator@private.invalid/var/lib/remi",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "sCp://operator@private.invalid/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "SfTp:%2f%2foperator@private.invalid/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "%66%69%6c%65%3a%2f%2f%2fvar/lib/remi",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "%2Fvar%2Flib%2Fremi%2Fprivate",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "file%253A%252F%252F%252Fvar/lib/remi",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "%25252525252525252525252Fvar/lib/remi",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "file%XXprivate",
+    "reason": "redaction_unproven"
+  },
+  {
+    "value": "journal: /arbitrary-root/private",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "survey-output/arch.json",
+    "reason": "private_string"
+  },
+  {
+    "value": "https://example.invalid/evidence",
+    "reason": "private_string"
+  },
+  {
+    "value": "https:%2f%2fexample.invalid/evidence",
+    "reason": "private_string"
+  },
+  {
+    "value": "//private.internal/share",
+    "reason": "private_host_path"
+  },
+  {
+    "value": "journal: //private.internal/share",
+    "reason": "private_string"
+  },
+  {
+    "value": "\\\\private.internal\\share",
+    "reason": "private_string"
+  },
+  {
+    "value": "journal: \\\\private.internal\\share",
+    "reason": "private_string"
+  },
+  {
+    "value": "internal-host",
+    "reason": "private_string"
+  },
+  {
+    "value": "private.internal",
+    "reason": "private_string"
+  },
+  {
+    "value": "safe-looking diagnostic prose",
+    "reason": "private_string"
+  },
+  {
+    "value": "unknown_reason",
+    "key": "reason",
+    "reason": "private_string"
+  },
+  {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reason": "safe",
+    "key": "source_sha256"
+  },
+  {
+    "value": "1234567890",
+    "reason": "safe",
+    "key": "run_id"
+  },
+  {
+    "value": "2026-09-05T19:41:33Z",
+    "key": "timestamp",
+    "reason": "safe"
+  },
+  {
+    "value": "helper_failed",
+    "key": "outcome",
+    "reason": "safe"
+  },
+  {
+    "value": "systemctl_failed",
+    "key": "reason",
+    "reason": "safe"
+  },
+  {
+    "value": "ubuntu-26.04",
+    "key": "profile",
+    "reason": "safe"
+  },
+  {
+    "value": "survey-300-400-1",
+    "key": "survey_id",
+    "reason": "safe"
+  },
+  {
+    "value": "<redacted:private_string>",
+    "reason": "safe"
+  },
+  {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "1234567890",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "2026-09-05T19:41:33Z",
+    "key": "message",
+    "reason": "private_string"
+  },
+  {
+    "value": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "key": "timestamp",
+    "reason": "private_string"
+  },
+  {
+    "value": "1234567890",
+    "key": "source_sha256",
+    "reason": "private_string"
+  },
+  {
+    "value": "2026-09-05T19:41:33Z",
+    "key": "run_id",
+    "reason": "private_string"
+  }
+]

@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -476,6 +477,46 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_recovery_uses_the_helpers_path_uri_policy(self) -> None:
+        cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-path-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            for case in cases:
+                with self.subTest(case=case):
+                    path.write_text(json.dumps({case.get("key", "message"): case["value"]}))
+                    if case["reason"] == "safe":
+                        TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                    else:
+                        message = {"private_host_path": "private host path", "redaction_unproven": "redaction_unproven"}.get(case["reason"], "outside the safe grammar")
+                        with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, message):
+                            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_recovery_rejects_unknown_keys_even_with_safe_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            path.write_text('{"internal-host":"ready"}')
+            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "outside the safe grammar"):
+                TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_real_outcome_preserves_only_safe_strings(self) -> None:
+        outcome = json.loads((REPO_ROOT / "apps/remi/tests/fixtures/resolution-survey-outcome/mixed.json").read_text())
+        outcome["output_dir"] = "journal: //private.internal/share"
+        expected = {**outcome, "output_dir": "<redacted:private_string>"}
+        process = subprocess.run(
+            ["bash", "-c", 'source "$1"; survey_sanitize_json', "sanitize-outcome", str(REPO_ROOT / "deploy/remi-deploy-helper.sh")],
+            input=json.dumps(outcome), text=True, capture_output=True, check=True,
+        )
+        self.assertEqual(json.loads(process.stdout), expected)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "outcome.json"
+            path.write_text(process.stdout)
+            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_missing_shared_policy_fails_closed(self) -> None:
+        with patch.object(TRANSPORT_TOOL.subprocess, "run", side_effect=OSError("private diagnostic")):
+            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "redaction_unproven"):
+                TRANSPORT_TOOL.forbid_recovery_host_paths(Path("unused.json"))
+
     def test_conflicting_closure_is_a_canonical_not_installable_reason(self) -> None:
         root = "1" * 64
         conflicting = {"status": "not_installable", "reason": "conflicting_closure"}
