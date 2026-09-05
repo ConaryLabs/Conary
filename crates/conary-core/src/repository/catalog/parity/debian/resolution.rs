@@ -217,17 +217,15 @@ fn resolve_exact_root(
         .architecture_admission
         .admits(&root.source_profile, root.version_scheme, root_architecture)
         .and_then(NativeResolutionArchitectureDecisionV1::into_result)
+        .map(|decision| decision.is_admitted())
     {
-        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
-        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
+        Ok(true) => {}
+        Ok(false) => {
             return Ok(NativeRootResolutionSuccess::plain(
                 NativeResolutionOutcomeV1::NotInstallable {
                     reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
                 },
             ));
-        }
-        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
-            unreachable!("unknown admission decision returned from into_result")
         }
         Err(error) => {
             return Err(NativeRootResolutionError::new(
@@ -320,7 +318,7 @@ fn debian_explanation(
     record_explanation_build();
     match outcome {
         AptResolutionOutcome::Resolved(source_packages) => {
-            let mut explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
+            let explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
                 result: NativeResolutionSurveyDebianResultV1::Resolved {
                     packages: Vec::new(),
                 },
@@ -330,12 +328,7 @@ fn debian_explanation(
             else {
                 return evidence_withheld();
             };
-            let NativeResolutionSurveyNativeExplanationV1::Debian {
-                result: NativeResolutionSurveyDebianResultV1::Resolved { packages },
-            } = &mut explanation
-            else {
-                unreachable!("new Debian explanation has the wrong result")
-            };
+            let mut packages = Vec::new();
             for source_package in source_packages {
                 let package = debian_package(source_package);
                 if !budget.retain(&package, !packages.is_empty()) {
@@ -343,10 +336,12 @@ fn debian_explanation(
                 }
                 packages.push(package);
             }
-            explanation
+            NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Resolved { packages },
+            }
         }
         AptResolutionOutcome::Unresolved(source_missing) => {
-            let mut explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
+            let explanation = NativeResolutionSurveyNativeExplanationV1::Debian {
                 result: NativeResolutionSurveyDebianResultV1::Unresolved {
                     missing: Vec::new(),
                 },
@@ -356,12 +351,7 @@ fn debian_explanation(
             else {
                 return evidence_withheld();
             };
-            let NativeResolutionSurveyNativeExplanationV1::Debian {
-                result: NativeResolutionSurveyDebianResultV1::Unresolved { missing },
-            } = &mut explanation
-            else {
-                unreachable!("new Debian explanation has the wrong result")
-            };
+            let mut missing = Vec::new();
             for source in source_missing {
                 let entry = NativeResolutionSurveyDebianMissingV1 {
                     requiring: debian_package(&source.requiring),
@@ -383,7 +373,9 @@ fn debian_explanation(
                 }
                 missing.push(entry);
             }
-            explanation
+            NativeResolutionSurveyNativeExplanationV1::Debian {
+                result: NativeResolutionSurveyDebianResultV1::Unresolved { missing },
+            }
         }
         AptResolutionOutcome::ConflictingClosure => {
             NativeResolutionSurveyNativeExplanationV1::Debian {

@@ -304,17 +304,15 @@ fn resolve_exact_root(
         .architecture_admission
         .admits(&root.source_profile, root.version_scheme, root_architecture)
         .and_then(NativeResolutionArchitectureDecisionV1::into_result)
+        .map(|decision| decision.is_admitted())
     {
-        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => {}
-        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => {
+        Ok(true) => {}
+        Ok(false) => {
             return Ok(NativeRootResolutionSuccess::plain(
                 NativeResolutionOutcomeV1::NotInstallable {
                     reason: NativeResolutionNotInstallableReasonV1::ArchitectureExcluded,
                 },
             ));
-        }
-        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
-            unreachable!("unknown admission decision returned from into_result")
         }
         Err(error) => {
             return Err(NativeRootResolutionError::new(

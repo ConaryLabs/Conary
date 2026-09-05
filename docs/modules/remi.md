@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 169
-summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
+revision: 170
+summary: Describe Remi repository ingestion, immutable catalog publication, conversion and benchmark boundaries, shared native parity producer ownership, typed conflicting-closure parity handoff, deployment, readiness, storage, and operator-facing serving contracts.
 ---
 
 # Remi
@@ -835,10 +835,20 @@ remi native-oracle-input \
 
 The full-catalog package-fact and resolution contract is owned by
 [the native parity oracle specification](../specs/remi-native-parity-oracle.md).
+
 That specification defines the pinned ALPM, libsolv, and apt-pkg producers,
 schema hard cuts, bounded surveys, comparison rules, and production transport.
 Remi consumes only independently reopened artifacts bound to the selected
 private profile candidates; survey output never authorizes promotion.
+
+Native resolution producer orchestration lives in
+`crates/conary-core/src/repository/catalog/parity/resolution_producer.rs`:
+policy setup, typed strict/survey destinations, ordered worker output, bundle
+reopening, and implementation evidence have one owner. Ecosystem modules own
+input staging, native handles, root projection, and Debian worker-process
+selection. Shared parity counter and regular-file checks live in `parity/support.rs`;
+canonical SHA-256 syntax is owned by `crate::hash::is_canonical_sha256`.
+
 The survey input manifest and verification evidence use schema 2; the output
 manifest and verification evidence use schema 3. Retained older survey inputs
 and outputs are typed `obsolete` / `schema_rebuild_required` non-authority before

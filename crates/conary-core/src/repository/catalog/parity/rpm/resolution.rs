@@ -379,12 +379,10 @@ fn resolve_exact_root(
         .architecture_admission
         .admits(&root.source_profile, root.version_scheme, root_architecture)
         .and_then(NativeResolutionArchitectureDecisionV1::into_result)
+        .map(|decision| decision.is_admitted())
     {
-        Ok(NativeResolutionArchitectureDecisionV1::Admitted) => true,
-        Ok(NativeResolutionArchitectureDecisionV1::Excluded { .. }) => false,
-        Ok(NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. }) => {
-            unreachable!("unknown admission decision returned from into_result")
-        }
+        Ok(true) => true,
+        Ok(false) => false,
         Err(error) => {
             return Err(NativeRootResolutionError::new(
                 error,
@@ -561,17 +559,11 @@ fn architecture_excluded_outcome(
             root.name
         ))
     })?;
-    let admitted = match policy
+    let admitted = policy
         .architecture_admission
         .admits(&root.source_profile, root.version_scheme, architecture)?
         .into_result()?
-    {
-        NativeResolutionArchitectureDecisionV1::Admitted => true,
-        NativeResolutionArchitectureDecisionV1::Excluded { .. } => false,
-        NativeResolutionArchitectureDecisionV1::UnknownArchitectureToken { .. } => {
-            unreachable!("unknown admission decision returned from into_result")
-        }
-    };
+        .is_admitted();
     let has_not_installable = problems
         .iter()
         .flat_map(|problem| &problem.rules)

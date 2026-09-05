@@ -817,26 +817,22 @@ fn decode_expression(dependency: &SolvDependency<'_>) -> Result<RepositoryRequir
         ));
     }
     let relation = dependency.relation()?;
+    let operator = match relation.flags {
+        ffi::REL_GT => Some(">"),
+        ffi::REL_EQ => Some("="),
+        ffi::REL_LT => Some("<"),
+        flags if flags == ffi::REL_GT | ffi::REL_EQ => Some(">="),
+        flags if flags == ffi::REL_LT | ffi::REL_EQ => Some("<="),
+        _ => None,
+    };
+    if let Some(operator) = operator {
+        let name = relation.name_dependency()?.atom()?;
+        let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
+        return Ok(RepositoryRequirementExpression::Atom(
+            RepositoryRequirementClause::versioned(name, format!("{operator} {version}")),
+        ));
+    }
     match relation.flags {
-        flags
-            if matches!(flags, ffi::REL_GT | ffi::REL_EQ | ffi::REL_LT)
-                || flags == ffi::REL_GT | ffi::REL_EQ
-                || flags == ffi::REL_LT | ffi::REL_EQ =>
-        {
-            let name = relation.name_dependency()?.atom()?;
-            let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
-            let operator = match relation.flags {
-                ffi::REL_GT => ">",
-                ffi::REL_EQ => "=",
-                ffi::REL_LT => "<",
-                flags if flags == ffi::REL_GT | ffi::REL_EQ => ">=",
-                flags if flags == ffi::REL_LT | ffi::REL_EQ => "<=",
-                _ => unreachable!("matched RPM version relation"),
-            };
-            Ok(RepositoryRequirementExpression::Atom(
-                RepositoryRequirementClause::versioned(name, format!("{operator} {version}")),
-            ))
-        }
         ffi::REL_AND | ffi::REL_OR => {
             let left = decode_expression(&relation.name_dependency()?)?;
             let right = decode_expression(&relation.evr_dependency()?)?;
