@@ -43,22 +43,18 @@ impl UntrustedPackageInspection {
         })
     }
 
-    /// Get package name
     pub fn name(&self) -> &str {
         &self.manifest.package.name
     }
 
-    /// Get package version
     pub fn version(&self) -> &str {
         &self.manifest.package.version
     }
 
-    /// Get total file count
     pub fn file_count(&self) -> usize {
         self.files.len()
     }
 
-    /// Get total size
     pub fn total_size(&self) -> u64 {
         self.files
             .iter()
@@ -66,7 +62,6 @@ impl UntrustedPackageInspection {
             .sum()
     }
 
-    /// Get component names
     pub fn component_names(&self) -> Vec<&str> {
         self.components.keys().map(|s| s.as_str()).collect()
     }

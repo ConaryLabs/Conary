@@ -58,7 +58,6 @@ impl BootstrapConfig {
         self
     }
 
-    /// Set the tools prefix
     pub fn with_tools_prefix(mut self, path: impl Into<PathBuf>) -> Self {
         self.tools_prefix = path.into();
         self
@@ -76,7 +75,6 @@ impl BootstrapConfig {
         self
     }
 
-    /// Get the target triple
     pub fn triple(&self) -> &'static str {
         self.target_arch.triple()
     }

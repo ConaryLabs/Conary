@@ -118,7 +118,6 @@ impl FromStr for ImageFormat {
 }
 
 impl ImageFormat {
-    /// Get file extension
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Raw => "img",
@@ -356,7 +355,6 @@ impl ImageBuilder {
         })
     }
 
-    /// Get the output path
     pub fn output_path(&self) -> &Path {
         &self.output
     }
@@ -811,7 +809,6 @@ menuentry "Conary Linux (Live, Text Mode)" {
     // generate_initramfs() removed: deprecated in favour of
     // system_config::configure_system() + dracut.
 
-    /// Get the build log
     pub fn log(&self) -> &str {
         &self.log
     }

@@ -54,7 +54,6 @@ pub enum TrustError {
     ThresholdNotMet {
         /// The role being verified
         role: String,
-        /// The required threshold
         threshold: u64,
         /// The number of valid signatures found
         got: u64,

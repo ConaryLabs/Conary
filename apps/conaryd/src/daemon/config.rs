@@ -47,7 +47,6 @@ impl DaemonConfig {
         self
     }
 
-    /// Set the socket path.
     pub fn with_socket_path<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.socket_path = path.into();
         self

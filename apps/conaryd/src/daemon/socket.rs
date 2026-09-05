@@ -111,7 +111,6 @@ impl SocketManager {
         self.unix_listener.take()
     }
 
-    /// Get the socket path
     pub fn socket_path(&self) -> &Path {
         &self.config.unix_path
     }

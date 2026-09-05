@@ -303,7 +303,6 @@ impl ModelDiff {
         self.actions.iter().filter(|a| a.is_structural()).count()
     }
 
-    /// Get all packages to install
     pub fn packages_to_install(&self) -> Vec<&str> {
         self.actions
             .iter()
@@ -314,7 +313,6 @@ impl ModelDiff {
             .collect()
     }
 
-    /// Get all packages to remove
     pub fn packages_to_remove(&self) -> Vec<&str> {
         self.actions
             .iter()

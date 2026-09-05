@@ -52,7 +52,6 @@ pub struct CcsPackage {
 }
 
 impl CcsPackage {
-    /// Get the manifest
     pub fn manifest(&self) -> &CcsManifest {
         &self.manifest
     }
@@ -111,17 +110,14 @@ impl CcsPackage {
         &mut self.manifest
     }
 
-    /// Get the file entries
     pub fn file_entries(&self) -> &[FileEntry] {
         &self.files
     }
 
-    /// Get the components
     pub fn components(&self) -> &HashMap<String, ComponentData> {
         &self.components
     }
 
-    /// Get the package path
     pub fn package_path(&self) -> &Path {
         &self.package_path
     }

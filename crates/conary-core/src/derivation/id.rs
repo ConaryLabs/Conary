@@ -22,7 +22,6 @@ pub enum DerivationError {
     InvalidField {
         /// Which input field triggered the error.
         field: String,
-        /// The offending value.
         value: String,
     },
 

@@ -740,17 +740,14 @@ impl DebPackage {
         self.parse_metrics
     }
 
-    /// Get package maintainer
     pub fn maintainer(&self) -> Option<&str> {
         self.maintainer.as_deref()
     }
 
-    /// Get package section
     pub fn section(&self) -> Option<&str> {
         self.section.as_deref()
     }
 
-    /// Get package priority
     pub fn priority(&self) -> Option<&str> {
         self.priority.as_deref()
     }

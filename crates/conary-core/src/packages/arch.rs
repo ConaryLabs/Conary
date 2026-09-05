@@ -734,12 +734,10 @@ impl ArchPackage {
         self.url.as_deref()
     }
 
-    /// Get package licenses
     pub fn licenses(&self) -> &[String] {
         &self.licenses
     }
 
-    /// Get package groups
     pub fn groups(&self) -> &[String] {
         &self.groups
     }
@@ -749,7 +747,6 @@ impl ArchPackage {
         self.packager.as_deref()
     }
 
-    /// Get build date
     pub fn build_date(&self) -> Option<&str> {
         self.build_date.as_deref()
     }

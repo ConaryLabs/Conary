@@ -279,22 +279,18 @@ impl Toolchain {
         self.tool("g++")
     }
 
-    /// Get path to ar
     pub fn ar(&self) -> PathBuf {
         self.tool("ar")
     }
 
-    /// Get path to ld
     pub fn ld(&self) -> PathBuf {
         self.tool("ld")
     }
 
-    /// Get path to ranlib
     pub fn ranlib(&self) -> PathBuf {
         self.tool("ranlib")
     }
 
-    /// Get path to strip
     pub fn strip(&self) -> PathBuf {
         self.tool("strip")
     }
