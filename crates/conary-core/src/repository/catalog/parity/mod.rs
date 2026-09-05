@@ -12,6 +12,12 @@ mod resolution_comparison_survey;
 mod resolution_contract;
 mod resolution_io;
 mod resolution_parallel;
+#[cfg(any(
+    feature = "native-rpm-oracle",
+    feature = "native-debian-oracle",
+    feature = "native-alpm-oracle"
+))]
+mod resolution_producer;
 mod resolution_root;
 mod resolution_survey;
 mod support;

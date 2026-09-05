@@ -31,27 +31,25 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
-    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
-    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
+    OrderedResolutionMetrics, ResolutionExplanationLimits, ResolutionWalkImplementationEvidenceV1,
+    ResolutionWorkerCount, ResolutionWorkerRequest,
+};
+use crate::repository::catalog::parity::resolution_producer::{
+    NativeResolutionEcosystem, Oracle, ResolutionContext, Survey, produce_resolution,
+    resolution_producers, walk_resolution_roots,
 };
 use crate::repository::catalog::parity::resolution_survey::{
-    NativeExplanationBudget, NativeResolutionSurveyCollector, NativeRootResolutionError,
-    NativeRootResolutionResult, NativeRootResolutionSuccess, RootOutcomeSink,
+    NativeExplanationBudget, NativeRootResolutionError, NativeRootResolutionResult,
+    NativeRootResolutionSuccess, RootOutcomeSink,
 };
 use crate::repository::catalog::parity::{
-    NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityImplementationV1,
-    NativeParityOracleReader, NativeParityOracleV1, NativeResolutionArchitectureAdmissionV1,
-    NativeResolutionInstalledStateV1, NativeResolutionNotInstallableReasonV1,
-    NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
-    NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
-    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
+    NativeParityEcosystemV1, NativeParityImplementationV1, NativeParityOracleReader,
+    NativeParityOracleV1, NativeParityPackageV1, NativeResolutionNotInstallableReasonV1,
+    NativeResolutionOracleV1, NativeResolutionOutcomeV1, NativeResolutionPolicyV1,
     NativeResolutionSurveyDebianMissingV1, NativeResolutionSurveyDebianPackageV1,
     NativeResolutionSurveyDebianResultV1, NativeResolutionSurveyErrorReasonV1,
     NativeResolutionSurveyEvidenceWithheldReasonV1, NativeResolutionSurveyNativeExplanationV1,
     NativeResolutionSurveyV1, NativeUnresolvedDependencyV1, native_requirement_group_sha256,
-    verify_native_parity_oracle_bundle, verify_native_resolution_oracle_bundle,
-    write_native_resolution_oracle_manifest, write_native_resolution_survey,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
@@ -75,285 +73,127 @@ CREATE TABLE requirements (
 ) STRICT;
 ";
 
-/// Produce and independently reopen one strict Debian resolution parity bundle.
-pub fn produce_debian_resolution_oracle(
-    profile: &ProfileRevisionV2,
-    inputs: &[DebianParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-) -> Result<NativeResolutionOracleV1> {
-    produce_debian_resolution_oracle_with_workers(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        output,
-        ResolutionWorkerRequest::Automatic,
-    )
-    .map(|(manifest, _)| manifest)
-}
+resolution_producers!(
+    DebianEcosystem,
+    DebianParityMemberInput,
+    produce_debian_resolution_oracle,
+    produce_debian_resolution_oracle_with_workers,
+    produce_debian_resolution_survey,
+    produce_debian_resolution_survey_with_workers
+);
 
-/// Produce a strict Debian bundle with isolated apt-pkg worker processes.
-pub fn produce_debian_resolution_oracle_with_workers(
-    profile: &ProfileRevisionV2,
-    inputs: &[DebianParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<(
-    NativeResolutionOracleV1,
-    ResolutionWalkImplementationEvidenceV1,
-)> {
-    let ResolutionProduct::Oracle(manifest) = produce_debian_resolution(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        ResolutionDestination::Oracle(output),
-        worker_request,
-    )?
-    else {
-        unreachable!("Debian oracle destination returned survey")
-    };
-    Ok(manifest)
-}
+struct DebianEcosystem;
 
-/// Walk every exact Debian root and write one diagnostics-only failure survey.
-pub fn produce_debian_resolution_survey(
-    profile: &ProfileRevisionV2,
-    inputs: &[DebianParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-) -> Result<NativeResolutionSurveyV1> {
-    produce_debian_resolution_survey_with_workers(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        output,
-        ResolutionWorkerRequest::Automatic,
-    )
-    .map(|(survey, _)| survey)
-}
+impl<'a> NativeResolutionEcosystem<'a> for DebianEcosystem {
+    type Input = DebianParityMemberInput<'a>;
+    type Prepared = DebianResolutionPrepared;
+    type Worker = DebianResolutionProcess;
+    const LABEL: &'static str = "Debian";
 
-/// Produce a Debian survey with isolated apt-pkg worker processes.
-pub fn produce_debian_resolution_survey_with_workers(
-    profile: &ProfileRevisionV2,
-    inputs: &[DebianParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<(
-    NativeResolutionSurveyV1,
-    ResolutionWalkImplementationEvidenceV1,
-)> {
-    let ResolutionProduct::Survey(survey) = produce_debian_resolution(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        ResolutionDestination::Survey(output),
-        worker_request,
-    )?
-    else {
-        unreachable!("Debian survey destination returned oracle")
-    };
-    Ok(survey)
-}
-
-enum ResolutionDestination<'a> {
-    Oracle(&'a Path),
-    Survey(&'a Path),
-}
-
-enum ResolutionProduct {
-    Oracle(
-        (
-            NativeResolutionOracleV1,
-            ResolutionWalkImplementationEvidenceV1,
-        ),
-    ),
-    Survey(
-        (
-            NativeResolutionSurveyV1,
-            ResolutionWalkImplementationEvidenceV1,
-        ),
-    ),
-}
-
-fn produce_debian_resolution(
-    profile: &ProfileRevisionV2,
-    inputs: &[DebianParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    destination: ResolutionDestination<'_>,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<ResolutionProduct> {
-    let architecture = profile.require_target_architecture(architecture)?;
-    let policy = NativeResolutionPolicyV1 {
-        architecture: architecture.to_string(),
-        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
-        installed_state: NativeResolutionInstalledStateV1::Empty,
-        roots: NativeResolutionRootPolicyV1::EveryExactPackage,
-        positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
-        provider_selection: NativeResolutionProviderPolicyV1::NativePrecedence,
-    };
-    policy.validate()?;
-
-    let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
-    require_debian_package_oracle(package_oracle.manifest())?;
-    verify_package_oracle_reprojection(profile, inputs, package_oracle.manifest())?;
-    validate_inputs(profile, inputs)?;
-
-    let staging = tempfile::Builder::new()
-        .prefix("conary-debian-resolution-")
-        .tempdir()?;
-    let staged = stage_verified_packages(inputs, staging.path())?;
-    let solver_inputs = stage_solver_inputs(&staged, staging.path())?;
-    let package_index = PackageResolutionIndex::create(&package_oracle)?;
-    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
-    let workers = worker_request.resolve(
-        package_oracle.manifest().artifact.counts.packages,
-        memory_budget_bytes,
-        RESOLUTION_WORKER_RSS_BYTES,
-    )?;
-    let (workers, worker_executable) =
-        select_debian_worker_launch(worker_request, workers, debian_worker_executable())?;
-
-    let implementation = NativeParityImplementationV1 {
-        ecosystem: NativeParityEcosystemV1::Debian,
-        name: "apt-pkg".to_string(),
-        version: PINNED_APT_PKG_VERSION.to_string(),
-        projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
-    };
-    match destination {
-        ResolutionDestination::Oracle(output) => {
-            fs::create_dir(output)?;
-            let mut writer = NativeResolutionOracleWriter::create(
-                output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-                profile,
-                package_oracle.manifest(),
-                implementation,
-                policy.clone(),
-            )?;
-            let metrics = walk_resolution_roots(
-                &package_oracle,
-                &package_index,
-                &policy,
-                RootOutcomeSink::Strict(&mut writer),
-                &solver_inputs,
-                workers,
-                worker_executable.as_deref(),
-            )?;
-            let manifest = writer.finish()?;
-            write_native_resolution_oracle_manifest(output, &manifest)?;
-            let reopened =
-                verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
-            if reopened.manifest() != &manifest {
-                return Err(Error::InternalError(
-                    "reopened Debian resolution manifest differs from produced manifest"
-                        .to_string(),
-                ));
-            }
-            Ok(ResolutionProduct::Oracle((
-                manifest,
-                implementation_evidence(workers, metrics, memory_budget_bytes)?,
-            )))
-        }
-        ResolutionDestination::Survey(output) => {
-            let mut collector = NativeResolutionSurveyCollector::new(
-                profile,
-                package_oracle.manifest(),
-                implementation,
-                policy.clone(),
-            )?;
-            let metrics = walk_resolution_roots(
-                &package_oracle,
-                &package_index,
-                &policy,
-                RootOutcomeSink::Survey(&mut collector),
-                &solver_inputs,
-                workers,
-                worker_executable.as_deref(),
-            )?;
-            let survey = collector.finish()?;
-            write_native_resolution_survey(output, &survey)?;
-            Ok(ResolutionProduct::Survey((
-                survey,
-                implementation_evidence(workers, metrics, memory_budget_bytes)?,
-            )))
+    fn prepare(
+        context: &ResolutionContext<'_, Self::Input>,
+        package_oracle: &NativeParityOracleReader,
+    ) -> Result<Self::Prepared> {
+        let ResolutionContext {
+            profile,
+            inputs,
+            policy: _,
+        } = *context;
+        require_debian_package_oracle(package_oracle.manifest())?;
+        verify_package_oracle_reprojection(profile, inputs, package_oracle.manifest())?;
+        validate_inputs(profile, inputs)?;
+        let staging = tempfile::Builder::new()
+            .prefix("conary-debian-resolution-")
+            .tempdir()?;
+        let staged = stage_verified_packages(inputs, staging.path())?;
+        let solver_inputs = stage_solver_inputs(&staged, staging.path())?;
+        let package_index = PackageResolutionIndex::create(package_oracle)?;
+        Ok(DebianResolutionPrepared {
+            _staging: staging,
+            solver_inputs,
+            package_index,
+            worker_executable: None,
+        })
+    }
+    fn implementation() -> NativeParityImplementationV1 {
+        NativeParityImplementationV1 {
+            ecosystem: NativeParityEcosystemV1::Debian,
+            name: "apt-pkg".to_string(),
+            version: PINNED_APT_PKG_VERSION.to_string(),
+            projection_schema: DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
         }
     }
-}
-
-fn walk_resolution_roots(
-    package_oracle: &NativeParityOracleReader,
-    package_index: &PackageResolutionIndex,
-    policy: &NativeResolutionPolicyV1,
-    mut sink: RootOutcomeSink<'_>,
-    solver_inputs: &[PathBuf],
-    workers: ResolutionWorkerCount,
-    worker_executable: Option<&Path>,
-) -> Result<OrderedResolutionMetrics> {
-    let explanation_limits = sink.explanation_limits();
-    if workers.get() == 1 {
-        let started = std::time::Instant::now();
-        let mut apt = AptResolution::open(solver_inputs, &policy.architecture)?;
-        let package_index = PackageResolutionIndexReader::open(package_index.database())?;
-        let load_milliseconds = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        package_oracle.for_each_package(|root| {
-            let projected = DebianResolutionRoot::from(&root);
-            let result = resolve_exact_root(
-                &mut apt,
-                &package_index,
-                &projected,
-                policy,
-                sink.explanation_limits(),
-            );
-            sink.root(&root, result)
+    fn select_workers(
+        prepared: &mut Self::Prepared,
+        request: ResolutionWorkerRequest,
+        workers: ResolutionWorkerCount,
+    ) -> Result<ResolutionWorkerCount> {
+        let (workers, executable) =
+            select_debian_worker_launch(request, workers, debian_worker_executable())?;
+        prepared.worker_executable = executable;
+        Ok(workers)
+    }
+    fn open_worker(
+        context: &ResolutionContext<'_, Self::Input>,
+        prepared: &Self::Prepared,
+    ) -> Result<Self::Worker> {
+        let executable = prepared.worker_executable.as_deref().ok_or_else(|| {
+            Error::InternalError("parallel Debian walk has no worker executable".to_string())
         })?;
-        return Ok(OrderedResolutionMetrics {
-            worker_load_milliseconds: vec![load_milliseconds],
-        });
+        DebianResolutionProcess::spawn(
+            executable,
+            &prepared.solver_inputs,
+            prepared.package_index.database(),
+            &context.policy.architecture,
+        )
     }
-    let executable = worker_executable.ok_or_else(|| {
-        Error::InternalError("parallel Debian walk has no worker executable".to_string())
-    })?;
-    walk_ordered_parallel(
-        package_oracle,
-        workers,
-        explanation_limits,
-        |_| {
-            DebianResolutionProcess::spawn(
-                executable,
-                solver_inputs,
-                package_index.database(),
-                &policy.architecture,
-            )
-        },
-        |worker, root, limits| worker.resolve(root, limits),
-        |root, result| {
-            sink.root(root, result?)?;
-            Ok(sink.explanation_limits())
-        },
-    )
+    fn resolve_root(
+        _context: &ResolutionContext<'_, Self::Input>,
+        worker: &mut Self::Worker,
+        root: &NativeParityPackageV1,
+        limits: ResolutionExplanationLimits,
+    ) -> Result<NativeRootResolutionResult> {
+        worker.resolve(root, limits)
+    }
+    fn walk(
+        context: &ResolutionContext<'_, Self::Input>,
+        prepared: &Self::Prepared,
+        package_oracle: &NativeParityOracleReader,
+        mut sink: RootOutcomeSink<'_>,
+        workers: ResolutionWorkerCount,
+    ) -> Result<OrderedResolutionMetrics> {
+        if workers.get() == 1 {
+            let started = std::time::Instant::now();
+            let mut apt =
+                AptResolution::open(&prepared.solver_inputs, &context.policy.architecture)?;
+            let package_index =
+                PackageResolutionIndexReader::open(prepared.package_index.database())?;
+            let load_milliseconds =
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            package_oracle.for_each_package(|root| {
+                let projected = DebianResolutionRoot::from(&root);
+                let result = resolve_exact_root(
+                    &mut apt,
+                    &package_index,
+                    &projected,
+                    context.policy,
+                    sink.explanation_limits(),
+                );
+                sink.root(&root, result)
+            })?;
+            return Ok(OrderedResolutionMetrics {
+                worker_load_milliseconds: vec![load_milliseconds],
+            });
+        }
+        walk_resolution_roots::<Self>(context, prepared, package_oracle, sink, workers)
+    }
 }
 
-fn implementation_evidence(
-    workers: ResolutionWorkerCount,
-    metrics: OrderedResolutionMetrics,
-    memory_budget_bytes: u64,
-) -> Result<ResolutionWalkImplementationEvidenceV1> {
-    ResolutionWalkImplementationEvidenceV1::new(
-        workers,
-        metrics.worker_load_milliseconds,
-        memory_budget_bytes,
-        RESOLUTION_WORKER_RSS_BYTES,
-    )
+struct DebianResolutionPrepared {
+    _staging: tempfile::TempDir,
+    solver_inputs: Vec<PathBuf>,
+    package_index: PackageResolutionIndex,
+    worker_executable: Option<PathBuf>,
 }
 
 fn resolve_exact_root(

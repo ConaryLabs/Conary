@@ -8,7 +8,6 @@
 //! crosses threads.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use alpm::{Alpm, Package, TransFlag};
@@ -33,294 +32,102 @@ use crate::error::{Error, Result};
 use crate::repository::architecture::NativeResolutionArchitectureDecisionV1;
 use crate::repository::catalog::ProfileRevisionV2;
 use crate::repository::catalog::parity::resolution_parallel::{
-    OrderedResolutionMetrics, RESOLUTION_WORKER_RSS_BYTES, ResolutionExplanationLimits,
-    ResolutionWalkImplementationEvidenceV1, ResolutionWorkerCount, ResolutionWorkerRequest,
-    resolution_walk_memory_budget_bytes, walk_ordered_parallel,
+    ResolutionExplanationLimits, ResolutionWalkImplementationEvidenceV1, ResolutionWorkerRequest,
+};
+use crate::repository::catalog::parity::resolution_producer::{
+    NativeResolutionEcosystem, Oracle, ResolutionContext, Survey, produce_resolution,
+    resolution_producers,
 };
 use crate::repository::catalog::parity::resolution_survey::{
-    NativeResolutionSurveyCollector, NativeRootResolutionError, NativeRootResolutionResult,
-    NativeRootResolutionSuccess, RootOutcomeSink,
+    NativeRootResolutionError, NativeRootResolutionResult, NativeRootResolutionSuccess,
 };
 use crate::repository::catalog::parity::{
-    NATIVE_RESOLUTION_ROOT_FILE_NAME, NativeParityEcosystemV1, NativeParityOracleReader,
-    NativeParityOracleV1, NativeParityPackageV1, NativeResolutionArchitectureAdmissionV1,
-    NativeResolutionInstalledStateV1, NativeResolutionNotInstallableReasonV1,
-    NativeResolutionOracleV1, NativeResolutionOracleWriter, NativeResolutionOutcomeV1,
-    NativeResolutionPolicyV1, NativeResolutionProviderPolicyV1,
-    NativeResolutionRequirementPolicyV1, NativeResolutionRootPolicyV1,
+    NativeParityEcosystemV1, NativeParityImplementationV1, NativeParityOracleReader,
+    NativeParityOracleV1, NativeParityPackageV1, NativeResolutionNotInstallableReasonV1,
+    NativeResolutionOracleV1, NativeResolutionOutcomeV1, NativeResolutionPolicyV1,
     NativeResolutionSurveyErrorReasonV1, NativeResolutionSurveyV1, NativeUnresolvedDependencyV1,
-    native_requirement_group_sha256, verify_native_parity_oracle_bundle,
-    verify_native_resolution_oracle_bundle, write_native_resolution_oracle_manifest,
-    write_native_resolution_survey,
+    native_requirement_group_sha256,
 };
 use crate::repository::dependency_model::RepositoryRequirementKind;
 
 /// Projection contract for libalpm transaction results.
 pub const ALPM_RESOLUTION_PROJECTION_SCHEMA_V3: u32 = 3;
 
-/// Produce and independently reopen one strict ALPM resolution parity bundle.
-pub fn produce_alpm_resolution_oracle(
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-) -> Result<NativeResolutionOracleV1> {
-    produce_alpm_resolution_oracle_with_workers(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        output,
-        ResolutionWorkerRequest::Automatic,
-    )
-    .map(|(manifest, _)| manifest)
-}
+resolution_producers!(
+    AlpmEcosystem,
+    AlpmParityMemberInput,
+    produce_alpm_resolution_oracle,
+    produce_alpm_resolution_oracle_with_workers,
+    produce_alpm_resolution_survey,
+    produce_alpm_resolution_survey_with_workers
+);
 
-/// Produce a strict ALPM bundle with an explicit or capacity-derived worker request.
-pub fn produce_alpm_resolution_oracle_with_workers(
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<(
-    NativeResolutionOracleV1,
-    ResolutionWalkImplementationEvidenceV1,
-)> {
-    let ResolutionProduct::Oracle(manifest) = produce_alpm_resolution(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        ResolutionDestination::Oracle(output),
-        worker_request,
-    )?
-    else {
-        unreachable!("ALPM oracle destination returned survey")
-    };
-    Ok(manifest)
-}
+struct AlpmEcosystem;
 
-/// Walk every exact ALPM root and write one diagnostics-only failure survey.
-pub fn produce_alpm_resolution_survey(
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-) -> Result<NativeResolutionSurveyV1> {
-    produce_alpm_resolution_survey_with_workers(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        output,
-        ResolutionWorkerRequest::Automatic,
-    )
-    .map(|(survey, _)| survey)
-}
+impl<'a> NativeResolutionEcosystem<'a> for AlpmEcosystem {
+    type Input = AlpmParityMemberInput<'a>;
+    type Prepared = PackageResolutionIndex;
+    type Worker = AlpmResolutionWorker;
+    const LABEL: &'static str = "ALPM";
 
-/// Produce an ALPM survey with an explicit or capacity-derived worker request.
-pub fn produce_alpm_resolution_survey_with_workers(
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    output: &Path,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<(
-    NativeResolutionSurveyV1,
-    ResolutionWalkImplementationEvidenceV1,
-)> {
-    let ResolutionProduct::Survey(survey) = produce_alpm_resolution(
-        profile,
-        inputs,
-        package_oracle_directory,
-        architecture,
-        ResolutionDestination::Survey(output),
-        worker_request,
-    )?
-    else {
-        unreachable!("ALPM survey destination returned oracle")
-    };
-    Ok(survey)
-}
-
-enum ResolutionDestination<'a> {
-    Oracle(&'a Path),
-    Survey(&'a Path),
-}
-
-enum ResolutionProduct {
-    Oracle(
-        (
-            NativeResolutionOracleV1,
-            ResolutionWalkImplementationEvidenceV1,
-        ),
-    ),
-    Survey(
-        (
-            NativeResolutionSurveyV1,
-            ResolutionWalkImplementationEvidenceV1,
-        ),
-    ),
-}
-
-fn produce_alpm_resolution(
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_oracle_directory: &Path,
-    architecture: &str,
-    destination: ResolutionDestination<'_>,
-    worker_request: ResolutionWorkerRequest,
-) -> Result<ResolutionProduct> {
-    let architecture = profile.require_target_architecture(architecture)?;
-    let policy = NativeResolutionPolicyV1 {
-        architecture: architecture.to_string(),
-        architecture_admission: NativeResolutionArchitectureAdmissionV1::NativeOnly,
-        installed_state: NativeResolutionInstalledStateV1::Empty,
-        roots: NativeResolutionRootPolicyV1::EveryExactPackage,
-        positive_requirements: NativeResolutionRequirementPolicyV1::RequiredOnly,
-        provider_selection: NativeResolutionProviderPolicyV1::NativePrecedence,
-    };
-    policy.validate()?;
-
-    let package_oracle = verify_native_parity_oracle_bundle(package_oracle_directory, profile)?;
-    require_alpm_package_oracle(package_oracle.manifest())?;
-    verify_package_oracle_reprojection(profile, inputs, package_oracle.manifest())?;
-    let package_index = PackageResolutionIndex::create(&package_oracle)?;
-    let memory_budget_bytes = resolution_walk_memory_budget_bytes()?;
-    let workers = worker_request.resolve(
-        package_oracle.manifest().artifact.counts.packages,
-        memory_budget_bytes,
-        RESOLUTION_WORKER_RSS_BYTES,
-    )?;
-
-    let implementation = crate::repository::catalog::parity::NativeParityImplementationV1 {
-        ecosystem: NativeParityEcosystemV1::Alpm,
-        name: "libalpm".to_string(),
-        version: alpm::version().to_string(),
-        projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V3,
-    };
-
-    match destination {
-        ResolutionDestination::Oracle(output) => {
-            fs::create_dir(output)?;
-            let mut writer = NativeResolutionOracleWriter::create(
-                output.join(NATIVE_RESOLUTION_ROOT_FILE_NAME),
-                profile,
-                package_oracle.manifest(),
-                implementation,
-                policy.clone(),
-            )?;
-            let metrics = walk_resolution_roots(
-                &package_oracle,
-                profile,
-                inputs,
-                &package_index,
-                &policy,
-                RootOutcomeSink::Strict(&mut writer),
-                workers,
-            )?;
-            let manifest = writer.finish()?;
-            write_native_resolution_oracle_manifest(output, &manifest)?;
-            let reopened =
-                verify_native_resolution_oracle_bundle(output, profile, &package_oracle)?;
-            if reopened.manifest() != &manifest {
-                return Err(Error::InternalError(
-                    "reopened ALPM resolution manifest differs from produced manifest".to_string(),
-                ));
-            }
-            Ok(ResolutionProduct::Oracle((
-                manifest,
-                implementation_evidence(workers, metrics, memory_budget_bytes)?,
-            )))
-        }
-        ResolutionDestination::Survey(output) => {
-            let mut collector = NativeResolutionSurveyCollector::new(
-                profile,
-                package_oracle.manifest(),
-                implementation,
-                policy.clone(),
-            )?;
-            let metrics = walk_resolution_roots(
-                &package_oracle,
-                profile,
-                inputs,
-                &package_index,
-                &policy,
-                RootOutcomeSink::Survey(&mut collector),
-                workers,
-            )?;
-            let survey = collector.finish()?;
-            write_native_resolution_survey(output, &survey)?;
-            Ok(ResolutionProduct::Survey((
-                survey,
-                implementation_evidence(workers, metrics, memory_budget_bytes)?,
-            )))
+    fn prepare(
+        context: &ResolutionContext<'_, Self::Input>,
+        package_oracle: &NativeParityOracleReader,
+    ) -> Result<Self::Prepared> {
+        let ResolutionContext {
+            profile,
+            inputs,
+            policy: _,
+        } = *context;
+        require_alpm_package_oracle(package_oracle.manifest())?;
+        verify_package_oracle_reprojection(profile, inputs, package_oracle.manifest())?;
+        PackageResolutionIndex::create(package_oracle)
+    }
+    fn implementation() -> NativeParityImplementationV1 {
+        NativeParityImplementationV1 {
+            ecosystem: NativeParityEcosystemV1::Alpm,
+            name: "libalpm".to_string(),
+            version: alpm::version().to_string(),
+            projection_schema: ALPM_RESOLUTION_PROJECTION_SCHEMA_V3,
         }
     }
-}
-
-fn walk_resolution_roots(
-    package_oracle: &NativeParityOracleReader,
-    profile: &ProfileRevisionV2,
-    inputs: &[AlpmParityMemberInput<'_>],
-    package_index: &PackageResolutionIndex,
-    policy: &NativeResolutionPolicyV1,
-    mut sink: RootOutcomeSink<'_>,
-    workers: ResolutionWorkerCount,
-) -> Result<OrderedResolutionMetrics> {
-    let explanation_limits = sink.explanation_limits();
-    walk_ordered_parallel(
-        package_oracle,
-        workers,
-        explanation_limits,
-        |_| {
-            let (staging, alpm) = open_alpm(profile, inputs, &[&policy.architecture])?;
-            Ok(AlpmResolutionWorker {
-                _staging: staging,
-                alpm,
-                package_index: package_index.worker()?,
-            })
-        },
-        |worker, root, limits| {
-            resolve_exact_root(
-                &mut worker.alpm,
-                profile,
-                inputs,
-                &worker.package_index,
-                root,
-                policy,
-                limits,
-            )
-        },
-        |root, result| {
-            sink.root(root, result)?;
-            Ok(sink.explanation_limits())
-        },
-    )
+    fn open_worker(
+        context: &ResolutionContext<'_, Self::Input>,
+        prepared: &Self::Prepared,
+    ) -> Result<Self::Worker> {
+        let (staging, alpm) = open_alpm(
+            context.profile,
+            context.inputs,
+            &[&context.policy.architecture],
+        )?;
+        Ok(AlpmResolutionWorker {
+            _staging: staging,
+            alpm,
+            package_index: prepared.worker()?,
+        })
+    }
+    fn resolve_root(
+        context: &ResolutionContext<'_, Self::Input>,
+        worker: &mut Self::Worker,
+        root: &NativeParityPackageV1,
+        limits: ResolutionExplanationLimits,
+    ) -> Result<NativeRootResolutionResult> {
+        Ok(resolve_exact_root(
+            &mut worker.alpm,
+            context.profile,
+            context.inputs,
+            &worker.package_index,
+            root,
+            context.policy,
+            limits,
+        ))
+    }
 }
 
 struct AlpmResolutionWorker {
     _staging: tempfile::TempDir,
     alpm: Alpm,
     package_index: PackageResolutionIndexReader,
-}
-
-fn implementation_evidence(
-    workers: ResolutionWorkerCount,
-    metrics: OrderedResolutionMetrics,
-    memory_budget_bytes: u64,
-) -> Result<ResolutionWalkImplementationEvidenceV1> {
-    ResolutionWalkImplementationEvidenceV1::new(
-        workers,
-        metrics.worker_load_milliseconds,
-        memory_budget_bytes,
-        RESOLUTION_WORKER_RSS_BYTES,
-    )
 }
 
 struct PackageResolutionIndex {
