@@ -470,7 +470,7 @@ mod tests {
 
         assert_eq!(
             boot_root_for_generation_build(&runtime_root),
-            temp.path().join("boot")
+            BootRoot::Staged(temp.path().join("boot"))
         );
     }
 
