@@ -2568,6 +2568,14 @@ test_rust_resolution_survey_outcome_fixtures() (
         fail "empty command output was accepted as a serialized outcome"
     fi
     grep -F 'outcome.document_count' <<<"$message" >/dev/null
+    printf '{broken: "/conary/private/value"}' >"$rejected"
+    if message="$(survey_validate_outcome "$rejected" '<survey-output>' 2>&1)"; then
+        fail "malformed command JSON was accepted"
+    fi
+    [[ "$message" == outcome.json_syntax ]] || fail "JSON syntax failure lost its safe named clause"
+    survey_sanitize_outcome "$rejected" | jq -e '
+        .document_state == "invalid_json" and (.source_sha256 | length == 64)
+    ' >/dev/null
 )
 
 main() {

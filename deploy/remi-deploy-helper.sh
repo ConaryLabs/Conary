@@ -1146,7 +1146,8 @@ survey_restore_and_exit() {
 
 survey_validate_outcome() {
     local outcome="$1" output="$2"
-    jq -es --arg output "$output" '
+    local result status=0
+    result="$(jq -es --arg output "$output" '
         def clause($name; predicate):
             if (try predicate catch false) then . else $name | halt_error(1) end;
         def uint: type == "number" and floor == . and . >= 0;
@@ -1185,7 +1186,16 @@ survey_validate_outcome() {
         | clause("aggregate.comparison_mismatches";
             .comparison_mismatches == ([.profile_results[] | .comparison.total_mismatches // 0] | add))
         | true
-    ' "$outcome"
+    ' "$outcome" 2>&1)" || status=$?
+    if (( status != 0 )); then
+        case "$result" in
+            outcome.*|profile.*|candidate.*|comparison.*|aggregate.*)
+                printf '%s\n' "$result" >&2 ;;
+            *) printf '%s\n' 'outcome.json_syntax' >&2 ;;
+        esac
+        return 1
+    fi
+    printf '%s\n' "$result"
 }
 
 survey_validate_oracle_transport() {
