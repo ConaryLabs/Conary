@@ -260,6 +260,16 @@ jobs:
           target/release/conary ccs verify \
             "packaging/ccs/output/conary-${VERSION}.ccs" \
             --policy "$authority_dir/trust-policy.toml"
+          # Retain only the public trust policy for the packaged-contents proof;
+          # the temporary private key is removed with the authority directory.
+          install -m 0644 "$authority_dir/trust-policy.toml" "$RUNNER_TEMP/ccs-trust-policy.toml"
+      - name: Require license texts inside the CCS package
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary LICENSE-MIT LICENSE-APACHE "$RUNNER_TEMP/ccs-trust-policy.toml"
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -318,6 +328,11 @@ jobs:
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build RPM
         run: bash packaging/rpm/build.sh
+      - name: Require license texts inside the RPM
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        run: bash scripts/check-release-license-contents.sh rpm packaging/rpm/output/*.rpm LICENSE-MIT LICENSE-APACHE
       - name: Upload RPM artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -373,6 +388,11 @@ jobs:
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build DEB
         run: bash packaging/deb/build.sh
+      - name: Require license texts inside the DEB
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb LICENSE-MIT LICENSE-APACHE
       - name: Upload DEB artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -425,6 +445,11 @@ jobs:
         run: chown -R builder:builder .
       - name: Build Arch package
         run: runuser -u builder -- bash packaging/arch/build.sh
+      - name: Require license texts inside the Arch package
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst LICENSE-MIT LICENSE-APACHE
       - name: Upload Arch artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -612,8 +637,22 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/remi "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64"
+          # The tree-capability guard matches the packaged-license proofs: trees
+          # carrying scripts/check-release-license-contents.sh ship license texts;
+          # older immutable tags rebuilt by nightly recovery are packaged as they were.
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE/apps/remi" LICENSE)
+          fi
+          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require the AGPL text inside the remi bundle
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh remi-tar "release-packages/remi-${VERSION}-linux-x64.tar.gz" apps/remi/LICENSE
       - name: Upload remi bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -680,8 +719,19 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conaryd "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64"
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)
+          fi
+          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require both license texts inside the conaryd bundle
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh client-tar "release-packages/conaryd-${VERSION}-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
       - name: Upload conaryd bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -748,8 +798,19 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conary-test "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64"
+          license_members=()
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            license_members=(-C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE)
+          fi
+          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64" "${license_members[@]}"
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require both license texts inside the conary-test bundle
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh client-tar "release-packages/conary-test-${VERSION}-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
       - name: Upload conary-test bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -922,6 +983,17 @@ jobs:
           copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64.tar.gz" "conaryd-${VERSION}-linux-x64.tar.gz"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64" "conary-test-${VERSION}-linux-x64"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64.tar.gz" "conary-test-${VERSION}-linux-x64.tar.gz"
+          # License texts accompany every standalone binary on the release page
+          # for trees that carry them (same tree-capability guard as the proofs).
+          expected_live_assets=14
+          expected_rehearsal_assets=15
+          if [[ -f scripts/check-release-license-contents.sh ]]; then
+            copy_exact LICENSE-MIT LICENSE-MIT
+            copy_exact LICENSE-APACHE LICENSE-APACHE
+            copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi
+            expected_live_assets=17
+            expected_rehearsal_assets=18
+          fi
 
           if [[ -s release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
             copy_exact \
@@ -972,13 +1044,18 @@ jobs:
             mapfile -d '' assets < <(
               find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z
             )
-            [[ ${#assets[@]} -eq 14 || ${#assets[@]} -eq 15 ]] || {
-              echo "expected 14 live suite assets or 15 rehearsal assets; found ${#assets[@]}" >&2
+            [[ ${#assets[@]} -eq $expected_live_assets || ${#assets[@]} -eq $expected_rehearsal_assets ]] || {
+              echo "expected $expected_live_assets live suite assets or $expected_rehearsal_assets rehearsal assets; found ${#assets[@]}" >&2
               exit 1
             }
             sha256sum -- "${assets[@]}" > SHA256SUMS
             sha256sum -c SHA256SUMS
           )
+      - name: Require the license assets in the suite
+        # Nightly recovery may rebuild an older immutable tag whose tree predates
+        # this proof; the proof runs whenever the selected tree carries it.
+        if: ${{ hashFiles('scripts/check-release-license-contents.sh') != '' }}
+        run: bash scripts/check-release-license-contents.sh suite suite-packages LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
       - name: Upload synchronized suite bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

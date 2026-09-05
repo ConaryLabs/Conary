@@ -1,7 +1,8 @@
 # Conary
 
 [![Merge validation](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Client license: MIT OR Apache-2.0](https://img.shields.io/badge/Client%20license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Remi license: AGPL-3.0-or-later](https://img.shields.io/badge/Remi%20license-AGPL--3.0--or--later-blue.svg)](apps/remi/LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/FieldmouseWorks/Conary?label=release)](https://github.com/FieldmouseWorks/Conary/releases/latest)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)
@@ -290,4 +291,4 @@ details.
 
 ## License
 
-[MIT](LICENSE)
+The Conary client, daemon, test harness, and every library crate are licensed under either the [MIT License](LICENSE-MIT) or the [Apache License, Version 2.0](LICENSE-APACHE), at your option. The Remi server (`apps/remi`) is licensed under the [GNU Affero General Public License, version 3 or later](apps/remi/LICENSE). Releases published before this split were MIT only.

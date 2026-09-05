@@ -104,3 +104,6 @@ web/static/apple-touch-icon.png
 # Protected workflows check out their own definition here (sparse .github/actions)
 # before verifying the candidate checkout; it is never part of the candidate tree.
 /workflow-authority/
+
+# release-matrix policy test scratch (created in the repo root while scripts/test-release-matrix.sh runs)
+.tmp-release-matrix-run.*/

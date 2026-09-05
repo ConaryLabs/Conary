@@ -13,7 +13,7 @@ Version:        0.16.1
 Release:        1%{?dist}
 Summary:        Early-preview Linux package manager with native-package adoption
 
-License:        MIT
+License:        MIT OR Apache-2.0
 URL:            https://github.com/FieldmouseWorks/Conary
 Source0:        %{crate}-%{version}.tar.gz
 Source1:        vendor.tar.gz
@@ -86,7 +86,8 @@ install -d %{buildroot}%{_sysconfdir}/%{crate}
 install -d %{buildroot}%{_sharedstatedir}/%{crate}
 
 # License
-install -Dpm 0644 LICENSE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE
+install -Dpm 0644 LICENSE-MIT %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE-MIT
+install -Dpm 0644 LICENSE-APACHE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE-APACHE
 
 %post
 # Initialize the Conary database and seed default repos (including Remi CCS proxy).
@@ -94,7 +95,7 @@ install -Dpm 0644 LICENSE %{buildroot}%{_datadir}/licenses/%{crate}/LICENSE
 %{_bindir}/%{crate} system init
 
 %files
-%license LICENSE
+%license LICENSE-MIT LICENSE-APACHE
 %doc README.md
 %{_bindir}/%{crate}
 %{_mandir}/man1/%{crate}.1*

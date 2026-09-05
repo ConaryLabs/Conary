@@ -127,8 +127,13 @@ package_artifact() {
     install -m 0644 "$sccache_stats" "$retained_sccache_stats"
     local bundle_started_ns bundle_finished_ns bundle_ms
     bundle_started_ns="$(date -u +%s%N)"
+    local license_dir
+    license_dir="$(realpath apps/remi)"
+    [[ -f "$license_dir/LICENSE" && ! -L "$license_dir/LICENSE" ]] || fail "apps/remi/LICENSE is missing"
+    # tar -C is cumulative, so the license directory must be absolute.
     tar --create --format=gnu --sort=name --mtime='UTC 1970-01-01' \
-        --owner=0 --group=0 --numeric-owner -C "$output_dir" "$artifact_name" |
+        --owner=0 --group=0 --numeric-owner -C "$output_dir" "$artifact_name" \
+        -C "$license_dir" LICENSE |
         gzip --no-name >"$bundle_path"
     bundle_finished_ns="$(date -u +%s%N)"
     bundle_ms=$(( (bundle_finished_ns - bundle_started_ns) / 1000000 ))
@@ -505,9 +510,10 @@ verify_artifact() {
     jq -e 'type == "object"' "$sccache_stats" >/dev/null ||
         fail "compiler-cache evidence is not a JSON object"
 
-    local listing
-    listing="$(tar -tzf "$bundle")"
-    [[ "$listing" == "$binary_name" ]] || fail "candidate bundle has unexpected members"
+    local listing expected_listing
+    listing="$(tar -tzf "$bundle" | sort)"
+    expected_listing="$(printf '%s\n%s\n' "$binary_name" LICENSE | sort)"
+    [[ "$listing" == "$expected_listing" ]] || fail "candidate bundle has unexpected members"
     local bundled_binary_sha
     bundled_binary_sha="$(tar -xOzf "$bundle" "$binary_name" | sha256sum | cut -d ' ' -f 1)"
     [[ "$bundled_binary_sha" == "$(jq -r '.artifact.binary_sha256' "$manifest")" ]] ||

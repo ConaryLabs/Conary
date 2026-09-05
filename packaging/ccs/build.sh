@@ -94,7 +94,8 @@ install -d "$STAGE/usr/share/fish/vendor_completions.d"
 "$RELEASE_BIN" system completions fish > "$STAGE/usr/share/fish/vendor_completions.d/$NAME.fish"
 
 # License
-install -Dpm 0644 "$REPO_ROOT/LICENSE" "$STAGE/usr/share/licenses/$NAME/LICENSE"
+install -Dpm 0644 "$REPO_ROOT/LICENSE-MIT" "$STAGE/usr/share/licenses/$NAME/LICENSE-MIT"
+install -Dpm 0644 "$REPO_ROOT/LICENSE-APACHE" "$STAGE/usr/share/licenses/$NAME/LICENSE-APACHE"
 
 # Config and data directories
 install -d "$STAGE/etc/$NAME"

@@ -39,7 +39,8 @@ override_dh_auto_install:
 	target/release/conary system completions fish > debian/conary/usr/share/fish/vendor_completions.d/conary.fish
 
 	# License
-	install -Dpm 0644 LICENSE debian/conary/usr/share/doc/conary/LICENSE
+	install -Dpm 0644 LICENSE-MIT debian/conary/usr/share/doc/conary/LICENSE-MIT
+	install -Dpm 0644 LICENSE-APACHE debian/conary/usr/share/doc/conary/LICENSE-APACHE
 
 override_dh_auto_clean:
 	cargo clean 2>/dev/null || true
@@ -54,5 +55,8 @@ override_dh_autoreconf:
 override_dh_autoreconf_clean:
 
 # Cargo release profile already strips the binary
+override_dh_compress:
+	dh_compress -X LICENSE-MIT -X LICENSE-APACHE
+
 override_dh_dwz:
 override_dh_strip:
