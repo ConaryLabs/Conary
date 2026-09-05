@@ -403,6 +403,7 @@ def resolution_survey_evidence(
         "diagnostic_outcomes_truncated": survey[
             "diagnostic_outcomes_truncated"
         ],
+        "evidence_byte_limit": survey["evidence_byte_limit"],
         "truncated_evidence": survey["truncated_evidence"],
     }
 

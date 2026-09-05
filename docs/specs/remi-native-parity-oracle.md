@@ -2,7 +2,7 @@
 title: Remi native full-catalog parity oracle
 summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
-revision: 75
+revision: 76
 status: active
 ---
 
@@ -501,6 +501,19 @@ explanations are capped at 32 MiB, reserving half of the lane's 64 MiB complete
 survey-document limit for root records and the canonical envelope. Rust
 validation and the lane reader both reject a document above that complete-file
 limit.
+
+The lane's sanitized survey manifest projects the already-validated
+`evidence_byte_limit` from the native survey into its `survey` summary; the
+protected workflow requires exactly 33,554,432 bytes in both documents.
+Omitting that summary field is invalid schema-3 output, not a new schema or a
+reason to weaken the workflow check. No persisted contract changes here;
+incomplete retained summaries must be regenerated from the validated survey.
+The lane regression suite executes the protected workflow's exact survey
+validation step against producer-generated fixtures for all three ecosystems,
+including negative manifest and rebound-digest count mutations. The release
+matrix suite runs that proof and rejects removal of either the writer's budget
+projection or the workflow's budget check. This keeps producer-versus-operator
+drift in the pull-request gate without maintaining a copied test predicate.
 
 The survey contract and writer live in
 `crates/conary-core/src/repository/catalog/parity/resolution_survey.rs`;
