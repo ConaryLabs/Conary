@@ -478,7 +478,8 @@ jobs:
               exit 1
             }
             start_phase database-transition-and-restart
-            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi "$1" "$2" "$3" "$4" >&2
+            sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi \
+              "$1" "$deployed_binary_sha256" "$2" "$3" "$4" >&2
             finish_phase complete
             transition_completed_at="$(date -u +%s)"
             start_phase ingress-after-transition

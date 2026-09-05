@@ -75,6 +75,9 @@ make_fake_remi_bundle() {
     cat >"$candidate" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "\${CONARY_FAKE_REMI_EXECUTION_MARKER:-}" ]]; then
+    printf 'executed\n' >"\$CONARY_FAKE_REMI_EXECUTION_MARKER"
+fi
 if [[ "\${1:-}" == "--version" ]]; then
     echo "remi ${version}"
     exit 0
@@ -178,6 +181,13 @@ exit 2
 EOF
     chmod 0755 "$candidate"
     tar czf "$bundle" -C "$build_dir" "$(basename "$candidate")"
+}
+
+remi_bundle_binary_sha256() {
+    local bundle="$1"
+    local version="$2"
+    tar xOzf "$bundle" -- "remi-${version}-linux-x64" |
+        sha256sum | cut -d ' ' -f 1
 }
 
 make_fake_benchmark_remi() {
@@ -772,6 +782,7 @@ run_helper() {
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
     CONARY_FAKE_INSPECT_DIAGNOSTIC="${CONARY_FAKE_INSPECT_DIAGNOSTIC:-0}" \
+    CONARY_FAKE_REMI_EXECUTION_MARKER="${CONARY_FAKE_REMI_EXECUTION_MARKER:-}" \
         bash "$helper" "$@"
 }
 
@@ -1080,7 +1091,9 @@ test_deploy_remi_uses_candidate_owned_transition() {
     make_fake_remi_bundle "$bundle" 0.8.0
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
 
-    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.0"
     test "$(cat "$fake_root/etc/conary/remi.toml.repository-keys-path")" = \
@@ -1098,7 +1111,9 @@ test_deploy_remi_uses_candidate_owned_transition() {
     repositories="${tmpdir}/repositories-repeat.toml"
     make_fake_remi_bundle "$bundle" 0.8.1
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
-    run_helper "$fake_root" deploy-remi 0.8.1 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.1 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.1)" \
+        "$bundle" "$repositories" 32
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.1"
     test "$(cat "$fake_root/conary/repository-keys/preserved")" = "stable-authority"
@@ -1140,6 +1155,33 @@ test_deploy_remi_uses_candidate_owned_transition() {
     expect_fail "conflicting Remi inspection requirements" \
         run_helper "$fake_root" inspect-remi --require-private-candidates \
         --require-repopulated
+}
+
+test_deploy_remi_authenticates_candidate_before_execution() {
+    local fake_root="${tmpdir}/root-remi-digest"
+    local bundle="${tmpdir}/remi-digest.tar.gz"
+    local repositories="${tmpdir}/repositories-digest.toml"
+    local execution_marker="${tmpdir}/candidate-executed"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+    CONARY_FAKE_REMI_EXECUTION_MARKER="$execution_marker" \
+        expect_fail "malformed deploy candidate digest" \
+        run_helper "$fake_root" deploy-remi 0.8.0 invalid \
+        "$bundle" "$repositories" 32
+    test ! -e "$execution_marker"
+    test ! -e "$fake_root/usr/local/bin/remi"
+
+    CONARY_FAKE_REMI_EXECUTION_MARKER="$execution_marker" \
+        expect_fail "mismatched deploy candidate digest" \
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$bundle" "$repositories" 32
+    test ! -e "$execution_marker"
+    test ! -e "$fake_root/usr/local/bin/remi"
+    test -f "$bundle"
+    test -f "$repositories"
 }
 
 test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
@@ -1259,14 +1301,18 @@ test_deploy_remi_rejects_malformed_authority_root() {
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
 
     expect_fail "insecure repository authority root" \
-        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
     test ! -e "$fake_root/usr/local/bin/remi"
 
     chmod 0700 "$fake_root/conary/repository-keys"
     rmdir "$fake_root/conary/repository-keys"
     ln -s "${tmpdir}" "$fake_root/conary/repository-keys"
     expect_fail "symlinked repository authority root" \
-        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
     test ! -e "$fake_root/usr/local/bin/remi"
 }
 
@@ -1315,7 +1361,9 @@ test_export_native_oracle_inputs_uses_exact_public_candidates() {
     mkdir -p "$fake_root/usr/local/bin"
     make_fake_remi_bundle "$bundle" 0.8.0
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
-    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
 
     run_helper "$fake_root" export-native-oracle-inputs \
         "$export_id" "$fedora_sha" "$ubuntu_sha" "$arch_sha"
@@ -2141,6 +2189,7 @@ main() {
     test_publish_test_artifact_is_verified_atomic_and_idempotent
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
+    test_deploy_remi_authenticates_candidate_before_execution
     test_candidate_baseline_uses_exact_staged_binary_without_mutation
     test_candidate_baseline_uses_installed_schema_owner_after_candidate_verification
     test_shared_conary_root_is_preserved_and_drift_fails_closed

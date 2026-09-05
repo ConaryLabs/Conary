@@ -21,7 +21,7 @@ usage() {
     cat >&2 <<'USAGE'
 usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
-  conary-remi-deploy deploy-remi <version> <bundle.tar.gz> <repositories.toml> <max-concurrent>
+  conary-remi-deploy deploy-remi <version> <sha256> <bundle.tar.gz> <repositories.toml> <max-concurrent>
   conary-remi-deploy deploy-site <site|web> <staging-dir>
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
@@ -284,6 +284,28 @@ start_and_probe() {
     return 1
 }
 
+extract_verified_remi_candidate() {
+    local version="$1"
+    local expected_sha="$2"
+    local bundle="$3"
+    local candidate="$4"
+    local member occurrences actual_sha
+    member="remi-${version}-linux-x64"
+    occurrences="$(tar tzf "$bundle" | awk -v expected="$member" '
+        $0 == expected { count += 1 }
+        END { print count + 0 }
+    ')" || die "could not inspect candidate bundle"
+    [[ "$occurrences" == "1" ]] ||
+        die "bundle must contain exactly one plain ${member}"
+    tar xOzf "$bundle" -- "$member" >"$candidate" ||
+        die "could not extract ${member} from candidate bundle"
+    chmod 0755 "$candidate"
+    actual_sha="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
+    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
+        die "candidate binary version does not match ${version}"
+}
+
 deploy_conary() {
     local version="$1"
     local staging
@@ -347,14 +369,16 @@ deploy_conary() {
 
 deploy_remi() {
     local version="$1"
+    local expected_sha="$2"
     local bundle
     local repositories
-    local max_concurrent="$4"
+    local max_concurrent="$5"
     validate_version "$version"
+    validate_sha256 "$expected_sha"
     validate_positive_int "$max_concurrent"
     configure_systemctl "Remi deployment"
-    bundle="$(real_tmp_path "$2")"
-    repositories="$(real_tmp_path "$3")"
+    bundle="$(real_tmp_path "$3")"
+    repositories="$(real_tmp_path "$4")"
     [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
     [[ -f "$repositories" && ! -L "$repositories" ]] ||
         die "repository manifest is not a plain file: $repositories"
@@ -367,11 +391,8 @@ deploy_remi() {
     had_previous=false
     trap 'rm -rf -- "$tmpdir"' EXIT
 
-    tar xzf "$bundle" -C "$tmpdir"
     candidate="${tmpdir}/remi-${version}-linux-x64"
-    [[ -f "$candidate" && ! -L "$candidate" ]] || die "bundle did not contain remi-${version}-linux-x64"
-    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
-        die "candidate binary version does not match ${version}"
+    extract_verified_remi_candidate "$version" "$expected_sha" "$bundle" "$candidate"
 
     runtime_root="$(root_path /conary)"
     runtime_lock="${runtime_root}/.remi-runtime.lock"
@@ -674,24 +695,11 @@ inspect_remi_candidate_baseline() {
     bundle="$(real_tmp_path "$3")"
     [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
 
-    local tmpdir member candidate occurrences actual_sha
+    local tmpdir candidate
     tmpdir="$(mktemp -d /tmp/remi-baseline.XXXXXX)"
     trap 'rm -rf -- "$tmpdir"' EXIT
-    member="remi-${version}-linux-x64"
-    candidate="${tmpdir}/${member}"
-    occurrences="$(tar tzf "$bundle" | awk -v expected="$member" '
-        $0 == expected { count += 1 }
-        END { print count + 0 }
-    ')" || die "could not inspect candidate bundle"
-    [[ "$occurrences" == "1" ]] ||
-        die "bundle must contain exactly one plain ${member}"
-    tar xOzf "$bundle" -- "$member" >"$candidate" ||
-        die "could not extract ${member} from candidate bundle"
-    chmod 0755 "$candidate"
-    actual_sha="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
-    [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
-    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
-        die "candidate binary version does not match ${version}"
+    candidate="${tmpdir}/remi-${version}-linux-x64"
+    extract_verified_remi_candidate "$version" "$expected_sha" "$bundle" "$candidate"
     local installed baseline_owner
     installed="$(root_path /usr/local/bin/remi)"
     if [[ -e "$installed" || -L "$installed" ]]; then
@@ -1945,8 +1953,8 @@ case "${1:-}" in
         deploy_conary "$2" "$3"
         ;;
     deploy-remi)
-        [[ $# -eq 5 ]] || usage
-        deploy_remi "$2" "$3" "$4" "$5"
+        [[ $# -eq 6 ]] || usage
+        deploy_remi "$2" "$3" "$4" "$5" "$6"
         ;;
     deploy-site)
         [[ $# -eq 3 ]] || usage
