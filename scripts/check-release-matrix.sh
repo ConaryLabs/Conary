@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="${1:-$(git rev-parse --show-toplevel)}"
-cd "$repo_root"
+list_inputs=false
+if [[ "${1:-}" == "--list-inputs" ]]; then
+    list_inputs=true
+    shift
+fi
+[[ $# -le 1 ]] || {
+    echo "usage: $0 [--list-inputs] [repo-root]" >&2
+    exit 2
+}
 
 workspace_manifest="Cargo.toml"
+release_matrix_script="scripts/release-matrix.sh"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 site_deploy_workflow=".github/workflows/deploy-site.yml"
@@ -239,54 +247,70 @@ validate_release_topology() {
     done
 }
 
-for required_file in \
-    "$workspace_manifest" \
-    "$release_build" \
-    "$deploy_workflow" \
-    "$site_deploy_workflow" \
-    "$candidate_build_workflow" \
-    "$candidate_deploy_workflow" \
-    "$native_oracle_export_workflow" \
-    "$native_oracle_production_workflow" \
-    "$resolution_survey_workflow" \
-    "$conversion_benchmark_workflow" \
-    "$r2_durability_workflow" \
-    "$pinned_production_ssh_action" \
-    "$conversion_workflow_checker" \
-    "$native_oracle_lane_assembler" \
-    "$native_oracle_lane_producer" \
-    "$native_oracle_lane_selector" \
-    "$native_oracle_producer_verifier" \
-    "$native_oracle_transport_verifier" \
-    "$resolution_survey_transport" \
-    "$remi_resolution_survey" \
-    "$candidate_predeployment_filter" \
-    "$candidate_postdeployment_filter" \
-    "$candidate_artifact_script" \
-    "$timed_linker_script" \
-    "$timed_rustc_wrapper" \
-    "$candidate_cache_action" \
-    "$artifact_proof_workflow" \
-    "$merge_workflow" \
-    "$pr_workflow" \
-    "$exact_ownership_action" \
-    "$workspace_setup_action" \
-    "$artifact_matrix" \
-    "$feedback_template" \
-    "$site_preview_release" \
-    "$site_install_page" \
-    "$site_bootstrap_installer" \
-    "$bootstrap_manifest_builder" \
-    "$bootstrap_installer_tests" \
-    "$rpm_containerfile" \
-    "$rpm_spec" \
-    "$deb_containerfile" \
-    "$arch_containerfile" \
-    "$arch_pkgbuild" \
-    "$rpm_build_script" \
-    "$deb_build_script" \
-    "$arch_build_script" \
-    "$ccs_build_script"; do
+required_files=(
+    "$workspace_manifest"
+    "$release_matrix_script"
+    "$release_build"
+    "$deploy_workflow"
+    "$site_deploy_workflow"
+    "$candidate_build_workflow"
+    "$candidate_deploy_workflow"
+    "$native_oracle_export_workflow"
+    "$native_oracle_production_workflow"
+    "$resolution_survey_workflow"
+    "$conversion_benchmark_workflow"
+    "$r2_durability_workflow"
+    "$pinned_production_ssh_action"
+    "$conversion_workflow_checker"
+    "$native_oracle_lane_assembler"
+    "$native_oracle_lane_producer"
+    "$native_oracle_lane_selector"
+    "$native_oracle_producer_verifier"
+    "$native_oracle_transport_verifier"
+    "$resolution_survey_transport"
+    "$remi_resolution_survey"
+    "$remi_deploy_helper"
+    "$candidate_predeployment_filter"
+    "$candidate_postdeployment_filter"
+    "$candidate_artifact_script"
+    "$timed_linker_script"
+    "$timed_rustc_wrapper"
+    "$static_build_script"
+    "$candidate_cache_action"
+    "$artifact_proof_workflow"
+    "$cross_source_lifecycle_manifest"
+    "$cross_source_lifecycle_script"
+    "$merge_workflow"
+    "$pr_workflow"
+    "$exact_ownership_action"
+    "$workspace_setup_action"
+    "$artifact_matrix"
+    "$feedback_template"
+    "$site_preview_release"
+    "$site_install_page"
+    "$site_bootstrap_installer"
+    "$bootstrap_manifest_builder"
+    "$bootstrap_installer_tests"
+    "$rpm_containerfile"
+    "$rpm_spec"
+    "$deb_containerfile"
+    "$arch_containerfile"
+    "$arch_pkgbuild"
+    "$rpm_build_script"
+    "$deb_build_script"
+    "$arch_build_script"
+    "$ccs_build_script"
+)
+
+if [[ "$list_inputs" == "true" ]]; then
+    printf '%s\n' "${required_files[@]}"
+    exit 0
+fi
+
+repo_root="${1:-$(git rev-parse --show-toplevel)}"
+cd "$repo_root"
+
+for required_file in "${required_files[@]}"; do
     [[ -f "$required_file" ]] || fail "missing $required_file"
 done
 

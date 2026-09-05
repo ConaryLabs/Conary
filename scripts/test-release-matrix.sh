@@ -253,102 +253,14 @@ run_repo_matrix() {
 
 create_release_policy_fixture() {
     local repo
+    local input
 
     repo="$(mktemp -d "${TEST_RUN_ROOT}/fixture.XXXXXX")"
-    mkdir -p \
-        "$repo/scripts" \
-        "$repo/.github/actions/setup-exact-ownership-tests" \
-        "$repo/.github/actions/setup-pinned-production-ssh" \
-        "$repo/.github/actions/setup-remi-candidate-compiler-cache" \
-        "$repo/.github/actions/setup-rust-workspace" \
-        "$repo/.github/ISSUE_TEMPLATE" \
-        "$repo/.github/workflows" \
-        "$repo/apps/remi/src/server" \
-        "$repo/apps/conary/tests/fixtures/native" \
-        "$repo/apps/conary/tests/integration/remi/manifests" \
-        "$repo/docs/operations" \
-        "$repo/site/src/lib" \
-        "$repo/site/static" \
-        "$repo/site/src/routes/install" \
-        "$repo/packaging/rpm" \
-        "$repo/packaging/deb" \
-        "$repo/packaging/arch" \
-        "$repo/packaging/ccs" \
-        "$repo/deploy"
-    cp "$REPO_ROOT/Cargo.toml" "$repo/Cargo.toml"
-    cp "$REPO_ROOT/scripts/release-matrix.sh" "$repo/scripts/release-matrix.sh"
-    cp "$REPO_ROOT/.github/workflows/release-build.yml" "$repo/.github/workflows/release-build.yml"
-    cp "$REPO_ROOT/.github/workflows/deploy-and-verify.yml" "$repo/.github/workflows/deploy-and-verify.yml"
-    cp "$REPO_ROOT/.github/workflows/deploy-site.yml" "$repo/.github/workflows/deploy-site.yml"
-    cp "$REPO_ROOT/.github/workflows/build-remi-candidate.yml" "$repo/.github/workflows/build-remi-candidate.yml"
-    cp "$REPO_ROOT/.github/workflows/deploy-remi-candidate.yml" "$repo/.github/workflows/deploy-remi-candidate.yml"
-    cp "$REPO_ROOT/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml"
-    cp "$REPO_ROOT/.github/workflows/produce-remi-native-oracles.yml" \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml"
-    cp "$REPO_ROOT/.github/workflows/survey-remi-resolution.yml" \
-        "$repo/.github/workflows/survey-remi-resolution.yml"
-    cp "$REPO_ROOT/.github/workflows/remi-conversion-benchmark.yml" \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml"
-    cp "$REPO_ROOT/.github/workflows/remi-r2-durability.yml" \
-        "$repo/.github/workflows/remi-r2-durability.yml"
-    cp "$REPO_ROOT/scripts/check-remi-conversion-workflow.py" \
-        "$repo/scripts/check-remi-conversion-workflow.py"
-    cp "$REPO_ROOT/scripts/remi-candidate-artifact.sh" "$repo/scripts/remi-candidate-artifact.sh"
-    cp "$REPO_ROOT/scripts/verify-native-oracle-input-transport.py" \
-        "$repo/scripts/verify-native-oracle-input-transport.py"
-    cp "$REPO_ROOT/scripts/produce-native-oracle-lane.py" \
-        "$repo/scripts/produce-native-oracle-lane.py"
-    cp "$REPO_ROOT/scripts/remi-resolution-survey-transport.py" \
-        "$repo/scripts/remi-resolution-survey-transport.py"
-    cp "$REPO_ROOT/apps/remi/src/server/resolution_survey.rs" \
-        "$repo/apps/remi/src/server/resolution_survey.rs"
-    cp "$REPO_ROOT/scripts/assemble-native-oracle-lanes.py" \
-        "$repo/scripts/assemble-native-oracle-lanes.py"
-    cp "$REPO_ROOT/scripts/native-oracle-lane-selection.py" \
-        "$repo/scripts/native-oracle-lane-selection.py"
-    cp "$REPO_ROOT/scripts/verify-native-oracle-producer.py" \
-        "$repo/scripts/verify-native-oracle-producer.py"
-    cp "$REPO_ROOT/scripts/timed-linker.sh" "$repo/scripts/timed-linker.sh"
-    cp "$REPO_ROOT/scripts/timed-rustc-wrapper.sh" "$repo/scripts/timed-rustc-wrapper.sh"
-    cp "$REPO_ROOT/scripts/build-static-conary.sh" "$repo/scripts/build-static-conary.sh"
-    cp "$REPO_ROOT/deploy/remi-predeployment-inspection.jq" \
-        "$repo/deploy/remi-predeployment-inspection.jq"
-    cp "$REPO_ROOT/deploy/remi-postdeployment-fencing.jq" \
-        "$repo/deploy/remi-postdeployment-fencing.jq"
-    cp "$REPO_ROOT/deploy/remi-deploy-helper.sh" \
-        "$repo/deploy/remi-deploy-helper.sh"
-    cp "$REPO_ROOT/.github/workflows/release-artifact-proof.yml" "$repo/.github/workflows/release-artifact-proof.yml"
-    cp "$REPO_ROOT/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
-        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
-    cp "$REPO_ROOT/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml" \
-        "$repo/apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
-    cp "$REPO_ROOT/.github/workflows/merge-validation.yml" "$repo/.github/workflows/merge-validation.yml"
-    cp "$REPO_ROOT/.github/workflows/pr-gate.yml" "$repo/.github/workflows/pr-gate.yml"
-    cp "$REPO_ROOT/.github/actions/setup-exact-ownership-tests/action.yml" \
-        "$repo/.github/actions/setup-exact-ownership-tests/action.yml"
-    cp "$REPO_ROOT/.github/actions/setup-pinned-production-ssh/action.yml" \
-        "$repo/.github/actions/setup-pinned-production-ssh/action.yml"
-    cp "$REPO_ROOT/.github/actions/setup-rust-workspace/action.yml" \
-        "$repo/.github/actions/setup-rust-workspace/action.yml"
-    cp "$REPO_ROOT/.github/actions/setup-remi-candidate-compiler-cache/action.yml" \
-        "$repo/.github/actions/setup-remi-candidate-compiler-cache/action.yml"
-    cp "$REPO_ROOT/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md"
-    cp "$REPO_ROOT/docs/operations/release-artifact-matrix.md" "$repo/docs/operations/release-artifact-matrix.md"
-    cp "$REPO_ROOT/site/src/lib/preview-release.ts" "$repo/site/src/lib/preview-release.ts"
-    cp "$REPO_ROOT/site/src/routes/install/+page.svelte" "$repo/site/src/routes/install/+page.svelte"
-    cp "$REPO_ROOT/site/static/install-conary-preview.sh" "$repo/site/static/install-conary-preview.sh"
-    cp "$REPO_ROOT/scripts/bootstrap-manifest.sh" "$repo/scripts/bootstrap-manifest.sh"
-    cp "$REPO_ROOT/scripts/test-install-conary-preview.sh" "$repo/scripts/test-install-conary-preview.sh"
-    cp "$REPO_ROOT/packaging/rpm/Containerfile.build" "$repo/packaging/rpm/Containerfile.build"
-    cp "$REPO_ROOT/packaging/rpm/conary.spec" "$repo/packaging/rpm/conary.spec"
-    cp "$REPO_ROOT/packaging/deb/Containerfile.build" "$repo/packaging/deb/Containerfile.build"
-    cp "$REPO_ROOT/packaging/arch/Containerfile.build" "$repo/packaging/arch/Containerfile.build"
-    cp "$REPO_ROOT/packaging/arch/PKGBUILD" "$repo/packaging/arch/PKGBUILD"
-    cp "$REPO_ROOT/packaging/rpm/build.sh" "$repo/packaging/rpm/build.sh"
-    cp "$REPO_ROOT/packaging/deb/build.sh" "$repo/packaging/deb/build.sh"
-    cp "$REPO_ROOT/packaging/arch/build.sh" "$repo/packaging/arch/build.sh"
-    cp "$REPO_ROOT/packaging/ccs/build.sh" "$repo/packaging/ccs/build.sh"
+
+    while IFS= read -r input; do
+        mkdir -p "$repo/$(dirname "$input")"
+        cp "$REPO_ROOT/$input" "$repo/$input"
+    done < <(bash "$REPO_ROOT/scripts/check-release-matrix.sh" --list-inputs)
     chmod +x "$repo/scripts/release-matrix.sh"
     printf '%s\n' "$repo"
 }
@@ -808,186 +720,315 @@ test_release_conary_rejects_stale_generated_man_page() {
         "stale generated man page should not create the release tag"
 }
 
-test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    cat >> "$repo/.github/workflows/deploy-and-verify.yml" <<'YAML'
+release_matrix_mutation_cases() {
+    python3 - <<'PY'
+import sys
 
-  deploy-conaryd:
-    name: deploy-conaryd
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo deploy
-YAML
-
-    assert_check_release_matrix_fails "$repo" "deployment job for a build-only suite artifact"
+cases = (
+    ('test_check_release_matrix_rejects_aliased_conversion_benchmark_authority', 'replace', '.github/workflows/remi-conversion-benchmark.yml', 'concurrency:', 'concurrency: &shared_concurrency', 'forbidden YAML anchors or aliases'),
+    ('test_check_release_matrix_rejects_all_profile_retry', 'replace', '.github/workflows/deploy-remi-candidate.yml', 'refresh?force=true&profile=${profile}', 'refresh?force=true', 'retries only exact failed public profiles'),
+    ('test_check_release_matrix_rejects_ambiguous_candidate_completion_mode', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          - private-candidates', '          - candidate-ish', 'candidate deploy explicit typed completion mode'),
+    ('test_check_release_matrix_rejects_ambiguous_ccs_target_directory', 'replace', 'packaging/ccs/build.sh', '    --target-dir "$TARGET_DIR"', '    --target-dir target', 'CCS wrapper must use one explicit Cargo target directory'),
+    ('test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit', 'replace', 'scripts/remi-resolution-survey-transport.py', '    if not member.isreg() or member.size <= 0 or member.size != expected_size:', '    if not member.isreg() or member.size <= 0 or member.size != expected_size or member.size > 96 * 1024 * 1024:', 'resolution survey arbitrary aggregate output limit'),
+    ('test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit', 'replace', 'deploy/remi-deploy-helper.sh', '    local listing="${manifest}.listing"', '    local transport_size\n    transport_size="$(stat -c \'%s\' "$transport")"\n    (( transport_size <= 32 * 1024 * 1024 * 1024 )) || die "oracle transport too large"\n\n    local listing="${manifest}.listing"', 'resolution survey arbitrary aggregate oracle input limit'),
+    ('test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit', 'replace', 'scripts/remi-resolution-survey-transport.py', '    metadata = plain_file(args.transport, "survey transport")', '    metadata = plain_file(args.transport, "survey transport", 640 * 1024 * 1024)', 'resolution survey arbitrary aggregate output limit'),
+    ('test_check_release_matrix_rejects_arch_bootstrap_partial_upgrade', 'replace', '.github/workflows/release-build.yml', 'pacman -Syu --noconfirm curl openssl sudo ca-certificates', 'pacman -Sy --noconfirm curl openssl sudo ca-certificates', 'Arch bootstrap rehearsal must avoid an unsupported partial upgrade'),
+    ('test_check_release_matrix_rejects_arch_debug_split_package_generation', 'replace', 'packaging/arch/PKGBUILD', 'options=(!debug !lto)', 'options=(debug !lto)', 'Arch package must explicitly disable debug split-package generation'),
+    ('test_check_release_matrix_rejects_arch_extra_output_blind_spot', 'replace', 'packaging/arch/build.sh', 'package_outputs=("$OUTPUT"/*.pkg.tar.zst)', 'package_outputs=("$EXPECTED_PACKAGE")', 'Arch build must reject every extra package output'),
+    ('test_check_release_matrix_rejects_automatic_rpm_rust_flags', 'replace', 'packaging/rpm/conary.spec', '%undefine _auto_set_build_flags', '%global _auto_set_build_flags 1', 'RPM spec must preserve non-debug Fedora Rust flags without overriding the workspace release profile'),
+    ('test_check_release_matrix_rejects_beta_maturity_drift', 'replace', '.github/ISSUE_TEMPLATE/pre_alpha_feedback.md', 'name: Pre-Alpha Tester Feedback', 'name: Beta Feedback', 'public maturity surfaces must identify this project as pre-alpha, not beta'),
+    ('test_check_release_matrix_rejects_buffered_resolution_survey_documents', 'replace', 'scripts/remi-resolution-survey-transport.py', '        file_entries: dict[str, tuple[int, str]] = {}', '        file_bytes: dict[str, bytes] = {}', 'resolution survey whole-document output buffering'),
+    ('test_check_release_matrix_rejects_caller_authorized_helper_update', 'replace', 'deploy/remi-deploy-helper.sh', '    install -m 0755 "${staging}/helper" "$next"', '    install -m 0755 "$source" "$next"', 'Remi helper updates require exact current protected-main bytes from root-trusted HTTPS authority'),
+    ('test_check_release_matrix_rejects_candidate_checkout_fencing_policy', 'replace', '.github/workflows/deploy-remi-candidate.yml', '              -f "$workflow_fencing_policy" \\', '              -f deploy/remi-postdeployment-fencing.jq \\', 'private candidate deploy evaluates post-transition fencing from the exact workflow authority, independent of the candidate checkout'),
+    ('test_check_release_matrix_rejects_candidate_completion_catalog_rescan', 'replace', '.github/workflows/deploy-remi-candidate.yml', '.candidate_verification.catalog_bytes_hashed == 0', '.candidate_verification.catalog_bytes_hashed >= 0', 'candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection'),
+    ('test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                    | select(. != "solus")]', '                    | select(true)]', 'retries only exact failed public profiles'),
+    ('test_check_release_matrix_rejects_cold_candidate_rebuild', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          verification="$(scripts/remi-candidate-artifact.sh verify \\', '          cargo build -p remi --release --locked\n          verification="$(scripts/remi-candidate-artifact.sh verify \\', 'candidate deploy cold Rust compilation'),
+    ('test_check_release_matrix_rejects_collapsed_hot_conversion_phases', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '              and ($hot.timing.phases | map(.phase)) == [', '              and ($hot.timing.phases | map(.phase) | unique) == [', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_collapsed_hot_skipped_phases', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '              and $hot.timing.skipped_phases == [', '              and ($hot.timing.skipped_phases | unique) == [', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}\n          # ref: ${{ github.workflow_sha }}', 'conversion benchmark exact workflow-revision checkout ref'),
+    ('test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin', 'replace', '.github/actions/setup-pinned-production-ssh/action.yml', '        if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then', '        if ! true; then\n        # if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then', 'shared production SSH action must validate and enforce the exclusive protected host identity pin'),
+    ('test_check_release_matrix_rejects_commented_conversion_benchmark_input', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: true', '      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: false\n        # required: true', 'conversion benchmark typed dispatch inputs'),
+    ('test_check_release_matrix_rejects_commented_conversion_benchmark_permissions', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '  actions: read', '  actions: write\n  # actions: read', 'conversion benchmark read-only permissions'),
+    ('test_check_release_matrix_rejects_conary_test_deploy_jobs', 'append', '.github/workflows/deploy-and-verify.yml', '', '\n  verify-conary-test:\n    name: verify-conary-test\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo verify\n', 'deployment job for a build-only suite artifact'),
+    ('test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused', 'append', '.github/workflows/deploy-and-verify.yml', '', '\n  deploy-conaryd:\n    name: deploy-conaryd\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo deploy\n', 'deployment job for a build-only suite artifact'),
+    ('test_check_release_matrix_rejects_container_native_oracle_shell', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '        shell: bash', '        shell: sh', 'native-oracle production uses Bash inside pinned job containers'),
+    ('test_check_release_matrix_rejects_direct_release_publication', 'replace', '.github/workflows/release-build.yml', 'gh release create "$TAG_NAME" \\', 'gh release create "$TAG_NAME" suite-packages/* \\', 'direct published release creation with attached assets'),
+    ('test_check_release_matrix_rejects_dirty_native_oracle_producer', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '          [[ -z "$(git status --porcelain)" ]]', '          true', 'native-oracle production selected exact clean producer source and typed lane adapter'),
+    ('test_check_release_matrix_rejects_discarded_candidate_failure_inspection', 'replace', '.github/workflows/deploy-remi-candidate.yml', "            > remi-deployment-inspection.json <<'REMOTE_EOF'", "            > /dev/null <<'REMOTE_EOF'", 'candidate deploy retains one validated final typed inspection'),
+    ('test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority', 'append', '.github/workflows/remi-conversion-benchmark.yml', '', '\nconcurrency:\n  group: deploy-and-verify\n  cancel-in-progress: false\n', "duplicate key 'concurrency'"),
+    ('test_check_release_matrix_rejects_duplicate_fused_conversion_phase', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                | select(.phase == "independent_transport_reopen") ] | length) == 1', '                | select(.phase == "independent_transport_reopen") ] | length) >= 1', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection', 'replace', 'scripts/native-oracle-lane-selection.py', '    if len(set(selected)) != len(selected):', '    if False:', 'native-oracle lane selection closed non-empty duplicate-free parser'),
+    ('test_check_release_matrix_rejects_duplicate_survey_transport_copy', 'replace', 'deploy/remi-deploy-helper.sh', '        -C "$output" "${transport_members[@]}"', '        -C "$SURVEY_STAGING" "${transport_members[@]}"', 'resolution survey archives the frozen root-owned snapshot without another full copy'),
+    ('test_check_release_matrix_rejects_empty_known_hosts_acceptance', 'replace', '.github/actions/setup-pinned-production-ssh/action.yml', '        [[ -n "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }', '        [[ -z "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }', 'fail closed clearly when the known-hosts input is empty'),
+    ('test_check_release_matrix_rejects_executable_resolution_survey_summary', 'replace', '.github/workflows/survey-remi-resolution.yml', '            echo "- oracle run: \\`$ORACLE_RUN_ID\\`"', '            echo "- oracle run: `$ORACLE_RUN_ID`"', 'resolution survey escaped oracle run summary binding'),
+    ('test_check_release_matrix_rejects_extra_conversion_benchmark_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            remi-candidate-manifest.json\n          if-no-files-found: error', '            remi-candidate-manifest.json\n            unexpected-benchmark-debug.json\n          if-no-files-found: error', 'conversion benchmark public-only retained evidence'),
+    ('test_check_release_matrix_rejects_flat_nested_outcome_decode', 'replace', 'scripts/remi-resolution-survey-transport.py', 'CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}', 'CANDIDATE_ROOT_STREAM_SPEC = {}', 'resolution survey verifier streams canonical root records and nested outcomes without whole-document buffering'),
+    ('test_check_release_matrix_rejects_fractional_conversion_benchmark_timing', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and . <= 9007199254740991\n                and floor == .;', '                and . <= 9007199254740991\n                and true;', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_global_known_hosts_fallback', 'replace', '.github/actions/setup-pinned-production-ssh/action.yml', "          printf '  GlobalKnownHostsFile /dev/null\\n'", "          printf '  GlobalKnownHostsFile /etc/ssh/ssh_known_hosts\\n'", 'shared production SSH action must validate and enforce the exclusive protected host identity pin'),
+    ('test_check_release_matrix_rejects_helper_survey_document_slurp', 'replace', 'deploy/remi-deploy-helper.sh', '            --slurpfile outcome "$outcome" \'', '            --slurpfile outcome "$outcome" \\\n            --slurpfile candidate "$candidate_file" \'', 'resolution survey helper whole-document jq buffering'),
+    ('test_check_release_matrix_rejects_hidden_native_debug_outputs', 'replace', '.github/workflows/release-build.yml', '          path: packaging/rpm/output/*.rpm', '          path: |\n            packaging/rpm/output/*.rpm\n            !packaging/rpm/output/*debug*', 'native debug artifact filtering'),
+    ('test_check_release_matrix_rejects_historical_local_action_authority__01', 'replace', '.github/workflows/build-remi-candidate.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}', 'historical checkout local-action authority'),
+    ('test_check_release_matrix_rejects_historical_local_action_authority__02', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}', 'historical checkout local-action authority'),
+    ('test_check_release_matrix_rejects_historical_local_action_authority__03', 'replace', '.github/workflows/release-artifact-proof.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}', 'historical checkout local-action authority'),
+    ('test_check_release_matrix_rejects_historical_local_action_authority__04', 'replace', '.github/workflows/remi-r2-durability.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}', 'historical checkout local-action authority'),
+    ('test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step', 'replace', 'apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh', 'preview="$(run_hook_free_conary install "${v1_package}" \\', 'preview="$(run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}" \\', 'published binary hook-free lifecycle coverage'),
+    ('test_check_release_matrix_rejects_late_suite_release_notes', 'replace', '.github/workflows/release-build.yml', 'gh release edit "$TAG_NAME" --notes-file "$release_notes"', 'gh release view "$TAG_NAME" --json body', 'immutable-compatible single suite publication sequence'),
+    ('test_check_release_matrix_rejects_leaf_manifest_native_versions__01', 'replace', 'packaging/rpm/build.sh', 'VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"', 'VERSION=$(grep \'^version\' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1)', 'RPM build must use and validate the root workspace version authority'),
+    ('test_check_release_matrix_rejects_leaf_manifest_native_versions__02', 'replace', 'packaging/deb/build.sh', 'VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"', 'VERSION=$(grep \'^version\' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1)', 'DEB build must use and validate the root workspace version authority'),
+    ('test_check_release_matrix_rejects_leaf_manifest_native_versions__03', 'replace', 'packaging/arch/build.sh', 'VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"', 'VERSION=$(grep \'^version\' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1)', 'Arch build must use and validate the root workspace version authority'),
+    ('test_check_release_matrix_rejects_lightweight_live_tag_guard', 'replace', '.github/workflows/release-build.yml', '[[ "$(git cat-file -t "refs/tags/${tag_name}")" == "tag" ]] || {', 'true || {', 'live suite build must require an annotated tag at the exact checkout'),
+    ('test_check_release_matrix_rejects_literal_ssh_target_fallback', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          target="$REMI_SSH_TARGET"', '          target="${REMI_SSH_TARGET:-operator@ssh.example.test}"', 'literal user@host fallback'),
+    ('test_check_release_matrix_rejects_loose_artifact_latency_budget', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          (( availability_ms <= 60000 )) || {', '          (( availability_ms <= 600000 )) || {', 'candidate deploy must download, verify, and budget the exact protected artifact'),
+    ('test_check_release_matrix_rejects_loose_candidate_build_policy', 'replace', 'scripts/remi-candidate-artifact.sh', '          and .build.rustflags == ""', '          and (.build.rustflags | type == "string")', 'candidate artifact verifier must recompute version and enforce the exact build and bulk-cache policy'),
+    ('test_check_release_matrix_rejects_loose_native_oracle_transport', 'replace', 'scripts/verify-native-oracle-input-transport.py', '        archive = tarfile.open(path, mode="r:")', '        archive = tarfile.open(path, mode="r:*")', 'native-oracle transport strict tar, canonical manifest, inventory, and byte verification'),
+    ('test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema', 'replace', 'scripts/remi-resolution-survey-transport.py', '        require_envelope_schema(manifest, OUTPUT_MANIFEST_SCHEMA, "survey output manifest")', '        # Incorrectly accept an obsolete outer manifest.', 'resolution survey strict sanitized output transport verification'),
+    ('test_check_release_matrix_rejects_loose_resolution_survey_transport', 'replace', 'scripts/remi-resolution-survey-transport.py', '        archive = tarfile.open(args.transport, mode="r:")', '        archive = tarfile.open(args.transport, mode="r:*")', 'resolution survey strict sanitized output transport verification'),
+    ('test_check_release_matrix_rejects_malformed_native_oracle_producer_commit', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '[[ "$PRODUCER_COMMIT" =~ ^[0-9a-f]{40}$ ]]', '[[ -n "$PRODUCER_COMMIT" ]]', 'native-oracle production exact current protected-main and full producer SHA authorization'),
+    ('test_check_release_matrix_rejects_merge_validation_production_probes__01', 'replace', '.github/workflows/merge-validation.yml', '      - name: Explain paused remote validation', '      - name: Probe mutable production Remi through the current health script\n        run: ./scripts/remi-health.sh --smoke\n      - name: Explain paused remote validation', 'mutable production Remi probe in source merge validation'),
+    ('test_check_release_matrix_rejects_merge_validation_production_probes__02', 'replace', '.github/workflows/merge-validation.yml', '      - name: Explain paused remote validation', '      - name: Probe mutable production Remi directly\n        run: curl -fsS https://remi.conary.io/health\n      - name: Explain paused remote validation', 'mutable production Remi probe in source merge validation'),
+    ('test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .producer_commit == $producer_commit and', '            .producer_commit == .deployed_commit and', 'strict and survey producer commit bindings'),
+    ('test_check_release_matrix_rejects_missing_candidate_failure_artifact', 'replace', '.github/workflows/deploy-remi-candidate.yml', '        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0', '        run: echo "deployment inspection upload removed"', 'candidate deploy retains before-and-after sanitized inspection artifacts'),
+    ('test_check_release_matrix_rejects_missing_candidate_phase_evidence', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            start_phase database-transition-and-restart', '            echo "database transition timing removed" >&2', 'candidate deploy retains typed refresh generations, phase timing, and early-failure evidence'),
+    ('test_check_release_matrix_rejects_missing_candidate_storage_evidence', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            > remi-predeployment-storage.json', '            > /dev/null', 'candidate deploy retains before-and-after numeric storage evidence'),
+    ('test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion', 'replace', '.github/workflows/release-build.yml', '"release-packages/conary-${VERSION}.ccs"', '"release-packages/conary-${VERSION}.ccs.unchecked"', 'exact version-matching CCS release asset assertion'),
+    ('test_check_release_matrix_rejects_missing_fused_ccs_output_hash_work', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                  "ccs_output_bytes",\n                  "ccs_output_bytes_hashed",', '                  "ccs_output_bytes",', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_missing_live_version_assertion', 'replace', '.github/workflows/release-build.yml', 'bash scripts/release-matrix.sh assert-owned-version "$release" "$version"', 'echo "owned version assertion removed"', 'live suite tag must match the workspace-owned version'),
+    ('test_check_release_matrix_rejects_missing_local_action_checkout', 'replace', '.github/workflows/deploy-and-verify.yml', '          ref: ${{ github.workflow_sha }}', '          ref: ${{ github.sha }}', 'check out the exact workflow repository before using the local SSH action'),
+    ('test_check_release_matrix_rejects_missing_native_oracle_binary_digest', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and', '            true and', 'strict and survey resolution producer digest bindings'),
+    ('test_check_release_matrix_rejects_missing_post_deploy_remi_readiness', 'replace', '.github/workflows/deploy-and-verify.yml', '          body=$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)', '          echo "structured readiness proof removed"', 'exact post-deploy Remi liveness and structured readiness proof'),
+    ('test_check_release_matrix_rejects_missing_refresh_causal_floor', 'replace', '.github/workflows/deploy-remi-candidate.yml', 'refresh?force=true&accept_completed_after=${transition_completed_at}', 'refresh?force=true', 'private candidate deploy coalesces one bounded post-transition refresh'),
+    ('test_check_release_matrix_rejects_missing_rpm_spool_reopen_counter', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                  "native_payload_spool_bytes_reread",\n                  "native_payload_spool_file_reopens",', '                  "native_payload_spool_bytes_reread",', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_missing_signer_trust_match', 'replace', '.github/workflows/release-build.yml', 'release signing key does not match an embedded trusted update key', 'release signing key check removed', 'live signing key must match an embedded trusted update key'),
+    ('test_check_release_matrix_rejects_missing_tester_authority_boundary', 'replace', '.github/workflows/release-build.yml', 'Publication and released-package proof do not make', 'Publication proves all tester readiness and makes', 'release notes must derive tester authority from versioned launch status'),
+    ('test_check_release_matrix_rejects_mixed_candidate_inspection_channels', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                "${helper_args[@]}" 2>/dev/null)"; then', '                "${helper_args[@]}" 2>&1)"; then', 'channel-separated diagnostics'),
+    ('test_check_release_matrix_rejects_moved_tag_publication', 'replace', '.github/workflows/release-build.yml', '          verify_release_tag "before draft mutation"', '          echo "tag revalidation removed"', 'suite tag validation before draft mutation'),
+    ('test_check_release_matrix_rejects_moving_artifact_proof_toolchain', 'replace', '.github/workflows/release-artifact-proof.yml', '          toolchain: 1.98.0', '          toolchain: stable', 'published artifact proof exact Rust toolchain'),
+    ('test_check_release_matrix_rejects_mutable_artifact_proof', 'replace', '.github/workflows/release-artifact-proof.yml', '             "$(jq -r \'.immutable\' <<< "$release_state")" == "true" ]] || {', '             "$(jq -r \'.immutable\' <<< "$release_state")" == "false" ]] || {', 'published artifact proof must reject a draft, mutable, or mismatched GitHub release'),
+    ('test_check_release_matrix_rejects_mutable_publication_result', 'replace', '.github/workflows/release-build.yml', '.tag_name == $tag and .draft == false and .immutable == true', '.tag_name == $tag and .draft == false', 'suite publisher must prove exact immutable state after publication'),
+    ('test_check_release_matrix_rejects_mutating_native_oracle_authority', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '          python3 operator/scripts/produce-native-oracle-lane.py \\', '          remi conversion-crawl && python3 operator/scripts/produce-native-oracle-lane.py \\', 'native-oracle production generic or mutating authority'),
+    ('test_check_release_matrix_rejects_mutating_resolution_survey', 'replace', '.github/workflows/survey-remi-resolution.yml', '              "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution \'$SURVEY_ID\' \'$EXPORT_ID\' \'$remote_input\'"', '              "sudo -n /usr/local/sbin/conary-remi-deploy promotion-activate \'$SURVEY_ID\' \'$EXPORT_ID\' \'$remote_input\'"', 'resolution survey fixed helper, fail-closed SSH, and independent output verification'),
+    ('test_check_release_matrix_rejects_native_oracle_archive_digest_bypass', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            [[ "$observed" == "$artifact_digest" ]] || {', '            true || {', 'native-oracle assembly exact current or latest successful same-export artifact with archive digest proof'),
+    ('test_check_release_matrix_rejects_native_oracle_implementation_pin_drift', 'replace', '.github/workflows/produce-remi-native-oracles.yml', 'projection_schema:5,version:"0.7.36"', 'projection_schema:4,version:"0.7.36"', 'strict and survey RPM implementation pins'),
+    ('test_check_release_matrix_rejects_native_oracle_lane_schema_drift', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .schema_version == 5 and', '            .schema_version == 4 and', 'native-oracle production exact lane, package, resolution, and implementation schemas'),
+    ('test_check_release_matrix_rejects_non_descendant_native_oracle_producer', 'replace', 'scripts/verify-native-oracle-producer.py', '        ["merge-base", "--is-ancestor", deployed_commit, producer_commit],', '        ["merge-base", "--is-ancestor", deployed_commit, deployed_commit],', 'native-oracle shared full-SHA fetch and deployed-producer-main predicate'),
+    ('test_check_release_matrix_rejects_non_failing_artifact_upload', 'replace', '.github/workflows/release-build.yml', 'if-no-files-found: error', 'if-no-files-found: warn', 'fail-closed release artifact uploads'),
+    ('test_check_release_matrix_rejects_non_tag_static_site_checkout', 'replace', '.github/workflows/deploy-and-verify.yml', 'ref: ${{ needs.resolve.outputs.tag_name }}', 'ref: main', 'static-site checkout must use the serialized release tag'),
+    ('test_check_release_matrix_rejects_non_xfs_conversion_benchmark_evidence', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and .filesystem_type == "0x58465342"', '                and .filesystem_type == "ext4"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_nonadvancing_candidate_fence', 'replace', 'deploy/remi-postdeployment-fencing.jq', '                > fencing_epoch($before; $profile)', '                >= fencing_epoch($before; $profile)', 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'),
+    ('test_check_release_matrix_rejects_noncanonical_conversion_failure_envelope', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                && [[ "$canonical_envelope" == "$envelope_json" ]]; then', '                && [[ -n "$canonical_envelope" ]]; then', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', "        if: ${{ steps.benchmark.outputs.result == 'failure' }}", '        if: ${{ failure() }}', 'conversion benchmark mutually exclusive result publication'),
+    ('test_check_release_matrix_rejects_nonexclusive_conversion_success_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', "        if: ${{ steps.benchmark.outputs.result == 'success' }}", '        if: ${{ success() }}', 'conversion benchmark mutually exclusive result publication'),
+    ('test_check_release_matrix_rejects_nonportable_helper_summary_jq', 'replace', 'deploy/remi-deploy-helper.sh', '                comparison: (if $result.comparison == null then null else {', '                comparison: if $result.comparison == null then null else {', 'resolution survey helper builds portable transport summaries from bounded Remi outcome authority'),
+    ('test_check_release_matrix_rejects_nonproduction_conversion_benchmark', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '    environment: production', '    environment: staging\n    # environment: production', 'production SSH job must use the production environment for its protected known-hosts secret'),
+    ('test_check_release_matrix_rejects_nonproduction_native_oracle_export', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '    environment: production', '    environment: staging', 'production SSH job must use the production environment for its protected known-hosts secret'),
+    ('test_check_release_matrix_rejects_nonproduction_native_oracle_production', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '    environment: production', '    environment: staging', 'native-oracle production exact current protected-main and full producer SHA authorization'),
+    ('test_check_release_matrix_rejects_nonterminal_conversion_failure_guard', 'replace', '.github/workflows/remi-conversion-benchmark.yml', "        if: ${{ always() && steps.benchmark.outputs.result != 'success' }}", "        if: ${{ steps.benchmark.outputs.result == 'failure' }}", 'conversion benchmark typed terminal failure result'),
+    ('test_check_release_matrix_rejects_nonzero_hot_conversion_work', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '              and ($hot.timing.work | all(.. | numbers; . == 0))', '              and ($hot.timing.work | all(.. | numbers; . >= 0))', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_omitted_survey_manifest_budget', 'replace', 'scripts/produce-native-oracle-lane.py', '        "evidence_byte_limit": survey["evidence_byte_limit"],', '', 'native-oracle sanitized survey retains its validated evidence byte limit'),
+    ('test_check_release_matrix_rejects_out_of_order_cold_conversion_finalizer_phases', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                "complete_archive_copy",\n                "independent_transport_reopen",\n                "complete_archive_hash",\n                "database_persistence"', '                "independent_transport_reopen",\n                "complete_archive_copy",\n                "complete_archive_hash",\n                "database_persistence"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_out_of_order_hot_conversion_finalizer_phases', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                "complete_archive_copy",\n                "independent_transport_reopen",\n                "complete_archive_hash",\n                "durable_cas_ingestion",\n                "r2_write_through",\n                "database_persistence"', '                "independent_transport_reopen",\n                "complete_archive_copy",\n                "complete_archive_hash",\n                "durable_cas_ingestion",\n                "r2_write_through",\n                "database_persistence"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_partial_public_conversion_output_shape', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and (.output | output_shape)', '                and (.output | type == "object")', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_partial_public_conversion_timing_shape', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and (.timing | timing_shape)', '                and (.timing | type == "object")', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_partial_public_conversion_work_shape', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                timing_shape_without_work and (.work | work_shape);', '                timing_shape_without_work and (.work | type == "object");', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '              and all(.environment.roots[];', '              and any(.environment.roots[];', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_per_object_candidate_cache', 'replace', '.github/actions/setup-remi-candidate-compiler-cache/action.yml', 'SCCACHE_CACHE_BACKEND=local-disk-bulk-v1', 'SCCACHE_CACHE_BACKEND=remote-object-v1', 'candidate compiler cache must use one exact-policy bounded local bulk seed'),
+    ('test_check_release_matrix_rejects_post_findings_package_coverage', 'replace', 'scripts/remi-resolution-survey-transport.py', '            candidate_failures += candidate_value["total_failures"]\n            validate_candidate_package_coverage(', '            candidate_failures += candidate_value["total_failures"]\n            validate_candidate_package_coverage_after_findings(', 'resolution survey validates package coverage before the findings branch'),
+    ('test_check_release_matrix_rejects_pretransition_candidate_completion', 'replace', 'deploy/remi-postdeployment-fencing.jq', '                > $final.deployment.transition_completed_at))', '                >= 0))', 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'),
+    ('test_check_release_matrix_rejects_preupload_conversion_failure_exit', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            echo "fixed production conversion benchmark operation failed" >&2\n            exit 0', '            echo "fixed production conversion benchmark operation failed" >&2\n            exit "$helper_status"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_private_conversion_failure_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          path: remi-conversion-benchmark-failure-v1.json', '          path: ${{ runner.temp }}/remi-conversion-benchmark-helper.stderr', 'conversion benchmark failure-only retained evidence'),
+    ('test_check_release_matrix_rejects_private_mode_public_readiness_claim', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then', '          if true; then', 'candidate deploy mode-specific public readiness contract'),
+    ('test_check_release_matrix_rejects_product_scoped_ccs_version', 'replace', 'packaging/ccs/build.sh', 'assert-owned-version suite "$VERSION"', 'assert-owned-version conary "$VERSION"', 'CCS build must validate the root workspace version authority'),
+    ('test_check_release_matrix_rejects_published_binary_as_hook_runner', 'replace', '.github/workflows/release-artifact-proof.yml', '          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks', '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks', 'published native package fence and separate test-hook lifecycle proof'),
+    ('test_check_release_matrix_rejects_raw_conversion_benchmark_upload', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            remi-conversion-benchmark-public-v6.json', '            remi-conversion-benchmark-public-v6.json\n            conversion-benchmark-v8.json', 'conversion benchmark public-only retained evidence'),
+    ('test_check_release_matrix_rejects_rehearsal_artifact_promotion', 'replace', '.github/workflows/deploy-and-verify.yml', 'elif [[ "$MANUAL_DRY_RUN" == "false" && "$dry_run" == "true" ]]; then', 'elif false; then', 'manual deployment must not promote rehearsal artifacts'),
+    ('test_check_release_matrix_rejects_release_tag_local_ssh_action', 'replace', '.github/workflows/deploy-and-verify.yml', '      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ github.workflow_sha }}', '      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ needs.resolve.outputs.tag_name }}', 'load the local SSH action from the workflow revision after checking out the release tag'),
+    ('test_check_release_matrix_rejects_reserved_ssh_conversion_helper_status', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          if (( helper_status >= 1 && helper_status <= 254 )) \\', '          if (( helper_status >= 1 && helper_status <= 255 )) \\', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_resolution_survey_helper_downgrade', 'replace', '.github/workflows/survey-remi-resolution.yml', '          [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {', '          [[ "$helper_sha256" == "$helper_sha256" ]] || {', 'resolution survey revalidates protected main immediately before helper installation'),
+    ('test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass', 'replace', '.github/workflows/survey-remi-resolution.yml', '            [[ "$(sha256sum "$lane_archive" | cut -d \' \' -f 1)" == "$artifact_sha256" ]] || {', '            true || {', 'resolution survey independently authenticates every assembled strict lane artifact'),
+    ('test_check_release_matrix_rejects_resolution_survey_set_digest_bypass', 'replace', '.github/workflows/survey-remi-resolution.yml', '          [[ "sha256:$(sha256sum "$set_archive" | cut -d \' \' -f 1)" == "$set_digest" ]] || {', '          true || {', 'resolution survey exact assembled oracle to export to deployment run chain'),
+    ('test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads', 'replace', '.github/workflows/survey-remi-resolution.yml', '            --consume-lane-files \\', '            # retain every extracted lane member', 'resolution survey releases authenticated lane archives and members while building its transport'),
+    ('test_check_release_matrix_rejects_retained_survey_profile_copies', 'replace', 'scripts/remi-resolution-survey-transport.py', '            comparison_path.unlink()', '            pass', 'resolution survey verification stages and deletes one profile at a time'),
+    ('test_check_release_matrix_rejects_retired_resolution_survey_envelopes__01', 'replace', 'scripts/remi-resolution-survey-transport.py', 'INPUT_EVIDENCE_SCHEMA = 2', 'INPUT_EVIDENCE_SCHEMA = 1', 'resolution survey hard-cut envelope schemas'),
+    ('test_check_release_matrix_rejects_retired_resolution_survey_envelopes__02', 'replace', '.github/workflows/survey-remi-resolution.yml', '              else .schema_version == 3 end)', '              else .schema_version == 2 end)', 'resolution survey verification evidence envelope fences'),
+    ('test_check_release_matrix_rejects_rpm_debug_rust_flags', 'replace', 'packaging/rpm/conary.spec', 'echo "Conary effective RUSTFLAGS: $RUSTFLAGS"', 'RUSTFLAGS="$RUSTFLAGS -Cdebuginfo=2"\necho "Conary effective RUSTFLAGS: $RUSTFLAGS"', 'RPM spec debug-oriented Rust flag override'),
+    ('test_check_release_matrix_rejects_rpm_debug_subpackage_generation', 'replace', 'packaging/rpm/conary.spec', '%global debug_package %{nil}', '%global debug_package 1', 'RPM spec must explain and disable debug subpackage generation'),
+    ('test_check_release_matrix_rejects_rpm_extra_output_blind_spot', 'replace', 'packaging/rpm/build.sh', 'rpm_outputs=("$OUTPUT"/*.rpm)', 'rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)', 'RPM build must reject every extra package output'),
+    ('test_check_release_matrix_rejects_rpm_macro_expansion_in_comment', 'replace', 'packaging/rpm/conary.spec', '# the manual distro macro below populates native dependency toolchain flags.', '# %set_build_flags populates native dependency toolchain flags.', 'RPM spec manual build-flag macro invocation expected 1 occurrences'),
+    ('test_check_release_matrix_rejects_single_static_site_deploy', 'replace', '.github/workflows/deploy-and-verify.yml', 'bash deploy/deploy-sites.sh both', 'bash deploy/deploy-sites.sh site', 'both-site deployment from the release tag'),
+    ('test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh', 'python-rfind', '.github/workflows/export-remi-native-oracle-inputs.yml', '(git rev-parse origin/main)', 'WORKFLOW_SHA', 'native-oracle export initial and pre-SSH current-main revalidation'),
+    ('test_check_release_matrix_rejects_stale_native_oracle_export_operator', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {', '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {', 'native-oracle export initial and pre-SSH current-main revalidation'),
+    ('test_check_release_matrix_rejects_stale_native_oracle_export_source', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .head_sha == $workflow_sha and', '            (.head_sha | test("^[0-9a-f]{40}$")) and', 'native-oracle production exact current-main successful protected export source'),
+    ('test_check_release_matrix_rejects_stale_native_oracle_production_operator', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '          ref: ${{ github.workflow_sha }}', '          ref: main', 'native-oracle production exact current protected-main and full producer SHA authorization'),
+    ('test_check_release_matrix_rejects_stale_native_output_policy', 'replace', 'packaging/rpm/build.sh', 'find "$OUTPUT" -maxdepth 1 -name \'*.rpm\' -delete', 'echo "stale RPM output retained"', 'RPM build must clean stale package output'),
+    ('test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator', 'replace', 'scripts/remi-resolution-survey-transport.py', '    if oracle_run["head_sha"] != workflow_commit:', '    if oracle_run["head_sha"] != oracle_run["head_sha"]:', 'resolution survey rejects stale oracle workflow authority'),
+    ('test_check_release_matrix_rejects_stale_resolution_survey_verifier', 'replace', '.github/workflows/survey-remi-resolution.yml', '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {', '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {', 'resolution survey exact current protected-main operator boundary'),
+    ('test_check_release_matrix_rejects_test_hooks_in_release_workflow', 'replace', '.github/workflows/release-build.yml', '        run: cargo fmt --check', '        run: cargo fmt --check --features test-hooks', 'release-build test-hooks feature'),
+    ('test_check_release_matrix_rejects_timing_as_hot_output_identity', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                independent_transport_reopen_bytes,', '                independent_transport_reopen_bytes,\n                independent_transport_reopen_ms,', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_tmp_survey_oracle_duplication', 'replace', 'deploy/remi-deploy-helper.sh', '    local survey_staging_root="${evidence_root}/.remi-operator-staging"', '    local survey_staging_root="/tmp/remi-resolution-survey-staging"', 'resolution survey materializes unbounded oracles on the evidence capacity domain'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__01', 'replace', '.github/workflows/deploy-and-verify.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__02', 'replace', '.github/workflows/deploy-and-verify.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__03', 'replace', '.github/workflows/deploy-remi-candidate.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__04', 'replace', '.github/workflows/deploy-remi-candidate.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__05', 'replace', '.github/workflows/deploy-site.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__06', 'replace', '.github/workflows/deploy-site.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__07', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__08', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__09', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__10', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__11', 'replace', '.github/workflows/remi-r2-durability.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__12', 'replace', '.github/workflows/remi-r2-durability.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__13', 'replace', '.github/workflows/survey-remi-resolution.yml', '      - name: Configure pinned production SSH', '      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH', 'live SSH host-key discovery'),
+    ('test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow__14', 'replace', '.github/workflows/survey-remi-resolution.yml', '      - name: Configure pinned production SSH', '      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH', 'SSH trust on first use'),
+    ('test_check_release_matrix_rejects_unattested_candidate_fencing', 'replace', 'deploy/remi-postdeployment-fencing.jq', '      and ($final.candidate_verification.catalog_bytes_integrity_checked == 0)', '      and ($final.candidate_verification.catalog_bytes_integrity_checked >= 0)', 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'),
+    ('test_check_release_matrix_rejects_unattested_native_oracle_export', 'replace', 'scripts/remi-resolution-survey-transport.py', '        or attestation["ssh_host_key_contract"] != "protected-pinned-known-hosts-v1"', '        or attestation["ssh_host_key_contract"] != "live-discovery"', 'resolution survey requires exact pinned export operator evidence'),
+    ('test_check_release_matrix_rejects_unattested_native_oracle_production_input', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .ssh_host_key_contract == "protected-pinned-known-hosts-v1"', '            .ssh_host_key_contract == "live-discovery"', 'native-oracle production requires the export pinned-SSH operator attestation'),
+    ('test_check_release_matrix_rejects_unbound_candidate_binary', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            and .deployment.binary_sha256 == $expected_binary', '            and (.deployment.binary_sha256 | type == "string")', 'candidate deploy binds final evidence to exact commit and binary'),
+    ('test_check_release_matrix_rejects_unbound_candidate_package_roots', 'replace', 'scripts/remi-resolution-survey-transport.py', '                if actual != expected:', '                if False:', 'resolution survey candidate roots exactly cover the authenticated package oracle'),
+    ('test_check_release_matrix_rejects_unbound_comparison_candidate_manifest', 'replace', 'scripts/remi-resolution-survey-transport.py', '        or survey["candidate_manifest_sha256"] != candidate_manifest_sha256', '        or False', 'resolution survey comparison binds its streamed reconstructed candidate manifest'),
+    ('test_check_release_matrix_rejects_unbound_conversion_benchmark_revision', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          REQUESTED_REVISION: ${{ inputs.profile_revision_sha256 }}', '          REQUESTED_REVISION: ${{ inputs.package_key_sha256 }}', 'conversion benchmark explicit comparable registered revision'),
+    ('test_check_release_matrix_rejects_unbound_conversion_helper_identity', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                    helper_sha256: $helper_sha256,', '                    helper_sha256: $workflow_commit_sha,', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbound_fused_ccs_output_hash_work', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes', '                and $work.ccs_output_bytes_hashed >= 0', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbound_native_oracle_producer_source', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '          ref: ${{ needs.authorize.outputs.producer_commit }}', '          ref: ${{ github.sha }}', 'native-oracle production selected exact clean producer source and typed lane adapter'),
+    ('test_check_release_matrix_rejects_unbound_proof_metadata_version', 'replace', '.github/workflows/release-artifact-proof.yml', '          [[ "$version" == "$resolved_version" ]] || {', '          true || {', 'published artifact proof must bind metadata to the annotated tag version and suite authority'),
+    ('test_check_release_matrix_rejects_unbound_resolution_survey_assembly', 'replace', '.github/workflows/survey-remi-resolution.yml', '            --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \\', '            # assembled oracle binding removed', 'resolution survey downloads and authenticates every exact current-operator assembled input'),
+    ('test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots', 'replace', 'scripts/remi-resolution-survey-transport.py', '    if roots != candidate_roots_walked or len(candidate_survey["outcomes"]) != roots:', '    if False:', 'resolution survey comparison binds the exact candidate root population'),
+    ('test_check_release_matrix_rejects_unbound_resolution_survey_output', 'replace', '.github/workflows/survey-remi-resolution.yml', '            --input-evidence resolution-survey-input-verification.json \\', '            # authenticated input binding removed', 'resolution survey fixed helper, fail-closed SSH, and independent output verification'),
+    ('test_check_release_matrix_rejects_unbound_rpm_payload_hash_work', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                    == $work.native_payload_bytes_spooled', '                    >= $work.native_payload_bytes_spooled', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbound_rpm_spool_declared_geometry', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                    == $work.native_payload_declared_bytes', '                    >= $work.native_payload_declared_bytes', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbound_rpm_spool_reopen_counter', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                  and $work.native_payload_spool_file_reopens == 0', '                  and $work.native_payload_spool_file_reopens >= 0', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbound_rpm_spool_reread_counter', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                  and $work.native_payload_spool_bytes_reread == 0', '                  and $work.native_payload_spool_bytes_reread >= 0', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbounded_candidate_completion_inspection', 'replace', '.github/workflows/deploy-remi-candidate.yml', '--accept-candidates-completed-after "$completed_after"', '--config "$completed_after"', 'candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection'),
+    ('test_check_release_matrix_rejects_unbounded_candidate_transport', 'replace', '.github/actions/setup-pinned-production-ssh/action.yml', "          printf '  ServerAliveInterval 30\\n'", "          printf '  ServerAliveInterval 0\\n'", 'shared production SSH action must validate and enforce the exclusive protected host identity pin'),
+    ('test_check_release_matrix_rejects_unbounded_conversion_helper_stdout', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            && (( stdout_bytes <= 4096 )) \\', '            && (( stdout_bytes <= 65536 )) \\', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unbounded_fused_conversion_timing', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                | .duration_ms) <= $cold.timing.total_ms', '                | .duration_ms) >= 0', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unchecked_survey_manifest_budget', 'replace', '.github/workflows/produce-remi-native-oracles.yml', '            .survey.evidence_byte_limit == 33554432 and', '', 'native-oracle workflow validates the sanitized survey evidence byte limit'),
+    ('test_check_release_matrix_rejects_unforced_post_deploy_candidates', 'replace', '.github/workflows/deploy-remi-candidate.yml', 'refresh?force=true&accept_completed_after=${transition_completed_at}', 'refresh?force=false&accept_completed_after=${transition_completed_at}', 'private candidate deploy coalesces one bounded post-transition refresh'),
+    ('test_check_release_matrix_rejects_unmerged_deployed_candidate', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '          git merge-base --is-ancestor "$deployed_commit" origin/main || {', '          true || {', 'native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence'),
+    ('test_check_release_matrix_rejects_unmerged_live_tag', 'replace', '.github/workflows/release-build.yml', '              refs/heads/main:refs/remotes/origin/main', '              main', 'live suite tag must already be reachable from a freshly fetched main'),
+    ('test_check_release_matrix_rejects_unmerged_native_oracle_producer', 'replace', 'scripts/verify-native-oracle-producer.py', '        ["merge-base", "--is-ancestor", producer_commit, "origin/main"],', '        ["merge-base", "--is-ancestor", producer_commit, producer_commit],', 'native-oracle shared full-SHA fetch and deployed-producer-main predicate'),
+    ('test_check_release_matrix_rejects_unpinned_arch_builder_image', 'replace', '.github/workflows/release-build.yml', 'image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433', 'image: docker.io/library/archlinux:latest', 'release-build Arch builder must use the pinned Arch image'),
+    ('test_check_release_matrix_rejects_unpinned_arch_toolchain', 'replace', '.github/workflows/release-build.yml', 'rustup default 1.98.0', 'rustup default stable', 'release-build Arch builder pinned Rust toolchain'),
+    ('test_check_release_matrix_rejects_unpinned_deb_builder_image', 'replace', '.github/workflows/release-build.yml', 'image: docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb', 'image: docker.io/library/ubuntu:26.04', 'release-build DEB builder must use the pinned Ubuntu 26.04 image'),
+    ('test_check_release_matrix_rejects_unpinned_rpm_builder_image', 'replace', '.github/workflows/release-build.yml', 'image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb', 'image: registry.fedoraproject.org/fedora:44', 'release-build RPM builder must use the pinned Fedora 44 image'),
+    ('test_check_release_matrix_rejects_unprotected_candidate_artifact', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                | select(.event == "push")', '                | select(.event == "pull_request")', 'candidate deploy must select only the exact successful protected-main build'),
+    ('test_check_release_matrix_rejects_unprotected_conversion_benchmark_operator_checkout', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {', '          [[ "$(git rev-parse HEAD^)" == "$WORKFLOW_SHA" ]] || {', 'conversion benchmark protected merged-main operator boundary'),
+    ('test_check_release_matrix_rejects_unprotected_conversion_benchmark_source', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '              and .conclusion == "success"', '              and .conclusion == "failure"', 'conversion benchmark exact successful protected deployment source'),
+    ('test_check_release_matrix_rejects_unprotected_native_oracle_source', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '              and .conclusion == "success"', '              and .conclusion == "failure"', 'native-oracle export exact successful protected deployment source'),
+    ('test_check_release_matrix_rejects_unprotected_resolution_survey_helper', 'replace', '.github/workflows/survey-remi-resolution.yml', '          ref: ${{ github.workflow_sha }}', '          ref: main', 'resolution survey exact current protected-main operator boundary'),
+    ('test_check_release_matrix_rejects_unproven_namespace_action', 'replace', '.github/actions/setup-exact-ownership-tests/action.yml', '        unshare --user --map-root-user --mount --propagation private /bin/true', '        /bin/true', 'exact ownership namespace proof'),
+    ('test_check_release_matrix_rejects_unrecomputed_native_comparison', 'replace', 'scripts/remi-resolution-survey-transport.py', '    if comparison_survey["counts"] != expected_counts:', '    if False:', 'resolution survey recomputes comparison authority from authenticated native roots'),
+    ('test_check_release_matrix_rejects_unreopened_survey_oracle_transport', 'replace', '.github/workflows/survey-remi-resolution.yml', '            --oracle-transport "$ORACLE_TRANSPORT" \\', '            --oracle-transport "$SURVEY_TRANSPORT" \\', 'resolution survey fixed helper, fail-closed SSH, and independent output verification'),
+    ('test_check_release_matrix_rejects_unsanitized_conversion_failure_stage', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          failure_stage="helper-envelope-invalid"', '          failure_stage="internal"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_unserialized_conversion_benchmark', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '  group: deploy-and-verify', '  group: remi-conversion-benchmark-production\n  # group: deploy-and-verify', 'conversion benchmark serialized with deployment and verification'),
+    ('test_check_release_matrix_rejects_unserialized_native_oracle_export', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '  group: deploy-and-verify', '  group: remi-native-oracle-input-export-production', 'native-oracle export serialized with candidate and release deployment'),
+    ('test_check_release_matrix_rejects_unserialized_r2_durability', 'replace', '.github/workflows/remi-r2-durability.yml', '  group: deploy-and-verify', '  group: remi-r2-durability-production', 'R2 durability serialized with production host authority'),
+    ('test_check_release_matrix_rejects_unserialized_resolution_survey', 'replace', '.github/workflows/survey-remi-resolution.yml', '  group: deploy-and-verify', '  group: remi-resolution-survey', 'resolution survey exact oracle input, read-only permissions, and shared serialization'),
+    ('test_check_release_matrix_rejects_unserialized_site_deployment', 'replace', '.github/workflows/deploy-site.yml', '  group: deploy-and-verify', '  group: deploy-site-production', 'site deployment serialized with production host authority'),
+    ('test_check_release_matrix_rejects_unsigned_embedded_ccs_authority', 'replace', '.github/workflows/release-build.yml', 'target/release/examples/sign_hash --write-ccs-authority "$authority_dir"', 'echo "embedded CCS authority removed"', 'CCS build must derive embedded authority from the configured release seed'),
+    ('test_check_release_matrix_rejects_unstable_ccs_release_name', 'replace', 'packaging/ccs/build.sh', 'mv -- "$BUILT_CCS" "$EXPECTED_CCS"', 'echo "stable CCS release name removed"', 'CCS wrapper must normalize one exact package-release name to the stable self-update asset'),
+    ('test_check_release_matrix_rejects_untyped_candidate_baseline_failure', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                      failure_phase: "predeployment-candidate-baseline",', '                      failure_phase: null,', 'candidate deploy verifies the exact staged candidate, validates the schema-compatible live baseline, and retains typed preflight failure evidence before mutation'),
+    ('test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline', 'replace', 'deploy/remi-predeployment-inspection.jq', '  . == null or (', '  . != null or (', 'candidate deploy baseline must distinguish an absent candidate'),
+    ('test_check_release_matrix_rejects_untyped_refresh_coalescing_result', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                  and (.coalesced | type == "boolean")', '                  and true', 'private candidate deploy coalesces one bounded post-transition refresh'),
+    ('test_check_release_matrix_rejects_untyped_survey_aggregate_counts', 'replace', 'scripts/remi-resolution-survey-transport.py', '        exact_nonnegative_int(value, f"survey counts.{key}")', '        pass', 'resolution survey aggregate manifest counts retain exact integer types'),
+    ('test_check_release_matrix_rejects_untyped_workspace_toolchain_setup', 'replace', '.github/actions/setup-rust-workspace/action.yml', '        toolchain: ${{ inputs.toolchain }}', '        toolchain: stable', 'shared workspace setup exact workspace Rust default and typed toolchain input'),
+    ('test_check_release_matrix_rejects_unvalidated_candidate_inspection', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            deployment_inspection_is_typed() {', '            deployment_inspection_is_untyped() {', 'channel-separated diagnostics'),
+    ('test_check_release_matrix_rejects_unvalidated_native_oracle_survey', 'replace', 'scripts/produce-native-oracle-lane.py', '        survey = write_resolution_survey(', '        survey = resolution_survey_evidence(', 'native-oracle lane writes and validates diagnostics survey before strict resolution'),
+    ('test_check_release_matrix_rejects_unverified_embedded_ccs_authority', 'replace', '.github/workflows/release-build.yml', '          target/release/conary ccs verify \\', '          echo "embedded CCS verification removed" \\', 'CCS build must verify its embedded release authority'),
+    ('test_check_release_matrix_rejects_unverified_remi_suite_bundle', 'replace', '.github/workflows/deploy-and-verify.yml', '            sha256sum -c SHA256SUMS\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"', '            echo "suite checksum verification removed"\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"', 'Remi deployment must verify the complete suite checksums before staging its bundle'),
+    ('test_check_release_matrix_rejects_unverified_rustup_init', 'replace', '.github/workflows/release-build.yml', '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init', '0000000000000000000000000000000000000000000000000000000000000000  /tmp/rustup-init', 'release-build RPM builder checksum-pinned rustup-init flow'),
+    ('test_check_release_matrix_rejects_ustar_resolution_survey_input', 'replace', 'scripts/remi-resolution-survey-transport.py', 'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT', 'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.USTAR_FORMAT', 'resolution survey input transport supports unbounded member sizes'),
+    ('test_check_release_matrix_rejects_variable_conversion_benchmark_transport', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}.json"', '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}-raw.json"', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_workflow_head_as_deployed_candidate', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '          deployed_commit="$(jq -r \'.deployment.commit_sha\' "$inspection")"', '          deployed_commit="$(git rev-parse HEAD)"', 'native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence'),
+    ('test_check_release_matrix_rejects_workspace_rust_version_drift', 'replace', 'Cargo.toml', 'rust-version = "1.98.0"', 'rust-version = "1.99.0"', 'shared workspace setup exact workspace Rust default'),
+    ('test_check_release_matrix_rejects_wrong_candidate_inspection_predicate', 'replace', '.github/workflows/deploy-remi-candidate.yml', '                requirement=--require-private-candidates', '                requirement=--require-repopulated', 'candidate deploy mode-specific typed inspection predicate'),
+    ('test_check_release_matrix_rejects_xfs_conversion_fallback_syncs', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                and $work.cas_fallback_object_syncs == 0', '                and $work.cas_fallback_object_syncs >= 0', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_requires_bounded_dependency_review_retry', 'replace', '.github/workflows/pr-gate.yml', '          for attempt in 1 2 3 4; do', '          for attempt in 1; do', 'dependency review API retry'),
+    ('test_check_release_matrix_requires_hosted_alpm_parity_producer__01', 'replace', '.github/workflows/pr-gate.yml', '        run: cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose', '        run: echo "ALPM producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_alpm_parity_producer__02', 'replace', '.github/workflows/merge-validation.yml', '        run: cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose', '        run: echo "ALPM producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_debian_parity_producer__01', 'replace', '.github/workflows/pr-gate.yml', '        run: cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose', '        run: echo "Debian producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_debian_parity_producer__02', 'replace', '.github/workflows/merge-validation.yml', '        run: cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose', '        run: echo "Debian producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_debian_resolution_binary__01', 'replace', '.github/workflows/pr-gate.yml', ' --bin conary-debian-resolution-oracle', '', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_debian_resolution_binary__02', 'replace', '.github/workflows/merge-validation.yml', ' --bin conary-debian-resolution-oracle', '', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_rpm_parity_producer__01', 'replace', '.github/workflows/pr-gate.yml', '        run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose', '        run: echo "RPM producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_hosted_rpm_parity_producer__02', 'replace', '.github/workflows/merge-validation.yml', '        run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose', '        run: echo "RPM producer proof removed"', 'hosted'),
+    ('test_check_release_matrix_requires_named_hook_for_every_container_mutation__01', 'replace', 'apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh', 'run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}"', 'run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v1_package}"', 'four explicit hook-dependent lifecycle mutations'),
+    ('test_check_release_matrix_requires_named_hook_for_every_container_mutation__02', 'replace', 'apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh', 'run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}"', 'run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v2_package}"', 'four explicit hook-dependent lifecycle mutations'),
+    ('test_check_release_matrix_requires_named_hook_for_every_container_mutation__03', 'replace', 'apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh', 'run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT \\', 'run_conary_requiring_hook CONARY_TEST_UNDECLARED \\', 'four explicit hook-dependent lifecycle mutations'),
+    ('test_check_release_matrix_requires_named_hook_for_every_container_mutation__04', 'replace', 'apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh', 'run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove "${package_name}"', 'run_conary_requiring_hook CONARY_TEST_UNDECLARED remove "${package_name}"', 'four explicit hook-dependent lifecycle mutations'),
+    ('test_check_release_matrix_requires_ordinary_conary_hook_fence', 'replace', '.github/workflows/release-build.yml', '        run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose', '        run: echo "ordinary Conary hook fence removed"', 'release ordinary Conary test-hook fence'),
+    ('test_check_release_matrix_requires_pinned_conversion_benchmark_host', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}', '          known-hosts: ${{ secrets.REMI_SSH_KEY }}', 'protected production SSH known-hosts secret'),
+    ('test_check_release_matrix_requires_pinned_native_oracle_export_host', 'replace', '.github/workflows/export-remi-native-oracle-inputs.yml', '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}', '          known-hosts: ${{ secrets.REMI_SSH_KEY }}', 'protected production SSH known-hosts secret'),
+    ('test_check_release_matrix_requires_pinned_resolution_survey_host', 'replace', '.github/workflows/survey-remi-resolution.yml', '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}', '          known-hosts: ${{ secrets.REMI_SSH_KEY }}', 'protected production SSH known-hosts secret'),
+    ('test_check_release_matrix_requires_production_environment_for_ssh_jobs', 'replace', '.github/workflows/deploy-and-verify.yml', '    environment: production', '    environment: staging', 'production SSH job must use the production environment for its protected known-hosts secret'),
+    ('test_check_release_matrix_requires_resilient_alpm_archive_downloads__01', 'replace', '.github/workflows/pr-gate.yml', "          sed -i '/^\\[options\\]/a DisableDownloadTimeout' /etc/pacman.conf", '          true', 'hosted'),
+    ('test_check_release_matrix_requires_resilient_alpm_archive_downloads__02', 'replace', '.github/workflows/merge-validation.yml', "          sed -i '/^\\[options\\]/a DisableDownloadTimeout' /etc/pacman.conf", '          true', 'hosted'),
+    ('test_check_release_matrix_requires_resolution_survey_helper_install', 'replace', '.github/workflows/survey-remi-resolution.yml', '            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper \'$helper_sha256\' \'$remote_helper\'"', '            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"', 'resolution survey installs its exact protected helper before staging survey input'),
+    ('test_check_release_matrix_requires_rpm_parity_completion_budget__01', 'replace', '.github/workflows/pr-gate.yml', '    timeout-minutes: 60', '    timeout-minutes: 30', 'hosted'),
+    ('test_check_release_matrix_requires_rpm_parity_completion_budget__02', 'replace', '.github/workflows/merge-validation.yml', '    timeout-minutes: 60', '    timeout-minutes: 30', 'hosted'),
+    ('test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane__01', 'replace', '.github/workflows/pr-gate.yml', '        uses: ./.github/actions/setup-exact-ownership-tests', '        run: echo "exact ownership setup removed"', 'shared exact ownership setup'),
+    ('test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane__02', 'replace', '.github/workflows/merge-validation.yml', '        uses: ./.github/actions/setup-exact-ownership-tests', '        run: echo "exact ownership setup removed"', 'shared exact ownership setup'),
+    ('test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane__03', 'replace', '.github/workflows/release-build.yml', '        uses: ./.github/actions/setup-exact-ownership-tests', '        run: echo "exact ownership setup removed"', 'shared exact ownership setup'),
+)
+for case in cases:
+    for field in case:
+        sys.stdout.buffer.write(field.encode() + b"\0")
+PY
 }
 
-test_check_release_matrix_rejects_beta_maturity_drift() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/ISSUE_TEMPLATE/pre_alpha_feedback.md" \
-        'name: Pre-Alpha Tester Feedback' \
-        'name: Beta Feedback'
+run_release_policy_mutation_cases() {
+    local name kind file old new expected repo
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "public maturity surfaces must identify this project as pre-alpha, not beta"
+    while IFS= read -r -d '' name \
+        && IFS= read -r -d '' kind \
+        && IFS= read -r -d '' file \
+        && IFS= read -r -d '' old \
+        && IFS= read -r -d '' new \
+        && IFS= read -r -d '' expected; do
+        repo="$(create_release_policy_fixture)"
+        case "$kind" in
+            replace)
+                replace_fixture_text_once "$repo/$file" "$old" "$new"
+                ;;
+            append)
+                printf '%s' "$new" >> "$repo/$file"
+                ;;
+            python-rfind)
+                python3 - "$repo/$file" "$old" "$new" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+position = text.rfind(sys.argv[2])
+if position < 0:
+    raise SystemExit("fixture could not find final mutation target")
+path.write_text(text[:position] + sys.argv[3] + text[position + len(sys.argv[2]):])
+PY
+                ;;
+            *)
+                fail "unknown release-policy mutation kind $kind"
+                ;;
+        esac
+        assert_check_release_matrix_fails "$repo" "$expected"
+        printf 'ok - %s
+' "$name"
+    done < <(release_matrix_mutation_cases)
 }
 
-test_check_release_matrix_rejects_conary_test_deploy_jobs() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    cat >> "$repo/.github/workflows/deploy-and-verify.yml" <<'YAML'
 
-  verify-conary-test:
-    name: verify-conary-test
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo verify
-YAML
 
-    assert_check_release_matrix_fails "$repo" "deployment job for a build-only suite artifact"
-}
 
-test_check_release_matrix_rejects_unpinned_rpm_builder_image() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'image: registry.fedoraproject.org/fedora@sha256:765b2260aa4b4eff379b9a6f983f15fcf41a6f9dda9b272b790e23e92fcbaafb' \
-        'image: registry.fedoraproject.org/fedora:44'
 
-    assert_check_release_matrix_fails "$repo" "release-build RPM builder must use the pinned Fedora 44 image"
-}
 
-test_check_release_matrix_rejects_unpinned_deb_builder_image() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'image: docker.io/library/ubuntu@sha256:3131b4cc82a783df6c9df078f86e01819a13594b865c2cad47bd1bca2b7063bb' \
-        'image: docker.io/library/ubuntu:26.04'
 
-    assert_check_release_matrix_fails "$repo" "release-build DEB builder must use the pinned Ubuntu 26.04 image"
-}
 
-test_check_release_matrix_rejects_unpinned_arch_builder_image() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433' \
-        'image: docker.io/library/archlinux:latest'
 
-    assert_check_release_matrix_fails "$repo" "release-build Arch builder must use the pinned Arch image"
-}
 
-test_check_release_matrix_rejects_arch_bootstrap_partial_upgrade() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'pacman -Syu --noconfirm curl openssl sudo ca-certificates' \
-        'pacman -Sy --noconfirm curl openssl sudo ca-certificates'
 
-    assert_check_release_matrix_fails "$repo" "Arch bootstrap rehearsal must avoid an unsupported partial upgrade"
-}
 
-test_check_release_matrix_rejects_rpm_debug_subpackage_generation() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/conary.spec" \
-        '%global debug_package %{nil}' \
-        '%global debug_package 1'
 
-    assert_check_release_matrix_fails "$repo" "RPM spec must explain and disable debug subpackage generation"
-}
 
-test_check_release_matrix_rejects_automatic_rpm_rust_flags() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/conary.spec" \
-        '%undefine _auto_set_build_flags' \
-        '%global _auto_set_build_flags 1'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "RPM spec must preserve non-debug Fedora Rust flags without overriding the workspace release profile"
-}
-
-test_check_release_matrix_rejects_rpm_debug_rust_flags() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/conary.spec" \
-        'echo "Conary effective RUSTFLAGS: $RUSTFLAGS"' \
-        $'RUSTFLAGS="$RUSTFLAGS -Cdebuginfo=2"\necho "Conary effective RUSTFLAGS: $RUSTFLAGS"'
-
-    assert_check_release_matrix_fails "$repo" "RPM spec debug-oriented Rust flag override"
-}
-
-test_check_release_matrix_rejects_rpm_macro_expansion_in_comment() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/conary.spec" \
-        '# the manual distro macro below populates native dependency toolchain flags.' \
-        '# %set_build_flags populates native dependency toolchain flags.'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "RPM spec manual build-flag macro invocation expected 1 occurrences"
-}
-
-test_check_release_matrix_rejects_arch_debug_split_package_generation() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/arch/PKGBUILD" \
-        'options=(!debug !lto)' \
-        'options=(debug !lto)'
-
-    assert_check_release_matrix_fails "$repo" "Arch package must explicitly disable debug split-package generation"
-}
-
-test_check_release_matrix_rejects_hidden_native_debug_outputs() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '          path: packaging/rpm/output/*.rpm' \
-        $'          path: |\n            packaging/rpm/output/*.rpm\n            !packaging/rpm/output/*debug*'
-
-    assert_check_release_matrix_fails "$repo" "native debug artifact filtering"
-}
-
-test_check_release_matrix_rejects_unverified_rustup_init() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c  /tmp/rustup-init' \
-        '0000000000000000000000000000000000000000000000000000000000000000  /tmp/rustup-init'
-
-    assert_check_release_matrix_fails "$repo" "release-build RPM builder checksum-pinned rustup-init flow"
-}
-
-test_check_release_matrix_rejects_workspace_rust_version_drift() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/Cargo.toml" \
-        'rust-version = "1.98.0"' \
-        'rust-version = "1.99.0"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "shared workspace setup exact workspace Rust default"
-}
 
 test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
     local repo
@@ -999,50 +1040,8 @@ test_check_release_matrix_rejects_unpinned_ccs_toolchain() {
     assert_check_release_matrix_fails "$repo" "release-build CCS builder pinned Rust toolchain"
 }
 
-test_check_release_matrix_rejects_unpinned_arch_toolchain() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'rustup default 1.98.0' \
-        'rustup default stable'
 
-    assert_check_release_matrix_fails "$repo" "release-build Arch builder pinned Rust toolchain"
-}
 
-test_check_release_matrix_rejects_leaf_manifest_native_versions() {
-    local format label repo
-
-    for format in rpm deb arch; do
-        case "$format" in
-            rpm) label="RPM" ;;
-            deb) label="DEB" ;;
-            arch) label="Arch" ;;
-        esac
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/packaging/$format/build.sh" \
-            'VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"' \
-            'VERSION=$(grep '\''^version'\'' "$REPO_ROOT/apps/conary/Cargo.toml" | head -1)'
-
-        assert_check_release_matrix_fails \
-            "$repo" \
-            "$label build must use and validate the root workspace version authority"
-    done
-}
-
-test_check_release_matrix_rejects_product_scoped_ccs_version() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/ccs/build.sh" \
-        'assert-owned-version suite "$VERSION"' \
-        'assert-owned-version conary "$VERSION"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "CCS build must validate the root workspace version authority"
-}
 
 test_check_release_matrix_rejects_moving_release_preparation_toolchain() {
     local repo
@@ -1056,103 +1055,13 @@ test_check_release_matrix_rejects_moving_release_preparation_toolchain() {
         "build-remi exact workspace toolchain must precede Cargo-backed release preparation"
 }
 
-test_check_release_matrix_rejects_untyped_workspace_toolchain_setup() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-rust-workspace/action.yml" \
-        '        toolchain: ${{ inputs.toolchain }}' \
-        '        toolchain: stable'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "shared workspace setup exact workspace Rust default and typed toolchain input"
-}
 
-test_check_release_matrix_rejects_missing_live_version_assertion() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'bash scripts/release-matrix.sh assert-owned-version "$release" "$version"' \
-        'echo "owned version assertion removed"'
 
-    assert_check_release_matrix_fails "$repo" "live suite tag must match the workspace-owned version"
-}
 
-test_check_release_matrix_rejects_lightweight_live_tag_guard() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '[[ "$(git cat-file -t "refs/tags/${tag_name}")" == "tag" ]] || {' \
-        'true || {'
 
-    assert_check_release_matrix_fails "$repo" "live suite build must require an annotated tag at the exact checkout"
-}
 
-test_check_release_matrix_rejects_unmerged_live_tag() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '              refs/heads/main:refs/remotes/origin/main' \
-        '              main'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "live suite tag must already be reachable from a freshly fetched main"
-}
-
-test_check_release_matrix_rejects_unbound_proof_metadata_version() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-artifact-proof.yml" \
-        '          [[ "$version" == "$resolved_version" ]] || {' \
-        '          true || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "published artifact proof must bind metadata to the annotated tag version and suite authority"
-}
-
-test_check_release_matrix_rejects_mutable_artifact_proof() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-artifact-proof.yml" \
-        '             "$(jq -r '\''.immutable'\'' <<< "$release_state")" == "true" ]] || {' \
-        '             "$(jq -r '\''.immutable'\'' <<< "$release_state")" == "false" ]] || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "published artifact proof must reject a draft, mutable, or mismatched GitHub release"
-}
-
-test_check_release_matrix_rejects_moving_artifact_proof_toolchain() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-artifact-proof.yml" \
-        '          toolchain: 1.98.0' \
-        '          toolchain: stable'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "published artifact proof exact Rust toolchain"
-}
-
-test_check_release_matrix_rejects_rehearsal_artifact_promotion() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        'elif [[ "$MANUAL_DRY_RUN" == "false" && "$dry_run" == "true" ]]; then' \
-        'elif false; then'
-
-    assert_check_release_matrix_fails "$repo" "manual deployment must not promote rehearsal artifacts"
-}
 
 remi_predeployment_inspection_fixture() {
     jq -n '
@@ -1412,1968 +1321,154 @@ test_candidate_deploy_materializes_policy_across_candidate_history() {
         fail "exact workflow SHA did not materialize its fencing policy"
 }
 
-test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-predeployment-inspection.jq" \
-        '  . == null or (' \
-        '  . != null or ('
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy baseline must distinguish an absent candidate"
-}
-
-test_check_release_matrix_rejects_ambiguous_candidate_completion_mode() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '          - private-candidates' \
-        '          - candidate-ish'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy explicit typed completion mode"
-}
-
-test_check_release_matrix_rejects_unprotected_candidate_artifact() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                | select(.event == "push")' \
-        '                | select(.event == "pull_request")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy must select only the exact successful protected-main build"
-}
-
-test_check_release_matrix_rejects_loose_candidate_build_policy() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-candidate-artifact.sh" \
-        '          and .build.rustflags == ""' \
-        '          and (.build.rustflags | type == "string")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate artifact verifier must recompute version and enforce the exact build and bulk-cache policy"
-}
-
-test_check_release_matrix_rejects_per_object_candidate_cache() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-remi-candidate-compiler-cache/action.yml" \
-        'SCCACHE_CACHE_BACKEND=local-disk-bulk-v1' \
-        'SCCACHE_CACHE_BACKEND=remote-object-v1'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate compiler cache must use one exact-policy bounded local bulk seed"
-}
-
-test_check_release_matrix_rejects_cold_candidate_rebuild() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '          verification="$(scripts/remi-candidate-artifact.sh verify \' \
-        $'          cargo build -p remi --release --locked\n          verification="$(scripts/remi-candidate-artifact.sh verify \\'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy cold Rust compilation"
-}
-
-test_check_release_matrix_rejects_unbounded_candidate_transport() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
-        "          printf '  ServerAliveInterval 30\\n'" \
-        "          printf '  ServerAliveInterval 0\\n'"
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
-}
-
-test_check_release_matrix_rejects_global_known_hosts_fallback() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
-        "          printf '  GlobalKnownHostsFile /dev/null\\n'" \
-        "          printf '  GlobalKnownHostsFile /etc/ssh/ssh_known_hosts\\n'"
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
-}
-
-test_check_release_matrix_rejects_empty_known_hosts_acceptance() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
-        '        [[ -n "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }' \
-        '        [[ -z "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "fail closed clearly when the known-hosts input is empty"
-}
-
-test_check_release_matrix_requires_production_environment_for_ssh_jobs() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        '    environment: production' \
-        '    environment: staging'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "production SSH job must use the production environment for its protected known-hosts secret"
-}
-
-test_check_release_matrix_rejects_literal_ssh_target_fallback() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '          target="$REMI_SSH_TARGET"' \
-        '          target="${REMI_SSH_TARGET:-operator@ssh.example.test}"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "literal user@host fallback"
-}
-
-test_check_release_matrix_rejects_loose_artifact_latency_budget() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '          (( availability_ms <= 60000 )) || {' \
-        '          (( availability_ms <= 600000 )) || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy must download, verify, and budget the exact protected artifact"
-}
-
-test_check_release_matrix_rejects_wrong_candidate_inspection_predicate() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                requirement=--require-private-candidates' \
-        '                requirement=--require-repopulated'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy mode-specific typed inspection predicate"
-}
-
-test_check_release_matrix_rejects_unforced_post_deploy_candidates() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        'refresh?force=true&accept_completed_after=${transition_completed_at}' \
-        'refresh?force=false&accept_completed_after=${transition_completed_at}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "private candidate deploy coalesces one bounded post-transition refresh"
-}
-
-test_check_release_matrix_rejects_missing_refresh_causal_floor() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        'refresh?force=true&accept_completed_after=${transition_completed_at}' \
-        'refresh?force=true'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "private candidate deploy coalesces one bounded post-transition refresh"
-}
-
-test_check_release_matrix_rejects_unbounded_candidate_completion_inspection() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '--accept-candidates-completed-after "$completed_after"' \
-        '--config "$completed_after"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection"
-}
-
-test_check_release_matrix_rejects_candidate_completion_catalog_rescan() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '.candidate_verification.catalog_bytes_hashed == 0' \
-        '.candidate_verification.catalog_bytes_hashed >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy binds one causal bounded private-candidate inspection to the exact transition while retaining full active inspection"
-}
-
-test_check_release_matrix_rejects_untyped_refresh_coalescing_result() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                  and (.coalesced | type == "boolean")' \
-        '                  and true'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "private candidate deploy coalesces one bounded post-transition refresh"
-}
-
-test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                    | select(. != "solus")]' \
-        '                    | select(true)]'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "retries only exact failed public profiles"
-}
-
-test_check_release_matrix_rejects_all_profile_retry() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        'refresh?force=true&profile=${profile}' \
-        'refresh?force=true'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "retries only exact failed public profiles"
-}
-
-test_check_release_matrix_rejects_nonadvancing_candidate_fence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-postdeployment-fencing.jq" \
-        '                > fencing_epoch($before; $profile)' \
-        '                >= fencing_epoch($before; $profile)'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
-}
-
-test_check_release_matrix_rejects_pretransition_candidate_completion() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-postdeployment-fencing.jq" \
-        '                > $final.deployment.transition_completed_at))' \
-        '                >= 0))'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
-}
-
-test_check_release_matrix_rejects_unattested_candidate_fencing() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-postdeployment-fencing.jq" \
-        '      and ($final.candidate_verification.catalog_bytes_integrity_checked == 0)' \
-        '      and ($final.candidate_verification.catalog_bytes_integrity_checked >= 0)'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority"
-}
-
-test_check_release_matrix_rejects_candidate_checkout_fencing_policy() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '              -f "$workflow_fencing_policy" \' \
-        '              -f deploy/remi-postdeployment-fencing.jq \'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "private candidate deploy evaluates post-transition fencing from the exact workflow authority, independent of the candidate checkout"
-}
-
-test_check_release_matrix_rejects_unbound_candidate_binary() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            and .deployment.binary_sha256 == $expected_binary' \
-        '            and (.deployment.binary_sha256 | type == "string")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy binds final evidence to exact commit and binary"
-}
-
-test_check_release_matrix_rejects_private_mode_public_readiness_claim() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '          if [[ "$COMPLETION_MODE" == "active-repopulation" ]]; then' \
-        '          if true; then'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy mode-specific public readiness contract"
-}
-
-test_check_release_matrix_rejects_untyped_candidate_baseline_failure() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                      failure_phase: "predeployment-candidate-baseline",' \
-        '                      failure_phase: null,'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy verifies the exact staged candidate, validates the schema-compatible live baseline, and retains typed preflight failure evidence before mutation"
-}
-
-test_check_release_matrix_rejects_discarded_candidate_failure_inspection() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            > remi-deployment-inspection.json <<'\''REMOTE_EOF'\''' \
-        '            > /dev/null <<'\''REMOTE_EOF'\'''
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy retains one validated final typed inspection"
-}
-
-test_check_release_matrix_rejects_mixed_candidate_inspection_channels() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '                "${helper_args[@]}" 2>/dev/null)"; then' \
-        '                "${helper_args[@]}" 2>&1)"; then'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "channel-separated diagnostics"
-}
-
-test_check_release_matrix_rejects_unvalidated_candidate_inspection() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            deployment_inspection_is_typed() {' \
-        '            deployment_inspection_is_untyped() {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "channel-separated diagnostics"
-}
-
-test_check_release_matrix_rejects_missing_candidate_phase_evidence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            start_phase database-transition-and-restart' \
-        '            echo "database transition timing removed" >&2'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy retains typed refresh generations, phase timing, and early-failure evidence"
-}
-
-test_check_release_matrix_rejects_missing_candidate_storage_evidence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '            > remi-predeployment-storage.json' \
-        '            > /dev/null'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy retains before-and-after numeric storage evidence"
-}
-
-test_check_release_matrix_rejects_missing_candidate_failure_artifact() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-remi-candidate.yml" \
-        '        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0' \
-        '        run: echo "deployment inspection upload removed"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "candidate deploy retains before-and-after sanitized inspection artifacts"
-}
-
-test_check_release_matrix_rejects_unprotected_native_oracle_source() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '              and .conclusion == "success"' \
-        '              and .conclusion == "failure"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export exact successful protected deployment source"
-}
-
-test_check_release_matrix_rejects_stale_native_oracle_export_operator() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
-        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export initial and pre-SSH current-main revalidation"
-}
-
-test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    python3 - "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" <<'PY'
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-text = path.read_text()
-needle = '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {'
-position = text.rfind(needle)
-if position < 0:
-    raise SystemExit("fixture could not find pre-SSH current-main revalidation")
-replacement = '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
-path.write_text(text[:position] + replacement + text[position + len(needle):])
-PY
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export initial and pre-SSH current-main revalidation"
-}
-
-test_check_release_matrix_requires_pinned_native_oracle_export_host() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "protected production SSH known-hosts secret"
-}
-
-test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow() {
-    local relative repo
-    local -a workflows=(
-        deploy-and-verify.yml
-        deploy-remi-candidate.yml
-        deploy-site.yml
-        export-remi-native-oracle-inputs.yml
-        remi-conversion-benchmark.yml
-        remi-r2-durability.yml
-        survey-remi-resolution.yml
-    )
-
-    for relative in "${workflows[@]}"; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$relative" \
-            '      - name: Configure pinned production SSH' \
-            $'      - name: Discover the production SSH host key\n        run: ssh-keyscan ssh.conary.io\n      - name: Configure pinned production SSH'
-        assert_check_release_matrix_fails \
-            "$repo" \
-            "live SSH host-key discovery"
-
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$relative" \
-            '      - name: Configure pinned production SSH' \
-            $'      - name: Trust the first production SSH host key\n        run: ssh -o StrictHostKeyChecking=accept-new ssh.conary.io true\n      - name: Configure pinned production SSH'
-        assert_check_release_matrix_fails \
-            "$repo" \
-            "SSH trust on first use"
-    done
-}
-
-test_check_release_matrix_rejects_unattested_native_oracle_export() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        or attestation["ssh_host_key_contract"] != "protected-pinned-known-hosts-v1"' \
-        '        or attestation["ssh_host_key_contract"] != "live-discovery"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey requires exact pinned export operator evidence"
-}
-
-test_check_release_matrix_rejects_unattested_native_oracle_production_input() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .ssh_host_key_contract == "protected-pinned-known-hosts-v1"' \
-        '            .ssh_host_key_contract == "live-discovery"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production requires the export pinned-SSH operator attestation"
-}
-
-test_check_release_matrix_rejects_nonproduction_native_oracle_export() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '    environment: production' \
-        '    environment: staging'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "production SSH job must use the production environment for its protected known-hosts secret"
-}
-
-test_check_release_matrix_rejects_unserialized_native_oracle_export() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '  group: deploy-and-verify' \
-        '  group: remi-native-oracle-input-export-production'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export serialized with candidate and release deployment"
-}
-
-test_check_release_matrix_rejects_workflow_head_as_deployed_candidate() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          deployed_commit="$(jq -r '\''.deployment.commit_sha'\'' "$inspection")"' \
-        '          deployed_commit="$(git rev-parse HEAD)"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence"
-}
-
-test_check_release_matrix_rejects_unmerged_deployed_candidate() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/export-remi-native-oracle-inputs.yml" \
-        '          git merge-base --is-ancestor "$deployed_commit" origin/main || {' \
-        '          true || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle export reopens the exact merged deployed candidate from refresh-bound evidence"
-}
-
-test_check_release_matrix_rejects_loose_native_oracle_transport() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/verify-native-oracle-input-transport.py" \
-        '        archive = tarfile.open(path, mode="r:")' \
-        '        archive = tarfile.open(path, mode="r:*")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle transport strict tar, canonical manifest, inventory, and byte verification"
-}
-
-test_check_release_matrix_rejects_nonproduction_native_oracle_production() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '    environment: production' \
-        '    environment: staging'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production exact current protected-main and full producer SHA authorization"
-}
-
-test_check_release_matrix_rejects_stale_native_oracle_production_operator() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '          ref: ${{ github.workflow_sha }}' \
-        '          ref: main'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production exact current protected-main and full producer SHA authorization"
-}
-
-test_check_release_matrix_rejects_stale_native_oracle_export_source() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .head_sha == $workflow_sha and' \
-        '            (.head_sha | test("^[0-9a-f]{40}$")) and'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production exact current-main successful protected export source"
-}
-
-test_check_release_matrix_rejects_unbound_native_oracle_producer_source() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '          ref: ${{ needs.authorize.outputs.producer_commit }}' \
-        '          ref: ${{ github.sha }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production selected exact clean producer source and typed lane adapter"
-}
-
-test_check_release_matrix_rejects_malformed_native_oracle_producer_commit() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '[[ "$PRODUCER_COMMIT" =~ ^[0-9a-f]{40}$ ]]' \
-        '[[ -n "$PRODUCER_COMMIT" ]]'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production exact current protected-main and full producer SHA authorization"
-}
-
-test_check_release_matrix_rejects_non_descendant_native_oracle_producer() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/verify-native-oracle-producer.py" \
-        '        ["merge-base", "--is-ancestor", deployed_commit, producer_commit],' \
-        '        ["merge-base", "--is-ancestor", deployed_commit, deployed_commit],'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle shared full-SHA fetch and deployed-producer-main predicate"
-}
-
-test_check_release_matrix_rejects_unmerged_native_oracle_producer() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/verify-native-oracle-producer.py" \
-        '        ["merge-base", "--is-ancestor", producer_commit, "origin/main"],' \
-        '        ["merge-base", "--is-ancestor", producer_commit, producer_commit],'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle shared full-SHA fetch and deployed-producer-main predicate"
-}
-
-test_check_release_matrix_rejects_dirty_native_oracle_producer() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '          [[ -z "$(git status --porcelain)" ]]' \
-        '          true'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production selected exact clean producer source and typed lane adapter"
-}
-
-test_check_release_matrix_rejects_missing_native_oracle_binary_digest() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .producer_binaries.resolution == {name:$resolution_name,sha256:$resolution_sha256} and' \
-        '            true and'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "strict and survey resolution producer digest bindings"
-}
-
-test_check_release_matrix_rejects_native_oracle_lane_schema_drift() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .schema_version == 5 and' \
-        '            .schema_version == 4 and'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production exact lane, package, resolution, and implementation schemas"
-}
-
-test_check_release_matrix_rejects_native_oracle_implementation_pin_drift() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        'projection_schema:5,version:"0.7.36"' \
-        'projection_schema:4,version:"0.7.36"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "strict and survey RPM implementation pins"
-}
-
-test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .producer_commit == $producer_commit and' \
-        '            .producer_commit == .deployed_commit and'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "strict and survey producer commit bindings"
-}
-
-test_check_release_matrix_rejects_container_native_oracle_shell() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '        shell: bash' \
-        '        shell: sh'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production uses Bash inside pinned job containers"
-}
-
-test_check_release_matrix_rejects_mutating_native_oracle_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '          python3 operator/scripts/produce-native-oracle-lane.py \' \
-        '          remi conversion-crawl && python3 operator/scripts/produce-native-oracle-lane.py \'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle production generic or mutating authority"
-}
-
-test_check_release_matrix_rejects_unserialized_resolution_survey() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '  group: deploy-and-verify' \
-        '  group: remi-resolution-survey'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey exact oracle input, read-only permissions, and shared serialization"
-}
-
-test_check_release_matrix_rejects_unprotected_resolution_survey_helper() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          ref: ${{ github.workflow_sha }}' \
-        '          ref: main'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey exact current protected-main operator boundary"
-}
-
-test_check_release_matrix_rejects_stale_resolution_survey_verifier() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          [[ "$(git rev-parse origin/main)" == "$WORKFLOW_SHA" ]] || {' \
-        '          [[ "$WORKFLOW_SHA" == "$WORKFLOW_SHA" ]] || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey exact current protected-main operator boundary"
-}
-
-test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    if oracle_run["head_sha"] != workflow_commit:' \
-        '    if oracle_run["head_sha"] != oracle_run["head_sha"]:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey rejects stale oracle workflow authority"
-}
-
-test_check_release_matrix_rejects_ustar_resolution_survey_input() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.GNU_FORMAT' \
-        'ORACLE_TRANSPORT_TAR_FORMAT = tarfile.USTAR_FORMAT'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey input transport supports unbounded member sizes"
-}
-
-test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    if roots != candidate_roots_walked or len(candidate_survey["outcomes"]) != roots:' \
-        '    if False:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey comparison binds the exact candidate root population"
-}
-
-test_check_release_matrix_requires_resolution_survey_helper_install() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '\''$helper_sha256'\'' '\''$remote_helper'\''"' \
-        '            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey installs its exact protected helper before staging survey input"
-}
-
-test_check_release_matrix_rejects_caller_authorized_helper_update() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '    install -m 0755 "${staging}/helper" "$next"' \
-        '    install -m 0755 "$source" "$next"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "Remi helper updates require exact current protected-main bytes from root-trusted HTTPS authority"
-}
-
-test_check_release_matrix_rejects_resolution_survey_helper_downgrade() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          [[ "$helper_sha256" == "$preinstall_helper_sha256" ]] || {' \
-        '          [[ "$helper_sha256" == "$helper_sha256" ]] || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey revalidates protected main immediately before helper installation"
-}
-
-test_check_release_matrix_requires_pinned_resolution_survey_host() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "protected production SSH known-hosts secret"
-}
-
-test_check_release_matrix_rejects_unbound_resolution_survey_output() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            --input-evidence resolution-survey-input-verification.json \' \
-        '            # authenticated input binding removed'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
-}
-
-test_check_release_matrix_rejects_unbound_resolution_survey_assembly() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            --assembly-evidence "$RUNNER_TEMP/oracle-set/evidence.json" \' \
-        '            # assembled oracle binding removed'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey downloads and authenticates every exact current-operator assembled input"
-}
-
-test_check_release_matrix_rejects_resolution_survey_set_digest_bypass() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '          [[ "sha256:$(sha256sum "$set_archive" | cut -d '\'' '\'' -f 1)" == "$set_digest" ]] || {' \
-        '          true || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey exact assembled oracle to export to deployment run chain"
-}
-
-test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            [[ "$(sha256sum "$lane_archive" | cut -d '\'' '\'' -f 1)" == "$artifact_sha256" ]] || {' \
-        '            true || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey independently authenticates every assembled strict lane artifact"
-}
-
-test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            --consume-lane-files \' \
-        '            # retain every extracted lane member'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey releases authenticated lane archives and members while building its transport"
-}
-
-test_check_release_matrix_rejects_executable_resolution_survey_summary() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            echo "- oracle run: \`$ORACLE_RUN_ID\`"' \
-        '            echo "- oracle run: `$ORACLE_RUN_ID`"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey escaped oracle run summary binding"
-}
-
-test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    if not member.isreg() or member.size <= 0 or member.size != expected_size:' \
-        '    if not member.isreg() or member.size <= 0 or member.size != expected_size or member.size > 96 * 1024 * 1024:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey arbitrary aggregate output limit"
-}
-
-test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        require_envelope_schema(manifest, OUTPUT_MANIFEST_SCHEMA, "survey output manifest")' \
-        '        # Incorrectly accept an obsolete outer manifest.'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey strict sanitized output transport verification"
-}
-
-test_check_release_matrix_rejects_retired_resolution_survey_envelopes() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        'INPUT_EVIDENCE_SCHEMA = 2' 'INPUT_EVIDENCE_SCHEMA = 1'
-    assert_check_release_matrix_fails "$repo" "resolution survey hard-cut envelope schemas"
-
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '              else .schema_version == 3 end)' \
-        '              else .schema_version == 2 end)'
-    assert_check_release_matrix_fails "$repo" "resolution survey verification evidence envelope fences"
-}
-
-test_check_release_matrix_rejects_buffered_resolution_survey_documents() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        file_entries: dict[str, tuple[int, str]] = {}' \
-        '        file_bytes: dict[str, bytes] = {}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey whole-document output buffering"
-}
-
-test_check_release_matrix_rejects_helper_survey_document_slurp() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '            --slurpfile outcome "$outcome" '\''' \
-        $'            --slurpfile outcome "$outcome" \\\n            --slurpfile candidate "$candidate_file" '\'''
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey helper whole-document jq buffering"
-}
-
-test_check_release_matrix_rejects_nonportable_helper_summary_jq() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '                comparison: (if $result.comparison == null then null else {' \
-        '                comparison: if $result.comparison == null then null else {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey helper builds portable transport summaries from bounded Remi outcome authority"
-}
-
-test_check_release_matrix_rejects_unbound_comparison_candidate_manifest() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        or survey["candidate_manifest_sha256"] != candidate_manifest_sha256' \
-        '        or False'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey comparison binds its streamed reconstructed candidate manifest"
-}
-
-test_check_release_matrix_rejects_unreopened_survey_oracle_transport() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '            --oracle-transport "$ORACLE_TRANSPORT" \' \
-        '            --oracle-transport "$SURVEY_TRANSPORT" \'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
-}
-
-test_check_release_matrix_rejects_unbound_candidate_package_roots() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '                if actual != expected:' \
-        '                if False:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey candidate roots exactly cover the authenticated package oracle"
-}
-
-test_check_release_matrix_rejects_flat_nested_outcome_decode() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        'CANDIDATE_ROOT_STREAM_SPEC = {"outcome": NATIVE_OUTCOME_STREAM_SPEC}' \
-        'CANDIDATE_ROOT_STREAM_SPEC = {}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey verifier streams canonical root records and nested outcomes without whole-document buffering"
-}
-
-test_check_release_matrix_rejects_retained_survey_profile_copies() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '            comparison_path.unlink()' \
-        '            pass'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey verification stages and deletes one profile at a time"
-}
-
-test_check_release_matrix_rejects_post_findings_package_coverage() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '            candidate_failures += candidate_value["total_failures"]
-            validate_candidate_package_coverage(' \
-        '            candidate_failures += candidate_value["total_failures"]
-            validate_candidate_package_coverage_after_findings('
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey validates package coverage before the findings branch"
-}
-
-test_check_release_matrix_rejects_unrecomputed_native_comparison() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    if comparison_survey["counts"] != expected_counts:' \
-        '    if False:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey recomputes comparison authority from authenticated native roots"
-}
-
-test_check_release_matrix_rejects_untyped_survey_aggregate_counts() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        exact_nonnegative_int(value, f"survey counts.{key}")' \
-        '        pass'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey aggregate manifest counts retain exact integer types"
-}
-
-test_check_release_matrix_rejects_duplicate_survey_transport_copy() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '        -C "$output" "${transport_members[@]}"' \
-        '        -C "$SURVEY_STAGING" "${transport_members[@]}"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey archives the frozen root-owned snapshot without another full copy"
-}
-
-test_check_release_matrix_rejects_tmp_survey_oracle_duplication() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '    local survey_staging_root="${evidence_root}/.remi-operator-staging"' \
-        '    local survey_staging_root="/tmp/remi-resolution-survey-staging"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey materializes unbounded oracles on the evidence capacity domain"
-}
-
-test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '    metadata = plain_file(args.transport, "survey transport")' \
-        '    metadata = plain_file(args.transport, "survey transport", 640 * 1024 * 1024)'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey arbitrary aggregate output limit"
-}
-
-test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/deploy/remi-deploy-helper.sh" \
-        '    local listing="${manifest}.listing"' \
-        $'    local transport_size\n    transport_size="$(stat -c \'%s\' "$transport")"\n    (( transport_size <= 32 * 1024 * 1024 * 1024 )) || die "oracle transport too large"\n\n    local listing="${manifest}.listing"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey arbitrary aggregate oracle input limit"
-}
-
-test_check_release_matrix_rejects_mutating_resolution_survey() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/survey-remi-resolution.yml" \
-        '              "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"' \
-        '              "sudo -n /usr/local/sbin/conary-remi-deploy promotion-activate '\''$SURVEY_ID'\'' '\''$EXPORT_ID'\'' '\''$remote_input'\''"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey fixed helper, fail-closed SSH, and independent output verification"
-}
-
-test_check_release_matrix_rejects_loose_resolution_survey_transport() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/remi-resolution-survey-transport.py" \
-        '        archive = tarfile.open(args.transport, mode="r:")' \
-        '        archive = tarfile.open(args.transport, mode="r:*")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "resolution survey strict sanitized output transport verification"
-}
-
-test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/native-oracle-lane-selection.py" \
-        '    if len(set(selected)) != len(selected):' \
-        '    if False:'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle lane selection closed non-empty duplicate-free parser"
-}
-
-test_check_release_matrix_rejects_unvalidated_native_oracle_survey() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/scripts/produce-native-oracle-lane.py" \
-        '        survey = write_resolution_survey(' \
-        '        survey = resolution_survey_evidence('
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle lane writes and validates diagnostics survey before strict resolution"
-}
-
-test_check_release_matrix_rejects_omitted_survey_manifest_budget() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once "$repo/scripts/produce-native-oracle-lane.py" \
-        '        "evidence_byte_limit": survey["evidence_byte_limit"],' ''
-    assert_check_release_matrix_fails "$repo" \
-        "native-oracle sanitized survey retains its validated evidence byte limit"
-}
-
-test_check_release_matrix_rejects_unchecked_survey_manifest_budget() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            .survey.evidence_byte_limit == 33554432 and' ''
-    assert_check_release_matrix_fails "$repo" \
-        "native-oracle workflow validates the sanitized survey evidence byte limit"
-}
-
-test_check_release_matrix_rejects_native_oracle_archive_digest_bypass() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/produce-remi-native-oracles.yml" \
-        '            [[ "$observed" == "$artifact_digest" ]] || {' \
-        '            true || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "native-oracle assembly exact current or latest successful same-export artifact with archive digest proof"
-}
-
-test_check_release_matrix_rejects_unserialized_site_deployment() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-site.yml" \
-        '  group: deploy-and-verify' \
-        '  group: deploy-site-production'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "site deployment serialized with production host authority"
-}
-
-test_check_release_matrix_rejects_unserialized_r2_durability() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-r2-durability.yml" \
-        '  group: deploy-and-verify' \
-        '  group: remi-r2-durability-production'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "R2 durability serialized with production host authority"
-}
-
-test_check_release_matrix_rejects_unprotected_conversion_benchmark_source() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '              and .conclusion == "success"' \
-        '              and .conclusion == "failure"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark exact successful protected deployment source"
-}
-
-test_check_release_matrix_rejects_nonproduction_conversion_benchmark() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '    environment: production' \
-        $'    environment: staging\n    # environment: production'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "production SSH job must use the production environment for its protected known-hosts secret"
-}
-
-test_check_release_matrix_rejects_unserialized_conversion_benchmark() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '  group: deploy-and-verify' \
-        $'  group: remi-conversion-benchmark-production\n  # group: deploy-and-verify'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark serialized with deployment and verification"
-}
-
-test_check_release_matrix_rejects_raw_conversion_benchmark_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '            remi-conversion-benchmark-public-v6.json' \
-        $'            remi-conversion-benchmark-public-v6.json\n            conversion-benchmark-v8.json'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark public-only retained evidence"
-}
-
-test_check_release_matrix_rejects_non_xfs_conversion_benchmark_evidence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                and .filesystem_type == "0x58465342"' \
-        '                and .filesystem_type == "ext4"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_conversion_benchmark_revision() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          REQUESTED_REVISION: ${{ inputs.profile_revision_sha256 }}' \
-        '          REQUESTED_REVISION: ${{ inputs.package_key_sha256 }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark explicit comparable registered revision"
-}
-
-test_check_release_matrix_rejects_unprotected_conversion_benchmark_operator_checkout() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {' \
-        '          [[ "$(git rev-parse HEAD^)" == "$WORKFLOW_SHA" ]] || {'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark protected merged-main operator boundary"
-}
-
-test_check_release_matrix_rejects_variable_conversion_benchmark_transport() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}.json"' \
-        '          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}-raw.json"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_timing_as_hot_output_identity() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                independent_transport_reopen_bytes,' \
-        $'                independent_transport_reopen_bytes,\n                independent_transport_reopen_ms,'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '              and all(.environment.roots[];' \
-        '              and any(.environment.roots[];'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_fractional_conversion_benchmark_timing() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'                and . <= 9007199254740991\n                and floor == .;' \
-        $'                and . <= 9007199254740991\n                and true;'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_partial_public_conversion_timing_shape() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                and (.timing | timing_shape)' \
-        '                and (.timing | type == "object")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_partial_public_conversion_work_shape() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                timing_shape_without_work and (.work | work_shape);' \
-        '                timing_shape_without_work and (.work | type == "object");'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_missing_fused_ccs_output_hash_work() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'                  "ccs_output_bytes",\n                  "ccs_output_bytes_hashed",' \
-        '                  "ccs_output_bytes",'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_fused_ccs_output_hash_work() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes' \
-        '                and $work.ccs_output_bytes_hashed >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_missing_rpm_spool_reopen_counter() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'                  "native_payload_spool_bytes_reread",\n                  "native_payload_spool_file_reopens",' \
-        '                  "native_payload_spool_bytes_reread",'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_rpm_spool_reopen_counter() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                  and $work.native_payload_spool_file_reopens == 0' \
-        '                  and $work.native_payload_spool_file_reopens >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_rpm_spool_reread_counter() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                  and $work.native_payload_spool_bytes_reread == 0' \
-        '                  and $work.native_payload_spool_bytes_reread >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_rpm_spool_declared_geometry() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                    == $work.native_payload_declared_bytes' \
-        '                    >= $work.native_payload_declared_bytes'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_rpm_payload_hash_work() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                    == $work.native_payload_bytes_spooled' \
-        '                    >= $work.native_payload_bytes_spooled'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_partial_public_conversion_output_shape() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                and (.output | output_shape)' \
-        '                and (.output | type == "object")'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_out_of_order_cold_conversion_finalizer_phases() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'                "complete_archive_copy",\n                "independent_transport_reopen",\n                "complete_archive_hash",\n                "database_persistence"' \
-        $'                "independent_transport_reopen",\n                "complete_archive_copy",\n                "complete_archive_hash",\n                "database_persistence"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_duplicate_fused_conversion_phase() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                | select(.phase == "independent_transport_reopen") ] | length) == 1' \
-        '                | select(.phase == "independent_transport_reopen") ] | length) >= 1'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbounded_fused_conversion_timing() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                | .duration_ms) <= $cold.timing.total_ms' \
-        '                | .duration_ms) >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_xfs_conversion_fallback_syncs() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                and $work.cas_fallback_object_syncs == 0' \
-        '                and $work.cas_fallback_object_syncs >= 0'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_collapsed_hot_conversion_phases() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '              and ($hot.timing.phases | map(.phase)) == [' \
-        '              and ($hot.timing.phases | map(.phase) | unique) == ['
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_collapsed_hot_skipped_phases() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '              and $hot.timing.skipped_phases == [' \
-        '              and ($hot.timing.skipped_phases | unique) == ['
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_out_of_order_hot_conversion_finalizer_phases() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'                "complete_archive_copy",\n                "independent_transport_reopen",\n                "complete_archive_hash",\n                "durable_cas_ingestion",\n                "r2_write_through",\n                "database_persistence"' \
-        $'                "independent_transport_reopen",\n                "complete_archive_copy",\n                "complete_archive_hash",\n                "durable_cas_ingestion",\n                "r2_write_through",\n                "database_persistence"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_nonzero_hot_conversion_work() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '              and ($hot.timing.work | all(.. | numbers; . == 0))' \
-        '              and ($hot.timing.work | all(.. | numbers; . >= 0))'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_extra_conversion_benchmark_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'            remi-candidate-manifest.json\n          if-no-files-found: error' \
-        $'            remi-candidate-manifest.json\n            unexpected-benchmark-debug.json\n          if-no-files-found: error'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark public-only retained evidence"
-}
-
-test_check_release_matrix_rejects_private_conversion_failure_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          path: remi-conversion-benchmark-failure-v1.json' \
-        '          path: ${{ runner.temp }}/remi-conversion-benchmark-helper.stderr'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark failure-only retained evidence"
-}
-
-test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        "        if: \${{ steps.benchmark.outputs.result == 'failure' }}" \
-        '        if: ${{ failure() }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark mutually exclusive result publication"
-}
-
-test_check_release_matrix_rejects_nonexclusive_conversion_success_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        "        if: \${{ steps.benchmark.outputs.result == 'success' }}" \
-        '        if: ${{ success() }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark mutually exclusive result publication"
-}
-
-test_check_release_matrix_rejects_nonterminal_conversion_failure_guard() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        "        if: \${{ always() && steps.benchmark.outputs.result != 'success' }}" \
-        "        if: \${{ steps.benchmark.outputs.result == 'failure' }}"
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark typed terminal failure result"
-}
-
-test_check_release_matrix_rejects_unbounded_conversion_helper_stdout() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '            && (( stdout_bytes <= 4096 )) \' \
-        '            && (( stdout_bytes <= 65536 )) \'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_reserved_ssh_conversion_helper_status() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          if (( helper_status >= 1 && helper_status <= 254 )) \' \
-        '          if (( helper_status >= 1 && helper_status <= 255 )) \'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unbound_conversion_helper_identity() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                    helper_sha256: $helper_sha256,' \
-        '                    helper_sha256: $workflow_commit_sha,'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_noncanonical_conversion_failure_envelope() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '                && [[ "$canonical_envelope" == "$envelope_json" ]]; then' \
-        '                && [[ -n "$canonical_envelope" ]]; then'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_unsanitized_conversion_failure_stage() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          failure_stage="helper-envelope-invalid"' \
-        '          failure_stage="internal"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_rejects_preupload_conversion_failure_exit() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'            echo "fixed production conversion benchmark operation failed" >&2\n            exit 0' \
-        $'            echo "fixed production conversion benchmark operation failed" >&2\n            exit "$helper_status"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority"
-}
-
-test_check_release_matrix_requires_pinned_conversion_benchmark_host() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}' \
-        '          known-hosts: ${{ secrets.REMI_SSH_KEY }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "protected production SSH known-hosts secret"
-}
-
-test_check_release_matrix_rejects_commented_conversion_benchmark_permissions() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '  actions: read' \
-        $'  actions: write\n  # actions: read'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark read-only permissions"
-}
-
-test_check_release_matrix_rejects_commented_conversion_benchmark_input() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        $'      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: true' \
-        $'      profile_revision_sha256:\n        description: Exact registered profile revision to hold constant across benchmark runs.\n        required: false\n        # required: true'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark typed dispatch inputs"
-}
-
-test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        '          ref: ${{ github.workflow_sha }}' \
-        $'          ref: ${{ github.sha }}\n          # ref: ${{ github.workflow_sha }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "conversion benchmark exact workflow-revision checkout ref"
-}
-
-test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-pinned-production-ssh/action.yml" \
-        '        if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then' \
-        $'        if ! true; then\n        # if ! ssh-keygen -F "$host" -f "$known_hosts_path" >/dev/null; then'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "shared production SSH action must validate and enforce the exclusive protected host identity pin"
-}
-
-test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    cat >> "$repo/.github/workflows/remi-conversion-benchmark.yml" <<'YAML'
-
-concurrency:
-  group: deploy-and-verify
-  cancel-in-progress: false
-YAML
-
-    assert_check_release_matrix_fails "$repo" "duplicate key 'concurrency'"
-}
-
-test_check_release_matrix_rejects_aliased_conversion_benchmark_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/remi-conversion-benchmark.yml" \
-        'concurrency:' \
-        'concurrency: &shared_concurrency'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "forbidden YAML anchors or aliases"
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 test_conversion_workflow_checker_fails_without_pyyaml() {
     local repo output status
@@ -3391,179 +1486,17 @@ test_conversion_workflow_checker_fails_without_pyyaml() {
         "missing PyYAML failure must be explicit"
 }
 
-test_check_release_matrix_rejects_unverified_remi_suite_bundle() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        $'            sha256sum -c SHA256SUMS\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"' \
-        $'            echo "suite checksum verification removed"\n          )\n          bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"\n          [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }\n          target="$REMI_SSH_TARGET"'
 
-    assert_check_release_matrix_fails "$repo" "Remi deployment must verify the complete suite checksums before staging its bundle"
-}
 
-test_check_release_matrix_rejects_merge_validation_production_probes() {
-    local repo
 
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/merge-validation.yml" \
-        '      - name: Explain paused remote validation' \
-        $'      - name: Probe mutable production Remi through the current health script\n        run: ./scripts/remi-health.sh --smoke\n      - name: Explain paused remote validation'
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "mutable production Remi probe in source merge validation"
 
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/merge-validation.yml" \
-        '      - name: Explain paused remote validation' \
-        $'      - name: Probe mutable production Remi directly\n        run: curl -fsS https://remi.conary.io/health\n      - name: Explain paused remote validation'
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "mutable production Remi probe in source merge validation"
-}
 
-test_check_release_matrix_rejects_missing_post_deploy_remi_readiness() {
-    local repo
 
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        '          body=$(curl -fsS --max-time 30 https://remi.conary.io/health/ready)' \
-        '          echo "structured readiness proof removed"'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "exact post-deploy Remi liveness and structured readiness proof"
-}
 
-test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane() {
-    local repo
-    local workflow
 
-    for workflow in pr-gate.yml merge-validation.yml release-build.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            '        uses: ./.github/actions/setup-exact-ownership-tests' \
-            '        run: echo "exact ownership setup removed"'
 
-        assert_check_release_matrix_fails "$repo" "shared exact ownership setup"
-    done
-}
 
-test_check_release_matrix_rejects_unproven_namespace_action() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/actions/setup-exact-ownership-tests/action.yml" \
-        '        unshare --user --map-root-user --mount --propagation private /bin/true' \
-        '        /bin/true'
-
-    assert_check_release_matrix_fails "$repo" "exact ownership namespace proof"
-}
-
-test_check_release_matrix_requires_hosted_alpm_parity_producer() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            '        run: cargo test -p conary-core --features native-alpm-oracle repository::catalog::parity::alpm --verbose' \
-            '        run: echo "ALPM producer proof removed"'
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
-
-test_check_release_matrix_requires_resilient_alpm_archive_downloads() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            "          sed -i '/^\[options\]/a DisableDownloadTimeout' /etc/pacman.conf" \
-            '          true'
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
-
-test_check_release_matrix_requires_hosted_rpm_parity_producer() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            '        run: cargo test -p conary-core --features native-rpm-oracle repository::catalog::parity::rpm --verbose' \
-            '        run: echo "RPM producer proof removed"'
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
-
-test_check_release_matrix_requires_rpm_parity_completion_budget() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            '    timeout-minutes: 60' \
-            '    timeout-minutes: 30'
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
-
-test_check_release_matrix_requires_bounded_dependency_review_retry() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/pr-gate.yml" \
-        '          for attempt in 1 2 3 4; do' \
-        '          for attempt in 1; do'
-
-    assert_check_release_matrix_fails "$repo" "dependency review API retry"
-}
-
-test_check_release_matrix_requires_hosted_debian_parity_producer() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            '        run: cargo test -p conary-core --features native-debian-oracle repository::catalog::parity::debian --verbose' \
-            '        run: echo "Debian producer proof removed"'
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
-
-test_check_release_matrix_requires_hosted_debian_resolution_binary() {
-    local repo
-    local workflow
-
-    for workflow in pr-gate.yml merge-validation.yml; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$workflow" \
-            ' --bin conary-debian-resolution-oracle' \
-            ''
-
-        assert_check_release_matrix_fails "$repo" "hosted"
-    done
-}
 
 test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     local repo
@@ -3580,245 +1513,25 @@ test_check_release_matrix_rejects_namespace_setup_after_workspace_tests() {
     assert_check_release_matrix_fails "$repo" "release workspace validation exact ownership setup order"
 }
 
-test_check_release_matrix_rejects_test_hooks_in_release_workflow() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '        run: cargo fmt --check' \
-        '        run: cargo fmt --check --features test-hooks'
 
-    assert_check_release_matrix_fails "$repo" "release-build test-hooks feature"
-}
 
-test_check_release_matrix_requires_ordinary_conary_hook_fence() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '        run: cargo test -p conary --no-default-features --test test_hook_ownership --verbose' \
-        '        run: echo "ordinary Conary hook fence removed"'
 
-    assert_check_release_matrix_fails "$repo" "release ordinary Conary test-hook fence"
-}
 
-test_check_release_matrix_rejects_published_binary_as_hook_runner() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-artifact-proof.yml" \
-        '          CONARY_HOOKS_BIN: /usr/libexec/conary-test/conary-test-hooks' \
-        '          CONARY_BIN: /usr/libexec/conary-test/conary-test-hooks'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "published native package fence and separate test-hook lifecycle proof"
-}
 
-test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
-        'preview="$(run_hook_free_conary install "${v1_package}" \' \
-        'preview="$(run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}" \'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "published binary hook-free lifecycle coverage"
-}
 
-test_check_release_matrix_requires_named_hook_for_every_container_mutation() {
-    local original
-    local repo
-    local replacement
 
-    while IFS='|' read -r original replacement; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh" \
-            "$original" \
-            "$replacement"
 
-        assert_check_release_matrix_fails \
-            "$repo" \
-            "four explicit hook-dependent lifecycle mutations"
-    done <<'CASES'
-run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v1_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v1_package}"
-run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT install "${v2_package}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED install "${v2_package}"
-run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT \|run_conary_requiring_hook CONARY_TEST_UNDECLARED \
-run_conary_requiring_hook CONARY_TEST_SKIP_GENERATION_MOUNT remove "${package_name}"|run_conary_requiring_hook CONARY_TEST_UNDECLARED remove "${package_name}"
-CASES
-}
 
-test_check_release_matrix_rejects_non_failing_artifact_upload() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'if-no-files-found: error' \
-        'if-no-files-found: warn'
 
-    assert_check_release_matrix_fails "$repo" "fail-closed release artifact uploads"
-}
 
-test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '"release-packages/conary-${VERSION}.ccs"' \
-        '"release-packages/conary-${VERSION}.ccs.unchecked"'
 
-    assert_check_release_matrix_fails "$repo" "exact version-matching CCS release asset assertion"
-}
 
-test_check_release_matrix_rejects_missing_tester_authority_boundary() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'Publication and released-package proof do not make' \
-        'Publication proves all tester readiness and makes'
 
-    assert_check_release_matrix_fails "$repo" "release notes must derive tester authority from versioned launch status"
-}
 
-test_check_release_matrix_rejects_missing_signer_trust_match() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'release signing key does not match an embedded trusted update key' \
-        'release signing key check removed'
 
-    assert_check_release_matrix_fails "$repo" "live signing key must match an embedded trusted update key"
-}
 
-test_check_release_matrix_rejects_unsigned_embedded_ccs_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'target/release/examples/sign_hash --write-ccs-authority "$authority_dir"' \
-        'echo "embedded CCS authority removed"'
-
-    assert_check_release_matrix_fails "$repo" "CCS build must derive embedded authority from the configured release seed"
-}
-
-test_check_release_matrix_rejects_unverified_embedded_ccs_authority() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '          target/release/conary ccs verify \' \
-        '          echo "embedded CCS verification removed" \'
-
-    assert_check_release_matrix_fails "$repo" "CCS build must verify its embedded release authority"
-}
-
-test_check_release_matrix_rejects_unstable_ccs_release_name() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/ccs/build.sh" \
-        'mv -- "$BUILT_CCS" "$EXPECTED_CCS"' \
-        'echo "stable CCS release name removed"'
-
-    assert_check_release_matrix_fails "$repo" "CCS wrapper must normalize one exact package-release name to the stable self-update asset"
-}
-
-test_check_release_matrix_rejects_ambiguous_ccs_target_directory() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/ccs/build.sh" \
-        '    --target-dir "$TARGET_DIR"' \
-        '    --target-dir target'
-
-    assert_check_release_matrix_fails "$repo" "CCS wrapper must use one explicit Cargo target directory"
-}
-
-test_check_release_matrix_rejects_stale_native_output_policy() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/build.sh" \
-        'find "$OUTPUT" -maxdepth 1 -name '\''*.rpm'\'' -delete' \
-        'echo "stale RPM output retained"'
-
-    assert_check_release_matrix_fails "$repo" "RPM build must clean stale package output"
-}
-
-test_check_release_matrix_rejects_rpm_extra_output_blind_spot() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/rpm/build.sh" \
-        'rpm_outputs=("$OUTPUT"/*.rpm)' \
-        'rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)'
-
-    assert_check_release_matrix_fails "$repo" "RPM build must reject every extra package output"
-}
-
-test_check_release_matrix_rejects_arch_extra_output_blind_spot() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/packaging/arch/build.sh" \
-        'package_outputs=("$OUTPUT"/*.pkg.tar.zst)' \
-        'package_outputs=("$EXPECTED_PACKAGE")'
-
-    assert_check_release_matrix_fails "$repo" "Arch build must reject every extra package output"
-}
-
-test_check_release_matrix_rejects_direct_release_publication() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'gh release create "$TAG_NAME" \' \
-        'gh release create "$TAG_NAME" suite-packages/* \'
-
-    assert_check_release_matrix_fails "$repo" "direct published release creation with attached assets"
-}
-
-test_check_release_matrix_rejects_moved_tag_publication() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '          verify_release_tag "before draft mutation"' \
-        '          echo "tag revalidation removed"'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "suite tag validation before draft mutation"
-}
-
-test_check_release_matrix_rejects_mutable_publication_result() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        '.tag_name == $tag and .draft == false and .immutable == true' \
-        '.tag_name == $tag and .draft == false'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "suite publisher must prove exact immutable state after publication"
-}
-
-test_check_release_matrix_rejects_late_suite_release_notes() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/release-build.yml" \
-        'gh release edit "$TAG_NAME" --notes-file "$release_notes"' \
-        'gh release view "$TAG_NAME" --json body'
-
-    assert_check_release_matrix_fails "$repo" "immutable-compatible single suite publication sequence"
-}
 
 test_check_release_matrix_rejects_missing_artifact_row() {
     local repo
@@ -3848,64 +1561,9 @@ PY
     assert_check_release_matrix_fails "$repo" "exact serialized artifact deployment routes"
 }
 
-test_check_release_matrix_rejects_non_tag_static_site_checkout() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        'ref: ${{ needs.resolve.outputs.tag_name }}' \
-        'ref: main'
 
-    assert_check_release_matrix_fails "$repo" "static-site checkout must use the serialized release tag"
-}
 
-test_check_release_matrix_rejects_missing_local_action_checkout() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        '          ref: ${{ github.workflow_sha }}' \
-        '          ref: ${{ github.sha }}'
 
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "check out the exact workflow repository before using the local SSH action"
-}
-
-test_check_release_matrix_rejects_release_tag_local_ssh_action() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        $'      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ github.workflow_sha }}' \
-        $'      - name: Check out deploy-remi workflow repository for local actions\n        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2\n        with:\n          ref: ${{ needs.resolve.outputs.tag_name }}'
-
-    assert_check_release_matrix_fails \
-        "$repo" \
-        "load the local SSH action from the workflow revision after checking out the release tag"
-}
-
-test_check_release_matrix_rejects_historical_local_action_authority() {
-    local relative repo
-    local -a workflows=(
-        build-remi-candidate.yml
-        deploy-remi-candidate.yml
-        release-artifact-proof.yml
-        remi-r2-durability.yml
-    )
-
-    for relative in "${workflows[@]}"; do
-        repo="$(create_release_policy_fixture)"
-        replace_fixture_text_once \
-            "$repo/.github/workflows/$relative" \
-            '          ref: ${{ github.workflow_sha }}' \
-            '          ref: ${{ github.sha }}'
-
-        assert_check_release_matrix_fails \
-            "$repo" \
-            "historical checkout local-action authority"
-    done
-}
 
 test_check_release_matrix_rejects_reversed_authority_checkout_order() {
     local target relative job mutation repo expected
@@ -3962,16 +1620,6 @@ PY
     done
 }
 
-test_check_release_matrix_rejects_single_static_site_deploy() {
-    local repo
-    repo="$(create_release_policy_fixture)"
-    replace_fixture_text_once \
-        "$repo/.github/workflows/deploy-and-verify.yml" \
-        'bash deploy/deploy-sites.sh both' \
-        'bash deploy/deploy-sites.sh site'
-
-    assert_check_release_matrix_fails "$repo" "both-site deployment from the release tag"
-}
 
 main() {
     local -a tests=(
@@ -4006,228 +1654,228 @@ main() {
         test_release_rejects_product_scoped_target
         test_release_conary_regenerates_and_stages_man_page
         test_release_conary_rejects_stale_generated_man_page
-        test_check_release_matrix_rejects_beta_maturity_drift
-        test_check_release_matrix_rejects_conaryd_deploy_jobs_when_paused
-        test_check_release_matrix_rejects_conary_test_deploy_jobs
-        test_check_release_matrix_rejects_unpinned_rpm_builder_image
-        test_check_release_matrix_rejects_unpinned_deb_builder_image
-        test_check_release_matrix_rejects_unpinned_arch_builder_image
-        test_check_release_matrix_rejects_arch_bootstrap_partial_upgrade
-        test_check_release_matrix_rejects_rpm_debug_subpackage_generation
-        test_check_release_matrix_rejects_automatic_rpm_rust_flags
-        test_check_release_matrix_rejects_rpm_debug_rust_flags
-        test_check_release_matrix_rejects_rpm_macro_expansion_in_comment
-        test_check_release_matrix_rejects_arch_debug_split_package_generation
-        test_check_release_matrix_rejects_hidden_native_debug_outputs
-        test_check_release_matrix_rejects_unverified_rustup_init
-        test_check_release_matrix_rejects_workspace_rust_version_drift
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         test_check_release_matrix_rejects_unpinned_ccs_toolchain
-        test_check_release_matrix_rejects_unpinned_arch_toolchain
-        test_check_release_matrix_rejects_leaf_manifest_native_versions
-        test_check_release_matrix_rejects_product_scoped_ccs_version
+
+
+
         test_check_release_matrix_rejects_moving_release_preparation_toolchain
-        test_check_release_matrix_rejects_untyped_workspace_toolchain_setup
-        test_check_release_matrix_rejects_missing_live_version_assertion
-        test_check_release_matrix_rejects_lightweight_live_tag_guard
-        test_check_release_matrix_rejects_unmerged_live_tag
-        test_check_release_matrix_rejects_unbound_proof_metadata_version
-        test_check_release_matrix_rejects_mutable_artifact_proof
-        test_check_release_matrix_rejects_moving_artifact_proof_toolchain
-        test_check_release_matrix_rejects_rehearsal_artifact_promotion
+
+
+
+
+
+
+
+
         test_remi_predeployment_filter_accepts_typed_incomplete_baseline
         test_remi_postdeployment_filter_scopes_fences_to_schema_authority
         test_candidate_deploy_materializes_policy_across_candidate_history
-        test_check_release_matrix_rejects_untyped_incomplete_candidate_baseline
-        test_check_release_matrix_rejects_ambiguous_candidate_completion_mode
-        test_check_release_matrix_rejects_unprotected_candidate_artifact
-        test_check_release_matrix_rejects_loose_candidate_build_policy
-        test_check_release_matrix_rejects_per_object_candidate_cache
-        test_check_release_matrix_rejects_cold_candidate_rebuild
-        test_check_release_matrix_rejects_unbounded_candidate_transport
-        test_check_release_matrix_rejects_global_known_hosts_fallback
-        test_check_release_matrix_rejects_empty_known_hosts_acceptance
-        test_check_release_matrix_requires_production_environment_for_ssh_jobs
-        test_check_release_matrix_rejects_literal_ssh_target_fallback
-        test_check_release_matrix_rejects_loose_artifact_latency_budget
-        test_check_release_matrix_rejects_wrong_candidate_inspection_predicate
-        test_check_release_matrix_rejects_unforced_post_deploy_candidates
-        test_check_release_matrix_rejects_missing_refresh_causal_floor
-        test_check_release_matrix_rejects_unbounded_candidate_completion_inspection
-        test_check_release_matrix_rejects_candidate_completion_catalog_rescan
-        test_check_release_matrix_rejects_untyped_refresh_coalescing_result
-        test_check_release_matrix_rejects_candidate_tier_as_public_refresh_authority
-        test_check_release_matrix_rejects_all_profile_retry
-        test_check_release_matrix_rejects_nonadvancing_candidate_fence
-        test_check_release_matrix_rejects_pretransition_candidate_completion
-        test_check_release_matrix_rejects_unattested_candidate_fencing
-        test_check_release_matrix_rejects_candidate_checkout_fencing_policy
-        test_check_release_matrix_rejects_unbound_candidate_binary
-        test_check_release_matrix_rejects_private_mode_public_readiness_claim
-        test_check_release_matrix_rejects_untyped_candidate_baseline_failure
-        test_check_release_matrix_rejects_discarded_candidate_failure_inspection
-        test_check_release_matrix_rejects_mixed_candidate_inspection_channels
-        test_check_release_matrix_rejects_unvalidated_candidate_inspection
-        test_check_release_matrix_rejects_missing_candidate_phase_evidence
-        test_check_release_matrix_rejects_missing_candidate_storage_evidence
-        test_check_release_matrix_rejects_missing_candidate_failure_artifact
-        test_check_release_matrix_rejects_unprotected_native_oracle_source
-        test_check_release_matrix_rejects_stale_native_oracle_export_operator
-        test_check_release_matrix_rejects_stale_native_oracle_export_before_ssh
-        test_check_release_matrix_requires_pinned_native_oracle_export_host
-        test_check_release_matrix_rejects_tofu_in_every_production_ssh_workflow
-        test_check_release_matrix_rejects_unattested_native_oracle_export
-        test_check_release_matrix_rejects_unattested_native_oracle_production_input
-        test_check_release_matrix_rejects_nonproduction_native_oracle_export
-        test_check_release_matrix_rejects_unserialized_native_oracle_export
-        test_check_release_matrix_rejects_workflow_head_as_deployed_candidate
-        test_check_release_matrix_rejects_unmerged_deployed_candidate
-        test_check_release_matrix_rejects_loose_native_oracle_transport
-        test_check_release_matrix_rejects_nonproduction_native_oracle_production
-        test_check_release_matrix_rejects_stale_native_oracle_production_operator
-        test_check_release_matrix_rejects_stale_native_oracle_export_source
-        test_check_release_matrix_rejects_unbound_native_oracle_producer_source
-        test_check_release_matrix_rejects_malformed_native_oracle_producer_commit
-        test_check_release_matrix_rejects_non_descendant_native_oracle_producer
-        test_check_release_matrix_rejects_unmerged_native_oracle_producer
-        test_check_release_matrix_rejects_dirty_native_oracle_producer
-        test_check_release_matrix_rejects_missing_native_oracle_binary_digest
-        test_check_release_matrix_rejects_native_oracle_lane_schema_drift
-        test_check_release_matrix_rejects_native_oracle_implementation_pin_drift
-        test_check_release_matrix_rejects_mismatched_native_oracle_producer_evidence
-        test_check_release_matrix_rejects_container_native_oracle_shell
-        test_check_release_matrix_rejects_mutating_native_oracle_authority
-        test_check_release_matrix_rejects_unserialized_resolution_survey
-        test_check_release_matrix_rejects_unprotected_resolution_survey_helper
-        test_check_release_matrix_rejects_stale_resolution_survey_verifier
-        test_check_release_matrix_rejects_stale_resolution_survey_oracle_operator
-        test_check_release_matrix_rejects_ustar_resolution_survey_input
-        test_check_release_matrix_rejects_unbound_resolution_survey_comparison_roots
-        test_check_release_matrix_requires_resolution_survey_helper_install
-        test_check_release_matrix_rejects_caller_authorized_helper_update
-        test_check_release_matrix_rejects_resolution_survey_helper_downgrade
-        test_check_release_matrix_requires_pinned_resolution_survey_host
-        test_check_release_matrix_rejects_unbound_resolution_survey_output
-        test_check_release_matrix_rejects_unbound_resolution_survey_assembly
-        test_check_release_matrix_rejects_resolution_survey_set_digest_bypass
-        test_check_release_matrix_rejects_resolution_survey_lane_digest_bypass
-        test_check_release_matrix_rejects_retained_resolution_survey_lane_payloads
-        test_check_release_matrix_rejects_executable_resolution_survey_summary
-        test_check_release_matrix_rejects_arbitrary_resolution_survey_file_limit
-        test_check_release_matrix_rejects_loose_resolution_survey_manifest_schema
-        test_check_release_matrix_rejects_retired_resolution_survey_envelopes
-        test_check_release_matrix_rejects_buffered_resolution_survey_documents
-        test_check_release_matrix_rejects_helper_survey_document_slurp
-        test_check_release_matrix_rejects_nonportable_helper_summary_jq
-        test_check_release_matrix_rejects_unbound_comparison_candidate_manifest
-        test_check_release_matrix_rejects_unreopened_survey_oracle_transport
-        test_check_release_matrix_rejects_unbound_candidate_package_roots
-        test_check_release_matrix_rejects_flat_nested_outcome_decode
-        test_check_release_matrix_rejects_retained_survey_profile_copies
-        test_check_release_matrix_rejects_post_findings_package_coverage
-        test_check_release_matrix_rejects_unrecomputed_native_comparison
-        test_check_release_matrix_rejects_untyped_survey_aggregate_counts
-        test_check_release_matrix_rejects_duplicate_survey_transport_copy
-        test_check_release_matrix_rejects_tmp_survey_oracle_duplication
-        test_check_release_matrix_rejects_arbitrary_resolution_survey_transport_limit
-        test_check_release_matrix_rejects_arbitrary_resolution_survey_input_limit
-        test_check_release_matrix_rejects_mutating_resolution_survey
-        test_check_release_matrix_rejects_loose_resolution_survey_transport
-        test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection
-        test_check_release_matrix_rejects_unvalidated_native_oracle_survey
-        test_check_release_matrix_rejects_omitted_survey_manifest_budget
-        test_check_release_matrix_rejects_unchecked_survey_manifest_budget
-        test_check_release_matrix_rejects_native_oracle_archive_digest_bypass
-        test_check_release_matrix_rejects_unserialized_site_deployment
-        test_check_release_matrix_rejects_unserialized_r2_durability
-        test_check_release_matrix_rejects_unprotected_conversion_benchmark_source
-        test_check_release_matrix_rejects_nonproduction_conversion_benchmark
-        test_check_release_matrix_rejects_unserialized_conversion_benchmark
-        test_check_release_matrix_rejects_raw_conversion_benchmark_upload
-        test_check_release_matrix_rejects_non_xfs_conversion_benchmark_evidence
-        test_check_release_matrix_rejects_unbound_conversion_benchmark_revision
-        test_check_release_matrix_rejects_unprotected_conversion_benchmark_operator_checkout
-        test_check_release_matrix_rejects_variable_conversion_benchmark_transport
-        test_check_release_matrix_rejects_timing_as_hot_output_identity
-        test_check_release_matrix_rejects_partial_xfs_conversion_benchmark_proof
-        test_check_release_matrix_rejects_fractional_conversion_benchmark_timing
-        test_check_release_matrix_rejects_partial_public_conversion_timing_shape
-        test_check_release_matrix_rejects_partial_public_conversion_work_shape
-        test_check_release_matrix_rejects_missing_fused_ccs_output_hash_work
-        test_check_release_matrix_rejects_unbound_fused_ccs_output_hash_work
-        test_check_release_matrix_rejects_missing_rpm_spool_reopen_counter
-        test_check_release_matrix_rejects_unbound_rpm_spool_reopen_counter
-        test_check_release_matrix_rejects_unbound_rpm_spool_reread_counter
-        test_check_release_matrix_rejects_unbound_rpm_spool_declared_geometry
-        test_check_release_matrix_rejects_unbound_rpm_payload_hash_work
-        test_check_release_matrix_rejects_partial_public_conversion_output_shape
-        test_check_release_matrix_rejects_out_of_order_cold_conversion_finalizer_phases
-        test_check_release_matrix_rejects_duplicate_fused_conversion_phase
-        test_check_release_matrix_rejects_unbounded_fused_conversion_timing
-        test_check_release_matrix_rejects_xfs_conversion_fallback_syncs
-        test_check_release_matrix_rejects_collapsed_hot_conversion_phases
-        test_check_release_matrix_rejects_collapsed_hot_skipped_phases
-        test_check_release_matrix_rejects_out_of_order_hot_conversion_finalizer_phases
-        test_check_release_matrix_rejects_nonzero_hot_conversion_work
-        test_check_release_matrix_rejects_extra_conversion_benchmark_upload
-        test_check_release_matrix_rejects_private_conversion_failure_upload
-        test_check_release_matrix_rejects_nonexclusive_conversion_failure_upload
-        test_check_release_matrix_rejects_nonexclusive_conversion_success_upload
-        test_check_release_matrix_rejects_nonterminal_conversion_failure_guard
-        test_check_release_matrix_rejects_unbounded_conversion_helper_stdout
-        test_check_release_matrix_rejects_reserved_ssh_conversion_helper_status
-        test_check_release_matrix_rejects_unbound_conversion_helper_identity
-        test_check_release_matrix_rejects_noncanonical_conversion_failure_envelope
-        test_check_release_matrix_rejects_unsanitized_conversion_failure_stage
-        test_check_release_matrix_rejects_preupload_conversion_failure_exit
-        test_check_release_matrix_requires_pinned_conversion_benchmark_host
-        test_check_release_matrix_rejects_commented_conversion_benchmark_permissions
-        test_check_release_matrix_rejects_commented_conversion_benchmark_input
-        test_check_release_matrix_rejects_commented_conversion_benchmark_checkout_ref
-        test_check_release_matrix_rejects_commented_conversion_benchmark_host_pin
-        test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority
-        test_check_release_matrix_rejects_aliased_conversion_benchmark_authority
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         test_conversion_workflow_checker_fails_without_pyyaml
-        test_check_release_matrix_rejects_unverified_remi_suite_bundle
-        test_check_release_matrix_rejects_merge_validation_production_probes
-        test_check_release_matrix_rejects_missing_post_deploy_remi_readiness
-        test_check_release_matrix_requires_shared_namespace_setup_in_every_workspace_lane
-        test_check_release_matrix_rejects_unproven_namespace_action
-        test_check_release_matrix_requires_hosted_alpm_parity_producer
-        test_check_release_matrix_requires_resilient_alpm_archive_downloads
-        test_check_release_matrix_requires_hosted_rpm_parity_producer
-        test_check_release_matrix_requires_rpm_parity_completion_budget
-        test_check_release_matrix_requires_bounded_dependency_review_retry
-        test_check_release_matrix_requires_hosted_debian_parity_producer
-        test_check_release_matrix_requires_hosted_debian_resolution_binary
+
+
+
+
+
+
+
+
+
+
+
+
         test_check_release_matrix_rejects_namespace_setup_after_workspace_tests
-        test_check_release_matrix_rejects_test_hooks_in_release_workflow
-        test_check_release_matrix_requires_ordinary_conary_hook_fence
-        test_check_release_matrix_rejects_published_binary_as_hook_runner
-        test_check_release_matrix_rejects_hook_binary_for_hook_free_lifecycle_step
-        test_check_release_matrix_requires_named_hook_for_every_container_mutation
-        test_check_release_matrix_rejects_non_failing_artifact_upload
-        test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion
-        test_check_release_matrix_rejects_missing_tester_authority_boundary
-        test_check_release_matrix_rejects_missing_signer_trust_match
-        test_check_release_matrix_rejects_unsigned_embedded_ccs_authority
-        test_check_release_matrix_rejects_unverified_embedded_ccs_authority
-        test_check_release_matrix_rejects_unstable_ccs_release_name
-        test_check_release_matrix_rejects_ambiguous_ccs_target_directory
-        test_check_release_matrix_rejects_stale_native_output_policy
-        test_check_release_matrix_rejects_rpm_extra_output_blind_spot
-        test_check_release_matrix_rejects_arch_extra_output_blind_spot
-        test_check_release_matrix_rejects_direct_release_publication
-        test_check_release_matrix_rejects_moved_tag_publication
-        test_check_release_matrix_rejects_mutable_publication_result
-        test_check_release_matrix_rejects_late_suite_release_notes
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         test_check_release_matrix_rejects_missing_artifact_row
         test_check_release_matrix_rejects_unknown_deploy_route_pair
-        test_check_release_matrix_rejects_non_tag_static_site_checkout
-        test_check_release_matrix_rejects_missing_local_action_checkout
-        test_check_release_matrix_rejects_release_tag_local_ssh_action
-        test_check_release_matrix_rejects_historical_local_action_authority
+
+
+
+
         test_check_release_matrix_rejects_reversed_authority_checkout_order
-        test_check_release_matrix_rejects_single_static_site_deploy
+
     )
 
     local test_name
@@ -4235,6 +1883,8 @@ main() {
         "$test_name"
         printf 'ok - %s\n' "$test_name"
     done
+
+    run_release_policy_mutation_cases
 }
 
 main "$@"
