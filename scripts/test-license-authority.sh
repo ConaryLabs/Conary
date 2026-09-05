@@ -26,6 +26,7 @@ make_fixture() {
     cp packaging/ccs/ccs.toml packaging/ccs/build.sh "$root/packaging/ccs/"
     cp packaging/deb/debian/copyright "$root/packaging/deb/debian/"
     cp packaging/deb/debian/rules "$root/packaging/deb/debian/"
+    mkdir -p "$root/recipes/tier2" && cp recipes/tier2/conary.toml "$root/recipes/tier2/"
     cp .github/workflows/release-build.yml "$root/.github/workflows/"
     cp scripts/check-license-authority.sh scripts/remi-candidate-artifact.sh "$root/scripts/"
     for manifest in apps/*/Cargo.toml crates/*/Cargo.toml; do
@@ -181,6 +182,14 @@ expect_failure "release-build rpm proof unreachable after an earlier exit" "$roo
 make_fixture "$root"
 printf '\nFiles: apps/remi/*\nCopyright: 2024-2026 Conary Contributors\nLicense: MIT\n' >> "$root/packaging/deb/debian/copyright"
 expect_failure "duplicate Remi Debian paragraph with a conflicting license" "$root"
+
+make_fixture "$root"
+sed -i 's/^license = "MIT OR Apache-2.0"$/license = "MIT"/' "$root/recipes/tier2/conary.toml"
+expect_failure "tier2 recipe license drift" "$root"
+
+make_fixture "$root"
+sed -i '/install -Dm644 LICENSE-APACHE %(destdir)s/d' "$root/recipes/tier2/conary.toml"
+expect_failure "tier2 recipe missing the Apache install" "$root"
 
 make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"

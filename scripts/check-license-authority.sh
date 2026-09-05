@@ -83,6 +83,10 @@ effective_pkgbuild_license="$(bash -c 'set -eu; source "$1"; printf "%s\n" "${li
 [[ "$effective_pkgbuild_license" == "MIT Apache-2.0" ]] ||
     fail "PKGBUILD evaluates license to '${effective_pkgbuild_license}', expected 'MIT Apache-2.0'"
 require_unique_line packaging/ccs/ccs.toml '^license[[:space:]]*=' 'ccs manifest license'
+require_unique_line recipes/tier2/conary.toml '^license[[:space:]]*=' 'tier2 recipe license'
+require_match recipes/tier2/conary.toml '^license = "MIT OR Apache-2[.]0"$' 'tier2 recipe license value'
+require_live_line recipes/tier2/conary.toml 'install -Dm644 LICENSE-MIT %[(]destdir[)]s/usr/share/licenses/conary/LICENSE-MIT' 'tier2 recipe MIT install'
+require_live_line recipes/tier2/conary.toml 'install -Dm644 LICENSE-APACHE %[(]destdir[)]s/usr/share/licenses/conary/LICENSE-APACHE' 'tier2 recipe Apache install'
 require_unique_line Cargo.toml '^license[[:space:]]*=' 'workspace license'
 require_unique_line apps/remi/Cargo.toml '^license[[:space:]]*=' 'remi license'
 require_live_line packaging/rpm/conary.spec '%license LICENSE-MIT LICENSE-APACHE$' 'rpm %license files'

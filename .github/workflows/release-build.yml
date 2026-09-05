@@ -260,10 +260,13 @@ jobs:
           target/release/conary ccs verify \
             "packaging/ccs/output/conary-${VERSION}.ccs" \
             --policy "$authority_dir/trust-policy.toml"
+          # Retain only the public trust policy for the packaged-contents proof;
+          # the temporary private key is removed with the authority directory.
+          install -m 0644 "$authority_dir/trust-policy.toml" "$RUNNER_TEMP/ccs-trust-policy.toml"
       - name: Require license texts inside the CCS package
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary LICENSE-MIT LICENSE-APACHE
+        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary LICENSE-MIT LICENSE-APACHE "$RUNNER_TEMP/ccs-trust-policy.toml"
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

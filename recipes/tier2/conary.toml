@@ -21,7 +21,7 @@ storage, explicit transaction and recovery boundaries, native-package
 adoption, and cross-distribution package resolution. This recipe builds
 Conary from source to achieve self-hosting on conaryOS.
 """
-license = "MIT"
+license = "MIT OR Apache-2.0"
 homepage = "https://conary.io/"
 
 [source]
@@ -41,6 +41,8 @@ cargo build --release -p conary
 
 install = """
 install -Dm755 target/release/conary %(destdir)s/usr/bin/conary
+install -Dm644 LICENSE-MIT %(destdir)s/usr/share/licenses/conary/LICENSE-MIT
+install -Dm644 LICENSE-APACHE %(destdir)s/usr/share/licenses/conary/LICENSE-APACHE
 """
 
 [variables]

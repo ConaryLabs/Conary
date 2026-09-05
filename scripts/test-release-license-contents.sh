@@ -90,26 +90,31 @@ PATH="$tmp/bin:$PATH" expect_fail "rpm missing LICENSE-MIT" rpm "$tmp/missing.rp
 make_rpm_cpio "$tmp/rpm-trunc" "$tmp/trunc.rpm" LICENSE-MIT "$tmp/truncated-apache"
 PATH="$tmp/bin:$PATH" expect_fail "rpm with a truncated Apache text" rpm "$tmp/trunc.rpm" LICENSE-MIT LICENSE-APACHE
 
-# --- ccs: the conary inspector and verifier are shimmed; sizes must match ---
-mit_size="$(wc -c < LICENSE-MIT)"; apache_size="$(wc -c < LICENSE-APACHE)"
+# --- ccs: the conary verifier and JSON inspector are shimmed; signed digests must match ---
+mit_sha="$(sha256sum LICENSE-MIT | cut -d ' ' -f 1)"; apache_sha="$(sha256sum LICENSE-APACHE | cut -d ' ' -f 1)"
+printf 'policy\n' > "$tmp/trust-policy.toml"
 cat > "$tmp/bin/conary" <<'SH'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "ccs verify") [[ -f "${3}.verify-ok" ]] ;;
-  "ccs inspect") printf 'Files (3):\n\n'; cat "${4}.listing" ;;
+  "ccs verify") [[ "$4" == "--policy" && -f "$5" && -f "${3}.verify-ok" ]] ;;
+  "ccs inspect") [[ "$*" == *"--format json"* && "$*" == *"--policy"* ]] || exit 2; cat "${3}.json" ;;
   *) exit 2 ;;
 esac
 SH
 chmod +x "$tmp/bin/conary"
-printf 'x' > "$tmp/ok.ccs"; : > "$tmp/ok.ccs.verify-ok"
-printf -- '-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-MIT\n-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-APACHE\n' "$mit_size" "$apache_size" > "$tmp/ok.ccs.listing"
-expect_pass "ccs with both texts at the reference sizes" ccs "$tmp/ok.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
-printf 'x' > "$tmp/short.ccs"; : > "$tmp/short.ccs.verify-ok"
-printf -- '-rw-r--r-- %s /usr/share/licenses/conary/LICENSE-MIT\n-rw-r--r-- 2000 /usr/share/licenses/conary/LICENSE-APACHE\n' "$mit_size" > "$tmp/short.ccs.listing"
-expect_fail "ccs with a wrong-size Apache text" ccs "$tmp/short.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
-printf 'x' > "$tmp/unverified.ccs"
-cp "$tmp/ok.ccs.listing" "$tmp/unverified.ccs.listing"
-expect_fail "ccs that fails its own verification" ccs "$tmp/unverified.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE
+write_ccs_json() {
+    local out="$1" mit="$2" apache="$3"
+    printf '{"name":"conary","files":[{"path":"/usr/bin/conary","content":{"sha256":"00","size":1}},{"path":"/usr/share/licenses/conary/LICENSE-MIT","content":{"sha256":"%s","size":1}},{"path":"/usr/share/licenses/conary/LICENSE-APACHE","content":{"sha256":"%s","size":1}}]}\n' "$mit" "$apache" > "$out"
+}
+printf 'x' > "$tmp/ok.ccs"; : > "$tmp/ok.ccs.verify-ok"; write_ccs_json "$tmp/ok.ccs.json" "$mit_sha" "$apache_sha"
+expect_pass "ccs with both signed digests matching" ccs "$tmp/ok.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE "$tmp/trust-policy.toml"
+# Same-length substitution: a different text of identical size must be rejected.
+tr 'a-z' 'b-za' < LICENSE-APACHE > "$tmp/apache-substituted"; sub_sha="$(sha256sum "$tmp/apache-substituted" | cut -d ' ' -f 1)"
+printf 'x' > "$tmp/sub.ccs"; : > "$tmp/sub.ccs.verify-ok"; write_ccs_json "$tmp/sub.ccs.json" "$mit_sha" "$sub_sha"
+expect_fail "ccs with an equal-size substituted Apache text" ccs "$tmp/sub.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE "$tmp/trust-policy.toml"
+printf 'x' > "$tmp/unverified.ccs"; write_ccs_json "$tmp/unverified.ccs.json" "$mit_sha" "$apache_sha"
+expect_fail "ccs that fails its own verification" ccs "$tmp/unverified.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE "$tmp/trust-policy.toml"
+expect_fail "ccs without a trust policy" ccs "$tmp/ok.ccs" "$tmp/bin/conary" LICENSE-MIT LICENSE-APACHE "$tmp/missing-policy.toml"
 
 # --- remi tarball: exact members and exact AGPL text ---
 mkdir -p "$tmp/remi"
