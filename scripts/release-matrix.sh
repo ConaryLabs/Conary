@@ -416,9 +416,24 @@ assert_owned_version() {
     [[ "$workspace_publish" == "false" ]] ||
         die "workspace registry publication must be disabled in Cargo.toml [workspace.package]"
 
+    # The Remi server is the one typed license exception (issue #900): it
+    # declares AGPL-3.0-or-later itself while every other member inherits the
+    # workspace's MIT OR Apache-2.0. scripts/check-license-authority.sh pins the
+    # same decision; the two must agree.
+    local remi_manifest='apps/remi/Cargo.toml'
+    local remi_license='license = "AGPL-3.0-or-later"'
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "workspace package manifest missing: $file"
         for field in version edition rust-version authors license publish; do
+            if [[ "$field" == license && "$file" == "$remi_manifest" ]]; then
+                grep -Fxq "$remi_license" "$file" ||
+                    die "workspace package license must be exactly '$remi_license' in $file"
+                [[ "$(grep -Ec '^license[[:space:]]*=' "$file")" -eq 1 ]] ||
+                    die "workspace package license must be declared exactly once in $file"
+                ! grep -Fxq "license.workspace = true" "$file" ||
+                    die "workspace package must not also inherit license in $file"
+                continue
+            fi
             grep -Fxq "${field}.workspace = true" "$file" ||
                 die "workspace package $field is not inherited from [workspace.package]: $file"
             if grep -Eq "^${field}[[:space:]]*=" "$file"; then
