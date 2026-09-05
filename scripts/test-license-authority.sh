@@ -27,7 +27,7 @@ make_fixture() {
     cp packaging/deb/debian/copyright "$root/packaging/deb/debian/"
     cp packaging/deb/debian/rules "$root/packaging/deb/debian/"
     cp .github/workflows/release-build.yml "$root/.github/workflows/"
-    cp scripts/check-license-authority.sh "$root/scripts/"
+    cp scripts/check-license-authority.sh scripts/remi-candidate-artifact.sh "$root/scripts/"
     for manifest in apps/*/Cargo.toml crates/*/Cargo.toml; do
         mkdir -p "$root/$(dirname "$manifest")/src"
         cp "$manifest" "$root/$manifest"
@@ -104,6 +104,18 @@ expect_failure "debian rules installing a bare LICENSE" "$root"
 make_fixture "$root"
 sed -i '/LICENSE-MIT/d' "$root/packaging/ccs/build.sh"
 expect_failure "ccs bundle missing the MIT install" "$root"
+
+make_fixture "$root"
+sed -i 's|^install -Dpm 0644 "$REPO_ROOT/LICENSE-MIT"|#&|' "$root/packaging/ccs/build.sh"
+expect_failure "ccs bundle MIT install commented out" "$root"
+
+make_fixture "$root"
+sed -i 's|^\(\s*\)install -Dm644 LICENSE-APACHE|\1# install -Dm644 LICENSE-APACHE|' "$root/packaging/arch/PKGBUILD"
+expect_failure "PKGBUILD Apache install commented out" "$root"
+
+make_fixture "$root"
+sed -i '/check-release-license-contents.sh rpm /d' "$root/.github/workflows/release-build.yml"
+expect_failure "release-build without the rpm contents proof" "$root"
 
 make_fixture "$root"
 sed -i '/install -Dm644 LICENSE-APACHE/d' "$root/packaging/arch/PKGBUILD"

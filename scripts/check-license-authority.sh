@@ -60,10 +60,16 @@ require_match() {
     local file="$1" pattern="$2" description="$3"
     grep -qE -- "$pattern" "$file" || fail "$description missing in $file"
 }
+# An install line counts only when it is live: first non-blank text on the
+# line, never behind a comment marker.
+require_live_line() {
+    local file="$1" pattern="$2" description="$3"
+    grep -qE -- "^[[:space:]]*${pattern}" "$file" || fail "$description missing (or commented out) in $file"
+}
 require_match Cargo.toml '^license = "MIT OR Apache-2\.0"$' 'workspace license'
 require_match apps/remi/Cargo.toml '^license = "AGPL-3\.0-or-later"$' 'remi license override'
 require_match packaging/rpm/conary.spec '^License:[[:space:]]+MIT OR Apache-2\.0$' 'rpm License field'
-require_match packaging/rpm/conary.spec '^%license LICENSE-MIT LICENSE-APACHE$' 'rpm %license files'
+require_live_line packaging/rpm/conary.spec '%license LICENSE-MIT LICENSE-APACHE$' 'rpm %license files'
 require_match packaging/arch/PKGBUILD "^license=\\('MIT' 'Apache-2\\.0'\\)$" 'PKGBUILD license array'
 require_match packaging/ccs/ccs.toml '^license = "MIT OR Apache-2\.0"$' 'ccs manifest license'
 # DEP-5 paragraphs are blank-line separated; the License field must be read
@@ -87,15 +93,19 @@ require_dep5_license packaging/deb/debian/copyright 'apps/remi/*' 'AGPL-3.0+'
 require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian copyright Apache text paragraph'
 require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright AGPL text paragraph'
 # Every package builder must install both texts, source and destination.
-require_match packaging/ccs/build.sh 'install -Dpm 0644 "\$REPO_ROOT/LICENSE-MIT" "\$STAGE/usr/share/licenses/\$NAME/LICENSE-MIT"' 'ccs bundle MIT license install'
-require_match packaging/ccs/build.sh 'install -Dpm 0644 "\$REPO_ROOT/LICENSE-APACHE" "\$STAGE/usr/share/licenses/\$NAME/LICENSE-APACHE"' 'ccs bundle Apache license install'
-require_match packaging/arch/PKGBUILD 'install -Dm644 LICENSE-MIT "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE-MIT"' 'PKGBUILD MIT license install'
-require_match packaging/arch/PKGBUILD 'install -Dm644 LICENSE-APACHE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE-APACHE"' 'PKGBUILD Apache license install'
-require_match packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-MIT %\{buildroot\}%\{_datadir\}/licenses/%\{crate\}/LICENSE-MIT' 'rpm MIT license install'
-require_match packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-APACHE %\{buildroot\}%\{_datadir\}/licenses/%\{crate\}/LICENSE-APACHE' 'rpm Apache license install'
-require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
-require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
+require_live_line packaging/ccs/build.sh 'install -Dpm 0644 "\$REPO_ROOT/LICENSE-MIT" "\$STAGE/usr/share/licenses/\$NAME/LICENSE-MIT"' 'ccs bundle MIT license install'
+require_live_line packaging/ccs/build.sh 'install -Dpm 0644 "\$REPO_ROOT/LICENSE-APACHE" "\$STAGE/usr/share/licenses/\$NAME/LICENSE-APACHE"' 'ccs bundle Apache license install'
+require_live_line packaging/arch/PKGBUILD 'install -Dm644 LICENSE-MIT "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE-MIT"' 'PKGBUILD MIT license install'
+require_live_line packaging/arch/PKGBUILD 'install -Dm644 LICENSE-APACHE "\$pkgdir/usr/share/licenses/\$pkgname/LICENSE-APACHE"' 'PKGBUILD Apache license install'
+require_live_line packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-MIT %\{buildroot\}%\{_datadir\}/licenses/%\{crate\}/LICENSE-MIT' 'rpm MIT license install'
+require_live_line packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-APACHE %\{buildroot\}%\{_datadir\}/licenses/%\{crate\}/LICENSE-APACHE' 'rpm Apache license install'
+require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
+require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
 require_match .github/workflows/release-build.yml 'apps/remi" LICENSE' 'remi tarball AGPL text'
+for kind in rpm deb arch ccs remi-tar; do
+    require_match .github/workflows/release-build.yml "check-release-license-contents\.sh ${kind} " "release-build packaged-contents proof for ${kind}"
+done
+require_match scripts/remi-candidate-artifact.sh '-C "\$license_dir" LICENSE' 'candidate bundle AGPL text'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
 require_match README.md 'apps/remi/LICENSE' 'README Remi license link'
 

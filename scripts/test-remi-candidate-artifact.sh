@@ -42,7 +42,8 @@ tail -n 1 "$wrapper_timings" | awk -F '\t' \
     fail "timed Rust compiler wrapper did not retain attributable failure evidence"
 
 fixture="${tmpdir}/fixture"
-mkdir -p "$fixture/scripts" "$fixture/target/release"
+mkdir -p "$fixture/scripts" "$fixture/target/release" "$fixture/apps/remi"
+cp "$(git rev-parse --show-toplevel)/apps/remi/LICENSE" "$fixture/apps/remi/LICENSE"
 cp "$script" "$fixture/scripts/remi-candidate-artifact.sh"
 cp "$linker" "$fixture/scripts/timed-linker.sh"
 cp "$rustc_wrapper" "$fixture/scripts/timed-rustc-wrapper.sh"
@@ -71,7 +72,7 @@ chmod +x "$fixture/target/release/remi"
 git -C "$fixture" init -q
 git -C "$fixture" config user.name fixture
 git -C "$fixture" config user.email fixture@example.invalid
-git -C "$fixture" add Cargo.toml Cargo.lock .gitignore scripts
+git -C "$fixture" add Cargo.toml Cargo.lock .gitignore scripts apps
 git -C "$fixture" commit -qm 'test: seed fixture'
 commit="$(git -C "$fixture" rev-parse HEAD)"
 

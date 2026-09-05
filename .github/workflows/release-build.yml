@@ -260,6 +260,10 @@ jobs:
           target/release/conary ccs verify \
             "packaging/ccs/output/conary-${VERSION}.ccs" \
             --policy "$authority_dir/trust-policy.toml"
+      - name: Require license texts inside the CCS package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh ccs "packaging/ccs/output/conary-${VERSION}.ccs" target/release/conary
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -318,6 +322,8 @@ jobs:
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build RPM
         run: bash packaging/rpm/build.sh
+      - name: Require license texts inside the RPM
+        run: bash scripts/check-release-license-contents.sh rpm packaging/rpm/output/*.rpm
       - name: Upload RPM artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -373,6 +379,8 @@ jobs:
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build DEB
         run: bash packaging/deb/build.sh
+      - name: Require license texts inside the DEB
+        run: bash scripts/check-release-license-contents.sh deb packaging/deb/output/*.deb
       - name: Upload DEB artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -425,6 +433,8 @@ jobs:
         run: chown -R builder:builder .
       - name: Build Arch package
         run: runuser -u builder -- bash packaging/arch/build.sh
+      - name: Require license texts inside the Arch package
+        run: bash scripts/check-release-license-contents.sh arch packaging/arch/output/*.pkg.tar.zst
       - name: Upload Arch artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -614,6 +624,10 @@ jobs:
           cp target/release/remi "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64"
           tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE/apps/remi" LICENSE
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require the AGPL text inside the remi bundle
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh remi-tar "release-packages/remi-${VERSION}-linux-x64.tar.gz" apps/remi/LICENSE
       - name: Upload remi bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:

@@ -300,6 +300,8 @@ jobs:
         run: bash scripts/check-license-authority.sh
       - name: Test license authority policy
         run: bash scripts/test-license-authority.sh
+      - name: Test release license contents proof
+        run: bash scripts/test-release-license-contents.sh
       - name: Test Remi deploy helper
         run: bash scripts/test-remi-deploy-helper.sh
       - name: Test Remi health probes
