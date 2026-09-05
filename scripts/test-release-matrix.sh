@@ -725,6 +725,11 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ("test_nightly_preflight_ancestor", "replace", "scripts/nightly-release.py", '"--is-ancestor", workflow_commit, commit', '"--is-ancestor", commit, workflow_commit', "nightly workflow ancestor preflight"),
+    ("test_nightly_preflight_grammar", "replace", "scripts/nightly-release.py", '"validate-version", version, "nightly"', '"validate-version", version, "stable"', "nightly selected-tree capability commands"),
+    ("test_nightly_preflight_release_target", "replace", "scripts/nightly-release.py", '"--dry-run", "--target", version', '"--dry-run", "--target", stable', "nightly selected-tree capability commands"),
+    ("test_nightly_preflight_skip", "replace", ".github/workflows/nightly-release.yml", "            exit 0", "            exit 1", "nightly unsupported commit skips before tag creation"),
+    ("test_nightly_preflight_workflow_commit", "replace", ".github/workflows/nightly-release.yml", "WORKFLOW_COMMIT: ${{ github.sha }}", "WORKFLOW_COMMIT: ${{ github.workflow_sha }}", "nightly running workflow commit authority"),
     ("test_nightly_notes_typed_boundary", "replace", ".github/workflows/release-build.yml", "nightly-release.py notes-boundary", "nightly-release.py unvalidated-boundary", "nightly notes previous-tag boundary"),
     ("test_nightly_channel_gate", "replace", ".github/workflows/nightly-release.yml", "      channel: nightly", "      channel: stable", "nightly channel-gated live build"),
     ("test_nightly_prerelease_flag", "replace", ".github/workflows/release-build.yml", "              release_flags+=(--prerelease)", "              release_flags+=(--latest)", "nightly publication prerelease flag"),

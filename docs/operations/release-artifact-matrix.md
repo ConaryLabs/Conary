@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 34
-summary: Typed release-notes boundaries skip malformed tags and explicitly fall back to stable
+revision: 35
+summary: Nightly tag creation requires selected-tree capability and running-workflow ancestry
 ---
 
 # Release Artifact Matrix
@@ -17,6 +17,18 @@ QEMU/KVM evidence may support a preview row only when it names the absolute run
 date, distro, suite, and pass counts.
 
 ## Current Release Suite
+
+Before creating a nightly tag, `nightly-release.py preflight` verifies the
+selected checkout matches the green commit and contains the running workflow's
+`github.sha` as an ancestor. The selected tree's own `release.sh suite --dry-run`
+must produce the stable base; its matrix must validate the full nightly version
+and render every target, and its `release.sh suite --dry-run --target <nightly>`
+must accept that target. These checks do not prepare or rewrite the tree.
+A commit older than the running workflow or lacking these capabilities reports
+`state: unsupported_commit`, `outcome: skipped`, the selected commit, and the
+failed capability in the step summary. The selection step exits successfully
+before recovery, build, or any tag-creation API call. Git operational failures
+and a mismatched checkout remain typed failures rather than unsupported content.
 
 The signed bootstrap installer reads Debian versions from the verified local
 package and the installed dpkg database. Only when `dpkg --compare-versions`

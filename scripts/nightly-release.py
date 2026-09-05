@@ -184,6 +184,51 @@ def resolve(api, candidate_tag, commit):
             "tag_name": tag, "commit_sha": commit, "release_id": release["id"] if release else None}
 
 
+def preflight(commit, workflow_commit, now):
+    if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (commit, workflow_commit)):
+        raise Failure("invalid_preflight_commit")
+    if git("rev-parse", "HEAD") != commit:
+        raise Failure("preflight_checkout_mismatch", commit_sha=commit)
+
+    def unsupported(reason, status=None):
+        return {"schema_version": 1, "state": "unsupported_commit", "outcome": "skipped",
+                "commit_sha": commit, "workflow_commit": workflow_commit,
+                "reason": reason, "command_status": status}
+
+    def run(*command):
+        return subprocess.run(list(command), text=True, capture_output=True)
+
+    ancestry = run("git", "merge-base", "--is-ancestor", workflow_commit, commit)
+    if ancestry.returncode == 1:
+        return unsupported("workflow_not_ancestor", ancestry.returncode)
+    if ancestry.returncode:
+        raise Failure("preflight_ancestry_failed", command_status=ancestry.returncode, commit_sha=commit)
+    # Relative paths deliberately execute the selected checkout, not ROOT's workflow authority.
+    dry_run = run("bash", "scripts/release.sh", "suite", "--dry-run")
+    if dry_run.returncode:
+        return unsupported("release_dry_run_failed", dry_run.returncode)
+    versions = [line.removeprefix("  Next version: ") for line in dry_run.stdout.splitlines()
+                if line.startswith("  Next version: ")]
+    if len(versions) != 1:
+        return unsupported("missing_next_version")
+    stable = versions[0]
+    version = f"{stable}-nightly.{now.astimezone(timezone.utc):%Y%m%d}"
+    checks = [
+        ("stable_grammar", ["bash", "scripts/release-matrix.sh", "validate-version", stable, "stable"]),
+        ("nightly_grammar", ["bash", "scripts/release-matrix.sh", "validate-version", version, "nightly"]),
+        ("nightly_release_target", ["bash", "scripts/release.sh", "suite", "--dry-run", "--target", version]),
+    ]
+    checks.extend((f"render_{target}", ["bash", "scripts/release-matrix.sh", "render-version", version, target])
+                  for target in ("cargo", "rpm", "deb", "arch", "ccs", "tag"))
+    for reason, command in checks:
+        result = run(*command)
+        if result.returncode:
+            return unsupported(reason, result.returncode)
+    return {"schema_version": 1, "state": "supported_commit", "outcome": "supported",
+            "commit_sha": commit, "workflow_commit": workflow_commit,
+            "version": version, "tag_name": f"v{version}"}
+
+
 def notes_boundary(current_tag):
     if tag_metadata(current_tag)["channel"] != "nightly":
         raise Failure("invalid_nightly_target")
@@ -249,12 +294,18 @@ def main():
     selection.add_argument("--tag", required=True)
     selection.add_argument("--commit", required=True)
     sub.add_parser("retain")
+    capability = sub.add_parser("preflight")
+    capability.add_argument("--commit", required=True)
+    capability.add_argument("--workflow-commit", required=True)
     notes = sub.add_parser("notes-boundary")
     notes.add_argument("--tag", required=True)
     receipt = sub.add_parser("receipt")
     receipt.add_argument("--tag", required=True)
     receipt.add_argument("--output", required=True)
     args = parser.parse_args()
+    if args.command == "preflight":
+        report(preflight(args.commit, args.workflow_commit, datetime.now(timezone.utc)))
+        return
     if args.command == "notes-boundary":
         report(notes_boundary(args.tag))
         return

@@ -45,6 +45,73 @@ class API:
 
 
 class NightlyTests(unittest.TestCase):
+    def test_selected_commit_capability_table(self):
+        workflow = "b" * 40
+        version = "0.17.0-nightly.20260905"
+        commands = [
+            ["git", "merge-base", "--is-ancestor", workflow, COMMIT],
+            ["bash", "scripts/release.sh", "suite", "--dry-run"],
+            ["bash", "scripts/release-matrix.sh", "validate-version", "0.17.0", "stable"],
+            ["bash", "scripts/release-matrix.sh", "validate-version", version, "nightly"],
+            ["bash", "scripts/release.sh", "suite", "--dry-run", "--target", version],
+            *[["bash", "scripts/release-matrix.sh", "render-version", version, target]
+              for target in ("cargo", "rpm", "deb", "arch", "ccs", "tag")],
+        ]
+        cases = [(None, None), (0, "workflow_not_ancestor"), (1, "release_dry_run_failed"),
+                 (2, "stable_grammar"), (3, "nightly_grammar"), (4, "nightly_release_target"),
+                 *[(index + 5, f"render_{target}")
+                   for index, target in enumerate(("cargo", "rpm", "deb", "arch", "ccs", "tag"))]]
+        for failed_index, reason in cases:
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as directory:
+                calls = []
+
+                def run(command, **kwargs):
+                    index = len(calls)
+                    self.assertEqual(command, commands[index])
+                    calls.append(command)
+                    status = (1 if index == 0 else 2) if index == failed_index else 0
+                    return SimpleNamespace(returncode=status, stdout="  Next version: 0.17.0\n")
+
+                summary = Path(directory) / "summary"
+                stdout = io.StringIO()
+                with patch.object(nightly, "git", return_value=COMMIT), \
+                        patch.object(nightly.subprocess, "run", side_effect=run), \
+                        patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), redirect_stdout(stdout):
+                    result = nightly.preflight(COMMIT, workflow, datetime(2026, 9, 5, tzinfo=timezone.utc))
+                    nightly.report(result)
+                self.assertEqual(json.loads(stdout.getvalue()), result)
+                self.assertIn(COMMIT, summary.read_text())
+                if reason:
+                    self.assertEqual(result["state"], "unsupported_commit")
+                    self.assertEqual(result["outcome"], "skipped")
+                    self.assertEqual(result["reason"], reason)
+                    self.assertEqual(len(calls), failed_index + 1)
+                else:
+                    self.assertEqual(result["state"], "supported_commit")
+                    self.assertEqual(result["tag_name"], "v" + version)
+                    self.assertEqual(calls, commands)
+
+    def test_preflight_operational_errors_are_not_unsupported_content(self):
+        with patch.object(nightly, "git", return_value="c" * 40), \
+                self.assertRaises(nightly.Failure) as error:
+            nightly.preflight(COMMIT, "b" * 40, datetime.now(timezone.utc))
+        self.assertEqual(error.exception.record["outcome"], "preflight_checkout_mismatch")
+        with patch.object(nightly, "git", return_value=COMMIT), \
+                patch.object(nightly.subprocess, "run", return_value=SimpleNamespace(returncode=128)), \
+                self.assertRaises(nightly.Failure) as error:
+            nightly.preflight(COMMIT, "b" * 40, datetime.now(timezone.utc))
+        self.assertEqual(error.exception.record["outcome"], "preflight_ancestry_failed")
+
+    def test_preflight_cli_skips_without_api_or_failure_exit(self):
+        with patch.object(sys, "argv", ["nightly-release.py", "preflight", "--commit", COMMIT,
+                                       "--workflow-commit", "b" * 40]), \
+                patch.object(nightly, "git", return_value=COMMIT), \
+                patch.object(nightly.subprocess, "run", return_value=SimpleNamespace(returncode=1)), \
+                patch.object(nightly, "GitHub", side_effect=AssertionError("preflight must not access GitHub")), \
+                redirect_stdout(io.StringIO()) as stdout:
+            self.assertIsNone(nightly.main())
+        self.assertEqual(json.loads(stdout.getvalue())["outcome"], "skipped")
+
     def test_notes_boundary_table(self):
         malformed = "v0.17.0-nightly.preview\t999999"
         earlier = "v0.17.0-nightly.20260903\t100"
