@@ -839,3 +839,71 @@ fn schema_guards_typed_claim_policies_against_raw_anchor_drift() {
         "raw SQL must not narrow a claim below its current anchor kind"
     );
 }
+
+#[test]
+fn claim_index_answers_exactly_what_the_sql_finders_return() {
+    let (_temp, conn) = create_test_db();
+    let first = insert_trove(&conn, "first");
+    let second = insert_trove(&conn, "second");
+    let third = insert_trove(&conn, "third");
+    let node = directory(0o755, 0, 0, 1);
+    for path in ["/etc", "/usr"] {
+        insert_anchor(&conn, path, first, &node);
+    }
+    for (path, trove) in [
+        ("/etc", first),
+        ("/etc", second),
+        ("/usr", second),
+        ("/usr", third),
+    ] {
+        PayloadClaim::new_directory(path.to_string(), trove, node.clone())
+            .unwrap()
+            .insert(&conn)
+            .unwrap();
+    }
+    // A directory claim materialized through an existing symlink-to-directory
+    // edge: the anchor at /var is a symlink to /etc, the claim is the package's
+    // directory, and the typed target is the resolved directory.
+    insert_anchor(&conn, "/var", third, &symlink("/etc", 0, 0, 2));
+    PayloadClaim::new_directory("/var".to_string(), third, node.clone())
+        .unwrap()
+        .with_anchor_policy(PayloadClaimAnchorPolicy::DirectoryOrSymlinkToDirectory)
+        .with_materialization_target(Some("/etc".to_string()))
+        .insert(&conn)
+        .unwrap();
+
+    let index = PayloadClaim::index_all(&conn).unwrap();
+    let key = |claim: &PayloadClaim| {
+        (
+            claim.trove_id,
+            claim.path.clone(),
+            claim.materialization_target_path.clone(),
+        )
+    };
+    for path in ["/etc", "/usr", "/var", "/missing"] {
+        let by_path_sql = PayloadClaim::find_by_path(&conn, path)
+            .unwrap()
+            .iter()
+            .map(key)
+            .collect::<Vec<_>>();
+        let by_path_index = index.by_path(path).map(key).collect::<Vec<_>>();
+        assert_eq!(by_path_index, by_path_sql, "by_path {path}");
+
+        let retaining_sql = PayloadClaim::find_retaining_path(&conn, path)
+            .unwrap()
+            .iter()
+            .map(key)
+            .collect::<Vec<_>>();
+        let retaining_index = index
+            .retaining(path)
+            .into_iter()
+            .map(key)
+            .collect::<Vec<_>>();
+        assert_eq!(retaining_index, retaining_sql, "retaining {path}");
+    }
+    // Anchors carry their own claim, so /etc and /usr each have three
+    // retainers (two explicit claims plus the anchor; /etc also via the target).
+    assert_eq!(index.retaining("/etc").len(), 3);
+    assert_eq!(index.retaining("/usr").len(), 3);
+    assert_eq!(index.retaining("/var").len(), 1);
+}

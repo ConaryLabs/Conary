@@ -118,7 +118,7 @@ pub use package_transaction_staging::{
     PackageTransactionSqlWork, PackageTransactionStaging, StagedAnchorDisposition, StagedConfigRow,
     StagedHistoryAction, StagedHistoryRow, StagedPayloadOutcome, StagedPayloadRow,
 };
-pub use payload_claim::{PayloadClaim, PayloadClaimAnchorPolicy};
+pub use payload_claim::{PayloadClaim, PayloadClaimAnchorPolicy, PayloadClaimIndex};
 pub use persisted_value::{InvalidPersistedValue, PersistedValueCorruption};
 pub use provenance::Provenance;
 pub use provide_entry::ProvideEntry;

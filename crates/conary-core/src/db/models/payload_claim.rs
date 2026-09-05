@@ -8,6 +8,7 @@ use crate::payload::{
 };
 use rusqlite::{Connection, Row, Transaction, params, types::Type};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Component as PathComponent, Path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +291,32 @@ impl PayloadClaim {
             .collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Load every claim once, ordered by `(trove_id, path)`, for repeated
+    /// per-path lookups that would otherwise issue one query per file.
+    pub fn index_all(conn: &Connection) -> Result<PayloadClaimIndex> {
+        let sql = format!(
+            "SELECT {} FROM payload_claims ORDER BY trove_id, path",
+            Self::COLUMNS
+        );
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let claims = stmt
+            .query_map([], Self::from_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut by_path: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut by_target: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, claim) in claims.iter().enumerate() {
+            by_path.entry(claim.path.clone()).or_default().push(index);
+            if let Some(target) = &claim.materialization_target_path {
+                by_target.entry(target.clone()).or_default().push(index);
+            }
+        }
+        Ok(PayloadClaimIndex {
+            claims,
+            by_path,
+            by_target,
+        })
+    }
+
     pub fn set_materialization_target(
         conn: &Connection,
         path: &str,
@@ -549,6 +576,59 @@ fn validate_absolute_path(path: &str, authority: &str) -> Result<()> {
         )));
     }
     Ok(())
+}
+
+/// In-memory view of the `payload_claims` table for one build.
+///
+/// Lookups answer exactly what [`PayloadClaim::find_by_path`] and
+/// [`PayloadClaim::find_retaining_path`] return, in the same order.
+pub struct PayloadClaimIndex {
+    claims: Vec<PayloadClaim>,
+    by_path: HashMap<String, Vec<usize>>,
+    by_target: HashMap<String, Vec<usize>>,
+}
+
+impl PayloadClaimIndex {
+    /// Claims whose own path is `path`, ordered by `trove_id`.
+    pub fn by_path(&self, path: &str) -> impl Iterator<Item = &PayloadClaim> + '_ {
+        self.by_path
+            .get(path)
+            .into_iter()
+            .flatten()
+            .map(move |index| &self.claims[*index])
+    }
+
+    /// Claims that retain `path` as their own path or as a materialization
+    /// target, ordered by `(trove_id, path)`, each claim once.
+    pub fn retaining(&self, path: &str) -> Vec<&PayloadClaim> {
+        let own = self.by_path.get(path).map(Vec::as_slice).unwrap_or(&[]);
+        let targets = self.by_target.get(path).map(Vec::as_slice).unwrap_or(&[]);
+        let mut merged = Vec::with_capacity(own.len() + targets.len());
+        let (mut left, mut right) = (own.iter().peekable(), targets.iter().peekable());
+        loop {
+            match (left.peek(), right.peek()) {
+                (Some(a), Some(b)) if a == b => {
+                    merged.push(**a);
+                    left.next();
+                    right.next();
+                }
+                (Some(a), Some(b)) if a < b => {
+                    merged.push(**a);
+                    left.next();
+                }
+                (Some(_), Some(_)) => {
+                    merged.push(*right.next().expect("peeked"));
+                }
+                (Some(_), None) => merged.push(*left.next().expect("peeked")),
+                (None, Some(_)) => merged.push(*right.next().expect("peeked")),
+                (None, None) => break,
+            }
+        }
+        merged
+            .into_iter()
+            .map(|index| &self.claims[index])
+            .collect()
+    }
 }
 
 #[cfg(test)]
