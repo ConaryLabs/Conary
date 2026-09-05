@@ -303,8 +303,13 @@ fn test_recover_does_not_promote_magic_only_generation() {
 
     // EROFS magic alone is not enough; recovery scanning now requires the
     // generation artifact contract and metadata.
-    let found = engine.find_latest_intact_generation().unwrap();
-    assert!(found.is_none(), "magic-only generation must be skipped");
+    let found = engine
+        .find_latest_intact_generation(&crate::generation::verity_policy::VerityPolicy::Verified)
+        .unwrap();
+    assert!(
+        found.artifact.is_none(),
+        "magic-only generation must be skipped"
+    );
 }
 
 #[test]
@@ -381,7 +386,7 @@ fn test_boot_selection_recovery_fails_without_valid_artifacts_and_preserves_miss
     let err = engine.recover_boot_selection(&conn).unwrap_err();
 
     assert!(
-        err.to_string().contains("no valid generation artifact"),
+        matches!(err, crate::Error::RecoveryScanExhausted { .. }),
         "unexpected recovery error: {err}"
     );
     assert!(
@@ -422,9 +427,11 @@ fn test_recover_rebuilds_when_image_missing() {
         lock_file: None,
     };
 
-    let found = engine.find_latest_intact_generation().unwrap();
+    let found = engine
+        .find_latest_intact_generation(&crate::generation::verity_policy::VerityPolicy::Verified)
+        .unwrap();
     assert!(
-        found.is_none(),
+        found.artifact.is_none(),
         "no intact image should result in None from find_latest_intact_generation"
     );
 }
@@ -462,5 +469,13 @@ fn test_find_latest_intact_generation_skips_pending_generation() {
         lock_file: None,
     };
 
-    assert!(engine.find_latest_intact_generation().unwrap().is_none());
+    assert!(
+        engine
+            .find_latest_intact_generation(
+                &crate::generation::verity_policy::VerityPolicy::Verified
+            )
+            .unwrap()
+            .artifact
+            .is_none()
+    );
 }

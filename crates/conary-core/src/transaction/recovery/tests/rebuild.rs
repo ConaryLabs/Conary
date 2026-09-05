@@ -2,10 +2,10 @@
 
 use super::*;
 use crate::filesystem::fsverity::FsVerityError;
-use crate::generation::builder::{BootRoot, rebuild_generation_image_with_boot_root};
 use crate::generation::builder::test_support::{
     insert_regular_file_with_parents, persist_test_host_capabilities,
 };
+use crate::generation::builder::{BootRoot, rebuild_generation_image_with_boot_root};
 use crate::generation::metadata::GenerationMetadata;
 use crate::generation::mount::{GenerationMountOutcome, MountOptions};
 use std::cell::{Cell, RefCell};

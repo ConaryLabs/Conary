@@ -21,6 +21,7 @@
 
 pub mod package_relations;
 mod recovery;
+pub use recovery::{RecoveryEvidence, RecoverySkipReason, RecoverySkippedArtifact};
 
 use crate::Result;
 use crate::filesystem::CasStore;

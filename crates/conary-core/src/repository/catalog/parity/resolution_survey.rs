@@ -427,7 +427,9 @@ impl NativeResolutionSurveyErrorVariantV1 {
             Error::InvalidPath(_) => Self::InvalidPath,
             Error::PathTraversal(_) => Self::PathTraversal,
             Error::NotFound(_) => Self::NotFound,
-            Error::RecoveryFailed(_) | Error::BootVerity(_) => Self::RecoveryFailed,
+            Error::RecoveryFailed(_)
+            | Error::BootVerity(_)
+            | Error::RecoveryScanExhausted { .. } => Self::RecoveryFailed,
             Error::TimeoutError(_) => Self::TimeoutError,
             Error::ResolutionError(_) => Self::ResolutionError,
             Error::NotImplemented(_) => Self::NotImplemented,

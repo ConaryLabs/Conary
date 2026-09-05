@@ -230,6 +230,12 @@ pub enum Error {
     #[error("Recovery failed: {0}")]
     RecoveryFailed(String),
 
+    /// No intact generation satisfies the active boot policy.
+    #[error("Recovery failed: no eligible generation artifact; skipped: {skipped_artifacts:?}")]
+    RecoveryScanExhausted {
+        skipped_artifacts: Vec<crate::transaction::RecoverySkippedArtifact>,
+    },
+
     /// Invalid boot verification policy or missing generation verification evidence.
     #[error(transparent)]
     BootVerity(#[from] crate::generation::verity_policy::VerityPolicyError),

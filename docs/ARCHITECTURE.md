@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 67
+revision: 68
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -517,6 +517,13 @@ When recovery rebuilds a missing or damaged selected image, it finalizes
 fs-verity and persists the flag alongside the builder's digest before mounting.
 `generation::builder::verity` owns this finalization for both normal publication
 and recovery; an explicit `off` rebuild skips enablement and mounts unverified.
+Artifact fallback scanning proceeds in descending generation order and selects
+the highest intact artifact eligible under the active policy. A plain artifact
+is skipped under verified policy, never mounted as a fallback. Boot recovery
+returns `RecoveryEvidence` with the selected generation and typed skipped-artifact
+reasons; exhausted scans preserve those reasons in `RecoveryScanExhausted`.
+Policy-ineligible candidates can be skipped, but a verified mount failure remains
+fatal and does not trigger further selection or an unverified retry.
 
 The deployed-system `deploy/dracut` hook invokes `conary system generation
 recover`, which consumes this Rust policy before repair, artifact scanning or
