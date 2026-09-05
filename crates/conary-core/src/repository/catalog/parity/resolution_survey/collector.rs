@@ -33,6 +33,10 @@ use crate::repository::catalog::parity::survey_support::canonical_value_size_wit
 pub(in crate::repository::catalog::parity) enum RootOutcomeSink<'a> {
     Strict(&'a mut NativeResolutionOracleWriter),
     Survey(&'a mut NativeResolutionSurveyCollector),
+    Both {
+        writer: &'a mut Option<NativeResolutionOracleWriter>,
+        collector: &'a mut NativeResolutionSurveyCollector,
+    },
 }
 
 #[allow(dead_code)]
@@ -42,7 +46,9 @@ impl RootOutcomeSink<'_> {
     ) -> ResolutionExplanationLimits {
         match self {
             Self::Strict(_) => ResolutionExplanationLimits::none(),
-            Self::Survey(collector) => collector.explanation_limits(),
+            Self::Survey(collector) | Self::Both { collector, .. } => {
+                collector.explanation_limits()
+            }
         }
     }
 
@@ -57,6 +63,20 @@ impl RootOutcomeSink<'_> {
                 outcome: success.outcome,
             }),
             (Self::Strict(_), Err(failure)) => Err(failure.error),
+            (Self::Both { writer, collector }, Ok(success)) => {
+                if let Some(writer) = writer {
+                    writer.root(&NativeResolutionRootV1 {
+                        root_package_key_sha256: root.package_key_sha256.clone(),
+                        outcome: success.outcome.clone(),
+                    })?;
+                }
+                collector.success(root, success)
+            }
+            (Self::Both { writer, collector }, Err(failure)) => {
+                // A failed root permanently aborts strict output, but never the survey.
+                writer.take();
+                collector.failure(root, *failure)
+            }
             (Self::Survey(collector), Ok(success)) => {
                 collector.success(root, success)?;
                 Ok(())

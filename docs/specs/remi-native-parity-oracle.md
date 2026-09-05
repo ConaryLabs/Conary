@@ -1,6 +1,6 @@
 ---
 title: Remi native full-catalog parity oracle
-summary: Define producer-bound strict native parity lanes, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
+summary: Define single-walk producer-bound strict native parity lanes with live progress, bounded native ALPM provider probing, selective same-export assembly, and deterministic bounded-parallel private collect-all resolution surveys for one complete immutable profile candidate
 last_updated: 2026-09-05
 revision: 76
 status: active
@@ -92,10 +92,15 @@ commit and binary digests.
 
 Every selected production lane produces diagnostics before deciding strict
 authority. It reopens one staged export, creates and reopens the package
-oracle once, runs the resolution producer with `--survey`, validates and
-uploads the canonical survey plus a separate binding manifest, and only then
-runs strict resolution against that same package oracle. Survey findings cause
-the survey process to return non-zero after writing; the lane adapter accepts
+oracle once, and invokes the resolution producer once with both `--survey` and
+`--output`. One `EveryExactPackage` walk feeds both the strict writer and survey
+collector, using the survey collector's explanation limits. The survey is
+written even when roots fail. A failed root aborts strict output while collection
+continues through every root; the strict output directory must not exist when
+`total_failures` is nonzero. Only a failure-free walk finalizes, independently
+reopens, and publishes the strict bundle. Single-destination calls retain their
+strict-only or survey-only behavior. Survey findings cause
+the combined process to return non-zero after writing; the lane adapter accepts
 that status only when it agrees with the validated failure inventory. A strict
 failure still fails the lane and emits no strict lane artifact, but it cannot
 discard an already validated survey. Survey artifacts are named separately,
@@ -551,7 +556,8 @@ or the 32 MiB explanation budget. The next sequence goes to the first available
 worker, so an uneven solve cannot strand idle capacity behind a busy worker's
 private queue. Results may finish out of order, but the sink does not observe
 root `n + 1` before root `n`; strict mode stops dispatch after the first failing
-canonical root, drains workers, and returns that failure.
+canonical root, drains workers, and returns that failure. Combined mode discards
+the strict writer on failure and continues collecting the complete survey.
 Consequently worker scheduling cannot change `roots.jsonl`, manifest bytes or
 digests, survey JSON, counts, histograms, caps, or budget decisions.
 The sink publishes independent conflict-outcome and fatal-failure explanation
@@ -578,7 +584,19 @@ KiB one-worker root-walk RSS observation). Native binaries require a separate
 `--implementation-evidence <FILE>` destination. Its create-only schema-1 JSON
 records the selected worker count, every worker's pool/cache load milliseconds,
 the effective memory budget, and the measured allowance; those run-dependent
-facts never enter canonical oracle or survey bytes.
+facts never enter canonical oracle or survey bytes. Combined production binds
+the same implementation evidence into both the survey manifest and strict lane
+evidence, with no schema or binding changes.
+
+The three native producer binaries enable info-level tracing to stderr. Each
+walk emits a typed `start` event with `workers`, `cpu_limit`,
+`memory_budget_bytes`, and `root_count`; `progress` events report `roots_walked`,
+`total`, and `elapsed_ms` every 5,000 roots or 60 seconds since the previous
+report, whichever comes first. A heartbeat continues during worker loading or
+a long-running root. A `finish` event reports the final count and duration,
+including a walk that returns an error. Progress never writes to stdout or
+changes persisted evidence schemas, so failed lanes retain worker-sizing and
+progress evidence in their job logs.
 
 The retained Fedora measurement covered all 101,187 roots and used
 profile-manifest SHA-256

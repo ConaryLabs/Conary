@@ -35,8 +35,8 @@ use crate::repository::catalog::parity::resolution_parallel::{
     ResolutionWorkerCount, ResolutionWorkerRequest,
 };
 use crate::repository::catalog::parity::resolution_producer::{
-    NativeResolutionEcosystem, Oracle, ResolutionContext, Survey, produce_resolution,
-    resolution_producers, walk_resolution_roots,
+    Both, NativeResolutionEcosystem, Oracle, ResolutionContext, ResolutionProgress, Survey,
+    produce_resolution, resolution_producers, walk_resolution_roots,
 };
 use crate::repository::catalog::parity::resolution_survey::{
     NativeExplanationBudget, NativeRootResolutionError, NativeRootResolutionResult,
@@ -79,7 +79,8 @@ resolution_producers!(
     produce_debian_resolution_oracle,
     produce_debian_resolution_oracle_with_workers,
     produce_debian_resolution_survey,
-    produce_debian_resolution_survey_with_workers
+    produce_debian_resolution_survey_with_workers,
+    produce_debian_resolution_walk_with_workers
 );
 
 struct DebianEcosystem;
@@ -161,6 +162,7 @@ impl<'a> NativeResolutionEcosystem<'a> for DebianEcosystem {
         package_oracle: &NativeParityOracleReader,
         mut sink: RootOutcomeSink<'_>,
         workers: ResolutionWorkerCount,
+        progress: &ResolutionProgress,
     ) -> Result<OrderedResolutionMetrics> {
         if workers.get() == 1 {
             let started = std::time::Instant::now();
@@ -179,13 +181,15 @@ impl<'a> NativeResolutionEcosystem<'a> for DebianEcosystem {
                     context.policy,
                     sink.explanation_limits(),
                 );
-                sink.root(&root, result)
+                let result = sink.root(&root, result);
+                progress.root();
+                result
             })?;
             return Ok(OrderedResolutionMetrics {
                 worker_load_milliseconds: vec![load_milliseconds],
             });
         }
-        walk_resolution_roots::<Self>(context, prepared, package_oracle, sink, workers)
+        walk_resolution_roots::<Self>(context, prepared, package_oracle, sink, workers, progress)
     }
 }
 

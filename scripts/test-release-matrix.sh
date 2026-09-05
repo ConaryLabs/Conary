@@ -2642,7 +2642,7 @@ test_check_release_matrix_rejects_unvalidated_native_oracle_survey() {
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle lane writes and validates diagnostics survey before strict resolution"
+        "native-oracle lane writes and validates diagnostics from one combined resolution walk"
 }
 
 test_check_release_matrix_rejects_omitted_survey_manifest_budget() {

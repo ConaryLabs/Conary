@@ -73,6 +73,8 @@ if "--package-oracle" not in args:
         "schema_version": 1,
     }
 else:
+    with (Path(one("--package-oracle")).parent / "resolution-invocations.jsonl").open("a") as log:
+        log.write(json.dumps(args) + "\n")
     resolution_projection = {"rpm": 5, "debian": 3, "alpm": 3}[ecosystem]
     impl = {"ecosystem": ecosystem, "name": implementation, "projection_schema": resolution_projection, "version": version}
     policy = {"architecture": one("--architecture"), "architecture_admission": "native_only", "installed_state": "empty", "positive_requirements": "required_only", "provider_selection": "native_precedence", "roots": "every_exact_package"}
@@ -120,10 +122,16 @@ else:
             "truncated_evidence": False,
             "withheld_explanations": 0,
         }
+        if os.environ.get("FAKE_STRICT_FAIL") == "1":
+            survey["counts"]["failed_roots"] = 1
+            survey["counts"]["roots_walked"] += 1
+            survey["total_failures"] = 1
+            survey["truncated"] = True
         Path(one("--survey")).write_bytes(canonical(survey))
-        sys.exit(0)
-    if os.environ.get("FAKE_STRICT_FAIL") == "1":
-        sys.exit(17)
+        if survey["total_failures"]:
+            sys.exit(17)
+        if "--output" not in args:
+            sys.exit(0)
     output = Path(one("--output"))
     output.mkdir()
     artifact = output / "roots.jsonl"
@@ -410,12 +418,20 @@ class NativeOracleLaneTests(unittest.TestCase):
             with self.subTest(profile=profile):
                 result = self.run_lane(profile, architecture)
                 self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_single_resolution_invocation(profile)
                 evidence = json.loads(result.stdout)
                 self.assertEqual(evidence["resolution_oracle"]["schema_version"], 3)
                 self.assertEqual(
                     evidence["resolution_oracle"]["implementation"]["projection_schema"],
                     projection_schema,
                 )
+
+    def assert_single_resolution_invocation(self, profile: str) -> None:
+        invocations = (self.root / f"output-{profile}" / "resolution-invocations.jsonl").read_text().splitlines()
+        self.assertEqual(len(invocations), 1)
+        arguments = json.loads(invocations[0])
+        self.assertIn("--survey", arguments)
+        self.assertIn("--output", arguments)
 
     def test_rejects_reordered_public_profiles(self) -> None:
         self.manifest["profiles"].reverse()
@@ -457,7 +473,9 @@ class NativeOracleLaneTests(unittest.TestCase):
     def test_retains_survey_when_strict_resolution_fails(self) -> None:
         result = self.run_lane(strict_failure=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("native resolution producer failed with exit status 17", result.stderr)
+        self.assertIn("native resolution survey recorded 1 failed roots", result.stderr)
+        self.assert_single_resolution_invocation("fedora-44")
+        self.assertFalse((self.root / "output-fedora-44" / "resolution-oracle").exists())
         survey_root = self.root / "survey-fedora-44"
         self.assertTrue((survey_root / "survey.json").is_file())
         manifest = json.loads((survey_root / "manifest.json").read_bytes())

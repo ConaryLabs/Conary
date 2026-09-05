@@ -554,7 +554,6 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="native-oracle-lane-", dir=output_root.parent) as temporary:
         staging = Path(temporary)
         resolution_implementation_path = staging / "resolution-implementation.json"
-        survey_implementation_path = staging / "survey-resolution-implementation.json"
         profile_manifest = staging / "profile.json"
         profile_manifest.write_bytes(canonical_json(profile["revision"]))
         source_paths: list[Path] = []
@@ -588,7 +587,8 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "--package-oracle", str(package_output),
             "--architecture", arguments.architecture,
             "--survey", str(survey_path),
-            "--implementation-evidence", str(survey_implementation_path),
+            "--output", str(resolution_output),
+            "--implementation-evidence", str(resolution_implementation_path),
         ]
         survey = write_resolution_survey(
             survey_command,
@@ -597,8 +597,8 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             lane,
             package["manifest_sha256"],
         )
-        survey_implementation = resolution_implementation_evidence(
-            survey_implementation_path
+        resolution_implementation = resolution_implementation_evidence(
+            resolution_implementation_path
         )
         survey_manifest = {
             "schema_version": NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA,
@@ -620,21 +620,17 @@ def produce(arguments: argparse.Namespace) -> dict[str, Any]:
             "target_architecture": target_architecture,
             "package_oracle": package,
             "survey": survey,
-            "resolution_implementation": survey_implementation,
+            "resolution_implementation": resolution_implementation,
         }
         (survey_output_root / "manifest.json").write_bytes(
             canonical_json(survey_manifest)
         )
-        resolution_command.extend((
-            "--package-oracle", str(package_output),
-            "--architecture", arguments.architecture,
-            "--output", str(resolution_output),
-            "--implementation-evidence", str(resolution_implementation_path),
-        ))
-        invoke(resolution_command, "native resolution producer")
-        resolution_implementation = resolution_implementation_evidence(
-            resolution_implementation_path
-        )
+        if survey["total_failures"] != 0:
+            if resolution_output.exists():
+                raise RuntimeError("failed resolution walk left a strict output directory")
+            raise RuntimeError(
+                f"native resolution survey recorded {survey['total_failures']} failed roots"
+            )
 
     if package_binary != producer_binary(
         arguments.package_producer,

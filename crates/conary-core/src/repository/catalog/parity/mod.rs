@@ -13,6 +13,7 @@ mod resolution_contract;
 mod resolution_io;
 mod resolution_parallel;
 #[cfg(any(
+    test,
     feature = "native-rpm-oracle",
     feature = "native-debian-oracle",
     feature = "native-alpm-oracle"
@@ -37,7 +38,7 @@ pub use alpm::{
     ALPM_PARITY_PROJECTION_SCHEMA_V1, ALPM_RESOLUTION_PROJECTION_SCHEMA_V3, AlpmParityMemberInput,
     produce_alpm_parity_oracle, produce_alpm_resolution_oracle,
     produce_alpm_resolution_oracle_with_workers, produce_alpm_resolution_survey,
-    produce_alpm_resolution_survey_with_workers,
+    produce_alpm_resolution_survey_with_workers, produce_alpm_resolution_walk_with_workers,
 };
 
 #[cfg(feature = "native-rpm-oracle")]
@@ -45,7 +46,7 @@ pub use rpm::{
     RPM_PARITY_PROJECTION_SCHEMA_V1, RPM_RESOLUTION_PROJECTION_SCHEMA_V5, RpmParityMemberInput,
     produce_rpm_parity_oracle, produce_rpm_resolution_oracle,
     produce_rpm_resolution_oracle_with_workers, produce_rpm_resolution_survey,
-    produce_rpm_resolution_survey_with_workers,
+    produce_rpm_resolution_survey_with_workers, produce_rpm_resolution_walk_with_workers,
 };
 
 #[cfg(feature = "native-debian-oracle")]
@@ -53,7 +54,8 @@ pub use debian::{
     DEBIAN_PARITY_PROJECTION_SCHEMA_V1, DEBIAN_RESOLUTION_PROJECTION_SCHEMA_V3,
     DebianParityMemberInput, produce_debian_parity_oracle, produce_debian_resolution_oracle,
     produce_debian_resolution_oracle_with_workers, produce_debian_resolution_survey,
-    produce_debian_resolution_survey_with_workers, run_debian_resolution_worker,
+    produce_debian_resolution_survey_with_workers, produce_debian_resolution_walk_with_workers,
+    run_debian_resolution_worker,
 };
 
 pub use crate::repository::architecture::{
