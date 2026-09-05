@@ -725,6 +725,8 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ("test_nightly_date_selection_priority", "replace", "scripts/nightly-release.py", 'outcome = "selected_by_existing_date_tag"', 'outcome = "selected_by_green_run"', "nightly date tag precedes green selection"),
+    ("test_nightly_date_recovery_route", "replace", ".github/workflows/nightly-release.yml", 'if [[ "$selected_by" == "selected_by_existing_date_tag" ]]; then', 'if [[ "$selected_by" == "selected_by_green_run" ]]; then', "nightly existing date recovery bypasses new-tag preflight"),
     ("test_nightly_preflight_ancestor", "replace", "scripts/nightly-release.py", '"--is-ancestor", workflow_commit, commit', '"--is-ancestor", commit, workflow_commit', "nightly workflow ancestor preflight"),
     ("test_nightly_preflight_grammar", "replace", "scripts/nightly-release.py", '"validate-version", version, "nightly"', '"validate-version", version, "stable"', "nightly selected-tree capability commands"),
     ("test_nightly_preflight_release_target", "replace", "scripts/nightly-release.py", '"--dry-run", "--target", version', '"--dry-run", "--target", stable', "nightly selected-tree capability commands"),

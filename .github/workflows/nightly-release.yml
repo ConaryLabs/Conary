@@ -46,38 +46,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          commit_sha="$(
-            gh api --method GET \
-              -H 'Accept: application/vnd.github+json' \
-              -H 'X-GitHub-Api-Version: 2026-03-10' \
-              "repos/${GITHUB_REPOSITORY}/actions/workflows/merge-validation.yml/runs" \
-              -f branch=main \
-              -f status=success \
-              -f per_page=100 \
-              --jq '.workflow_runs[0].head_sha'
-          )"
-          [[ "$commit_sha" =~ ^[0-9a-f]{40}$ ]] || {
-            echo "no successful merge-validation run for main" >&2
-            exit 1
-          }
-
           git fetch --force --tags origin \
             refs/heads/main:refs/remotes/origin/main
+          selection="$(python3 workflow-authority/scripts/nightly-release.py select)"
+          commit_sha="$(jq -er '.commit_sha' <<< "$selection")"
+          selected_by="$(jq -er '.outcome' <<< "$selection")"
+          nightly_date="$(jq -er '.date' <<< "$selection")"
           git merge-base --is-ancestor "$commit_sha" origin/main || {
             echo "successful merge-validation commit is no longer on main: ${commit_sha}" >&2
             exit 1
           }
           git checkout --detach "$commit_sha"
 
-          capability="$(python3 workflow-authority/scripts/nightly-release.py preflight --commit "$commit_sha" --workflow-commit "$WORKFLOW_COMMIT")"
-          if [[ "$(jq -r '.state' <<< "$capability")" == "unsupported_commit" ]]; then
-            echo 'state=unsupported_commit' >> "$GITHUB_OUTPUT"
-            echo 'outcome=skipped' >> "$GITHUB_OUTPUT"
-            echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-            exit 0
+          if [[ "$selected_by" == "selected_by_existing_date_tag" ]]; then
+            tag_name="$(jq -er '.tag_name' <<< "$selection")"
+          else
+            [[ "$selected_by" == "selected_by_green_run" ]]
+            capability="$(python3 workflow-authority/scripts/nightly-release.py preflight --commit "$commit_sha" --workflow-commit "$WORKFLOW_COMMIT" --date "$nightly_date")"
+            if [[ "$(jq -r '.state' <<< "$capability")" == "unsupported_commit" ]]; then
+              echo 'state=unsupported_commit' >> "$GITHUB_OUTPUT"
+              echo 'outcome=skipped' >> "$GITHUB_OUTPUT"
+              echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            [[ "$(jq -r '.state' <<< "$capability")" == "supported_commit" ]]
+            tag_name="$(jq -er '.tag_name' <<< "$capability")"
           fi
-          [[ "$(jq -r '.state' <<< "$capability")" == "supported_commit" ]]
-          tag_name="$(jq -er '.tag_name' <<< "$capability")"
 
           resolved="$(python3 workflow-authority/scripts/nightly-release.py resolve --tag "$tag_name" --commit "$commit_sha")"
           state="$(jq -r '.state' <<< "$resolved")"

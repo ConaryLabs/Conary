@@ -184,6 +184,36 @@ def resolve(api, candidate_tag, commit):
             "tag_name": tag, "commit_sha": commit, "release_id": release["id"] if release else None}
 
 
+def select_candidate(api, now):
+    date = now.astimezone(timezone.utc).strftime("%Y%m%d")
+    matches = []
+    for tag in git("tag", "--list", "v*-nightly.*").splitlines():
+        metadata = discovered_tag_metadata(tag)
+        if metadata["channel"] != "nightly" or metadata["version"].split("-nightly.")[1] != date:
+            continue
+        if git("cat-file", "-t", f"refs/tags/{tag}") != "tag":
+            raise Failure("unannotated_nightly_tag", tag_name=tag)
+        matches.append(tag)
+    if len(matches) > 1:
+        raise Failure("ambiguous_nightly_date", date=date, tag_names=matches)
+    if matches:
+        tag = matches[0]
+        commit = git("rev-parse", f"refs/tags/{tag}^{{}}")
+        outcome = "selected_by_existing_date_tag"
+    else:
+        runs = api.get("actions/workflows/merge-validation.yml/runs?branch=main&status=success&per_page=100")
+        rows = runs.get("workflow_runs", [])
+        if not rows:
+            raise Failure("green_commit_missing", date=date)
+        commit = rows[0].get("head_sha", "")
+        tag = None
+        outcome = "selected_by_green_run"
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise Failure("invalid_selected_commit")
+    return {"schema_version": 1, "outcome": outcome, "commit_sha": commit,
+            "tag_name": tag, "date": date}
+
+
 def preflight(commit, workflow_commit, now):
     if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (commit, workflow_commit)):
         raise Failure("invalid_preflight_commit")
@@ -294,9 +324,11 @@ def main():
     selection.add_argument("--tag", required=True)
     selection.add_argument("--commit", required=True)
     sub.add_parser("retain")
+    sub.add_parser("select")
     capability = sub.add_parser("preflight")
     capability.add_argument("--commit", required=True)
     capability.add_argument("--workflow-commit", required=True)
+    capability.add_argument("--date", required=True)
     notes = sub.add_parser("notes-boundary")
     notes.add_argument("--tag", required=True)
     receipt = sub.add_parser("receipt")
@@ -304,13 +336,21 @@ def main():
     receipt.add_argument("--output", required=True)
     args = parser.parse_args()
     if args.command == "preflight":
-        report(preflight(args.commit, args.workflow_commit, datetime.now(timezone.utc)))
+        try:
+            date = datetime.strptime(args.date, "%Y%m%d").replace(tzinfo=timezone.utc)
+            if date.strftime("%Y%m%d") != args.date:
+                raise ValueError
+        except ValueError:
+            raise Failure("invalid_nightly_date", date=args.date)
+        report(preflight(args.commit, args.workflow_commit, date))
         return
     if args.command == "notes-boundary":
         report(notes_boundary(args.tag))
         return
     api = GitHub()
-    if args.command == "resolve":
+    if args.command == "select":
+        report(select_candidate(api, datetime.now(timezone.utc)))
+    elif args.command == "resolve":
         report(resolve(api, args.tag, args.commit))
     elif args.command == "retain":
         retain(api, datetime.now(timezone.utc))

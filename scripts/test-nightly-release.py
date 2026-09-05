@@ -45,6 +45,63 @@ class API:
 
 
 class NightlyTests(unittest.TestCase):
+    def test_existing_date_tag_precedes_newer_green_commit(self):
+        newer = "b" * 40
+        malformed = "v0.17.0-nightly.20260905.preview"
+        endpoint = "actions/workflows/merge-validation.yml/runs?branch=main&status=success&per_page=100"
+        cases = (
+            ([TAG], COMMIT, "selected_by_existing_date_tag"),
+            ([malformed, TAG], COMMIT, "selected_by_existing_date_tag"),
+            ([malformed], newer, "selected_by_green_run"),
+            (["v0.17.0-nightly.20260904"], newer, "selected_by_green_run"),
+            ([], newer, "selected_by_green_run"),
+        )
+        for tags, expected, outcome in cases:
+            with self.subTest(tags=tags), tempfile.TemporaryDirectory() as directory:
+                def git(*args):
+                    if args[0] == "tag":
+                        return "\n".join(tags)
+                    self.assertNotIn(malformed, " ".join(args))
+                    return "tag" if args[0] == "cat-file" else COMMIT
+
+                api = API(objects={endpoint: {"workflow_runs": [{"head_sha": newer}]}})
+                summary = Path(directory) / "summary"
+                with patch.object(nightly, "git", side_effect=git), \
+                        patch.object(api, "get", wraps=api.get) as get, \
+                        patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), \
+                        redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    result = nightly.select_candidate(api, datetime(2026, 9, 5, tzinfo=timezone.utc))
+                    nightly.report(result)
+                    self.assertEqual(result["commit_sha"], expected)
+                    self.assertEqual(result["outcome"], outcome)
+                    self.assertIn(expected, summary.read_text())
+                    if TAG in tags:
+                        get.assert_not_called()
+                        self.assertIn("selected_by_existing_date_tag", summary.read_text())
+                        # Existing date selection feeds every recovery state at A, never B.
+                        for release, status, proved, state in (
+                            (None, 404, False, "tag_without_release"),
+                            ({**RELEASE, "draft": True}, 200, False, "draft_release"),
+                            (RELEASE, 200, False, "published_without_proof"),
+                            (RELEASE, 200, True, "proved"),
+                        ):
+                            with patch.object(nightly, "has_proof", return_value=proved):
+                                recovery = nightly.resolve(API(release, status), result["tag_name"], result["commit_sha"])
+                            self.assertEqual(recovery["state"], state)
+                            self.assertEqual(recovery["commit_sha"], COMMIT)
+                    else:
+                        get.assert_called_once_with(endpoint)
+                    if malformed in tags:
+                        self.assertIn("ignored_malformed_tag", summary.read_text())
+
+    def test_two_valid_tags_for_today_fail_without_selecting_green(self):
+        api = API()
+        def git(*args):
+            return TAG + "\nv0.18.0-nightly.20260905" if args[0] == "tag" else "tag"
+        with patch.object(nightly, "git", side_effect=git), self.assertRaises(nightly.Failure) as error:
+            nightly.select_candidate(api, datetime(2026, 9, 5, tzinfo=timezone.utc))
+        self.assertEqual(error.exception.record["outcome"], "ambiguous_nightly_date")
+
     def test_selected_commit_capability_table(self):
         workflow = "b" * 40
         version = "0.17.0-nightly.20260905"
@@ -104,7 +161,7 @@ class NightlyTests(unittest.TestCase):
 
     def test_preflight_cli_skips_without_api_or_failure_exit(self):
         with patch.object(sys, "argv", ["nightly-release.py", "preflight", "--commit", COMMIT,
-                                       "--workflow-commit", "b" * 40]), \
+                                       "--workflow-commit", "b" * 40, "--date", "20260905"]), \
                 patch.object(nightly, "git", return_value=COMMIT), \
                 patch.object(nightly.subprocess, "run", return_value=SimpleNamespace(returncode=1)), \
                 patch.object(nightly, "GitHub", side_effect=AssertionError("preflight must not access GitHub")), \

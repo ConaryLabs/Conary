@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 35
-summary: Nightly tag creation requires selected-tree capability and running-workflow ancestry
+revision: 36
+summary: Recover the existing UTC-date nightly before selecting a newer green commit
 ---
 
 # Release Artifact Matrix
@@ -17,6 +17,18 @@ QEMU/KVM evidence may support a preview row only when it names the absolute run
 date, distro, suite, and pass counts.
 
 ## Current Release Suite
+
+Nightly selection first discovers any valid typed nightly tag for today's UTC
+date, regardless of its stable base. That existing annotated tag selects its
+peeled commit before any green-run API lookup; the summary records
+`selected_by_existing_date_tag`, the tag, date, and commit. It resumes through
+`tag_without_release`, `draft_release`, `published_without_proof`, or `proved`
+even when a newer commit has turned green. Malformed lookalikes remain ignored
+non-authority. Multiple valid tags for the date fail as `ambiguous_nightly_date`.
+Only an absent date tag permits green-commit selection and the new-tag preflight
+below. Existing-tag recovery does not require an older commit to contain a newer
+running workflow revision. Selection pins the UTC date for the whole run, so a
+midnight rollover during preflight cannot change its intended tag date.
 
 Before creating a nightly tag, `nightly-release.py preflight` verifies the
 selected checkout matches the green commit and contains the running workflow's
