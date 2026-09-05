@@ -173,7 +173,7 @@ fn seed_selected_root(db_path: &Path, named_account: Option<(u32, u32)>) {
             &conn,
             &runtime_root.generations_dir(),
             "named ownership selected-root base",
-            &runtime_root.root().join("boot"),
+            &conary_core::generation::builder::BootRoot::Staged(runtime_root.root().join("boot")),
             conary_core::generation::builder::GenerationActivation::Active,
             captured,
         )

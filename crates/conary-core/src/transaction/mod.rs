@@ -291,10 +291,10 @@ pub struct TransactionResult {
 mod integration_tests {
     use crate::db::models::{SystemState, Trove, TroveType};
     use crate::filesystem::CasStore;
-    use crate::generation::builder::build_generation_from_db_with_boot_root;
     use crate::generation::builder::test_support::{
         insert_regular_file_with_parents, persist_test_host_capabilities,
     };
+    use crate::generation::builder::{BootRoot, build_generation_from_db_with_boot_root};
     use crate::generation::metadata::{
         GENERATION_FORMAT, GENERATION_METADATA_FILE, GenerationMetadata,
     };
@@ -358,7 +358,7 @@ mod integration_tests {
             &conn,
             &generations_dir,
             "Full transaction round-trip test",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         );
         assert!(
             result.is_ok(),

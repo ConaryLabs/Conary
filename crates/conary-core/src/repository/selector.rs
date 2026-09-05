@@ -368,7 +368,6 @@ impl PackageSelector {
     }
 
     pub fn select_best_with_options(
-        _conn: &Connection,
         mut candidates: Vec<PackageWithRepo>,
         options: &SelectionOptions,
     ) -> Result<PackageWithRepo> {
@@ -450,7 +449,7 @@ impl PackageSelector {
             return Err(Error::NotFound(msg));
         }
 
-        Self::select_best_with_options(conn, candidates, options)
+        Self::select_best_with_options(candidates, options)
     }
 }
 

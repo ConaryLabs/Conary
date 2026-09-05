@@ -2,6 +2,8 @@
 
 //! Exact eligibility for reusing an already-published boot artifact set.
 
+#[cfg(test)]
+use super::boot_root::BootRoot;
 use std::path::Path;
 
 use tracing::info;
@@ -134,7 +136,7 @@ mod tests {
             &conn,
             &generations_root,
             "initial exact generation",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
         let publication = GenerationPublication::create_pending(
@@ -211,7 +213,7 @@ mod tests {
             &fixture.conn,
             &fixture.generations_root,
             "ordinary package mutation",
-            Path::new("/boot"),
+            &BootRoot::Host,
         )
         .unwrap();
 
@@ -239,7 +241,7 @@ mod tests {
             &fixture.conn,
             &fixture.generations_root,
             "kernel package mutation",
-            Path::new("/boot"),
+            &BootRoot::Host,
         )
         .unwrap_err()
         .to_string();
@@ -269,7 +271,7 @@ mod tests {
             &fixture.conn,
             &fixture.generations_root,
             "ordinary package mutation",
-            Path::new("/boot"),
+            &BootRoot::Host,
         )
         .unwrap_err();
 

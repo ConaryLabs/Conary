@@ -131,7 +131,7 @@ fn candidate_target_package(
         return Ok(None);
     }
 
-    let selected = PackageSelector::select_best_with_options(conn, candidates, &options)?;
+    let selected = PackageSelector::select_best_with_options(candidates, &options)?;
     Ok(Some(selected.package))
 }
 

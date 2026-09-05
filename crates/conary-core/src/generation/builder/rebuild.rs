@@ -1,5 +1,6 @@
 // crates/conary-core/src/generation/builder/rebuild.rs
 
+use super::boot_root::BootRoot;
 use std::path::Path;
 
 use tracing::info;
@@ -41,7 +42,7 @@ pub(crate) fn rebuild_generation_image(
         generations_root,
         gen_number,
         summary,
-        Path::new("/boot"),
+        &BootRoot::Host,
     )
 }
 
@@ -50,7 +51,7 @@ pub(crate) fn rebuild_generation_image_with_boot_root(
     generations_root: &Path,
     gen_number: i64,
     summary: &str,
-    boot_root: &Path,
+    boot_root: &BootRoot,
 ) -> crate::Result<BuildResult> {
     let gen_dir = generations_root.join(gen_number.to_string());
     std::fs::create_dir_all(&gen_dir).map_err(|e| {
@@ -167,7 +168,7 @@ mod tests {
             &generations_root,
             7,
             "wrong-sized runtime CAS object",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap_err()
         .to_string();
@@ -186,7 +187,7 @@ mod tests {
             &generations_root,
             7,
             "missing runtime CAS object",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap_err()
         .to_string();
@@ -247,7 +248,7 @@ mod tests {
             &generations_root,
             7,
             "recovery rebuild",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
 
@@ -320,7 +321,7 @@ mod tests {
             &generations_root,
             7,
             "recovery rebuild",
-            &boot_root,
+            &BootRoot::Staged(boot_root.to_path_buf()),
         )
         .unwrap();
 

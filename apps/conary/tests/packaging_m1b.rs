@@ -369,7 +369,7 @@ fn create_current_generation(db_path: &str) {
         &conn,
         &runtime_root.generations_dir(),
         "packaging-m1b try-session base",
-        &runtime_root.root().join("boot"),
+        &conary_core::generation::builder::BootRoot::Staged(runtime_root.root().join("boot")),
         conary_core::generation::builder::GenerationActivation::Active,
         captured,
     )

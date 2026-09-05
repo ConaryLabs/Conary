@@ -1,5 +1,6 @@
 // crates/conary-core/src/generation/builder/boot_assets.rs
 
+use super::boot_root::BootRoot;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -83,7 +84,7 @@ fn resolve_runtime_boot_asset_sources(boot_root: &Path) -> crate::Result<Runtime
 pub(super) fn resolve_generation_boot_asset_sources(
     runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
-    boot_root: &Path,
+    boot_root: &BootRoot,
 ) -> crate::Result<RuntimeBootAssetSources> {
     resolve_generation_boot_asset_sources_with_tools(
         runtime_inputs,
@@ -99,9 +100,9 @@ pub(super) fn resolve_generation_boot_asset_sources_for_publication(
     conn: &rusqlite::Connection,
     runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
-    boot_root: &Path,
+    boot_root: &BootRoot,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    if boot_root == Path::new("/boot")
+    if *boot_root == BootRoot::Host
         && let Some(sources) =
             super::boot_reuse::resolve_reusable_boot_assets(conn, generations_root)?
     {
@@ -113,13 +114,13 @@ pub(super) fn resolve_generation_boot_asset_sources_for_publication(
 fn resolve_generation_boot_asset_sources_with_tools(
     runtime_inputs: &mut runtime_inputs::RuntimeGenerationInputs,
     generations_root: &Path,
-    boot_root: &Path,
+    boot_root: &BootRoot,
     dracut: &Path,
     depmod: &Path,
     cpio: &Path,
 ) -> crate::Result<RuntimeBootAssetSources> {
-    if boot_root != Path::new("/boot") {
-        return resolve_runtime_boot_asset_sources_with_tools(boot_root, dracut, depmod, cpio);
+    if let BootRoot::Staged(staged) = boot_root {
+        return resolve_runtime_boot_asset_sources_with_tools(staged, dracut, depmod, cpio);
     }
 
     let artifact_root = artifact_root_for_generations_root(generations_root)?;

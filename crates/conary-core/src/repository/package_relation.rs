@@ -185,18 +185,27 @@ pub fn expression_matches_candidate_set(
     relation_scheme: VersionScheme,
     candidates: &[OwnedPackageRelationCandidate],
 ) -> Result<bool, String> {
-    match expression {
-        RepositoryRequirementExpression::Atom(_) => {
-            for candidate in candidates {
-                if candidate.evaluate(expression, relation_scheme)? {
-                    return Ok(true);
-                }
+    evaluate_connectives(expression, &mut |leaf| {
+        for candidate in candidates {
+            if candidate.evaluate(leaf, relation_scheme)? {
+                return Ok(true);
             }
-            Ok(false)
         }
+        Ok(false)
+    })
+}
+
+/// Walk the `and`/`or`/`if`/`unless` structure every relation evaluator
+/// shares; `leaf` decides atoms and `with`/`without`, which differ between
+/// set and single-candidate semantics.
+fn evaluate_connectives(
+    expression: &RepositoryRequirementExpression,
+    leaf: &mut dyn FnMut(&RepositoryRequirementExpression) -> Result<bool, String>,
+) -> Result<bool, String> {
+    match expression {
         RepositoryRequirementExpression::And(operands) => {
             for operand in operands {
-                if !expression_matches_candidate_set(operand, relation_scheme, candidates)? {
+                if !evaluate_connectives(operand, leaf)? {
                     return Ok(false);
                 }
             }
@@ -204,7 +213,7 @@ pub fn expression_matches_candidate_set(
         }
         RepositoryRequirementExpression::Or(operands) => {
             for operand in operands {
-                if expression_matches_candidate_set(operand, relation_scheme, candidates)? {
+                if evaluate_connectives(operand, leaf)? {
                     return Ok(true);
                 }
             }
@@ -215,10 +224,10 @@ pub fn expression_matches_candidate_set(
             condition,
             otherwise,
         } => {
-            if expression_matches_candidate_set(condition, relation_scheme, candidates)? {
-                expression_matches_candidate_set(requirement, relation_scheme, candidates)
+            if evaluate_connectives(condition, leaf)? {
+                evaluate_connectives(requirement, leaf)
             } else if let Some(otherwise) = otherwise {
-                expression_matches_candidate_set(otherwise, relation_scheme, candidates)
+                evaluate_connectives(otherwise, leaf)
             } else {
                 Ok(true)
             }
@@ -228,24 +237,52 @@ pub fn expression_matches_candidate_set(
             condition,
             otherwise,
         } => {
-            if !expression_matches_candidate_set(condition, relation_scheme, candidates)? {
-                expression_matches_candidate_set(requirement, relation_scheme, candidates)
+            if !evaluate_connectives(condition, leaf)? {
+                evaluate_connectives(requirement, leaf)
             } else if let Some(otherwise) = otherwise {
-                expression_matches_candidate_set(otherwise, relation_scheme, candidates)
+                evaluate_connectives(otherwise, leaf)
             } else {
                 Ok(true)
             }
         }
-        RepositoryRequirementExpression::With { .. }
-        | RepositoryRequirementExpression::Without { .. } => {
-            for candidate in candidates {
-                if candidate.evaluate(expression, relation_scheme)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
+        RepositoryRequirementExpression::Atom(_)
+        | RepositoryRequirementExpression::With { .. }
+        | RepositoryRequirementExpression::Without { .. } => leaf(expression),
     }
+}
+
+/// Visit the `target_size`-element combinations of `eligible` in
+/// lexicographic order and return the first one `accept` confirms.
+fn first_combination(
+    eligible: &[usize],
+    target_size: usize,
+    accept: &mut dyn FnMut(&[usize]) -> Result<bool, String>,
+) -> Result<Option<Vec<usize>>, String> {
+    fn visit(
+        eligible: &[usize],
+        target_size: usize,
+        start: usize,
+        selected: &mut Vec<usize>,
+        accept: &mut dyn FnMut(&[usize]) -> Result<bool, String>,
+    ) -> Result<Option<Vec<usize>>, String> {
+        if selected.len() == target_size {
+            return Ok(accept(selected)?.then(|| selected.clone()));
+        }
+        let needed = target_size - selected.len();
+        if eligible.len().saturating_sub(start) < needed {
+            return Ok(None);
+        }
+        for offset in start..eligible.len() {
+            selected.push(eligible[offset]);
+            if let Some(result) = visit(eligible, target_size, offset + 1, selected, accept)? {
+                return Ok(Some(result));
+            }
+            selected.pop();
+        }
+        Ok(None)
+    }
+    let mut selected = Vec::with_capacity(target_size);
+    visit(eligible, target_size, 0, &mut selected, accept)
 }
 
 /// Return the exact minimum-cardinality removable candidate set that makes a
@@ -282,17 +319,21 @@ pub fn minimum_conflict_removal_indices(
     }
 
     for target_size in 1..=eligible.len() {
-        let mut selected = Vec::with_capacity(target_size);
-        if let Some(indices) = find_false_subset(
-            relation,
-            relation_scheme,
-            removable,
-            fixed,
-            &eligible,
-            target_size,
-            0,
-            &mut selected,
-        )? {
+        let removal_makes_false = &mut |selected: &[usize]| {
+            let mut remaining = removable
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !selected.contains(index))
+                .map(|(_, candidate)| candidate.clone())
+                .collect::<Vec<_>>();
+            remaining.extend_from_slice(fixed);
+            Ok(!expression_matches_candidate_set(
+                &relation.expression,
+                relation_scheme,
+                &remaining,
+            )?)
+        };
+        if let Some(indices) = first_combination(&eligible, target_size, removal_makes_false)? {
             return Ok(indices);
         }
     }
@@ -338,17 +379,12 @@ pub fn minimum_relation_addition_indices(
 
     let eligible = (0..additions.len()).collect::<Vec<_>>();
     for target_size in 1..=eligible.len() {
-        let mut selected = Vec::with_capacity(target_size);
-        if let Some(indices) = find_true_subset(
-            relation,
-            relation_scheme,
-            baseline,
-            additions,
-            &eligible,
-            target_size,
-            0,
-            &mut selected,
-        )? {
+        let addition_makes_true = &mut |selected: &[usize]| {
+            let mut candidates = baseline.to_vec();
+            candidates.extend(selected.iter().map(|index| additions[*index].clone()));
+            expression_matches_candidate_set(&relation.expression, relation_scheme, &candidates)
+        };
+        if let Some(indices) = first_combination(&eligible, target_size, addition_makes_true)? {
             return Ok(indices);
         }
     }
@@ -360,105 +396,6 @@ pub fn minimum_relation_addition_indices(
             .as_deref()
             .unwrap_or("<typed relation>")
     ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn find_false_subset(
-    relation: &RepositoryRequirementGroup,
-    relation_scheme: VersionScheme,
-    removable: &[OwnedPackageRelationCandidate],
-    fixed: &[OwnedPackageRelationCandidate],
-    eligible: &[usize],
-    target_size: usize,
-    start: usize,
-    selected: &mut Vec<usize>,
-) -> Result<Option<Vec<usize>>, String> {
-    if selected.len() == target_size {
-        let selected = selected
-            .iter()
-            .copied()
-            .collect::<std::collections::HashSet<_>>();
-        let mut remaining = removable
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !selected.contains(index))
-            .map(|(_, candidate)| candidate.clone())
-            .collect::<Vec<_>>();
-        remaining.extend_from_slice(fixed);
-        return expression_matches_candidate_set(&relation.expression, relation_scheme, &remaining)
-            .map(|matches| {
-                (!matches).then(|| {
-                    let mut result = selected.into_iter().collect::<Vec<_>>();
-                    result.sort_unstable();
-                    result
-                })
-            });
-    }
-    let needed = target_size - selected.len();
-    if eligible.len().saturating_sub(start) < needed {
-        return Ok(None);
-    }
-    for offset in start..eligible.len() {
-        selected.push(eligible[offset]);
-        if let Some(result) = find_false_subset(
-            relation,
-            relation_scheme,
-            removable,
-            fixed,
-            eligible,
-            target_size,
-            offset + 1,
-            selected,
-        )? {
-            return Ok(Some(result));
-        }
-        selected.pop();
-    }
-    Ok(None)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn find_true_subset(
-    relation: &RepositoryRequirementGroup,
-    relation_scheme: VersionScheme,
-    baseline: &[OwnedPackageRelationCandidate],
-    additions: &[OwnedPackageRelationCandidate],
-    eligible: &[usize],
-    target_size: usize,
-    start: usize,
-    selected: &mut Vec<usize>,
-) -> Result<Option<Vec<usize>>, String> {
-    if selected.len() == target_size {
-        let mut candidates = baseline.to_vec();
-        candidates.extend(selected.iter().map(|index| additions[*index].clone()));
-        return expression_matches_candidate_set(
-            &relation.expression,
-            relation_scheme,
-            &candidates,
-        )
-        .map(|matches| matches.then(|| selected.clone()));
-    }
-    let needed = target_size - selected.len();
-    if eligible.len().saturating_sub(start) < needed {
-        return Ok(None);
-    }
-    for offset in start..eligible.len() {
-        selected.push(eligible[offset]);
-        if let Some(result) = find_true_subset(
-            relation,
-            relation_scheme,
-            baseline,
-            additions,
-            eligible,
-            target_size,
-            offset + 1,
-            selected,
-        )? {
-            return Ok(Some(result));
-        }
-        selected.pop();
-    }
-    Ok(None)
 }
 
 fn parse_debian_relation(input: &str) -> Result<RepositoryRequirementExpression, String> {
@@ -798,51 +735,9 @@ pub(crate) fn evaluate_expression(
     relation_scheme: VersionScheme,
     candidate: &PackageRelationCandidate<'_>,
 ) -> Result<bool, String> {
-    match expression {
+    evaluate_connectives(expression, &mut |leaf| match leaf {
         RepositoryRequirementExpression::Atom(clause) => {
             clause_matches_candidate(clause, relation_scheme, candidate)
-        }
-        RepositoryRequirementExpression::And(operands) => {
-            for operand in operands {
-                if !evaluate_expression(operand, relation_scheme, candidate)? {
-                    return Ok(false);
-                }
-            }
-            Ok(true)
-        }
-        RepositoryRequirementExpression::Or(operands) => {
-            for operand in operands {
-                if evaluate_expression(operand, relation_scheme, candidate)? {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
-        }
-        RepositoryRequirementExpression::If {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            if evaluate_expression(condition, relation_scheme, candidate)? {
-                evaluate_expression(requirement, relation_scheme, candidate)
-            } else if let Some(otherwise) = otherwise {
-                evaluate_expression(otherwise, relation_scheme, candidate)
-            } else {
-                Ok(true)
-            }
-        }
-        RepositoryRequirementExpression::Unless {
-            requirement,
-            condition,
-            otherwise,
-        } => {
-            if !evaluate_expression(condition, relation_scheme, candidate)? {
-                evaluate_expression(requirement, relation_scheme, candidate)
-            } else if let Some(otherwise) = otherwise {
-                evaluate_expression(otherwise, relation_scheme, candidate)
-            } else {
-                Ok(true)
-            }
         }
         RepositoryRequirementExpression::With { left, right } => {
             Ok(evaluate_expression(left, relation_scheme, candidate)?
@@ -852,7 +747,8 @@ pub(crate) fn evaluate_expression(
             Ok(evaluate_expression(left, relation_scheme, candidate)?
                 && !evaluate_expression(right, relation_scheme, candidate)?)
         }
-    }
+        connective => evaluate_expression(connective, relation_scheme, candidate),
+    })
 }
 
 fn clause_matches_candidate(

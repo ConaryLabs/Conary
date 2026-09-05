@@ -218,7 +218,7 @@ fn seed_selected_root(db_path: &Path) -> i64 {
             &conn,
             &runtime_root.generations_dir(),
             "static repository selected-root base",
-            &runtime_root.root().join("boot"),
+            &conary_core::generation::builder::BootRoot::Staged(runtime_root.root().join("boot")),
             conary_core::generation::builder::GenerationActivation::Active,
             captured,
         )
