@@ -14,6 +14,7 @@ mod resolution_io;
 mod resolution_parallel;
 mod resolution_root;
 mod resolution_survey;
+mod support;
 mod survey_support;
 
 #[cfg(feature = "native-alpm-oracle")]

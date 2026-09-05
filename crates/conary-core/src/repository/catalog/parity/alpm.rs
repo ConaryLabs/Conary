@@ -16,6 +16,9 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::architecture::require_known_package_architecture_for_profile;
+use crate::repository::catalog::parity::support::{
+    Counter, RegularFileError, checked_increment, require_regular_file,
+};
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -79,7 +82,10 @@ pub fn produce_alpm_parity_oracle(
         let member_ordinal = u32::try_from(ordinal)
             .map_err(|_| Error::ConfigError("ALPM member ordinal exceeds u32".to_string()))?;
         for package in database.pkgs().iter() {
-            native_packages = checked_increment(native_packages, "native package rows")?;
+            native_packages = checked_increment(
+                native_packages,
+                Counter::NativeRows("ALPM native package rows"),
+            )?;
             let row = project_package(profile, member_ordinal, input.source_snapshot, package)?;
             let bytes = crate::json::canonical_json(&row).map_err(|error| {
                 Error::ParseError(format!("serialize ALPM parity package row: {error}"))
@@ -105,14 +111,20 @@ pub fn produce_alpm_parity_oracle(
                         profile.profile, row.name, row.version, row.architecture
                     )));
                 }
-                exact_duplicates = checked_increment(exact_duplicates, "exact duplicates")?;
+                exact_duplicates = checked_increment(
+                    exact_duplicates,
+                    Counter::NativeRows("ALPM exact duplicates"),
+                )?;
                 continue;
             }
             spool.execute(
                 "INSERT INTO packages (package_key_sha256, row_json) VALUES (?1, ?2)",
                 params![row.package_key_sha256, bytes],
             )?;
-            selected_packages = checked_increment(selected_packages, "selected package rows")?;
+            selected_packages = checked_increment(
+                selected_packages,
+                Counter::NativeRows("ALPM selected package rows"),
+            )?;
         }
     }
 
@@ -147,7 +159,7 @@ pub fn produce_alpm_parity_oracle(
             Error::InternalError(format!("reopen staged ALPM parity row: {error}"))
         })?;
         writer.package(&package)?;
-        written = checked_increment(written, "written package rows")?;
+        written = checked_increment(written, Counter::NativeRows("ALPM written package rows"))?;
     }
     if written != selected_packages {
         return Err(Error::InternalError(format!(
@@ -250,7 +262,11 @@ fn validate_inputs(
             )));
         }
         arch_database_object(snapshot)?;
-        require_regular_file(input.database, "ALPM source database")?;
+        require_regular_file(
+            input.database,
+            "ALPM source database",
+            RegularFileError::InvalidPath,
+        )?;
     }
     Ok(())
 }
@@ -264,7 +280,11 @@ fn stage_verified_databases(
         let object = arch_database_object(input.source_snapshot)?;
         let destination = sync_root.join(format!("{}.db", database_name(ordinal)?));
         fs::copy(input.database, &destination)?;
-        require_regular_file(&destination, "staged ALPM database")?;
+        require_regular_file(
+            &destination,
+            "staged ALPM database",
+            RegularFileError::InvalidPath,
+        )?;
         let metadata = fs::metadata(&destination)?;
         if metadata.len() != object.size {
             return Err(Error::ChecksumMismatch {
@@ -596,17 +616,6 @@ fn arch_database_object(snapshot: &SourceSnapshotV1) -> Result<&SourceMetadataOb
         })
 }
 
-fn require_regular_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(Error::InvalidPath(format!(
-            "{label} {} must be a regular file, never a symlink",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
 fn required_text<'a>(value: Option<&'a str>, package: &str, field: &str) -> Result<&'a str> {
     value
         .filter(|value| !value.is_empty())
@@ -638,12 +647,6 @@ fn capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
-}
-
-fn checked_increment(value: u64, label: &str) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| Error::InternalError(format!("ALPM {label} exceed u64")))
 }
 
 #[cfg(test)]

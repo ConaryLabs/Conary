@@ -15,6 +15,9 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::architecture::require_known_package_architecture;
+use crate::repository::catalog::parity::support::{
+    Counter, RegularFileError, checked_increment, require_regular_file,
+};
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -85,7 +88,10 @@ pub fn produce_debian_parity_oracle(
             .map_err(|_| Error::ConfigError("Debian member ordinal exceeds u32".to_string()))?;
         let packages = AptPackages::open(packages_path)?.packages()?;
         for package in packages {
-            native_packages = checked_increment(native_packages, "native package rows")?;
+            native_packages = checked_increment(
+                native_packages,
+                Counter::NativeRows("Debian native package rows"),
+            )?;
             let row = project_package(profile, member_ordinal, input.source_snapshot, package)?;
             let bytes = crate::json::canonical_json(&row).map_err(|error| {
                 Error::ParseError(format!("serialize Debian parity package row: {error}"))
@@ -111,14 +117,20 @@ pub fn produce_debian_parity_oracle(
                         profile.profile, row.name, row.version, row.architecture
                     )));
                 }
-                exact_duplicates = checked_increment(exact_duplicates, "exact duplicates")?;
+                exact_duplicates = checked_increment(
+                    exact_duplicates,
+                    Counter::NativeRows("Debian exact duplicates"),
+                )?;
                 continue;
             }
             spool.execute(
                 "INSERT INTO packages (package_key_sha256, row_json) VALUES (?1, ?2)",
                 params![row.package_key_sha256, bytes],
             )?;
-            selected_packages = checked_increment(selected_packages, "selected package rows")?;
+            selected_packages = checked_increment(
+                selected_packages,
+                Counter::NativeRows("Debian selected package rows"),
+            )?;
         }
     }
     if native_packages
@@ -152,7 +164,7 @@ pub fn produce_debian_parity_oracle(
             Error::InternalError(format!("reopen staged Debian parity row: {error}"))
         })?;
         writer.package(&package)?;
-        written = checked_increment(written, "written package rows")?;
+        written = checked_increment(written, Counter::NativeRows("Debian written package rows"))?;
     }
     if written != selected_packages {
         return Err(Error::InternalError(format!(
@@ -211,7 +223,11 @@ fn validate_inputs(
             )));
         }
         debian_packages_object(snapshot)?;
-        require_regular_file(input.packages, "Debian Packages object")?;
+        require_regular_file(
+            input.packages,
+            "Debian Packages object",
+            RegularFileError::InvalidPath,
+        )?;
     }
     Ok(())
 }
@@ -230,7 +246,11 @@ fn stage_verified_packages(
         fs::create_dir(&member)?;
         let destination = member.join(basename);
         fs::copy(input.packages, &destination)?;
-        require_regular_file(&destination, "staged Debian Packages object")?;
+        require_regular_file(
+            &destination,
+            "staged Debian Packages object",
+            RegularFileError::InvalidPath,
+        )?;
         let metadata = fs::metadata(&destination)?;
         if metadata.len() != object.size {
             return Err(Error::ChecksumMismatch {
@@ -269,7 +289,12 @@ fn project_package(
     snapshot: &SourceSnapshotV1,
     package: AptPackage,
 ) -> Result<NativeParityPackageV1> {
-    validate_sha256(&package.sha256, &package.name)?;
+    if !crate::hash::is_canonical_sha256(&package.sha256) {
+        return Err(Error::ParseError(format!(
+            "apt-pkg package '{}' has invalid SHA256 '{}'",
+            package.name, package.sha256
+        )));
+    }
     require_known_package_architecture(VersionScheme::Debian, &package.architecture)?;
     let size = package.size.parse::<u64>().map_err(|error| {
         Error::ParseError(format!(
@@ -505,30 +530,6 @@ fn provide_architecture_qualifier(
     }
 }
 
-fn validate_sha256(value: &str, package: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(Error::ParseError(format!(
-            "apt-pkg package '{package}' has invalid SHA256 '{value}'"
-        )));
-    }
-    Ok(())
-}
-
-fn require_regular_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(Error::InvalidPath(format!(
-            "{label} {} must be a regular file, never a symlink",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
 fn capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
     match kind {
         RepositoryCapabilityKind::PackageName => "package",
@@ -542,10 +543,4 @@ fn capability_kind(kind: RepositoryCapabilityKind) -> &'static str {
         RepositoryCapabilityKind::Comar => "comar",
         RepositoryCapabilityKind::Generic => "generic",
     }
-}
-
-fn checked_increment(value: u64, label: &str) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| Error::InternalError(format!("Debian {label} exceed u64")))
 }
