@@ -77,21 +77,23 @@ The native package runs `conary system init`, which records host capabilities
 and Remi feed definitions but no installed-package providers, and
 `apps/conary/src/commands/install/dep_resolution.rs` resolves dependencies
 only from Conary's persisted provider graph or repository metadata. So adopt
-the host's installed packages first; they become the dependency source for a
-local artifact:
+the host's installed packages first, with `--full` so their files are
+CAS-backed and present in the selected root; they become the dependency
+source and the lifecycle environment for a local artifact:
 
 ```bash
-sudo conary system adopt --system --dry-run
-sudo conary system adopt --system
+sudo conary system adopt --system --full --dry-run
+sudo conary system adopt --system --full
 sudo conary install ./package.rpm --dry-run   # .deb and .pkg.tar.zst work the same way
 sudo conary install ./package.rpm --yes
 sudo conary list <name> --info
 sudo conary remove <name> --yes
-sudo conary system unadopt --all --yes
 ```
 
 The artifact's dependencies must be satisfied by the adopted packages; with
-no active public universe there is nothing else to resolve them from.
+no active public universe there is nothing else to resolve them from. Once a
+generation is selected, unadoption goes through
+`conary system native-handoff`, not `conary system unadopt`.
 
 ### Paused: the Remi-backed tester loop
 
@@ -128,9 +130,10 @@ which change Conary's tracking records rather than host files; the root-only
 `conary system adopt --refresh --quiet --from-sync-hook` native
 package-manager hook; the hidden boot-time `conary system generation activate`
 continuation, authorized by the selected generation artifact and kernel
-command line; and local-state commands such as `conary repo`, `conary config`,
-`conary pin`, `conary unpin`, and `conary system init`, which change Conary's
-own records only. Use `--dry-run` first when the command supports it. The
+command line; and the local-state class (`conary repo`, `conary pin`,
+`conary unpin`, `conary system init`, and similar), which is not gated even
+where a member writes host files, as `conary config restore` does. Use
+`--dry-run` first when the command supports it. The
 default `conary --help` shows the daily-driver commands;
 `conary --help-advanced` and
 [docs/guides/advanced-commands.md](docs/guides/advanced-commands.md) list the
@@ -178,41 +181,35 @@ already owned by dnf, apt, or pacman, adoption remains available as a
 reversible migration bridge; those native package managers are not runtime
 authority for Conary-owned operations.
 
-A native RPM, DEB, or Arch install runs in this order:
+A native RPM, DEB, or Arch install applies in this order:
 
-1. Resolve the request against source policy, download the artifact, and
-   parse it into a lossless source-authority record with its typed lifecycle
-   bundle.
+1. Download the artifact and parse it into a lossless source-authority record
+   with its typed lifecycle bundle
+   (`apps/conary/src/commands/install/command.rs`).
 2. Resolve dependencies with a SAT solver against typed provides. Missing
-   dependencies are downloaded and installed first as their own batch
-   transaction, which commits before the requested package is touched. If a
-   later step fails, those dependencies stay installed and are recorded with
-   a dependency install reason. Making the whole operation one unit is
-   tracked in [#917](https://github.com/FieldmouseWorks/Conary/issues/917).
-3. Plan conflicts and replacements. `--dry-run` stops here: it proves the
-   package resolves and prints the package, architecture, file count,
-   dependencies that would be installed, and replacements, without changing
-   anything. It does not extract the payload, prepare a selected root, or
-   run the lifecycle preflight, so a scriptlet or capability failure can
-   still surface on the real run.
-4. Take the runtime lock, extract and classify the payload, check file
-   ownership, and prepare an isolated selected root from the current
-   generation or DB/CAS state.
-5. Preflight the exact lifecycle plan against that root and the typed host
-   capability inventory: stages, arguments, triggers, and payload boundaries
-   in source-ABI order. A failure here stops before mutation.
-6. Inside that root and one SQLite transaction, run the lifecycle
-   scriptlets, payload, config decisions, and triggers, then bind the exact
-   selected-root snapshot. Any failure rolls back the transaction and
-   discards the root; nothing from this package has been committed.
-7. Commit SQLite, then publish the recorded generation and select it. A
+   dependencies are installed first as their own changeset, which commits
+   before the requested package is touched and stays committed if a later
+   step fails (`apps/conary/src/commands/install/dependencies.rs`,
+   [#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
+3. Take the runtime lock, plan conflicts and replacements, extract the
+   payload, prepare an isolated selected root, and preflight the typed
+   lifecycle plan against that root and the host capability inventory. A
+   failure here stops before the requested package mutates anything
+   (`command.rs`).
+4. Inside that root and one SQLite transaction, run the lifecycle scriptlets,
+   payload, config decisions, and triggers, then bind the selected-root
+   snapshot. Any failure rolls back the transaction and discards the root
+   (`apps/conary/src/commands/install/batch/execution.rs`).
+5. Commit SQLite, then publish and select the recorded generation. A
    publication failure after commit leaves typed debt for deterministic
    retry.
 
-That ordering is implemented in `apps/conary/src/commands/install/command.rs`,
-`apps/conary/src/commands/install/dependencies.rs`, and
-`apps/conary/src/commands/install/batch/execution.rs`, and the rollback
-boundary is documented under "Composefs-native transactions" in
+`--dry-run` plans dependencies and relations without the lock, prints the
+plan, and returns before payload extraction, root preparation, and lifecycle
+preflight, so a scriptlet or capability failure can still surface on the real
+run.
+
+The rollback boundary is documented under "Composefs-native transactions" in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The lifecycle contract itself is
 [docs/specs/foreign-package-lifecycle-contracts.md](docs/specs/foreign-package-lifecycle-contracts.md).
 
