@@ -83,7 +83,7 @@ fn cache_hit_returns_existing_record() {
         build_env_hash: Some(build_env_hash.to_owned()),
         built_at: "2026-03-19T12:00:00Z".to_owned(),
         build_duration_secs: 30,
-        trust_level: 0,
+        trust_level: crate::derivation::index::DerivationTrustLevel::Unverified,
         provenance_cas_hash: None,
         reproducible: None,
     };
@@ -414,16 +414,24 @@ fn build_log_written_on_failure() {
 }
 
 #[test]
-fn successful_build_generates_provenance() {
-    // Verify that the provenance types can be constructed without panicking.
-    let source = crate::provenance::SourceProvenance::from_tarball(
-        "https://example.com/test.tar.gz",
-        "sha256:abc123",
+fn provenance_storage_failure_propagates() {
+    let tmp = TempDir::new().unwrap();
+    let cas = test_cas(tmp.path());
+    // A regular file at the CAS root deterministically rejects writes even as root.
+    std::fs::remove_dir_all(cas.objects_dir()).unwrap();
+    std::fs::write(cas.objects_dir(), b"blocked").unwrap();
+    let executor = DerivationExecutor::new(cas, tmp.path().join("cas"), ExecutorConfig::default());
+    let provenance = crate::provenance::Provenance::new(
+        crate::provenance::SourceProvenance::from_tarball(
+            "https://example.com/test.tar.gz",
+            "sha256:abc123",
+        ),
+        crate::provenance::BuildProvenance::new("script_hash"),
+        crate::provenance::SignatureProvenance::default(),
+        crate::provenance::ContentProvenance::new("output_hash"),
     );
-    let build = crate::provenance::BuildProvenance::new("script_hash");
-    let sig = crate::provenance::SignatureProvenance::default();
-    let content = crate::provenance::ContentProvenance::new("output_hash");
-    let prov = crate::provenance::Provenance::new(source, build, sig, content);
-    let json = prov.to_json().unwrap();
-    assert!(json.contains("output_hash"));
+    assert!(matches!(
+        executor.store_provenance(&provenance),
+        Err(ExecutorError::Cas(_))
+    ));
 }

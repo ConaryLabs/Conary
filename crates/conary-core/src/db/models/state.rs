@@ -460,8 +460,8 @@ impl<'a> StateEngine<'a> {
 
         // Count current packages
         let package_count: i64 = tx.query_row(
-            "SELECT COUNT(*) FROM troves WHERE type = 'package'",
-            [],
+            "SELECT COUNT(*) FROM troves WHERE type = ?1",
+            params![crate::db::models::TroveType::Package.as_str()],
             |row| row.get(0),
         )?;
 
@@ -477,8 +477,8 @@ impl<'a> StateEngine<'a> {
         tx.execute(
             "INSERT INTO state_members (state_id, trove_name, trove_version, package_release, architecture, install_reason, selection_reason)
              SELECT ?1, name, version, package_release, architecture, install_reason, selection_reason
-             FROM troves WHERE type = 'package'",
-            [state_id],
+             FROM troves WHERE type = ?2",
+            params![state_id, crate::db::models::TroveType::Package.as_str()],
         )?;
 
         if activate {

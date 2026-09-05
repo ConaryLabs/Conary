@@ -109,9 +109,9 @@ impl<'a> EnhancementContext<'a> {
     pub fn set_enhancement_version(&self, version: i32) -> EnhancementResult<()> {
         self.conn.execute(
             "UPDATE converted_packages
-             SET enhancement_version = ?1, enhancement_status = 'complete', enhancement_attempted_at = CURRENT_TIMESTAMP
+             SET enhancement_version = ?1, enhancement_status = ?3, enhancement_attempted_at = CURRENT_TIMESTAMP
              WHERE id = ?2",
-            rusqlite::params![version, self.converted_id],
+            rusqlite::params![version, self.converted_id, EnhancementStatus::Complete.to_db_str()],
         )?;
         Ok(())
     }
@@ -144,24 +144,23 @@ impl ConvertedPackageInfo {
                     cp.enhancement_status, cp.enhancement_version
              FROM converted_packages cp
              JOIN troves t ON t.id = cp.trove_id
-             WHERE cp.enhancement_status = 'pending'
+             WHERE cp.enhancement_status = ?1
              ORDER BY t.name",
         )?;
 
         let packages = stmt
-            .query_map([], |row| {
+            .query_map([EnhancementStatus::Pending.to_db_str()], |row| {
                 Ok(ConvertedPackageInfo {
                     id: row.get(0)?,
                     trove_id: row.get(1)?,
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
+                    enhancement_status: EnhancementStatus::from_row(row, 5)?,
                     enhancement_version: row.get(6)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(packages)
     }
@@ -185,12 +184,11 @@ impl ConvertedPackageInfo {
                     name: row.get(2)?,
                     version: row.get(3)?,
                     original_format: row.get(4)?,
-                    enhancement_status: EnhancementStatus::from_db_str(&row.get::<_, String>(5)?),
+                    enhancement_status: EnhancementStatus::from_row(row, 5)?,
                     enhancement_version: row.get(6)?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+            .collect::<rusqlite::Result<Vec<_>>>()?;
 
         Ok(packages)
     }
@@ -204,17 +202,17 @@ impl ConvertedPackageInfo {
         )?;
 
         let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            Ok((EnhancementStatus::from_row(row, 0)?, row.get::<_, i64>(1)?))
         })?;
 
-        for row in rows.flatten() {
-            match row.0.as_str() {
-                "pending" => stats.pending = row.1 as usize,
-                "in_progress" => stats.in_progress = row.1 as usize,
-                "complete" => stats.complete = row.1 as usize,
-                "failed" => stats.failed = row.1 as usize,
-                "skipped" => stats.skipped = row.1 as usize,
-                _ => {}
+        for row in rows {
+            let row = row?;
+            match row.0 {
+                EnhancementStatus::Pending => stats.pending = row.1 as usize,
+                EnhancementStatus::InProgress => stats.in_progress = row.1 as usize,
+                EnhancementStatus::Complete => stats.complete = row.1 as usize,
+                EnhancementStatus::Failed => stats.failed = row.1 as usize,
+                EnhancementStatus::Skipped => stats.skipped = row.1 as usize,
             }
         }
 
@@ -260,5 +258,25 @@ mod tests {
         assert_eq!(stats.total, 0);
         assert_eq!(stats.pending, 0);
         assert_eq!(stats.complete, 0);
+    }
+    #[test]
+    fn status_counts_reject_unknown_persisted_values() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE converted_packages (enhancement_status TEXT);
+            INSERT INTO converted_packages VALUES ('obsolete');",
+        )
+        .unwrap();
+        let error = ConvertedPackageInfo::count_by_status(&conn).unwrap_err();
+        let EnhancementError::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) =
+            error
+        else {
+            panic!("expected typed persisted error: {error:?}");
+        };
+        assert!(
+            source
+                .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+                .is_some()
+        );
     }
 }

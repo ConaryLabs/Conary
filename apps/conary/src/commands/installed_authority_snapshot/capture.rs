@@ -638,7 +638,11 @@ fn capture_installed_conversions(
                 converted_at: row.get(3)?,
                 enhancement_version: row.get(4)?,
                 extracted_provenance_json: row.get(5)?,
-                enhancement_status: row.get(6)?,
+                enhancement_status: conary_core::ccs::enhancement::EnhancementStatus::from_row(
+                    row, 6,
+                )?
+                .to_db_str()
+                .to_string(),
                 enhancement_error: row.get(7)?,
                 enhancement_attempted_at: row.get(8)?,
                 enhancement_priority: row.get(9)?,

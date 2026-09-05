@@ -764,6 +764,20 @@ fn exact_installed_authority_round_trips_and_rejects_broken_relations() {
 
     let before =
         snapshot_trove(&conn, &Trove::find_by_id(&conn, trove_id).unwrap().unwrap()).unwrap();
+    let mut obsolete = before.installed_conversions.clone();
+    obsolete[0].enhancement_status = "obsolete".to_string();
+    let rejected = conn.transaction().unwrap();
+    let error = super::restore_conversions(&rejected, trove_id, &obsolete).unwrap_err();
+    let conary_core::Error::Database(rusqlite::Error::ToSqlConversionFailure(source)) = error
+    else {
+        panic!("expected typed non-authority: {error:?}");
+    };
+    assert!(
+        source
+            .downcast_ref::<conary_core::db::models::InvalidPersistedValue>()
+            .is_some()
+    );
+    rejected.rollback().unwrap();
     let collection_before = snapshot_trove(
         &conn,
         &Trove::find_by_id(&conn, collection_id).unwrap().unwrap(),

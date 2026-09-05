@@ -79,6 +79,85 @@ pub(super) fn validate_uuid(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn is_terminal_state(state: &str) -> bool {
-    matches!(state, "candidate" | "published" | "failed" | "abandoned")
+/// Rust representation of the `repository_sync_runs.state` CHECK vocabulary.
+/// Unknown persisted values cannot authorize work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(strum_macros::EnumIter))]
+pub enum ProfileSyncRunState {
+    Created,
+    FetchingRoots,
+    FetchingObjects,
+    Authenticated,
+    Ingesting,
+    Validating,
+    ReadyToPublish,
+    Candidate,
+    Published,
+    Failed,
+    Abandoned,
+}
+
+impl ProfileSyncRunState {
+    pub const TERMINAL_STATES: &'static [Self] = &[
+        Self::Candidate,
+        Self::Published,
+        Self::Failed,
+        Self::Abandoned,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::FetchingRoots => "fetching_roots",
+            Self::FetchingObjects => "fetching_objects",
+            Self::Authenticated => "authenticated",
+            Self::Ingesting => "ingesting",
+            Self::Validating => "validating",
+            Self::ReadyToPublish => "ready_to_publish",
+            Self::Candidate => "candidate",
+            Self::Published => "published",
+            Self::Failed => "failed",
+            Self::Abandoned => "abandoned",
+        }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        Self::TERMINAL_STATES.contains(&self)
+    }
+
+    pub(super) fn terminal_sql() -> &'static str {
+        static SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+            ProfileSyncRunState::TERMINAL_STATES
+                .iter()
+                .map(|state| format!("'{}'", state.as_str()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+        &SQL
+    }
+}
+
+impl TryFrom<&str> for ProfileSyncRunState {
+    type Error = crate::db::models::InvalidPersistedValue;
+
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        match value {
+            "created" => Ok(Self::Created),
+            "fetching_roots" => Ok(Self::FetchingRoots),
+            "fetching_objects" => Ok(Self::FetchingObjects),
+            "authenticated" => Ok(Self::Authenticated),
+            "ingesting" => Ok(Self::Ingesting),
+            "validating" => Ok(Self::Validating),
+            "ready_to_publish" => Ok(Self::ReadyToPublish),
+            "candidate" => Ok(Self::Candidate),
+            "published" => Ok(Self::Published),
+            "failed" => Ok(Self::Failed),
+            "abandoned" => Ok(Self::Abandoned),
+            other => Err(Self::Error::new(
+                "profile sync run state",
+                other,
+                "a current lifecycle state; fence this run or rebuild the database",
+            )),
+        }
+    }
 }

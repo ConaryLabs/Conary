@@ -27,7 +27,8 @@ pub struct Trigger {
     pub name: String,
     pub description: Option<String>,
     /// Comma-separated glob patterns (e.g., "/usr/lib/*.so*,/usr/lib64/*.so*")
-    pub pattern: String,
+    pattern: String,
+    compiled_patterns: Vec<Pattern>,
     /// Command to execute when triggered
     pub handler: String,
     /// Lower priority runs first (default: 50)
@@ -44,17 +45,18 @@ impl Trigger {
 
     /// Create a new trigger with a fully validated path-pattern grammar.
     pub fn new(name: String, pattern: String, handler: String) -> Result<Self> {
-        let trigger = Self {
+        let mut trigger = Self {
             id: None,
             name,
             description: None,
             pattern,
+            compiled_patterns: Vec::new(),
             handler,
             priority: 50,
             enabled: true,
             created_at: None,
         };
-        trigger.compile_patterns()?;
+        trigger.compiled_patterns = trigger.compile_patterns()?;
         Ok(trigger)
     }
 
@@ -72,7 +74,6 @@ impl Trigger {
 
     /// Insert this trigger into the database
     pub fn insert(&mut self, conn: &Connection) -> Result<i64> {
-        self.compile_patterns()?;
         conn.execute(
             "INSERT INTO triggers (name, description, pattern, handler, priority, enabled)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -176,17 +177,18 @@ impl Trigger {
 
     /// Convert a database row to a Trigger
     fn from_row(row: &Row) -> rusqlite::Result<Self> {
-        let trigger = Self {
+        let mut trigger = Self {
             id: Some(row.get(0)?),
             name: row.get(1)?,
             description: row.get(2)?,
             pattern: row.get(3)?,
+            compiled_patterns: Vec::new(),
             handler: row.get(4)?,
             priority: row.get(5)?,
             enabled: row.get::<_, i32>(6)? != 0,
             created_at: row.get(7)?,
         };
-        trigger.compile_patterns().map_err(|error| {
+        trigger.compiled_patterns = trigger.compile_patterns().map_err(|error| {
             rusqlite::Error::FromSqlConversionFailure(
                 3,
                 rusqlite::types::Type::Text,
@@ -194,6 +196,18 @@ impl Trigger {
             )
         })?;
         Ok(trigger)
+    }
+
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+
+    /// Replace patterns only after validating the entire new grammar.
+    pub fn set_pattern(&mut self, pattern: String) -> Result<()> {
+        let replacement = Self::new(self.name.clone(), pattern, self.handler.clone())?;
+        self.pattern = replacement.pattern;
+        self.compiled_patterns = replacement.compiled_patterns;
+        Ok(())
     }
 
     /// Parse the pattern string into individual glob patterns
@@ -225,8 +239,8 @@ impl Trigger {
     /// Check if a file path matches any of this trigger's validated patterns.
     pub fn matches(&self, path: &str) -> Result<bool> {
         Ok(self
-            .compile_patterns()?
-            .into_iter()
+            .compiled_patterns
+            .iter()
             .any(|pattern| pattern.matches(path)))
     }
 
@@ -414,10 +428,10 @@ impl ChangesetTrigger {
     pub fn increment_matched(conn: &Connection, changeset_id: i64, trigger_id: i64) -> Result<()> {
         conn.execute(
             "INSERT INTO changeset_triggers (changeset_id, trigger_id, status, matched_files)
-             VALUES (?1, ?2, 'pending', 1)
+             VALUES (?1, ?2, ?3, 1)
              ON CONFLICT(changeset_id, trigger_id) DO UPDATE SET
                 matched_files = matched_files + 1",
-            params![changeset_id, trigger_id],
+            params![changeset_id, trigger_id, TriggerStatus::Pending.as_str()],
         )?;
         Ok(())
     }
@@ -425,9 +439,9 @@ impl ChangesetTrigger {
     /// Update status to running
     pub fn mark_running(conn: &Connection, changeset_id: i64, trigger_id: i64) -> Result<()> {
         conn.execute(
-            "UPDATE changeset_triggers SET status = 'running', started_at = datetime('now')
+            "UPDATE changeset_triggers SET status = ?3, started_at = datetime('now')
              WHERE changeset_id = ?1 AND trigger_id = ?2",
-            params![changeset_id, trigger_id],
+            params![changeset_id, trigger_id, TriggerStatus::Running.as_str()],
         )?;
         Ok(())
     }
@@ -440,9 +454,14 @@ impl ChangesetTrigger {
         output: Option<&str>,
     ) -> Result<()> {
         conn.execute(
-            "UPDATE changeset_triggers SET status = 'completed', completed_at = datetime('now'), output = ?3
+            "UPDATE changeset_triggers SET status = ?4, completed_at = datetime('now'), output = ?3
              WHERE changeset_id = ?1 AND trigger_id = ?2",
-            params![changeset_id, trigger_id, output],
+            params![
+                changeset_id,
+                trigger_id,
+                output,
+                TriggerStatus::Completed.as_str()
+            ],
         )?;
         Ok(())
     }
@@ -455,9 +474,14 @@ impl ChangesetTrigger {
         error: &str,
     ) -> Result<()> {
         conn.execute(
-            "UPDATE changeset_triggers SET status = 'failed', completed_at = datetime('now'), output = ?3
+            "UPDATE changeset_triggers SET status = ?4, completed_at = datetime('now'), output = ?3
              WHERE changeset_id = ?1 AND trigger_id = ?2",
-            params![changeset_id, trigger_id, error],
+            params![
+                changeset_id,
+                trigger_id,
+                error,
+                TriggerStatus::Failed.as_str()
+            ],
         )?;
         Ok(())
     }

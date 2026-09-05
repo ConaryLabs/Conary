@@ -16,8 +16,8 @@ pub(super) use path::sync_repository_remi_from_db_path;
 pub use run::{
     PROFILE_SYNC_HEARTBEAT_INTERVAL, ProfileSyncCandidate, ProfileSyncFailureCategory,
     ProfileSyncFailureStage, ProfileSyncRun, ProfileSyncRunMember, ProfileSyncRunRecovery,
-    abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup, begin_profile_sync_run,
-    begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
+    ProfileSyncRunState, abort_profile_sync_run, acknowledge_profile_sync_candidate_cleanup,
+    begin_profile_sync_run, begin_profile_sync_run_with_input, begin_profile_sync_run_with_members,
     complete_profile_sync_candidate, current_profile_sync_candidate, heartbeat_profile_sync_run,
     ready_profile_sync_run, record_profile_sync_run_member, recover_expired_profile_sync_runs,
 };

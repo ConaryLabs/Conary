@@ -5,6 +5,7 @@
 use super::validation::validate_current_scriptlet_summary;
 use super::{CONVERSION_VERSION, ChunkConversionState, ConvertedPackage};
 use crate::ccs::convert::ScriptletBundleSummary;
+use crate::ccs::enhancement::EnhancementStatus;
 use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
@@ -432,7 +433,7 @@ impl ConvertedPackage {
     pub fn update_enhancement_status(
         &mut self,
         conn: &Connection,
-        status: &str,
+        status: EnhancementStatus,
         error: Option<&str>,
     ) -> Result<()> {
         let id = self.id.ok_or_else(|| {
@@ -443,10 +444,10 @@ impl ConvertedPackage {
 
         conn.execute(
             "UPDATE converted_packages SET enhancement_status = ?1, enhancement_error = ?2, enhancement_attempted_at = datetime('now') WHERE id = ?3",
-            rusqlite::params![status, error, id],
+            rusqlite::params![status.to_db_str(), error, id],
         )?;
 
-        self.enhancement_status = status.to_string();
+        self.enhancement_status = status.to_db_str().to_string();
         self.enhancement_error = error.map(|s| s.to_string());
         Ok(())
     }
@@ -466,28 +467,34 @@ impl ConvertedPackage {
             "UPDATE converted_packages SET
                 enhancement_version = ?1,
                 extracted_provenance_json = ?2,
-                enhancement_status = 'complete',
+                enhancement_status = ?4,
                 enhancement_error = NULL,
                 enhancement_attempted_at = datetime('now')
              WHERE id = ?3",
-            rusqlite::params![version, extracted_provenance, id],
+            rusqlite::params![
+                version,
+                extracted_provenance,
+                id,
+                EnhancementStatus::Complete.to_db_str()
+            ],
         )?;
 
         self.enhancement_version = version;
         self.extracted_provenance_json = extracted_provenance.map(|s| s.to_string());
-        self.enhancement_status = "complete".to_string();
+        self.enhancement_status = EnhancementStatus::Complete.to_db_str().to_string();
         self.enhancement_error = None;
         Ok(())
     }
 
     /// Mark enhancement as failed with error message
     pub fn set_enhancement_failed(&mut self, conn: &Connection, error: &str) -> Result<()> {
-        self.update_enhancement_status(conn, "failed", Some(error))
+        self.update_enhancement_status(conn, EnhancementStatus::Failed, Some(error))
     }
 
     /// Check if this package needs enhancement
     pub fn needs_enhancement(&self, current_version: i32) -> bool {
-        self.enhancement_status == "pending"
-            || (self.enhancement_status == "complete" && self.enhancement_version < current_version)
+        self.enhancement_status == EnhancementStatus::Pending.to_db_str()
+            || (self.enhancement_status == EnhancementStatus::Complete.to_db_str()
+                && self.enhancement_version < current_version)
     }
 }

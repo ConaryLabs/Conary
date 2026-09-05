@@ -520,10 +520,6 @@ impl Pipeline {
                         duration_secs: duration,
                     });
 
-                    // Set trust level 2 (locally built).
-                    let idx = DerivationIndex::new(conn);
-                    let _ = idx.set_trust_level(derivation_id.as_str(), 2);
-
                     total_built += 1;
                 }
             }

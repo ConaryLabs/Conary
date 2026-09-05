@@ -102,7 +102,7 @@ fn provenance_enrichment_does_not_infer_policy_or_relationships() {
         "name suffixes must not create dependencies"
     );
     assert!(matches!(
-        check_enhancement_window(&conn, trove_id),
+        check_enhancement_window(&conn, trove_id).unwrap(),
         EnhancementWindowStatus::Complete
     ));
 }

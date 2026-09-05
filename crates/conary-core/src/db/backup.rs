@@ -22,6 +22,12 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
+mod publication;
+use publication::{
+    verify_generation_publication_state, verify_generation_publication_state_connection,
+    verify_transaction_high_water_mark, verify_transaction_high_water_mark_connection,
+};
+
 const BACKUP_FORMAT: &str = "conary.db-checkpoint.v1";
 const CHECKPOINT_MANIFEST_VERSION: u32 = 1;
 const DEFAULT_RETAIN_COUNT: usize = 5;
@@ -820,81 +826,6 @@ fn validate_generation_directory_number(generation_dir: &Path, expected: i64) ->
     if actual != expected {
         return Err(Error::RecoveryFailed(format!(
             "generation directory mismatch: directory is {actual}, backup manifest says {expected}"
-        )));
-    }
-    Ok(())
-}
-
-fn verify_generation_publication_state(
-    manifest: &GenerationDbBackupManifest,
-    backup_path: &Path,
-) -> Result<()> {
-    verify_generation_publication_state_values(
-        manifest.generation_number,
-        manifest.state_number,
-        backup_path,
-    )
-}
-
-fn verify_generation_publication_state_values(
-    generation_number: i64,
-    expected_state_number: i64,
-    backup_path: &Path,
-) -> Result<()> {
-    let conn = open_immutable_sqlite_snapshot(backup_path)?;
-    verify_generation_publication_state_connection(&conn, generation_number, expected_state_number)
-}
-
-fn verify_generation_publication_state_connection(
-    conn: &Connection,
-    generation_number: i64,
-    expected_state_number: i64,
-) -> Result<()> {
-    let mut stmt = conn.prepare(
-        "SELECT phase, status, recoverable, state_number
-         FROM generation_publications
-         WHERE generation_number = ?1
-         ORDER BY id DESC",
-    )?;
-    let mut rows = stmt.query([generation_number])?;
-    while let Some(row) = rows.next()? {
-        let phase: String = row.get(0)?;
-        let status: String = row.get(1)?;
-        let recoverable: i64 = row.get(2)?;
-        let state_number: Option<i64> = row.get(3)?;
-        if state_number != Some(expected_state_number) {
-            continue;
-        }
-        let complete = phase == "database_backed_up" && status == "complete" && recoverable == 0;
-        let backup_snapshot = phase == "active_marked" && status == "running" && recoverable == 1;
-        if complete || backup_snapshot {
-            return Ok(());
-        }
-    }
-
-    Err(Error::RecoveryFailed(format!(
-        "generation DB backup has no complete or active_marked/running publication state for generation {} state {}",
-        generation_number, expected_state_number
-    )))
-}
-
-fn verify_transaction_high_water_mark(expected: Option<i64>, backup_path: &Path) -> Result<()> {
-    let conn = open_immutable_sqlite_snapshot(backup_path)?;
-    verify_transaction_high_water_mark_connection(&conn, expected)
-}
-
-fn verify_transaction_high_water_mark_connection(
-    conn: &Connection,
-    expected: Option<i64>,
-) -> Result<()> {
-    let actual: Option<i64> = conn.query_row(
-        "SELECT MAX(id) FROM changesets WHERE status = 'applied'",
-        [],
-        |row| row.get(0),
-    )?;
-    if actual != expected {
-        return Err(Error::RecoveryFailed(format!(
-            "generation DB backup transaction high-water mark changed: manifest={expected:?}, backup={actual:?}"
         )));
     }
     Ok(())

@@ -3,6 +3,7 @@
 use super::*;
 use crate::db::models::Repository;
 use crate::db::schema::ensure_current;
+use strum::IntoEnumIterator;
 
 const OWNER_ONE: &str = "00000000-0000-4000-8000-000000000001";
 const OWNER_TWO: &str = "00000000-0000-4000-8000-000000000002";
@@ -438,5 +439,284 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
             "wrong owner",
         )
         .is_err()
+    );
+}
+
+#[test]
+fn terminal_sql_and_typed_states_agree() {
+    let conn = Connection::open_in_memory().unwrap();
+    for state in ProfileSyncRunState::iter() {
+        assert_eq!(
+            ProfileSyncRunState::try_from(state.as_str()).unwrap(),
+            state
+        );
+        let terminal: bool = conn
+            .query_row(
+                &format!("SELECT ?1 IN ({})", ProfileSyncRunState::terminal_sql()),
+                [state.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(terminal, state.is_terminal());
+    }
+    for value in ["", "CREATED", "obsolete"] {
+        assert!(ProfileSyncRunState::try_from(value).is_err());
+    }
+}
+
+#[test]
+fn unknown_run_state_fences_mutation_and_successor() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let owner = uuid::Uuid::new_v4().to_string();
+    let run = begin_profile_sync_run(&conn, "fedora", &owner).unwrap();
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+        .unwrap();
+    conn.execute("UPDATE repository_sync_runs SET state = ?1", ["obsolete"])
+        .unwrap();
+    for error in [
+        heartbeat_profile_sync_run(&conn, &run).unwrap_err(),
+        begin_profile_sync_run(&conn, "fedora", &owner).unwrap_err(),
+        abort_profile_sync_run(
+            &conn,
+            &run,
+            ProfileSyncFailureStage::Publishing,
+            ProfileSyncFailureCategory::Fenced,
+            "test",
+        )
+        .unwrap_err(),
+    ] {
+        let Error::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = error else {
+            panic!("expected typed persisted-value error: {error:?}");
+        };
+        assert!(
+            source
+                .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+                .is_some()
+        );
+    }
+    assert_eq!(run_state(&conn, &run), "obsolete");
+}
+
+#[test]
+fn expiry_prefilter_excludes_terminal_history_and_preserves_unknown_evidence() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    // The valid run sorts first, so a later unknown row must prevent even an
+    // earlier valid row from being committed as abandoned.
+    let valid = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+    let corrupt = begin_profile_sync_run_at(&conn, "ubuntu-26.04", None, OWNER_TWO, 100).unwrap();
+    let now = 100 + REMI_SYNC_LEASE_SECONDS;
+    for state in ProfileSyncRunState::TERMINAL_STATES {
+        let profile = format!("terminal-{}", state.as_str());
+        let run = begin_profile_sync_run_at(&conn, &profile, None, OWNER_ONE, 100).unwrap();
+        let successful = matches!(
+            state,
+            ProfileSyncRunState::Candidate | ProfileSyncRunState::Published
+        );
+        conn.execute(
+            "UPDATE repository_sync_runs
+             SET state = ?1, finished_at = ?2, candidate_cleaned_at = ?2,
+                 candidate_profile_digest = ?4, failure_stage = ?5,
+                 failure_category = ?6, failure_evidence = ?7
+             WHERE run_id = ?3",
+            params![
+                state.as_str(),
+                now,
+                &run.run_id,
+                successful.then(|| digest('a')),
+                (!successful).then_some(ProfileSyncFailureStage::Publishing.as_str()),
+                (!successful).then_some(ProfileSyncFailureCategory::Fenced.as_str()),
+                (!successful).then_some("terminal fixture"),
+            ],
+        )
+        .unwrap();
+    }
+    conn.execute_batch("PRAGMA ignore_check_constraints = ON")
+        .unwrap();
+    conn.execute(
+        "UPDATE repository_sync_runs SET state = ?1, failure_evidence = ?2 WHERE run_id = ?3",
+        params!["bogus", "original fencing evidence", &corrupt.run_id],
+    )
+    .unwrap();
+    let snapshot = || {
+        conn.query_row(
+            "SELECT state, heartbeat_at, lease_expires_at, finished_at,
+                    failure_stage, failure_category, failure_evidence
+             FROM repository_sync_runs WHERE run_id = ?1",
+            [&corrupt.run_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            },
+        )
+        .unwrap()
+    };
+    let before = snapshot();
+    // Inspect the exact production query before decoding: completed history
+    // must not be loaded, while unknown encodings must still reach the decoder.
+    let selected = conn
+        .prepare(&recovery::expired_runs_sql())
+        .unwrap()
+        .query_map([now], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(selected, vec![valid.run_id.clone(), corrupt.run_id.clone()]);
+    let recovery_error = recover_expired_profile_sync_runs_at(&conn, now).unwrap_err();
+    let successor_error =
+        begin_profile_sync_run_at(&conn, &corrupt.source_profile, None, OWNER_ONE, now)
+            .unwrap_err();
+    let abandon_error = {
+        let tx = Transaction::new_unchecked(&conn, TransactionBehavior::Immediate).unwrap();
+        abandon_expired_run(
+            &tx,
+            &corrupt.source_profile,
+            &corrupt.run_id,
+            now,
+            corrupt.fencing_epoch,
+            "test direct recovery",
+        )
+        .unwrap_err()
+    };
+    for error in [recovery_error, successor_error, abandon_error] {
+        let Error::Database(rusqlite::Error::FromSqlConversionFailure(_, _, source)) = error else {
+            panic!("expected typed persisted-value error: {error:?}");
+        };
+        let invalid = source
+            .downcast_ref::<crate::db::models::InvalidPersistedValue>()
+            .expect("unknown state must retain its typed fencing error");
+        assert_eq!(invalid.value(), "bogus");
+    }
+    assert_eq!(snapshot(), before);
+    assert_eq!(
+        run_state(&conn, &valid),
+        ProfileSyncRunState::Created.as_str()
+    );
+}
+
+#[test]
+fn recovery_abandons_every_current_nonterminal_state() {
+    for state in ProfileSyncRunState::iter().filter(|state| !state.is_terminal()) {
+        let conn = Connection::open_in_memory().unwrap();
+        ensure_current(&conn).unwrap();
+        let run = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+        conn.execute(
+            "UPDATE repository_sync_runs SET state = ?1 WHERE run_id = ?2",
+            params![state.as_str(), &run.run_id],
+        )
+        .unwrap();
+        let recovered =
+            recover_expired_profile_sync_runs_at(&conn, 100 + REMI_SYNC_LEASE_SECONDS).unwrap();
+        assert_eq!(
+            recovered,
+            vec![ProfileSyncRunRecovery {
+                run_id: run.run_id.clone(),
+                source_profile: run.source_profile.clone(),
+            }]
+        );
+        assert_eq!(
+            run_state(&conn, &run),
+            ProfileSyncRunState::Abandoned.as_str()
+        );
+    }
+}
+
+#[test]
+fn sync_run_variants_and_terminal_classification_match_schema_check() {
+    use std::collections::BTreeSet;
+
+    let schema = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/db/current_schema/sql/repository.sql"
+    ));
+    let table = schema
+        .split_once("CREATE TABLE repository_sync_runs (")
+        .expect("sync-run table must exist in the current schema")
+        .1
+        .split_once("CREATE INDEX")
+        .expect("sync-run table must end before its indexes")
+        .0;
+    let check_values = |prefix| {
+        let list = table
+            .split_once(prefix)
+            .expect("sync-run state CHECK must exist")
+            .1
+            .split_once(')')
+            .expect("state CHECK value list must close")
+            .0;
+        list.split(',')
+            .map(|value| {
+                value
+                    .trim()
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+                    .expect("state CHECK entries must be SQL string literals")
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let schema_states = check_values("CHECK(state IN (");
+    let enum_states = ProfileSyncRunState::iter()
+        .map(ProfileSyncRunState::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(enum_states.len(), ProfileSyncRunState::iter().count());
+    assert_eq!(
+        schema_states, enum_states,
+        "schema and enum must agree in both directions"
+    );
+    for value in schema_states {
+        assert_eq!(
+            ProfileSyncRunState::try_from(value).unwrap().as_str(),
+            value
+        );
+    }
+
+    // The schema requires finished_at for precisely the terminal states.
+    let schema_terminal = check_values("state NOT IN (");
+    let enum_terminal = ProfileSyncRunState::iter()
+        .filter(|state| state.is_terminal())
+        .map(ProfileSyncRunState::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(schema_terminal, enum_terminal);
+}
+
+#[test]
+fn successor_acquisition_treats_ingesting_as_live_nonterminal() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let run = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+    conn.execute(
+        "UPDATE repository_sync_runs SET state = ?1 WHERE run_id = ?2",
+        params![ProfileSyncRunState::Ingesting.as_str(), &run.run_id],
+    )
+    .unwrap();
+
+    let error = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_TWO, 101).unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)), "{error:?}");
+    assert!(error.to_string().contains("owns fencing epoch 1"));
+    assert_eq!(
+        run_state(&conn, &run),
+        ProfileSyncRunState::Ingesting.as_str()
+    );
+
+    let successor = begin_profile_sync_run_at(
+        &conn,
+        "fedora-44",
+        None,
+        OWNER_TWO,
+        100 + REMI_SYNC_LEASE_SECONDS,
+    )
+    .unwrap();
+    assert_eq!(successor.fencing_epoch, 2);
+    assert_eq!(
+        run_state(&conn, &run),
+        ProfileSyncRunState::Abandoned.as_str()
     );
 }

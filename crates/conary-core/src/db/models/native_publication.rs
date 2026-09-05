@@ -24,16 +24,13 @@ impl NativePublicationStatus {
     }
 
     pub fn from_db(value: &str, column: usize) -> rusqlite::Result<Self> {
-        match value {
-            "public" => Ok(Self::Public),
-            "superseded" => Ok(Self::Superseded),
-            "rolled_back" => Ok(Self::RolledBack),
-            other => Err(rusqlite::Error::FromSqlConversionFailure(
+        Self::try_from(value).map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(
                 column,
                 rusqlite::types::Type::Text,
-                format!("invalid native publication status {other}").into(),
-            )),
-        }
+                Box::new(error),
+            )
+        })
     }
 }
 
@@ -83,10 +80,14 @@ impl NativePackagePublication {
         Self::require_public_source_profile(source_profile)?;
         let mut sql = format!(
             "SELECT {} FROM native_package_publications \
-             WHERE status = 'public' AND source_profile = ?1 AND name = ?2",
+             WHERE status = ?3 AND source_profile = ?1 AND name = ?2",
             Self::COLUMNS
         );
-        let mut values: Vec<String> = vec![source_profile.to_string(), name.to_string()];
+        let mut values: Vec<String> = vec![
+            source_profile.to_string(),
+            name.to_string(),
+            NativePublicationStatus::Public.as_str().to_string(),
+        ];
         if let Some(version) = version {
             values.push(version.to_string());
             sql.push_str(&format!(" AND version = ?{}", values.len()));
@@ -121,12 +122,15 @@ impl NativePackagePublication {
         let pattern = format!("%\"{sha256}\"%");
         let sql = format!(
             "SELECT {} FROM native_package_publications \
-             WHERE status = 'public' AND transport_json LIKE ?1",
+             WHERE status = ?2 AND transport_json LIKE ?1",
             Self::COLUMNS
         );
         let mut stmt = conn.prepare(&sql)?;
         let candidates = stmt
-            .query_map([pattern], Self::from_row)?
+            .query_map(
+                params![pattern, NativePublicationStatus::Public.as_str()],
+                Self::from_row,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         for candidate in candidates {
             if candidate
@@ -203,6 +207,22 @@ impl NativePackagePublication {
             target_path: row.get(15)?,
             trust_status: row.get(16)?,
         })
+    }
+}
+
+impl TryFrom<&str> for NativePublicationStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [Self::Public, Self::Superseded, Self::RolledBack]
+            .into_iter()
+            .find(|state| state.as_str() == value)
+            .ok_or_else(|| {
+                Self::Error::new(
+                    "NativePublicationStatus",
+                    value,
+                    "a current typed value; rebuild or fence obsolete stored state",
+                )
+            })
     }
 }
 

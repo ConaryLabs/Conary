@@ -7,7 +7,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rusqlite::{Connection, Transaction, params};
 use std::collections::BTreeSet;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RepositoryPackageKeyStatus {
     Active,
     Retired,
@@ -79,12 +79,18 @@ impl RepositoryPackageKey {
             "SELECT public_key
              FROM repository_package_keys
              WHERE repository_id = ?1
-               AND status = 'active'
+               AND status = ?2
              ORDER BY public_key",
         )?;
 
         let keys = stmt
-            .query_map([repository_id], |row| row.get(0))?
+            .query_map(
+                params![
+                    repository_id,
+                    RepositoryPackageKeyStatus::Active.as_db_str()
+                ],
+                |row| row.get(0),
+            )?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(keys)
     }
@@ -178,7 +184,15 @@ fn authority_rows_match(
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, Option<String>>(1)?,
-                row.get::<_, String>(2)?,
+                RepositoryPackageKeyStatus::try_from(row.get::<_, String>(2)?.as_str()).map_err(
+                    |error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(error),
+                        )
+                    },
+                )?,
             ))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -188,7 +202,7 @@ fn authority_rows_match(
             (
                 key.public_key.clone(),
                 key.key_id.clone(),
-                key.status.as_db_str().to_string(),
+                key.status.clone(),
             )
         })
         .collect::<Vec<_>>();
@@ -235,6 +249,22 @@ fn replace_rows(
         }
     }
     Ok(())
+}
+
+impl TryFrom<&str> for RepositoryPackageKeyStatus {
+    type Error = crate::db::models::InvalidPersistedValue;
+    fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
+        [Self::Active, Self::Retired]
+            .into_iter()
+            .find(|state| state.as_db_str() == value)
+            .ok_or_else(|| {
+                Self::Error::new(
+                    "RepositoryPackageKeyStatus",
+                    value,
+                    "a current typed value; rebuild or fence obsolete stored state",
+                )
+            })
+    }
 }
 
 #[cfg(test)]

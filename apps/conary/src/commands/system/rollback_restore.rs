@@ -794,7 +794,11 @@ fn restore_conversions(
                 &snapshot.converted_at,
                 snapshot.enhancement_version,
                 &snapshot.extracted_provenance_json,
-                &snapshot.enhancement_status,
+                conary_core::ccs::enhancement::EnhancementStatus::try_from(
+                    snapshot.enhancement_status.as_str()
+                )
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?
+                .to_db_str(),
                 &snapshot.enhancement_error,
                 &snapshot.enhancement_attempted_at,
                 snapshot.enhancement_priority,

@@ -15,7 +15,7 @@ pub struct InvalidPersistedValue {
 }
 
 impl InvalidPersistedValue {
-    pub(super) fn new(
+    pub(crate) fn new(
         kind: &'static str,
         value: impl Into<String>,
         expected: &'static str,
