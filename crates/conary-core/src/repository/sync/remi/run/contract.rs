@@ -79,11 +79,17 @@ pub(super) fn validate_uuid(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// Persisted profile-refresh lifecycle. Unknown values cannot authorize work.
+/// Rust representation of the `repository_sync_runs.state` CHECK vocabulary.
+/// Unknown persisted values cannot authorize work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(strum_macros::EnumIter))]
 pub enum ProfileSyncRunState {
     Created,
+    FetchingRoots,
     FetchingObjects,
+    Authenticated,
+    Ingesting,
+    Validating,
     ReadyToPublish,
     Candidate,
     Published,
@@ -102,7 +108,11 @@ impl ProfileSyncRunState {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Created => "created",
+            Self::FetchingRoots => "fetching_roots",
             Self::FetchingObjects => "fetching_objects",
+            Self::Authenticated => "authenticated",
+            Self::Ingesting => "ingesting",
+            Self::Validating => "validating",
             Self::ReadyToPublish => "ready_to_publish",
             Self::Candidate => "candidate",
             Self::Published => "published",
@@ -133,7 +143,11 @@ impl TryFrom<&str> for ProfileSyncRunState {
     fn try_from(value: &str) -> std::result::Result<Self, Self::Error> {
         match value {
             "created" => Ok(Self::Created),
+            "fetching_roots" => Ok(Self::FetchingRoots),
             "fetching_objects" => Ok(Self::FetchingObjects),
+            "authenticated" => Ok(Self::Authenticated),
+            "ingesting" => Ok(Self::Ingesting),
+            "validating" => Ok(Self::Validating),
             "ready_to_publish" => Ok(Self::ReadyToPublish),
             "candidate" => Ok(Self::Candidate),
             "published" => Ok(Self::Published),

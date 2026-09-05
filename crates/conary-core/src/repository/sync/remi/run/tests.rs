@@ -3,6 +3,7 @@
 use super::*;
 use crate::db::models::Repository;
 use crate::db::schema::ensure_current;
+use strum::IntoEnumIterator;
 
 const OWNER_ONE: &str = "00000000-0000-4000-8000-000000000001";
 const OWNER_TWO: &str = "00000000-0000-4000-8000-000000000002";
@@ -444,15 +445,7 @@ fn abort_marks_only_the_exact_owned_run_abandoned() {
 #[test]
 fn terminal_sql_and_typed_states_agree() {
     let conn = Connection::open_in_memory().unwrap();
-    for state in [
-        ProfileSyncRunState::Created,
-        ProfileSyncRunState::FetchingObjects,
-        ProfileSyncRunState::ReadyToPublish,
-        ProfileSyncRunState::Candidate,
-        ProfileSyncRunState::Published,
-        ProfileSyncRunState::Failed,
-        ProfileSyncRunState::Abandoned,
-    ] {
+    for state in ProfileSyncRunState::iter() {
         assert_eq!(
             ProfileSyncRunState::try_from(state.as_str()).unwrap(),
             state
@@ -611,11 +604,7 @@ fn expiry_prefilter_excludes_terminal_history_and_preserves_unknown_evidence() {
 
 #[test]
 fn recovery_abandons_every_current_nonterminal_state() {
-    for state in [
-        ProfileSyncRunState::Created,
-        ProfileSyncRunState::FetchingObjects,
-        ProfileSyncRunState::ReadyToPublish,
-    ] {
+    for state in ProfileSyncRunState::iter().filter(|state| !state.is_terminal()) {
         let conn = Connection::open_in_memory().unwrap();
         ensure_current(&conn).unwrap();
         let run = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
@@ -638,4 +627,96 @@ fn recovery_abandons_every_current_nonterminal_state() {
             ProfileSyncRunState::Abandoned.as_str()
         );
     }
+}
+
+#[test]
+fn sync_run_variants_and_terminal_classification_match_schema_check() {
+    use std::collections::BTreeSet;
+
+    let schema = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/db/current_schema/sql/repository.sql"
+    ));
+    let table = schema
+        .split_once("CREATE TABLE repository_sync_runs (")
+        .expect("sync-run table must exist in the current schema")
+        .1
+        .split_once("CREATE INDEX")
+        .expect("sync-run table must end before its indexes")
+        .0;
+    let check_values = |prefix| {
+        let list = table
+            .split_once(prefix)
+            .expect("sync-run state CHECK must exist")
+            .1
+            .split_once(')')
+            .expect("state CHECK value list must close")
+            .0;
+        list.split(',')
+            .map(|value| {
+                value
+                    .trim()
+                    .strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+                    .expect("state CHECK entries must be SQL string literals")
+            })
+            .collect::<BTreeSet<_>>()
+    };
+    let schema_states = check_values("CHECK(state IN (");
+    let enum_states = ProfileSyncRunState::iter()
+        .map(ProfileSyncRunState::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(enum_states.len(), ProfileSyncRunState::iter().count());
+    assert_eq!(
+        schema_states, enum_states,
+        "schema and enum must agree in both directions"
+    );
+    for value in schema_states {
+        assert_eq!(
+            ProfileSyncRunState::try_from(value).unwrap().as_str(),
+            value
+        );
+    }
+
+    // The schema requires finished_at for precisely the terminal states.
+    let schema_terminal = check_values("state NOT IN (");
+    let enum_terminal = ProfileSyncRunState::iter()
+        .filter(|state| state.is_terminal())
+        .map(ProfileSyncRunState::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(schema_terminal, enum_terminal);
+}
+
+#[test]
+fn successor_acquisition_treats_ingesting_as_live_nonterminal() {
+    let conn = Connection::open_in_memory().unwrap();
+    ensure_current(&conn).unwrap();
+    let run = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_ONE, 100).unwrap();
+    conn.execute(
+        "UPDATE repository_sync_runs SET state = ?1 WHERE run_id = ?2",
+        params![ProfileSyncRunState::Ingesting.as_str(), &run.run_id],
+    )
+    .unwrap();
+
+    let error = begin_profile_sync_run_at(&conn, "fedora-44", None, OWNER_TWO, 101).unwrap_err();
+    assert!(matches!(error, Error::ConflictError(_)), "{error:?}");
+    assert!(error.to_string().contains("owns fencing epoch 1"));
+    assert_eq!(
+        run_state(&conn, &run),
+        ProfileSyncRunState::Ingesting.as_str()
+    );
+
+    let successor = begin_profile_sync_run_at(
+        &conn,
+        "fedora-44",
+        None,
+        OWNER_TWO,
+        100 + REMI_SYNC_LEASE_SECONDS,
+    )
+    .unwrap();
+    assert_eq!(successor.fencing_epoch, 2);
+    assert_eq!(
+        run_state(&conn, &run),
+        ProfileSyncRunState::Abandoned.as_str()
+    );
 }

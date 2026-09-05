@@ -120,7 +120,11 @@ pub(super) fn abandon_expired_run(
     )?;
     match state {
         ProfileSyncRunState::Created
+        | ProfileSyncRunState::FetchingRoots
         | ProfileSyncRunState::FetchingObjects
+        | ProfileSyncRunState::Authenticated
+        | ProfileSyncRunState::Ingesting
+        | ProfileSyncRunState::Validating
         | ProfileSyncRunState::ReadyToPublish => {}
         ProfileSyncRunState::Candidate
         | ProfileSyncRunState::Published
