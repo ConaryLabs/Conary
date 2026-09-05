@@ -2611,6 +2611,40 @@ test_verify_access_does_not_require_a_running_service() {
     run_helper "$fake_root" verify-access
 }
 
+test_recovery_path_uri_policy() (
+    source "$helper"
+    local fake_root="${tmpdir}/uri-policy-root"
+    local retained="$fake_root/conary/evidence/.remi-operator-staging/completed-resolution-survey-uri-policy"
+    local value reason member="${tmpdir}/uri-policy-member.json" archive="${tmpdir}/uri-policy.tar"
+    mkdir -p "$retained"
+    chmod 0700 "$retained"
+    for name in helper outcome restore; do
+        printf '{}\n' >"$retained/$name.json"
+        chmod 0600 "$retained/$name.json"
+    done
+    while IFS=$'\t' read -r value reason; do
+        jq -cn --arg value "$value" '{message:$value}' >"$member"
+        [[ "$(survey_recovery_path_reason "$member")" == "$reason" ]] || fail "URI policy classification drifted"
+        if [[ "$reason" == safe ]]; then
+            survey_sanitize_json <"$member" | jq -e --arg value "$value" '.message == $value' >/dev/null
+        else
+            survey_sanitize_json <"$member" | jq -e '.message == "<redacted-host-path>"' >/dev/null
+            jq -cn --arg value "$value" '{($value):"detail"}' | survey_sanitize_json \
+                | jq -e '.["<redacted-host-path>"] == "detail"' >/dev/null
+        fi
+        install -m 0600 "$member" "$retained/manifest.json"
+        run_helper "$fake_root" export-resolution-survey-evidence uri-policy export-policy >"$archive"
+        tar -xOf "$archive" recovery.json | jq -e --arg reason "$reason" '
+            if $reason == "safe" then any(.files[]; .path == "manifest.json")
+            else (.withheld | index({path:"manifest.json",reason:$reason})) != null
+                and all(.files[]; .path != "manifest.json") end
+        ' >/dev/null
+        for name in helper outcome restore; do
+            tar -xOf "$archive" "$name.json" | cmp - "$retained/$name.json"
+        done
+    done < <(jq -r '.[] | [.value,.reason] | @tsv' scripts/fixtures/remi-recovery-path-policy.json)
+)
+
 test_rust_resolution_survey_outcome_fixtures() (
     source "$helper"
     local fixture rejected="${tmpdir}/outcome-rejected.json" message
@@ -2675,6 +2709,7 @@ main() {
         return
     fi
     python3 scripts/test-remi-survey-ssh-diagnostic.py
+    test_recovery_path_uri_policy
     test_deploy_conary_accepts_verified_release
     test_deploy_conary_rejects_checksum_mismatch
     test_deploy_conary_requires_ccs_signature

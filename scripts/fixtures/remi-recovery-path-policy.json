@@ -1,0 +1,17 @@
+[
+  {"value":"FILE:///var/lib/remi/private","reason":"private_host_path"},
+  {"value":"File:///var/lib/remi/private","reason":"private_host_path"},
+  {"value":"file%3A%2F%2Fvar/lib/remi/private","reason":"private_host_path"},
+  {"value":"SsH://operator@private.invalid/var/lib/remi","reason":"private_host_path"},
+  {"value":"sCp://operator@private.invalid/private","reason":"private_host_path"},
+  {"value":"SfTp:%2f%2foperator@private.invalid/private","reason":"private_host_path"},
+  {"value":"%66%69%6c%65%3a%2f%2f%2fvar/lib/remi","reason":"private_host_path"},
+  {"value":"%2Fvar%2Flib%2Fremi%2Fprivate","reason":"private_host_path"},
+  {"value":"file%253A%252F%252F%252Fvar/lib/remi","reason":"private_host_path"},
+  {"value":"%25252525252525252525252Fvar/lib/remi","reason":"redaction_unproven"},
+  {"value":"file%XXprivate","reason":"redaction_unproven"},
+  {"value":"journal: /arbitrary-root/private","reason":"private_host_path"},
+  {"value":"survey-output/arch.json","reason":"safe"},
+  {"value":"https://example.invalid/evidence","reason":"safe"},
+  {"value":"https:%2f%2fexample.invalid/evidence","reason":"safe"}
+]

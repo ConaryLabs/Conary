@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -476,6 +477,26 @@ def candidate_survey(profile: str, revision: str, package_manifest: str) -> dict
 
 
 class ResolutionSurveyTransportTests(unittest.TestCase):
+    def test_recovery_uses_the_helpers_path_uri_policy(self) -> None:
+        cases = json.loads((REPO_ROOT / "scripts/fixtures/remi-recovery-path-policy.json").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "diagnostic.json"
+            for case in cases:
+                for document in ({"message": case["value"]}, {case["value"]: "detail"}):
+                    with self.subTest(case=case, document=document):
+                        path.write_text(json.dumps(document))
+                        if case["reason"] == "safe":
+                            TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+                        else:
+                            message = "private host path" if case["reason"] == "private_host_path" else "redaction_unproven"
+                            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, message):
+                                TRANSPORT_TOOL.forbid_recovery_host_paths(path)
+
+    def test_missing_shared_policy_fails_closed(self) -> None:
+        with patch.object(TRANSPORT_TOOL.subprocess, "run", side_effect=OSError("private diagnostic")):
+            with self.assertRaisesRegex(TRANSPORT_TOOL.ValidationError, "redaction_unproven"):
+                TRANSPORT_TOOL.forbid_recovery_host_paths(Path("unused.json"))
+
     def test_conflicting_closure_is_a_canonical_not_installable_reason(self) -> None:
         root = "1" * 64
         conflicting = {"status": "not_installable", "reason": "conflicting_closure"}

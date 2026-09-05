@@ -994,15 +994,46 @@ SURVEY_TRANSPORT_NEXT=""
 SURVEY_RETAINED=""
 SURVEY_COMMAND_STATUS=null
 SURVEY_FAILURE_MESSAGE=""
-# Match absolute path tokens regardless of their top-level directory. Relative
-# evidence paths and HTTPS URLs remain public; file URIs are host-local.
-SURVEY_HOST_PATH_PATTERN='(^|[^A-Za-z0-9_./-])/(?!/)|^/|file:/'
+# The sole recovery path/URI policy. The runner calls the library function below
+# from this same helper; it must not maintain a second grammar or decoder.
+survey_recovery_path_policy() {
+    cat <<'JQ'
+        def hex_digit: ascii_downcase | explode[0] | if . >= 97 then . - 87 else . - 48 end;
+        def percent_decode($budget):
+            if $budget == 0 then . else
+                gsub("%(?<hi>[0-9A-Fa-f])(?<lo>[0-9A-Fa-f])";
+                    [((.hi | hex_digit) * 16 + (.lo | hex_digit))] | implode) as $decoded
+                | if $decoded == . then . else $decoded | percent_decode($budget - 1) end
+            end;
+        def recovery_path_reason:
+            percent_decode(8) as $decoded
+            | if $decoded | contains("%") then "redaction_unproven"
+              elif $decoded | test("(^|[^A-Za-z0-9_./-])/(?!/)|^/|(file|ssh|scp|sftp):"; "i")
+              then "private_host_path" else null end;
+JQ
+}
+
+survey_recovery_path_reason() {
+    local reason
+    # Stream decoded JSON keys and leaves; never load a full-catalog document.
+    if ! reason="$(jq -nr --stream "$(survey_recovery_path_policy)
+        first(inputs | .. | strings | recovery_path_reason | select(. != null)) // \"safe\"
+    " "$1" 2>/dev/null)"; then
+        reason=redaction_unproven
+    fi
+    case "$reason" in
+        safe|private_host_path|redaction_unproven) printf '%s\n' "$reason" ;;
+        *) printf '%s\n' redaction_unproven ;;
+    esac
+}
 
 survey_sanitize_json() {
-    jq -cS --arg pattern "$SURVEY_HOST_PATH_PATTERN" '
-        def redact: if test($pattern) then "<redacted-host-path>" else . end;
+    jq -cS "$(survey_recovery_path_policy)"'
+        def redact: if recovery_path_reason != null then "<redacted-host-path>" else . end;
         walk(if type == "string" then redact
              elif type == "object" then with_entries(.key |= redact) else . end)
+        | if any(.. | strings; recovery_path_reason != null)
+          then error("redaction_unproven") else . end
     '
 }
 
@@ -1070,7 +1101,7 @@ export_resolution_survey_evidence() {
     : >"$rows"
     : >"$skipped"
     local -a members=()
-    local path file size sha256 path_status
+    local path file size sha256 path_reason
     if [[ -e "$retained" || -L "$retained" ]]; then
         [[ -d "$retained" && ! -L "$retained" && "$(stat -c '%a:%u' "$retained")" == "700:$(id -u)" ]] ||
             die "survey recovery root is not a private control-owned directory"
@@ -1091,17 +1122,12 @@ export_resolution_survey_evidence() {
                 jq -cn --arg path "$path" '{path:$path,reason:"empty"}' >>"$skipped"
                 continue
             fi
-            # Decode one JSON leaf at a time, including escaped paths and keys,
-            # without loading a full-catalog survey document into memory.
-            path_status=0
-            jq -en --stream --arg pattern "$SURVEY_HOST_PATH_PATTERN" \
-                'any(inputs; any(.. | strings; test($pattern)))' "$file" \
-                >/dev/null 2>&1 || path_status=$?
-            case "$path_status" in
-                0) jq -cn --arg path "$path" '{path:$path,reason:"private_host_path"}' >>"$skipped"; continue ;;
-                1) ;;
-                *) jq -cn --arg path "$path" '{path:$path,reason:"invalid_json"}' >>"$skipped"; continue ;;
-            esac
+            path_reason="$(survey_recovery_path_reason "$file")"
+            if [[ "$path_reason" != safe ]]; then
+                jq -cn --arg path "$path" --arg reason "$path_reason" \
+                    '{path:$path,reason:$reason}' >>"$skipped"
+                continue
+            fi
             sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
             if [[ "$path" == input-manifest.json ]]; then
                 jq -e --arg survey "$survey_id" --arg export "$export_id" '

@@ -12,6 +12,7 @@ import mmap
 import os
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -2977,15 +2978,22 @@ def verify_output(args: argparse.Namespace) -> None:
 
 
 def forbid_recovery_host_paths(path: Path) -> None:
-    # Same token grammar as SURVEY_HOST_PATH_PATTERN in the fixed helper.
-    pattern = re.compile(r"(^|[^A-Za-z0-9_./-])/(?!/)|^/|file:/")
-    with path.open("rb") as stream, mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
-        position = 0
-        while (start := data.find(b'"', position)) != -1:
-            position = scan_json_string_end(data, start, "survey recovery member")
-            value = decode_json(data[start:position], "survey recovery string")
-            if pattern.search(value):
-                fail("survey recovery member contains a private host path")
+    # Source the exact workflow helper in library mode: one grammar, percent
+    # decoder, and residual check own both host export and runner verification.
+    helper = Path(__file__).resolve().parents[1] / "deploy/remi-deploy-helper.sh"
+    try:
+        result = subprocess.run(
+            ["bash", "-c", 'source "$1"; survey_recovery_path_reason "$2"',
+             "remi-recovery-path-check", str(helper), str(path)],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False,
+        )
+    except OSError:
+        fail("survey recovery member redaction_unproven")
+    if result.returncode == 0 and result.stdout == b"safe\n":
+        return
+    if result.returncode == 0 and result.stdout == b"private_host_path\n":
+        fail("survey recovery member contains a private host path")
+    fail("survey recovery member redaction_unproven")
 
 
 def verify_recovery(args: argparse.Namespace) -> None:
@@ -3050,7 +3058,7 @@ def verify_recovery(args: argparse.Namespace) -> None:
                 not isinstance(item["path"], str) or item["path"] not in allowed
                 or item["path"] in included or item["path"] in withheld
                 or not isinstance(item["reason"], str)
-                or item["reason"] not in {"private_host_path", "empty", "invalid_json"}
+                or item["reason"] not in {"private_host_path", "empty", "redaction_unproven"}
             ):
                 fail("survey recovery withheld file is unsafe or repeated")
             withheld.add(item["path"])

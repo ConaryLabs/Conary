@@ -796,6 +796,8 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_case_sensitive_recovery_uris', 'replace', 'deploy/remi-deploy-helper.sh', '(file|ssh|scp|sftp):"; "i")', '(file|ssh|scp|sftp):"; "")', 'resolution survey shared path policy decodes escaped case-insensitive private URIs'),
+    ('test_check_release_matrix_rejects_independent_recovery_path_policy', 'replace', 'scripts/remi-resolution-survey-transport.py', 'source "$1"; survey_recovery_path_reason "$2"', 'printf "safe\\n"', 'resolution survey verifier calls the helper-owned path policy'),
     ('test_check_release_matrix_rejects_raw_survey_ssh_artifact', 'replace', '.github/workflows/survey-remi-resolution.yml', '--argjson stderr "$(sanitize_helper_stderr)"', '--rawfile stderr "$helper_stderr"', 'resolution survey sanitizes connection identifiers before constructing failure artifacts'),
     ('test_check_release_matrix_rejects_missing_survey_ssh_identity_inventory', 'replace', '.github/workflows/survey-remi-resolution.yml', '--stderr "$helper_stderr" --ssh-config "$REMI_SSH_CONFIG"', '--stderr "$helper_stderr"', 'resolution survey sanitizes connection identifiers before constructing failure artifacts'),
     ('test_check_release_matrix_rejects_residual_survey_ssh_identifiers', 'replace', 'scripts/remi-survey-ssh-diagnostic.py', 'if remaining_identifier(message, identifiers):', 'if False:', 'resolution survey withholds residual connection identifiers after redaction'),
