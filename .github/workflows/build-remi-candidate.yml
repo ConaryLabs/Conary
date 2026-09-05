@@ -46,6 +46,17 @@ jobs:
           sparse-checkout: .github/actions
           fetch-depth: 1
           persist-credentials: false
+      - name: Exclude the workflow authority checkout from the candidate tree
+        # Installed by the workflow, not the candidate revision, so rebuilding an
+        # older merged commit stays clean regardless of that commit's .gitignore.
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '/workflow-authority/\n' >> .git/info/exclude
+          [[ -z "$(git status --porcelain --untracked-files=all -- workflow-authority)" ]] || {
+            echo "workflow-authority checkout is still visible to git status" >&2
+            exit 1
+          }
       - name: Bind exact protected-main source
         id: candidate
         env:
