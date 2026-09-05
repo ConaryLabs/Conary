@@ -4,7 +4,7 @@
 		description,
 		path,
 		noindex = false,
-		imageAlt = 'Conary limited Linux preview: reversible package experiments on the distro you already use.'
+		imageAlt = 'Conary: a pre-alpha cross-distro package manager that installs RPM, DEB, and Arch packages on Fedora, Ubuntu, and Arch.'
 	}: {
 		title: string;
 		description: string;

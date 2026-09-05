@@ -1,18 +1,19 @@
 <script lang="ts">
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
+	import { previewRelease, project } from '$lib/preview-release';
 </script>
 
 <PageMeta
 	title="About Conary — Conary"
-	description="Learn how Conary reinterprets an influential package-manager idea as an independent, ground-up Rust project."
+	description="Conary is an independent, ground-up Rust reimplementation of an influential package-manager idea, built by Fieldmouse Works and licensed MIT OR Apache-2.0."
 	path="/about/"
 />
 
 <PageIntro
 	eyebrow="Project context"
 	title="An old packaging idea, rebuilt from scratch."
-	description="Conary takes inspiration from a visionary mid-2000s design, then starts again in Rust with a deliberately narrower public preview and a modern generation model."
+	description="Conary takes inspiration from a mid-2000s design that got several things right early, then starts again in Rust with a deliberately narrow public preview and a modern generation model."
 />
 
 <section class="independence-band">
@@ -21,7 +22,7 @@
 		<div>
 			<p class="eyebrow">Independent project</p>
 			<p>
-				This is a ground-up reimplementation in Rust—not a fork, port, resurrection, or continuation of the original
+				This is a ground-up reimplementation in Rust, not a fork, port, resurrection, or continuation of the original
 				rPath Conary codebase. It is not affiliated with, endorsed by, or maintained by rPath, SAS, or the original Conary developers.
 			</p>
 		</div>
@@ -44,7 +45,7 @@
 				<div>
 					<h3>rPath builds the original Conary</h3>
 					<p>
-						The <a href="https://en.wikipedia.org/wiki/Conary_(package_manager)">original Conary package manager</a>,
+						The <a href="https://en.wikipedia.org/wiki/Conary">original Conary package manager</a>,
 						developed by the rPath team, pioneered content-addressable package storage, repository-level binary diffs,
 						a SAT-based resolver, and rollback of system state.
 					</p>
@@ -66,7 +67,7 @@
 					<h3>Conary starts again in Rust</h3>
 					<p>
 						The current project treats the filesystem as a content store, gives mutations explicit transaction and recovery boundaries,
-						and resolves dependencies before applying changes—without reusing the original codebase.
+						and resolves dependencies before applying changes, without reusing a line of the original codebase.
 					</p>
 				</div>
 			</li>
@@ -74,7 +75,47 @@
 	</div>
 </section>
 
-<section class="section section-band approach">
+<section class="section section-band who">
+	<div class="container grid-12">
+		<div class="who-title">
+			<p class="eyebrow">Who makes it</p>
+			<h2 class="section-heading">A Fieldmouse Works project.</h2>
+		</div>
+		<div class="who-copy">
+			<p>
+				Conary is built by <a href={project.orgUrl}>{project.orgName}</a>, the home for open
+				tools aimed at closed, expensive, or restrictive software ecosystems. The source lives
+				at <a href={project.repoUrl}>github.com/FieldmouseWorks/Conary</a>; the GitHub
+				organization was previously named ConaryLabs, and old links redirect.
+			</p>
+			<p>
+				It is a single-maintainer project, which is why the verification layer carries the
+				weight a team's review would otherwise carry. The integration harness runs the RPM,
+				DEB, Arch, and CCS pipeline inside Fedora 44, Ubuntu 26.04, and Arch containers
+				against a one-package fixture repository served from the harness's own loopback
+				server: the native package managers and package payloads inside those containers
+				are real, the repository is not. The only clean-host proof is the release artifact
+				proof, which installs the published packages into clean base images of the three
+				distributions through the signed bootstrap and is recorded in the
+				<a href={previewRelease.matrixUrl}>release matrix</a>. A documentation-truth check
+				fails CI when the README, the roadmap, or this site claims something the code does
+				not do.
+			</p>
+			<div id="licensing" class="licensing">
+				<p class="eyebrow">Licensing</p>
+				<p>
+					The Conary client and every library crate are licensed
+					<strong>{project.license}</strong>, so you may use either license. Remi, the
+					hosted package service, is licensed <strong>{project.remiLicense}</strong>: if you
+					run a modified Remi as a service, its users are entitled to the source. Releases
+					published through v0.16.1 remain MIT.
+				</p>
+			</div>
+		</div>
+	</div>
+</section>
+
+<section class="section approach">
 	<div class="container grid-12">
 		<div class="approach-title">
 			<p class="eyebrow">The problem</p>
@@ -86,11 +127,12 @@
 				Switching hosts means changing commands and expectations, while package availability and recovery behavior vary.
 			</p>
 			<p>
-				Conary does not ask upstream maintainers to change their packages. Remi converts RPM, DEB, and Arch inputs
-				into source-independent CCS transactions that retain the source package ABI and run against typed target capabilities.
+				Conary does not ask upstream maintainers to change their packages. RPM, DEB, and Arch
+				inputs are converted into source-independent CCS transactions that retain the source
+				package ABI and run against typed target capabilities, locally or through Remi.
 			</p>
 			<p>
-				The first cross-distro tester loop installs a foreign-format artifact, inspects it,
+				The first cross-distro loop installs a foreign-format artifact, inspects it,
 				plans an update, and removes it. Adoption remains a separate migration path for
 				packages already owned by the host package manager.
 			</p>
@@ -98,7 +140,7 @@
 	</div>
 </section>
 
-<section class="section architecture">
+<section class="section section-band architecture">
 	<div class="container grid-12">
 		<div class="architecture-heading">
 			<p class="eyebrow">Architecture</p>
@@ -107,16 +149,16 @@
 
 		<dl class="architecture-list">
 			<div>
-				<dt>CAS layer</dt>
-				<dd>Files are stored by hash rather than only by package, allowing identical content to be deduplicated.</dd>
+				<dt>Format parsers</dt>
+				<dd>RPM, DEB, and Arch parsers preserve exact lifecycle, dependency, version, payload, and configuration semantics in one source-independent model.</dd>
 			</div>
 			<div>
 				<dt>Resolver</dt>
 				<dd>resolvo provides SAT-based dependency resolution across conflicts, virtual provides, and typed dependencies.</dd>
 			</div>
 			<div>
-				<dt>Format parsers</dt>
-				<dd>RPM, DEB, and Arch parsers preserve exact lifecycle, dependency, version, payload, and configuration semantics in a shared source-independent model.</dd>
+				<dt>CAS layer</dt>
+				<dd>Files are stored by hash rather than only by package, so identical content is kept once.</dd>
 			</div>
 			<div>
 				<dt>Package changesets</dt>
@@ -124,19 +166,19 @@
 			</div>
 			<div>
 				<dt>Generation artifacts</dt>
-				<dd>The advanced path builds EROFS images and can integrate composefs and fs-verity on compatible hosts.</dd>
+				<dd>The advanced path builds EROFS images and can integrate composefs and fs-verity on compatible hosts, with raw, qcow2, and ISO export.</dd>
 			</div>
 			<div>
 				<dt>System model</dt>
-				<dd>Desired package state can be declared and inspected for drift; live application remains a VM-only follow-up.</dd>
+				<dd>Desired package state can be declared and inspected for drift; live application remains a VM-only path.</dd>
 			</div>
 			<div>
-				<dt>Delta work</dt>
-				<dd>CAS chunking and generation-delta work remain broader roadmap items, not a size-reduction promise for the first tester loop.</dd>
+				<dt>Remi</dt>
+				<dd>The conversion and package-serving service: authenticated source ingestion, immutable catalogs, signing, and atomic activation.</dd>
 			</div>
 			<div>
 				<dt>Bootstrap</dt>
-				<dd>A staged pipeline builds from cross-tools through a complete system image, with experimental architecture targets beyond the packaged x86_64 tester lane.</dd>
+				<dd>A staged pipeline builds from cross-tools through a complete system image, with experimental architecture targets beyond the packaged x86_64 lane.</dd>
 			</div>
 		</dl>
 	</div>
@@ -150,13 +192,14 @@
 		</div>
 
 		<dl class="stack-list">
-			<div><dt>Language</dt><dd>Rust, Edition 2024 · 8-member Cargo workspace</dd></div>
-			<div><dt>Filesystem</dt><dd>EROFS · optional composefs and fs-verity integration for generations</dd></div>
-			<div><dt>Database</dt><dd>SQLite · current schema epoch · explicit rebuild boundary · DB-first runtime state</dd></div>
-			<div><dt>Hashing</dt><dd>SHA-256 · XXH128</dd></div>
+			<div><dt>Language</dt><dd>Rust, Edition 2024 · one Cargo workspace, one synchronized release</dd></div>
+			<div><dt>Filesystem</dt><dd>EROFS · composefs and fs-verity for generations where the kernel supports them</dd></div>
+			<div><dt>Database</dt><dd>SQLite · explicit schema epoch with a rebuild boundary instead of migrations</dd></div>
+			<div><dt>Hashing</dt><dd>SHA-256 · XXH3 · FastCDC content-defined chunking</dd></div>
+			<div><dt>Signatures</dt><dd>Ed25519 for CCS artifacts and the release bootstrap manifest</dd></div>
 			<div><dt>Compression</dt><dd>Zstd · Gzip · XZ</dd></div>
-			<div><dt>Server</dt><dd>Axum · Tantivy full-text search</dd></div>
 			<div><dt>Resolver</dt><dd>resolvo SAT solver</dd></div>
+			<div><dt>Server</dt><dd>Axum · Tantivy full-text search</dd></div>
 		</dl>
 	</div>
 </section>
@@ -167,14 +210,14 @@
 			<p class="eyebrow">Contribute</p>
 			<h2>Help turn preview evidence into a trustworthy package manager.</h2>
 			<p>
-				The repository includes unit, integration, harness, formatting, lint, documentation-truth, and release workflows.
-				Open issues and the contributing guide are the current entry points.
+				The repository runs unit, integration, harness, formatting, lint, documentation-truth, and release workflows.
+				Open issues and the contributing guide are the entry points.
 			</p>
 		</div>
 		<div class="button-row">
-			<a href="https://github.com/ConaryLabs/Conary" class="btn btn-primary">GitHub <span aria-hidden="true">↗</span></a>
-			<a href="https://github.com/ConaryLabs/Conary/blob/main/CONTRIBUTING.md" class="btn btn-secondary">Contributing guide <span aria-hidden="true">↗</span></a>
-			<a href="https://github.com/ConaryLabs/Conary/issues" class="btn btn-secondary">Issues <span aria-hidden="true">↗</span></a>
+			<a href={project.repoUrl} class="btn btn-primary">GitHub <span aria-hidden="true">↗</span></a>
+			<a href={project.contributingUrl} class="btn btn-secondary">Contributing guide <span aria-hidden="true">↗</span></a>
+			<a href={project.issuesUrl} class="btn btn-secondary">Issues <span aria-hidden="true">↗</span></a>
 		</div>
 	</div>
 </section>
@@ -212,6 +255,7 @@
 	}
 
 	.origins-heading,
+	.who-title,
 	.approach-title,
 	.architecture-heading,
 	.stack-heading {
@@ -219,6 +263,7 @@
 	}
 
 	.timeline,
+	.who-copy,
 	.approach-copy,
 	.architecture-list,
 	.stack-list {
@@ -243,7 +288,7 @@
 	.timeline-date {
 		color: var(--color-orange);
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-label);
 		text-transform: uppercase;
 	}
 
@@ -256,15 +301,37 @@
 	}
 
 	.timeline p,
+	.who-copy p,
 	.approach-copy p {
 		margin: 0 0 0.85rem;
 		color: var(--color-mist);
-		font-size: 0.95rem;
+		font-size: 0.97rem;
 		line-height: 1.72;
 	}
 
+	.who-copy p:last-child,
 	.approach-copy p:last-child {
 		margin-bottom: 0;
+	}
+
+	.licensing {
+		margin-top: 1.5rem;
+		padding: 1.1rem 1.2rem;
+		border: 1px solid var(--color-border-strong);
+		border-left: 3px solid var(--color-cyan);
+		background: var(--color-code-bg);
+		scroll-margin-top: 8rem;
+	}
+
+	.licensing .eyebrow {
+		margin-bottom: 0.5rem;
+		color: var(--color-cyan);
+	}
+
+	.licensing strong {
+		color: var(--color-ivory);
+		font-family: var(--font-mono);
+		font-weight: 500;
 	}
 
 	.architecture-list,
@@ -288,7 +355,7 @@
 	.stack-list dt {
 		color: var(--color-cyan);
 		font-family: var(--font-mono);
-		font-size: 0.75rem;
+		font-size: 0.78rem;
 		font-weight: 500;
 	}
 
@@ -296,12 +363,7 @@
 	.stack-list dd {
 		margin: 0;
 		color: var(--color-mist);
-		font-size: 0.92rem;
-	}
-
-	.stack-section {
-		padding-top: 0;
-		border-top: 0 !important;
+		font-size: 0.93rem;
 	}
 
 	.stack-list {
@@ -350,12 +412,13 @@
 	.contribute-box .button-row {
 		justify-content: flex-end;
 		flex: 0 0 auto;
-		max-width: 310px;
 	}
 
 	@media (max-width: 820px) {
 		.origins-heading,
 		.timeline,
+		.who-title,
+		.who-copy,
 		.approach-title,
 		.approach-copy,
 		.architecture-heading,
@@ -366,6 +429,7 @@
 		}
 
 		.origins-heading,
+		.who-title,
 		.approach-title,
 		.architecture-heading,
 		.stack-heading {
@@ -379,7 +443,6 @@
 
 		.contribute-box .button-row {
 			justify-content: flex-start;
-			max-width: none;
 		}
 	}
 

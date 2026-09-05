@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
+	import { previewRelease, project } from '$lib/preview-release';
 
 	let { children } = $props();
 
@@ -47,11 +48,29 @@
 				</ul>
 			</nav>
 
-			<a href="https://remi.conary.io" class="packages-link">
+			<a href={project.packagesUrl} class="packages-link">
 				Packages <span aria-hidden="true">↗</span>
 			</a>
 		</div>
 	</header>
+
+	<!-- The one fact every page must carry: this is pre-alpha software. -->
+	<aside class="status-strip" aria-label="Project status">
+		<div class="container status-inner">
+			<span class="status-item"><span class="status-dot" aria-hidden="true"></span>pre-alpha</span>
+			<span class="status-item">
+				latest release <a href={previewRelease.releaseUrl}>{previewRelease.tag}</a>
+			</span>
+			{#if previewRelease.testerState === 'assigned_guide_active'}
+				<span class="status-item status-wide">external tester release pinned · loop open</span>
+			{:else if previewRelease.testerState === 'assigned_guide_paused'}
+				<span class="status-item status-wide">tester release assigned · loop not yet open</span>
+			{:else}
+				<span class="status-item status-wide">no external tester pin assigned</span>
+			{/if}
+			<a class="status-link" href="/install/">what that means</a>
+		</div>
+	</aside>
 
 	<main id="main-content" tabindex="-1">
 		{@render children()}
@@ -64,19 +83,31 @@
 					<img src="/brand/conary-mark.svg" alt="" width="42" height="42" />
 					<span>Conary</span>
 				</a>
-				<p>Early-preview cross-distro package management with exact source-format semantics.</p>
+				<p>
+					A cross-distro package manager for Linux. RPM, DEB, and Arch packages keep
+					their source semantics; Conary owns the transaction and the rollback.
+				</p>
+				<p class="footer-org">
+					A <a href={project.orgUrl}>{project.orgName}</a> project.
+					{project.orgTagline}
+				</p>
 			</div>
 
 			<nav class="footer-nav" aria-label="Footer navigation">
 				{#each navLinks as link}
 					<a href={link.href}>{link.label}</a>
 				{/each}
-				<a href="https://remi.conary.io">Packages <span aria-hidden="true">↗</span></a>
-				<a href="https://github.com/ConaryLabs/Conary">GitHub <span aria-hidden="true">↗</span></a>
+				<a href={project.packagesUrl}>Packages <span aria-hidden="true">↗</span></a>
+				<a href={project.repoUrl}>GitHub <span aria-hidden="true">↗</span></a>
+				<a href={project.discussionsUrl}>Discussions <span aria-hidden="true">↗</span></a>
+				<a href={project.securityPolicyUrl}>Security policy <span aria-hidden="true">↗</span></a>
 			</nav>
 		</div>
 		<div class="container footer-bottom">
-			<span>Independent, ground-up Rust implementation.</span>
+			<span>
+				Client and libraries <a href="/about/#licensing">{project.license}</a> · independent, ground-up
+				Rust implementation
+			</span>
 			<a href="/about/">Project history and non-affiliation</a>
 		</div>
 	</footer>
@@ -147,7 +178,7 @@
 		min-height: 44px;
 		padding: 0.5rem 0.72rem;
 		color: var(--color-mist);
-		font-size: 0.88rem;
+		font-size: 0.92rem;
 		font-weight: 500;
 		text-decoration: none;
 	}
@@ -183,7 +214,7 @@
 		border-radius: var(--radius-sm);
 		color: var(--color-cyan);
 		font-family: var(--font-mono);
-		font-size: 0.78rem;
+		font-size: 0.8rem;
 		text-decoration: none;
 	}
 
@@ -191,6 +222,45 @@
 		color: var(--color-field);
 		background: var(--color-cyan);
 		border-color: var(--color-cyan);
+	}
+
+	.status-strip {
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-code-bg);
+		color: var(--color-mist);
+		font-family: var(--font-mono);
+		font-size: 0.76rem;
+	}
+
+	.status-inner {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0.35rem 1.6rem;
+		min-height: 40px;
+		padding-block: 0.4rem;
+	}
+
+	.status-item {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		white-space: nowrap;
+	}
+
+	.status-dot {
+		width: 0.5rem;
+		height: 0.5rem;
+		background: var(--color-orange);
+		transform: rotate(45deg);
+	}
+
+	.status-strip a {
+		color: var(--color-cyan);
+	}
+
+	.status-link {
+		margin-left: auto;
 	}
 
 	.site-footer {
@@ -215,9 +285,13 @@
 	}
 
 	.footer-manifest p {
-		max-width: 46ch;
+		max-width: 48ch;
 		margin: 1rem 0 0;
 		color: var(--color-muted);
+	}
+
+	.footer-org {
+		font-size: 0.92rem;
 	}
 
 	.footer-nav {
@@ -231,7 +305,7 @@
 		min-height: 38px;
 		padding-block: 0.45rem;
 		color: var(--color-mist);
-		font-size: 0.88rem;
+		font-size: 0.92rem;
 		text-decoration: none;
 	}
 
@@ -248,7 +322,7 @@
 		border-top: 1px solid var(--color-border);
 		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.7rem;
+		font-size: 0.74rem;
 	}
 
 	.footer-bottom a {
@@ -286,11 +360,15 @@
 
 		.nav-link {
 			padding-inline: 0.25rem;
-			font-size: clamp(0.69rem, 2.8vw, 0.82rem);
+			font-size: clamp(0.72rem, 2.8vw, 0.86rem);
 		}
 
 		.packages-link {
 			padding-inline: 0.65rem;
+		}
+
+		.status-link {
+			margin-left: 0;
 		}
 
 		.footer-grid {
@@ -315,7 +393,7 @@
 		}
 
 		.packages-link {
-			font-size: 0.7rem;
+			font-size: 0.72rem;
 		}
 	}
 </style>

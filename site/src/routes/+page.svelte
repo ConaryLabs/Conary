@@ -2,7 +2,8 @@
 	import BoundaryDiagram from '$lib/components/BoundaryDiagram.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
 	import TerminalFrame from '$lib/components/TerminalFrame.svelte';
-	import { previewRelease } from '$lib/preview-release';
+	import { commandRisk } from '$lib/command-risk';
+	import { previewRelease, project } from '$lib/preview-release';
 </script>
 
 <PageMeta
@@ -14,20 +15,22 @@
 <section class="hero">
 	<div class="container grid-12 hero-grid">
 		<div class="hero-copy">
-			<p class="eyebrow">A package system for Linux · tester loop paused</p>
+			<p class="eyebrow">Pre-alpha · cross-distro package manager for Linux</p>
 			<h1>An RPM that installs on Ubuntu. A DEB that installs on Fedora.</h1>
 			<p class="hero-lede">
-				Conary keeps each package's exact RPM, Debian, or ALPM semantics, executes
-				them against typed capabilities on the target host, and owns the resulting
-				transaction and rollback — without invoking dnf, apt, or pacman.
+				Conary installs RPM, DEB, and Arch packages on Fedora, Ubuntu, and Arch hosts.
+				Each package keeps its source format's exact lifecycle, dependency, version, and
+				configuration semantics; Conary owns the transaction and the rollback. It never
+				hands the work to dnf, apt, or pacman.
 			</p>
 			<div class="button-row hero-actions">
-				<a href="/install/" class="btn btn-primary">Read the current release status</a>
-				<a href="/features/" class="btn btn-secondary">See what is proven</a>
+				<a href="/install/" class="btn btn-primary">Install the preview</a>
+				<a href="/features/" class="btn btn-secondary">See what works today</a>
 			</div>
-			<ul class="hero-meta" aria-label="Supported formats and hosts">
+			<ul class="hero-meta" aria-label="Formats, hosts, and license">
 				<li>RPM · DEB · Arch · CCS</li>
-				<li>Fedora 44 · Ubuntu 26.04 · Arch</li>
+				<li>Fedora 44 · Ubuntu 26.04 LTS · Arch Linux</li>
+				<li>x86_64 · Rust · {project.license}</li>
 			</ul>
 		</div>
 
@@ -41,6 +44,46 @@
 	</div>
 </section>
 
+<section class="section status" aria-labelledby="status-title">
+	<div class="container">
+		<h2 id="status-title" class="visually-hidden">Current status</h2>
+		<dl class="status-grid">
+			<div>
+				<dt>Latest release</dt>
+				<dd>
+					<a href={previewRelease.releaseUrl}>{previewRelease.tag}</a>, an immutable GitHub
+					release with checksums, a detached CCS signature, and a signed bootstrap manifest.
+				</dd>
+			</div>
+			<div>
+				<dt>Maturity</dt>
+				<dd>
+					Pre-alpha. Expect failures. Use a VM, a snapshot, or a host you can throw away.
+					It is not a replacement for apt, dnf, or pacman on a machine you rely on.
+				</dd>
+			</div>
+			<div>
+				<dt>External testing</dt>
+				<dd>
+					{#if previewRelease.testerState === 'assigned_guide_active'}
+						Open: {previewRelease.tag} is the assigned tester release and the tester guide
+						is active. The gate state is tracked in
+						<a href={project.launchStatusUrl}>launch-status.json</a>.
+					{:else if previewRelease.testerState === 'assigned_guide_paused'}
+						Assigned, not yet open: <a href={project.launchStatusUrl}>launch-status.json</a>
+						names {previewRelease.tag} as the tester release, but the tester guide that
+						owns the loop is still paused. Runs made now are not qualifying tester runs.
+					{:else}
+						Not open yet. No release is assigned as tester authority; the remaining launch
+						gates are tracked in the open in
+						<a href={project.launchStatusUrl}>launch-status.json</a>.
+					{/if}
+				</dd>
+			</div>
+		</dl>
+	</div>
+</section>
+
 <section class="section thesis">
 	<div class="container thesis-inner">
 		<div class="thesis-head">
@@ -50,18 +93,18 @@
 
 		<div class="thesis-body">
 			<p>
-				A package belongs to the distribution that built it. If the software you
-				need ships as an RPM and you run Ubuntu, you wait for a Debian maintainer,
-				reach for a container, or change distributions. The work of packaging the
-				same software gets repeated once per ecosystem, and the cost lands on
-				maintainers and on anyone whose distro is not the popular one.
+				A package belongs to the distribution that built it. If the software you need
+				ships as an RPM and you run Ubuntu, you wait for a Debian maintainer, reach for
+				a container, or change distributions. The same software gets packaged once per
+				ecosystem, and the cost lands on maintainers and on anyone whose distro is not
+				the popular one.
 			</p>
 			<p>
-				Conary's bet is that this boundary is mechanical, not fundamental. RPM,
-				Debian, and ALPM each expose a finite, documented lifecycle ABI. Encode
-				those exactly, express what a host provides as typed capabilities, and a
-				package stops being the property of one distribution — while Conary, not
-				the distro's package manager, owns the transaction and the way back.
+				Conary's bet is that this boundary is mechanical, not fundamental. RPM, Debian,
+				and ALPM each expose a finite, documented lifecycle ABI. Encode those exactly,
+				describe what a host provides as typed capabilities, and a package stops being
+				the property of one distribution, while Conary, not the distro's package
+				manager, owns the transaction and the way back.
 			</p>
 		</div>
 
@@ -70,118 +113,114 @@
 		</p>
 
 		<p class="thesis-bound">
-			Today that holds for RPM, DEB, Arch, and CCS packages on Fedora 44, Ubuntu
-			26.04 LTS, and Arch Linux. Everything below is labelled with how far it has
-			actually been proven.
+			Today that holds for RPM, DEB, Arch, and CCS packages on Fedora 44, Ubuntu 26.04
+			LTS, and Arch Linux, x86_64 only. Everything on this site is labelled with how far
+			it has actually been proven.
 		</p>
 	</div>
 </section>
 
-<section class="section vision">
+<section class="section section-band contract">
 	<div class="container">
-		<div class="vision-heading">
-			<div>
-				<p class="eyebrow">The Conary idea</p>
-				<h2 class="section-heading">One model, from package intent to a complete system.</h2>
-			</div>
+		<div class="contract-heading">
+			<p class="eyebrow">Who owns what</p>
+			<h2 class="section-heading">Three parties, one transaction.</h2>
 			<p class="section-copy">
-				Distribution differences are inputs, not walls. Conary preserves each source
-				format's lifecycle, dependency, version, payload, and configuration rules,
-				then executes them against the capabilities of the target Linux system.
+				The whole design reduces to a division of authority. Nothing in it is inferred
+				from script text, distro names, or the host package manager's opinion.
 			</p>
 		</div>
 
-		<div class="vision-grid">
+		<div class="contract-grid">
 			<article>
-				<span class="vision-status available">foundation available</span>
-				<h3>Install across package-format boundaries</h3>
-				<p>Install an RPM on Ubuntu, a DEB on Fedora, or an Arch package on either without delegating the transaction to dnf, apt, or pacman.</p>
+				<span class="contract-label source">The source format owns</span>
+				<h3>The package ABI</h3>
+				<ul>
+					<li>Lifecycle events, their arguments, and their ordering</li>
+					<li>Dependency and version comparison rules</li>
+					<li>Payload layout and metadata</li>
+					<li>Configuration-file semantics</li>
+				</ul>
 			</article>
 			<article>
-				<span class="vision-status available">preview today</span>
-				<h3>Bring the existing system along</h3>
-				<p>Adopt packages already owned by dnf, apt, or pacman as a reversible migration bridge, then transfer authority only through an explicit takeover.</p>
+				<span class="contract-label conary">Conary owns</span>
+				<h3>The transaction</h3>
+				<ul>
+					<li>Install, update, and remove</li>
+					<li>Rollback and the changeset record</li>
+					<li>Content-addressed storage of installed files</li>
+					<li>Generation publication on hosts that support it</li>
+				</ul>
 			</article>
 			<article>
-				<span class="vision-status building">available · growing</span>
-				<h3>Treat packages as verifiable content</h3>
-				<p>Store Conary-owned files by content hash, resolve dependencies as a graph, and build, sign, verify, and inspect the native CCS format.</p>
+				<span class="contract-label target">The target supplies</span>
+				<h3>Typed capabilities</h3>
+				<ul>
+					<li>Architecture, libc, and dynamic loader</li>
+					<li>Init and service-manager interfaces</li>
+					<li>Filesystem layout, users, and security policy</li>
+					<li>Interpreters and helper contracts</li>
+				</ul>
 			</article>
-			<article>
-				<span class="vision-status building">active machinery</span>
-				<h3>Describe the system you want</h3>
-				<p>Compare a declarative model with a running host and develop a path toward planned package changes and cross-distribution replatforming.</p>
-			</article>
-			<article>
-				<span class="vision-status advanced">VM evidence</span>
-				<h3>Select complete system generations</h3>
-				<p>Build content-reusing EROFS artifacts, select a generation for the next boot, and make recovery a system-level operation rather than a hopeful undo.</p>
-			</article>
-			<article>
-				<span class="vision-status horizon">service today · wider horizon</span>
-				<h3>Share package infrastructure</h3>
-				<p>Use Remi as the package metadata and conversion service today, while federation, third-party publishing, and broader automation mature.</p>
-			</article>
-			<a href="/features/" class="vision-link">
-				<span>See the full feature map and maturity of each layer</span>
-				<span aria-hidden="true">→</span>
-			</a>
 		</div>
+
+		<p class="contract-note">
+			A package that needs a capability the host does not provide fails preflight before
+			anything is mutated. A lifecycle form Conary has not modelled is a bug to fix, not
+			a reason to guess.
+		</p>
 	</div>
 </section>
 
-<section class="section evaluate">
+<section class="section truth">
 	<div class="container grid-12">
-		<div class="evaluate-heading">
-			<p class="eyebrow">W7 passed · signed-universe launch gate active</p>
-			<h2 class="section-heading">Cross the package boundary deliberately.</h2>
-			<p class="section-copy">
-				The next public loop remains deliberately focused: inspect a foreign-format
-				package, confirm its exact target capabilities, install it through Conary,
-				and prove that query, update planning, removal, and rollback still agree.
-				The published {previewRelease.tag} artifact remains immutable historical release
-				evidence. {previewRelease.testerAuthorityReason}
+		<div class="truth-col works">
+			<p class="eyebrow">What works today</p>
+			<h2 class="section-heading">Working on the three supported hosts.</h2>
+			<p class="truth-note">
+				Proof runs in the integration harness, inside Fedora, Ubuntu, and Arch containers
+				against a harness-served fixture repository, on the current tree; the
+				ordinary-package gate passed after {previewRelease.tag} was cut. That release is immutable
+				install-and-bootstrap evidence; the behaviour below is not a claim about the
+				artifact itself.
 			</p>
+			<ul class="truth-list">
+				<li>Installing RPM, DEB, and Arch artifacts through typed lifecycle, dependency, payload, and configuration contracts, on any of the three hosts.</li>
+				<li>Installing native CCS packages and Remi-converted RPM, DEB, and Arch packages with Conary as package authority.</li>
+				<li>Adopting packages already owned by dnf, apt, or pacman, and unadopting them without deleting anything.</li>
+				<li>Atomic package-state changesets, history, and rollback-oriented state tracking.</li>
+				<li>Immutable EROFS and composefs generations, plus raw, qcow2, and x86_64 UEFI ISO export, on hosts with the kernel and tooling.</li>
+				<li>A signed release: checksummed packages, a detached CCS signature, and an Ed25519-signed bootstrap manifest.</li>
+			</ul>
 		</div>
-
-		<ol class="capability-list">
-			<li>
-				<span class="capability-mark track" aria-hidden="true"></span>
-				<div>
-					<h3>Run a foreign package as its source format intended</h3>
-					<p>Keep RPM, Debian, or ALPM lifecycle arguments and ordering while Conary supplies the target root, users, services, and other typed interfaces.</p>
-				</div>
-				<span class="capability-state">source exact</span>
-			</li>
-			<li>
-				<span class="capability-mark inspect" aria-hidden="true"></span>
-				<div>
-					<h3>Inspect a Conary-owned package change</h3>
-					<p>Sync Remi, resolve a supported package, and review the complete dry-run before approving a live install.</p>
-				</div>
-				<span class="capability-state">dry-run first</span>
-			</li>
-			<li>
-				<span class="capability-mark cross" aria-hidden="true"></span>
-				<div>
-					<h3>Use one package engine on three hosts</h3>
-					<p>Exercise the same RPM, DEB, Arch, and CCS pipeline on Fedora 44, Ubuntu 26.04 LTS, and Arch while retaining source-specific version and dependency rules.</p>
-				</div>
-				<span class="capability-state">matrix proof</span>
-			</li>
-		</ol>
+		<div class="truth-col breaks">
+			<p class="eyebrow">What will break</p>
+			<h2 class="section-heading">Known edges, stated up front.</h2>
+			<ul class="truth-list">
+				<li>A package that needs a target capability the host does not provide fails exact preflight before mutation.</li>
+				<li>Source lifecycle forms outside the implemented RPM, Debian, or ALPM ABI are bugs to model and test; Conary does not invent behaviour from command text.</li>
+				<li>Security-only updates fail closed unless a repository declares trusted advisory metadata support.</li>
+				<li>Native transaction-history import is not implemented.</li>
+				<li>Non-x86_64 generation boot assets are still reserved.</li>
+				<li>No SBOM or provenance sidecars are published for the current release.</li>
+			</ul>
+		</div>
 	</div>
 </section>
 
 <section class="section section-band evidence">
 	<div class="container grid-12">
 		<div class="evidence-copy">
-			<p class="eyebrow">Cross-distro transaction preview</p>
-			<h2 class="section-heading">See the source ABI and target contract before apply.</h2>
+			<p class="eyebrow">
+				{#if previewRelease.loopOpen}The bounded loop{:else if previewRelease.testerAssigned}The bounded loop · assigned, not yet open{:else}The bounded loop · inactive until a release is pinned{/if}
+			</p>
+			<h2 class="section-heading">Cross the format boundary, then prove you can come back.</h2>
 			<p class="section-copy">
-				Start with the documented dry-run. Conary shows the package's typed lifecycle,
-				dependencies, payload, and required host capabilities before it mutates the
-				selected root.
+				Pick a source whose package format differs from the host. Every dry-run shows the
+				package's typed lifecycle, dependencies, payload, and required host capabilities
+				before any package transaction is applied. {commandRisk.rule} The
+				<a href="/install/#confirmation">policy classes and known exceptions</a> are
+				derived from <code>{commandRisk.source}</code>.
 			</p>
 
 			<div class="authority-summary">
@@ -191,38 +230,68 @@
 				</div>
 				<div>
 					<span class="summary-label">What stays source-native</span>
-					<p>The RPM, Debian, or ALPM ABI—not command-name guesses or the host's package manager.</p>
+					<p>The RPM, Debian, or ALPM ABI, not command-name guesses or the host's package manager.</p>
 				</div>
 			</div>
 		</div>
 
 		<div class="evidence-terminal">
-			<TerminalFrame title="cross-distro package sequence">
+			{#if previewRelease.loopOpen}
+				<TerminalFrame title="cross-distro package loop">
+					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --yes</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list htop --info</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary query depends htop</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update htop --dry-run</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove htop --yes</span></span>
+				</TerminalFrame>
+				<p class="evidence-note">
+					Commands only; output is not shown because it varies by host. A reproducible
+					captured demo is open work, not something the site pretends to have.
+				</p>
+			{:else}
+				<!-- The live loop is owned by the tester guide; until that guide is active
+				     the homepage shows only dry-run and read commands. -->
+				<TerminalFrame title="dry-run only · tester loop inactive">
+					<span class="terminal-line"><span class="terminal-command">source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install htop --from "$source" --dry-run</span></span>
 					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --dry-run</span></span>
-					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary install ./package.deb --yes</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list package --info</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update package --dry-run</span></span>
-				<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary remove package --yes</span></span>
-			</TerminalFrame>
-			<p class="evidence-note">Command-only illustration. Output varies by host; use the ordered install runbook to capture evidence.</p>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary list</span></span>
+					<span class="terminal-line"><span class="terminal-prompt">$</span><span class="terminal-command">sudo conary update --dry-run</span></span>
+				</TerminalFrame>
+				<p class="evidence-note">
+					Dry runs plan and print without applying a package transaction, with one known
+					client defect: if the named package is already installed as a dependency,
+					<code>install --dry-run</code> records it as explicitly installed before honouring
+					the flag (<a href={commandRisk.dryRunIssueUrl}>{commandRisk.dryRunIssue}</a>).
+					The live install, update, and remove loop is owned by the tester guide, which is
+					{#if previewRelease.testerAssigned}still paused even though {previewRelease.tag} is assigned{:else}paused until a release is pinned{/if};
+					the <a href="/install/#tester-loop">install page</a> keeps its retained commands
+					folded away. No output is shown because it varies by host.
+				</p>
+			{/if}
 		</div>
 	</div>
 </section>
 
-<section class="section section-band fit-check">
+<section class="section fit-check">
 	<div class="container grid-12">
 		<div class="fit-title">
 			<p class="eyebrow">Honest fit check</p>
-			<h2 class="section-heading">Evaluate package portability, then the migration path.</h2>
+			<h2 class="section-heading">Evaluate package portability first, migration second.</h2>
 		</div>
 		<div class="fit-copy">
 			<p>
-				apt, dnf, pacman, and Nix are mature systems with much larger ecosystems.
-				Conary's bet is different: existing distro repositories become source inputs
-				to one package engine, while adoption remains the bridge for the machine you
-				already have.
+				apt, dnf, pacman, and Nix are mature systems with far larger ecosystems. Conary
+				is not the mature choice today. Its bet is different: existing distro
+				repositories become source inputs to one package engine, and adoption stays the
+				bridge for the machine you already have.
 			</p>
-			<a href="/compare/" class="text-link">Compare the trade-offs <span aria-hidden="true">→</span></a>
+			<div class="button-row">
+				<a href="/compare/" class="btn btn-secondary">Compare the operating models</a>
+				<a href="/about/" class="btn btn-secondary">Read the project history</a>
+			</div>
 		</div>
 	</div>
 </section>
@@ -230,13 +299,24 @@
 <section class="section final-cta">
 	<div class="container cta-box">
 		<div>
-			<p class="eyebrow">See the package bridge on a real host</p>
-			<h2>Try a package your distro did not ship.</h2>
-			<p>Use the pinned, checksum-verified preview on a disposable host and inspect the complete transaction before apply.</p>
+			<p class="eyebrow">Inspect it on a disposable host</p>
+			<h2>Install the pre-alpha and read the plan before you apply it.</h2>
+			<p>
+				The bootstrap script verifies the signed release manifest and the package for
+				your host before it touches anything, and previews by default.
+				{#if previewRelease.loopOpen}
+					{previewRelease.tag} is the assigned external tester release and the loop is open.
+				{:else if previewRelease.testerAssigned}
+					{previewRelease.tag} is assigned as the tester release; the loop opens when the
+					tester guide is resumed.
+				{:else}
+					The external tester loop stays inactive until a release is pinned.
+				{/if}
+			</p>
 		</div>
 		<div class="button-row">
 			<a href="/install/" class="btn btn-primary">Open the install guide</a>
-			<a href="https://github.com/ConaryLabs/Conary" class="btn btn-secondary">View the source <span aria-hidden="true">↗</span></a>
+			<a href={project.repoUrl} class="btn btn-secondary">View the source <span aria-hidden="true">↗</span></a>
 		</div>
 	</div>
 </section>
@@ -249,7 +329,7 @@
 	}
 
 	.hero-grid {
-		min-height: min(760px, calc(100svh - var(--header-height)));
+		min-height: min(720px, calc(100svh - var(--header-height) - 40px));
 		align-items: center;
 		padding-block: clamp(3rem, 6vw, 5rem);
 	}
@@ -290,7 +370,7 @@
 		list-style: none;
 		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-label);
 	}
 
 	.hero-meta li {
@@ -309,133 +389,49 @@
 		transform: rotate(45deg);
 	}
 
-	.vision {
-		border-bottom: 1px solid var(--color-border);
-		background: var(--color-layer);
-	}
-
-	.vision-heading {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) minmax(300px, 0.72fr);
-		gap: clamp(2rem, 7vw, 6rem);
-		align-items: end;
-		margin-bottom: clamp(2.5rem, 6vw, 4.5rem);
-	}
-
-	.vision-heading h2 {
-		max-width: 15ch;
-	}
-
-	.vision-heading .section-copy {
-		margin: 0;
-	}
-
-	.vision-grid {
-		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 1px;
-		border: 1px solid var(--color-border);
-		background: var(--color-border);
-	}
-
-	.vision-grid article,
-	.vision-link {
-		background: var(--color-field);
-	}
-
-	.vision-grid article {
-		min-height: 248px;
-		padding: clamp(1.35rem, 3vw, 2rem);
-	}
-
-	.vision-status {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.5rem;
-		font-family: var(--font-mono);
-		font-size: 0.65rem;
-		letter-spacing: 0.05em;
-		text-transform: uppercase;
-	}
-
-	.vision-status::before {
-		content: '';
-		width: 0.52rem;
-		height: 0.52rem;
-		flex: 0 0 auto;
-	}
-
-	.vision-status.available,
-	.vision-status.building {
-		color: var(--color-cyan);
-	}
-
-	.vision-status.available::before {
-		background: var(--color-cyan);
-	}
-
-	.vision-status.building::before {
-		border: 1px solid var(--color-cyan);
-	}
-
-	.vision-status.advanced {
-		color: var(--color-orange);
-	}
-
-	.vision-status.advanced::before {
-		background: var(--color-orange);
-		transform: rotate(45deg) scale(0.82);
-	}
-
-	.vision-status.horizon {
-		color: var(--color-muted);
-	}
-
-	.vision-status.horizon::before {
-		width: 0.65rem;
-		height: 1px;
-		background: var(--color-muted);
-	}
-
-	.vision-grid h3 {
-		max-width: 20ch;
-		margin: 2.6rem 0 0.75rem;
-		font-family: var(--font-body);
-		font-size: 1.15rem;
-		font-weight: 600;
-		letter-spacing: -0.015em;
-	}
-
-	.vision-grid p {
-		margin: 0;
-		color: var(--color-muted);
-		font-size: 0.9rem;
-		line-height: 1.65;
-	}
-
-	.vision-link {
-		grid-column: 1 / -1;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		min-height: 64px;
-		padding: 1rem 1.4rem;
-		color: var(--color-cyan);
-		font-family: var(--font-mono);
-		font-size: 0.78rem;
-		text-decoration: none;
-	}
-
-	.vision-link:hover {
-		color: var(--color-field);
-		background: var(--color-cyan);
-	}
-
 	.hero-art {
 		grid-column: 8 / -1;
 		align-self: center;
 		margin: 0;
 		min-width: 0;
+	}
+
+	.status {
+		padding-block: clamp(2rem, 4vw, 3rem);
+		border-bottom: 1px solid var(--color-border);
+		background: var(--color-layer);
+	}
+
+	.status-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: clamp(1.5rem, 4vw, 3rem);
+		margin: 0;
+	}
+
+	.status-grid > div {
+		padding-left: 1rem;
+		border-left: 2px solid var(--color-border-strong);
+	}
+
+	.status-grid > div:nth-child(2) {
+		border-left-color: var(--color-orange);
+	}
+
+	.status-grid dt {
+		margin-bottom: 0.4rem;
+		color: var(--color-ivory);
+		font-family: var(--font-mono);
+		font-size: var(--text-label);
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+	}
+
+	.status-grid dd {
+		margin: 0;
+		color: var(--color-mist);
+		font-size: 0.95rem;
+		line-height: 1.65;
 	}
 
 	.thesis {
@@ -486,73 +482,151 @@
 	.thesis-bound {
 		grid-column: 1 / -1;
 		max-width: 72ch;
-		/* Indented to the claim's rule: the boundary belongs to the claim above it,
-		   not to the section. */
 		margin: 1.25rem 0 0;
 		padding-left: clamp(1rem, 2vw, 1.5rem);
 		border-left: 3px solid transparent;
 		color: var(--color-muted);
-		font-size: 0.92rem;
+		font-size: 0.95rem;
 	}
 
-	.evaluate-heading {
-		grid-column: 1 / span 5;
+	.contract-heading {
+		max-width: 720px;
+		margin-bottom: clamp(2rem, 5vw, 3.5rem);
 	}
 
-	.capability-list {
-		grid-column: 7 / -1;
+	.contract-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1px;
+		border: 1px solid var(--color-border);
+		background: var(--color-border);
+	}
+
+	.contract-grid article {
+		padding: clamp(1.35rem, 3vw, 2rem);
+		background: var(--color-field);
+	}
+
+	.contract-label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-family: var(--font-mono);
+		font-size: var(--text-label);
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+	}
+
+	.contract-label::before {
+		content: '';
+		width: 0.52rem;
+		height: 0.52rem;
+		flex: 0 0 auto;
+	}
+
+	.contract-label.source {
+		color: var(--color-mist);
+	}
+
+	.contract-label.source::before {
+		border: 1px solid var(--color-control-border);
+	}
+
+	.contract-label.conary {
+		color: var(--color-orange);
+	}
+
+	.contract-label.conary::before {
+		background: var(--color-orange);
+		transform: rotate(45deg) scale(0.82);
+	}
+
+	.contract-label.target {
+		color: var(--color-cyan);
+	}
+
+	.contract-label.target::before {
+		background: var(--color-cyan);
+	}
+
+	.contract-grid h3 {
+		margin: 1.4rem 0 0.75rem;
+		font-family: var(--font-body);
+		font-size: 1.2rem;
+		font-weight: 600;
+		letter-spacing: -0.015em;
+	}
+
+	.contract-grid ul {
 		margin: 0;
+		padding-left: 1.1rem;
+		color: var(--color-muted);
+		font-size: 0.93rem;
+		line-height: 1.65;
+	}
+
+	.contract-grid li + li {
+		margin-top: 0.35rem;
+	}
+
+	.contract-note {
+		max-width: 72ch;
+		margin: 1.5rem 0 0;
+		color: var(--color-mist);
+		font-size: 0.95rem;
+	}
+
+	.truth-col.works {
+		grid-column: 1 / span 6;
+	}
+
+	.truth-col.breaks {
+		grid-column: 7 / -1;
+	}
+
+	.truth-col .section-heading {
+		max-width: 18ch;
+	}
+
+	.truth-note {
+		max-width: 60ch;
+		margin: 0;
+		color: var(--color-muted);
+		font-size: 0.93rem;
+	}
+
+	.truth-list {
+		margin: 1.5rem 0 0;
 		padding: 0;
 		list-style: none;
 		border-top: 1px solid var(--color-border);
 	}
 
-	.capability-list li {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr) auto;
-		gap: 1rem;
-		align-items: start;
-		padding-block: 1.4rem;
+	.truth-list li {
+		position: relative;
+		padding: 0.9rem 0 0.9rem 1.3rem;
 		border-bottom: 1px solid var(--color-border);
+		color: var(--color-mist);
+		font-size: 0.95rem;
+		line-height: 1.6;
 	}
 
-	.capability-list h3 {
-		margin-bottom: 0.35rem;
-		font-family: var(--font-body);
-		font-size: 1.05rem;
-		font-weight: 600;
-		letter-spacing: 0;
+	.truth-list li::before {
+		content: '';
+		position: absolute;
+		top: 1.45rem;
+		left: 0;
+		width: 0.45rem;
+		height: 0.45rem;
 	}
 
-	.capability-list p {
-		margin: 0;
-		color: var(--color-muted);
-		font-size: 0.9rem;
+	.works .truth-list li::before {
+		background: var(--color-cyan);
 	}
 
-	.capability-mark {
-		width: 0.82rem;
-		height: 0.82rem;
-		margin-top: 0.32rem;
-		border: 2px solid var(--color-cyan);
-		border-radius: 50%;
-	}
-
-	.capability-mark.inspect {
-		border-radius: 2px;
-	}
-
-	.capability-mark.cross {
-		border-color: var(--color-orange);
-		border-radius: 2px;
-		transform: rotate(45deg) scale(0.8);
-	}
-
-	.capability-state {
-		color: var(--color-cyan);
-		font-family: var(--font-mono);
-		font-size: 0.68rem;
-		white-space: nowrap;
+	.breaks .truth-list li::before {
+		background: var(--color-orange);
+		transform: rotate(45deg);
 	}
 
 	.evidence-copy {
@@ -581,7 +655,7 @@
 	.summary-label {
 		color: var(--color-ivory);
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-label);
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
 	}
@@ -589,7 +663,7 @@
 	.authority-summary p {
 		margin: 0.35rem 0 0;
 		color: var(--color-muted);
-		font-size: 0.9rem;
+		font-size: 0.93rem;
 	}
 
 	.evidence-terminal {
@@ -602,7 +676,7 @@
 		margin: 0.85rem 0 0;
 		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.7rem;
+		font-size: var(--text-label);
 		line-height: 1.6;
 	}
 
@@ -619,11 +693,6 @@
 		margin-bottom: 1.5rem;
 		color: var(--color-mist);
 		font-size: 1.05rem;
-	}
-
-	.text-link {
-		font-family: var(--font-mono);
-		font-size: 0.78rem;
 	}
 
 	.final-cta {
@@ -658,10 +727,6 @@
 	}
 
 	@media (max-width: 980px) {
-		.vision-grid {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
-
 		.hero-copy {
 			grid-column: 1 / span 6;
 		}
@@ -674,12 +739,14 @@
 			grid-template-columns: 1fr;
 		}
 
-		.evaluate-heading,
+		.contract-grid {
+			grid-template-columns: 1fr;
+		}
+
 		.evidence-copy {
 			grid-column: 1 / span 5;
 		}
 
-		.capability-list,
 		.evidence-terminal {
 			grid-column: 6 / -1;
 		}
@@ -690,18 +757,6 @@
 	}
 
 	@media (max-width: 760px) {
-		.vision-heading {
-			grid-template-columns: 1fr;
-		}
-
-		.vision-grid {
-			grid-template-columns: 1fr;
-		}
-
-		.vision-link {
-			grid-column: 1;
-		}
-
 		.hero-grid {
 			min-height: auto;
 			padding-top: 2.75rem;
@@ -710,8 +765,8 @@
 
 		.hero-copy,
 		.hero-art,
-		.evaluate-heading,
-		.capability-list,
+		.truth-col.works,
+		.truth-col.breaks,
 		.evidence-copy,
 		.evidence-terminal,
 		.fit-title,
@@ -727,22 +782,14 @@
 			margin: 2.5rem 0 0;
 		}
 
-		.evaluate-heading,
+		.status-grid {
+			grid-template-columns: 1fr;
+		}
+
+		.truth-col.works,
 		.evidence-copy,
 		.fit-title {
 			margin-bottom: 2rem;
-		}
-
-		.capability-list li {
-			grid-template-columns: auto minmax(0, 1fr);
-		}
-
-		.capability-state {
-			grid-column: 2;
-		}
-
-		.evidence-terminal {
-			margin-top: 0.5rem;
 		}
 
 		.cta-box {

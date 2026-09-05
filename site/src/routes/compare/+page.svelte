@@ -1,7 +1,7 @@
 <script lang="ts">
 	import PageIntro from '$lib/components/PageIntro.svelte';
 	import PageMeta from '$lib/components/PageMeta.svelte';
-	import { previewRelease } from '$lib/preview-release';
+	import { previewRelease, project } from '$lib/preview-release';
 </script>
 
 <PageMeta
@@ -13,7 +13,7 @@
 <PageIntro
 	eyebrow="Trade-off matrix"
 	title="Compare the operating models, not the checkmarks."
-	description="Conary is not the mature choice today. Its near-term bet is that RPM, DEB, and Arch packages can retain their source semantics while one engine owns the transaction on any supported Linux target."
+	description="Conary is not the mature choice today. Its bet is that RPM, DEB, and Arch packages can keep their source semantics while one engine owns the transaction on any supported Linux target."
 />
 
 <section class="compare-section">
@@ -25,9 +25,9 @@
 					<h2>One row, one defined behavior.</h2>
 				</div>
 				<div class="matrix-meta">
-					<span>Compared on</span>
+					<span>Competitor columns reviewed</span>
 					<strong>2026-07-25</strong>
-					<p>Documentation snapshot · default first-party behavior unless a cell says otherwise</p>
+					<p>Documentation snapshot · default first-party behavior unless a cell says otherwise · Conary column reflects current roadmap maturity, not only the {previewRelease.tag} artifact</p>
 				</div>
 			</div>
 
@@ -41,7 +41,7 @@
 			<!-- svelte-ignore a11y_no_noninteractive_tabindex (horizontal comparison needs a keyboard focus target) -->
 			<div class="compare-table-wrap scroll-region" tabindex="0" role="region" aria-label="Package manager operating-model comparison">
 				<table class="compare-table">
-					<caption>Documentation-based comparison of package-manager operating models, reviewed 2026-07-25.</caption>
+					<caption>Documentation-based comparison of package-manager operating models; competitor columns reviewed 2026-07-25.</caption>
 					<thead>
 						<tr>
 							<th scope="col" class="feature-heading">Defined behavior</th>
@@ -53,6 +53,14 @@
 						</tr>
 					</thead>
 					<tbody>
+						<tr>
+							<th scope="row" class="feature-name">Cross-target package portability</th>
+							<td class="highlight"><span class="status preview">proven · three hosts</span></td>
+							<td><span class="status different">Debian-family model</span></td>
+							<td><span class="status different">RPM-family model</span></td>
+							<td><span class="status different">Arch package model</span></td>
+							<td><span class="status built-in">broad host support</span></td>
+						</tr>
 						<tr>
 							<th scope="row" class="feature-name">Dependency selection model</th>
 							<td class="highlight"><span class="status built-in">SAT · built-in</span></td>
@@ -71,7 +79,7 @@
 						</tr>
 						<tr>
 							<th scope="row" class="feature-name">Reversible native tracking without authority transfer</th>
-							<td class="highlight"><span class="status preview">preview-supported</span></td>
+							<td class="highlight"><span class="status preview">works today</span></td>
 							<td><span class="status no">No</span></td>
 							<td><span class="status no">No</span></td>
 							<td><span class="status no">No</span></td>
@@ -117,20 +125,12 @@
 							<td><span class="status built-in">built-in</span></td>
 							<td><span class="status built-in">different model</span></td>
 						</tr>
-						<tr>
-							<th scope="row" class="feature-name">Cross-target package portability</th>
-							<td class="highlight"><span class="status preview">preview core</span></td>
-							<td><span class="status different">Debian-family model</span></td>
-							<td><span class="status different">RPM-family model</span></td>
-							<td><span class="status different">Arch package model</span></td>
-							<td><span class="status built-in">broad host support</span></td>
-						</tr>
 					</tbody>
 				</table>
 			</div>
 
 			<div class="status-key" aria-label="Status vocabulary">
-				<span><i class="key-mark cyan" aria-hidden="true"></i>default, built-in, or preview-supported</span>
+				<span><i class="key-mark cyan" aria-hidden="true"></i>default, built-in, or proven</span>
 				<span><i class="key-mark orange" aria-hidden="true"></i>limited, version-gated, VM-only, or experimental</span>
 				<span><i class="key-mark muted" aria-hidden="true"></i>different model, separate stack, roadmap, N/A, or no</span>
 			</div>
@@ -142,6 +142,7 @@
 				<h2 id="definitions-title">What the matrix is actually measuring.</h2>
 			</div>
 			<dl class="definitions-list">
+				<div><dt>Cross-target portability</dt><dd>A source package keeps its version, dependency, payload, configuration, and lifecycle ABI on a host whose native package format differs; equivalent-name mapping alone does not count.</dd></div>
 				<div><dt>Dependency selection</dt><dd>How the tool chooses a consistent package set from versions, alternatives, providers, and conflicts.</dd></div>
 				<div><dt>Direct repository compatibility</dt><dd>Consumes the host distro's native repository metadata and binary package format without conversion.</dd></div>
 				<div><dt>Reversible native tracking</dt><dd>Adds and removes another tool's tracking while the native manager keeps package authority and files.</dd></div>
@@ -150,7 +151,6 @@
 				<div><dt>Inverse package transaction</dt><dd>A built-in history command attempts to reverse recorded package actions; this is not a filesystem snapshot.</dd></div>
 				<div><dt>Bootable generations</dt><dd>Retained complete system closures are selectable as boot entries, not merely package-cache downgrades.</dd></div>
 				<div><dt>Alternate root or architecture</dt><dd>First-party operation targets a root or architecture different from the running host.</dd></div>
-				<div><dt>Cross-target portability</dt><dd>A source package keeps its version, dependency, payload, configuration, and lifecycle ABI on a host whose native package format differs; equivalent-name mapping alone does not count.</dd></div>
 			</dl>
 		</section>
 
@@ -170,7 +170,7 @@
 		<section class="details-section" aria-labelledby="tradeoffs-title">
 			<div class="details-heading">
 				<p class="eyebrow">Practical trade-offs</p>
-				<h2 id="tradeoffs-title">Where Conary fits—and where it does not.</h2>
+				<h2 id="tradeoffs-title">Where Conary fits, and where it does not.</h2>
 			</div>
 			<div class="details">
 				<article class="detail-card">
@@ -188,7 +188,7 @@
 					<p>
 						DNF5 uses libsolv and has built-in history reversal. Fedora stopped generating
 						delta RPMs in Fedora 40. Conary adds source-independent DEB and Arch package
-						execution, a reversible adoption bridge, and VM-focused generations.
+						execution, a reversible adoption bridge, and VM-only generations.
 					</p>
 				</article>
 
@@ -222,11 +222,19 @@
 				<article class="detail-card maturity-card">
 					<h3>Where Conary is still early</h3>
 					<p>
-						Conary {previewRelease.version} is an immutable published preview artifact, but
-						it is not current tester authority. {previewRelease.testerAuthorityReason}
-						Native CCS packages are few, the cross-distro lifecycle matrix still needs wider
-						installed-host evidence, generation work is VM-only, and the community and
-						operational evidence are small beside established managers.
+						Conary {previewRelease.version} is pre-alpha and a single-maintainer project.
+						{#if previewRelease.loopOpen}
+							{previewRelease.tag} is the assigned external tester release and the loop is open.
+						{:else if previewRelease.testerAssigned}
+							{previewRelease.tag} is assigned as the tester release, but the tester guide
+							is not yet active, so the loop is not open.
+						{:else}
+							No release is assigned as external tester authority yet.
+						{/if}
+						Native CCS packages are
+						few, the cross-distro lifecycle matrix still needs wider installed-host evidence,
+						generation work is VM-only, and the community and operational track record are
+						small beside the established managers.
 					</p>
 				</article>
 			</div>
@@ -239,12 +247,12 @@
 				<p>Third-party extensions are excluded unless a cell names an add-on or separate stack.</p>
 			</div>
 			<ul class="source-list">
-				<li><a href={previewRelease.testerGuideUrl}>Conary launch-status tester guide <span aria-hidden="true">↗</span></a></li>
-				<li><a href="https://github.com/ConaryLabs/Conary/blob/main/docs/modules/source-selection.md">Conary source-selection boundary <span aria-hidden="true">↗</span></a></li>
+				<li><a href={previewRelease.matrixUrl}>Conary release artifact matrix <span aria-hidden="true">↗</span></a></li>
+				<li><a href={project.sourceSelectionUrl}>Conary source-selection boundary <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://documentation.ubuntu.com/release-notes/26.04/summary-for-lts-users/">Ubuntu 26.04 APT summary <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://dnf5.readthedocs.io/en/latest/commands/history.8.html">DNF5 history commands <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://dnf5.readthedocs.io/en/stable/changes_from_dnf4.7.html">DNF5 changes from DNF4 <span aria-hidden="true">↗</span></a></li>
-				<li><a href="https://man.archlinux.org/man/pacman.8.en">pacman manual <span aria-hidden="true">↗</span></a></li>
+				<li><a href="https://archlinux.org/pacman/pacman.8.html">pacman manual <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://nix.dev/manual/nix/stable/package-management/profiles">Nix profiles <span aria-hidden="true">↗</span></a></li>
 				<li><a href="https://nixos.org/manual/nixos/stable/">NixOS manual <span aria-hidden="true">↗</span></a></li>
 			</ul>
@@ -253,9 +261,9 @@
 		<div class="compare-cta">
 			<div>
 				<p class="eyebrow">The useful question</p>
-				<h2>Would one package engine across distro boundaries solve a real problem?</h2>
+				<h2>Would one package engine across distro boundaries solve a real problem for you?</h2>
 			</div>
-			<a href="/install/" class="btn btn-primary">Run the bounded preview</a>
+			<a href="/install/" class="btn btn-primary">{previewRelease.loopOpen ? 'Try the bounded loop' : 'Inspect the preview'}</a>
 		</div>
 	</div>
 </section>
@@ -318,7 +326,7 @@
 
 	.matrix-meta {
 		justify-self: end;
-		max-width: 360px;
+		max-width: 380px;
 		padding-left: 1rem;
 		border-left: 2px solid var(--color-orange);
 		font-family: var(--font-mono);
@@ -327,14 +335,14 @@
 	.matrix-meta span {
 		display: block;
 		color: var(--color-muted);
-		font-size: 0.65rem;
+		font-size: var(--text-label);
 		letter-spacing: 0.08em;
 		text-transform: uppercase;
 	}
 
 	.matrix-meta strong {
 		color: var(--color-ivory);
-		font-size: 0.85rem;
+		font-size: 0.88rem;
 		font-weight: 500;
 	}
 
@@ -342,14 +350,14 @@
 		margin: 0.35rem 0 0;
 		color: var(--color-muted);
 		font-family: var(--font-body);
-		font-size: 0.78rem;
+		font-size: var(--text-caption);
 	}
 
 	.matrix-note {
 		max-width: 78ch;
 		margin: 0 0 1.25rem;
 		color: var(--color-muted);
-		font-size: 0.88rem;
+		font-size: 0.9rem;
 	}
 
 	.scroll-cue {
@@ -357,7 +365,7 @@
 		margin: 0 0 0.55rem;
 		color: var(--color-cyan);
 		font-family: var(--font-mono);
-		font-size: 0.68rem;
+		font-size: var(--text-label);
 		text-align: right;
 	}
 
@@ -374,7 +382,7 @@
 		width: 100%;
 		min-width: 1050px;
 		border-collapse: collapse;
-		font-size: 0.8rem;
+		font-size: 0.82rem;
 	}
 
 	.compare-table caption {
@@ -401,7 +409,7 @@
 		color: var(--color-muted);
 		background: var(--color-layer);
 		font-family: var(--font-mono);
-		font-size: 0.66rem;
+		font-size: var(--text-label);
 		font-weight: 500;
 		letter-spacing: 0.05em;
 		text-transform: uppercase;
@@ -422,7 +430,7 @@
 		color: var(--color-ivory);
 		background: var(--color-code-bg);
 		font-family: var(--font-body);
-		font-size: 0.82rem;
+		font-size: 0.86rem;
 		font-weight: 500;
 		letter-spacing: 0;
 		text-align: left;
@@ -432,7 +440,7 @@
 	.compare-table .feature-heading {
 		background: var(--color-layer);
 		font-family: var(--font-mono);
-		font-size: 0.66rem;
+		font-size: var(--text-label);
 		text-transform: uppercase;
 	}
 
@@ -447,7 +455,7 @@
 		justify-content: center;
 		gap: 0.4rem;
 		font-family: var(--font-mono);
-		font-size: 0.67rem;
+		font-size: var(--text-label);
 		line-height: 1.35;
 	}
 
@@ -517,7 +525,7 @@
 		margin-top: 0.9rem;
 		color: var(--color-muted);
 		font-family: var(--font-mono);
-		font-size: 0.64rem;
+		font-size: var(--text-label);
 	}
 
 	.status-key span {
@@ -568,13 +576,13 @@
 	.definitions-list dt {
 		color: var(--color-cyan);
 		font-family: var(--font-mono);
-		font-size: 0.72rem;
+		font-size: var(--text-label);
 	}
 
 	.definitions-list dd {
 		margin: 0;
 		color: var(--color-mist);
-		font-size: 0.9rem;
+		font-size: 0.92rem;
 	}
 
 	.application-grid,
@@ -646,7 +654,7 @@
 		color: var(--color-mist);
 		background: var(--color-code-bg);
 		font-family: var(--font-mono);
-		font-size: 0.7rem;
+		font-size: var(--text-label);
 		text-decoration: none;
 	}
 

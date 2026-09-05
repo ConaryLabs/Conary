@@ -2,7 +2,7 @@
 # site/static/install-conary-preview.sh -- Verify and preview/apply a Conary release bootstrap.
 set -euo pipefail
 
-readonly DEFAULT_MANIFEST_URL="https://github.com/ConaryLabs/Conary/releases/latest/download/conary-bootstrap-v1.manifest"
+readonly DEFAULT_MANIFEST_URL="https://github.com/FieldmouseWorks/Conary/releases/latest/download/conary-bootstrap-v1.manifest"
 # DER SubjectPublicKeyInfo for the Ed25519 release key embedded by conary-core.
 readonly RELEASE_PUBLIC_KEY_DER_BASE64="MCowBQYDK2VwAyEACOqs0foIOJ043D8A0gvp3zBtpTZ+Za074fNunYAegAM="
 
@@ -10,7 +10,7 @@ apply=false
 assume_yes=false
 manifest_url="$DEFAULT_MANIFEST_URL"
 release_public_key_der_base64="$RELEASE_PUBLIC_KEY_DER_BASE64"
-artifact_base_url="https://github.com/ConaryLabs/Conary/releases/download"
+artifact_base_url="https://github.com/FieldmouseWorks/Conary/releases/download"
 artifact_base_overridden=false
 
 die() {
