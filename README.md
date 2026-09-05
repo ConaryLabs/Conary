@@ -7,86 +7,74 @@
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)
 
-## Release Channels
+Conary is a cross-distro package manager for Linux, written in Rust. It
+installs RPM, DEB, Arch, and native CCS packages on Fedora, Ubuntu, and Arch
+hosts without invoking dnf, apt, or pacman: an RPM keeps RPM lifecycle and
+dependency semantics on Ubuntu or Arch, a DEB keeps Debian semantics on Fedora
+or Arch, and an Arch package keeps ALPM semantics on Fedora or Ubuntu. Every
+change is one atomic, recorded transaction over content-addressed storage,
+with immutable system generations for rollback.
+
+It is for people who want packages from another distribution's repositories
+on the host they already run, without a container or a rebuild, and who are
+willing to test pre-alpha software on a machine they can throw away.
+
+Conary is a [Fieldmouse Works](https://github.com/FieldmouseWorks) project.
+It is inspired by the
+[original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager))
+from rPath, but it is an independent project. It is not affiliated with,
+endorsed by, or maintained by rPath, SAS, or the original Conary developers.
+
+## Status
+
+Conary is still early. Expect failures.
+
+Conary Preview is a rollback-first package bridge for installing proven RPM,
+DEB, and Arch packages across Fedora, Ubuntu, and Arch. It is not a
+full-system replacement for apt, dnf, or pacman, and it is not ready to run a
+critical system unattended. Use a VM or disposable host first.
 
 | Channel | Current state | Authority |
 | --- | --- | --- |
 | Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
 | Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/FieldmouseWorks/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
-| Current external tester pin | **None** | W7 passed; assignment waits for the signed public universe, daily-driver floor, synchronized release, and launch proof in [launch status](docs/roadmaps/launch-status.json) |
+| Current external tester pin | **None** | [Launch status](docs/roadmaps/launch-status.json) |
 
-Conary is a cross-distro package manager for Linux, written in Rust. It
-installs RPM, DEB, Arch, and native CCS packages on Fedora, Ubuntu, and Arch
-hosts: an RPM keeps exact RPM lifecycle and dependency semantics on Ubuntu or
-Arch, a DEB keeps exact Debian semantics on Fedora or Arch, and an Arch
-package keeps exact ALPM semantics on Fedora or Ubuntu — without invoking
-dnf, apt, or pacman.
-
-Every change runs through one source-independent atomic transaction model,
-recorded as changesets over content-addressed storage, with immutable system
-generations for rollback and image export.
-The source package format defines the package ABI; Conary owns install,
-update, remove, and rollback; the target supplies an explicitly inventoried
-set of typed host capabilities.
-
-The primary adoption path is cross-distro package installation. For packages
-already owned by dnf, apt, or pacman on an existing system, adoption remains
-available as a reversible migration bridge; those native package managers are
-not runtime authority for normal Conary-owned package operations.
-
-Inspired by the [original Conary](https://en.wikipedia.org/wiki/Conary_(package_manager))
-from rPath, but this is an independent project. It is not affiliated with,
-endorsed by, or maintained by rPath, SAS, or the original Conary developers.
-
-## Early Preview Warning
-
-Conary is still early. Expect failures.
-
-Conary Preview is a rollback-first package bridge for installing proven RPM,
-DEB, and Arch packages across Fedora, Ubuntu, and Arch. It is not yet a
-full-system replacement for apt, dnf, or pacman.
-
-Use a VM or disposable host first. The current public preview is useful for
-testing cross-distro package installation, Remi conversion, exact transaction
-history, removal, and self-update. Adoption is the secondary migration lane for
-an existing system. Conary is not ready to run a critical system unattended.
-
-The highest-risk failure class is source-package lifecycle execution. RPM,
-Debian, and ALPM expose finite documented transaction ABIs plus package-authored
-programs. Conary preserves those native slots, arguments, ordering, triggers,
-configuration semantics, and payload visibility, then executes them against
-typed target capabilities without invoking the source package manager. A
-missing model or capability is an engineering defect or an exact target
-preflight error—not a reason to guess semantics or route a package into an
-indefinite manual-review queue.
+The latest release is checksummed, attested, signed where the matrix says so,
+and proven on all three supported hosts. No release is assigned as external
+tester authority yet: the signed public package universe, the daily-driver
+floor, a synchronized public release, and performance proof are still open.
+The machine-readable [launch status](docs/roadmaps/launch-status.json) owns
+those gates; the [agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md)
+stays paused until it names a pinned release.
 
 If you hit a failure, capture the command, distro, package name, Conary
-version, source package format, and exact error. For first-wave testing, use the
-[agent-assisted tester loop](docs/guides/agent-assisted-tester-loop.md) and
-attach only a reviewed support bundle.
+version, source package format, and exact error, then open an issue. Attach
+only a reviewed support bundle; never a live database or trust directory.
 
 ## Try It
 
-The [latest immutable GitHub release](https://github.com/FieldmouseWorks/Conary/releases/latest)
-is the current artifact-verified synchronized suite. The
-[release artifact matrix](docs/operations/release-artifact-matrix.md) records
-its exact tag, complete asset set, historical deployments, and three-distro
-released-package proof. W7's ordinary-package gate passed, but broad external
-testing remains paused while the signed public universe, daily-driver floor,
-a new synchronized public release, and performance/usefulness proof remain
-open. The machine-readable
-[launch status](docs/roadmaps/launch-status.json) owns those gates. If you
-inspect the current release now, use only a VM or non-critical host and do not
-treat the result as an outreach completion.
+Supported hosts are Fedora 44, Ubuntu 26.04 LTS, and Arch Linux on x86_64.
 
-After an exact release is pinned and the tester guide is resumed, choose a
-source whose package format differs from the host and run the complete bounded
+The signed bootstrap installer downloads the latest release manifest, verifies
+its Ed25519 signature against the embedded release key, selects the native
+package for your host, verifies that package, and prints the plan. Nothing is
+installed without `--apply --yes`. Do not pipe it into a shell.
+
+```bash
+curl --proto '=https' --tlsv1.2 -fLO https://conary.io/install-conary-preview.sh
+less install-conary-preview.sh
+bash ./install-conary-preview.sh
+bash ./install-conary-preview.sh --apply --yes
+```
+
+The native package runs `conary system init` on install, which creates the
+root-owned database and seeds the default repositories, including Remi. Then
+pick a source whose package format differs from the host and run the bounded
 loop:
 
 ```bash
-source=ubuntu-26.04  # Fedora/Arch hosts; use fedora-44 on Ubuntu
-sudo conary repo list
-sudo conary repo sync remi
+source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu
 sudo conary install htop --from "$source" --dry-run
 sudo conary install htop --from "$source" --yes
 sudo conary list htop --info
@@ -95,7 +83,7 @@ sudo conary update htop --dry-run
 sudo conary remove htop --yes
 ```
 
-You can also pass a local RPM, DEB, or Arch artifact on any supported target:
+A local RPM, DEB, or Arch artifact works on any supported host:
 
 ```bash
 sudo conary install ./package.rpm --dry-run
@@ -103,128 +91,102 @@ sudo conary install ./package.deb --dry-run
 sudo conary install ./package.pkg.tar.zst --dry-run
 ```
 
-Conary validates exact package-declared capabilities against the selected
-target during preflight and applies the executor-owned enforcement contract
-automatically. An unsupported declaration fails before mutation; there is no
-blanket capability-approval bypass.
+Preflight validates the package's declared capabilities against the target
+before anything is mutated. An unsupported declaration fails there; there is
+no capability-approval bypass.
 
-The RPM, DEB, and Arch packages initialize the root-owned system database and
-all built-in RPM, DEB, and Arch source feeds during installation. The host
-distribution does not select which package ecosystems Conary may resolve.
-
-To test reversible adoption without handing package ownership to Conary:
+To test reversible adoption of packages the host's native package manager
+already owns:
 
 ```bash
 sudo conary system adopt --system --dry-run
 sudo conary system adopt --system
-sudo conary system adopt --status
-sudo conary system unadopt --all --dry-run
 sudo conary system unadopt --all --yes
 ```
 
-Commands that change packages, files, generation state, or selected native
-authority require command-local apply intent with `--yes`. Use `--dry-run`
-first when the command supports it.
+Commands that change packages, files, generation state, or native authority
+require `--yes`. Use `--dry-run` first when the command supports it. The
+default `conary --help` shows the daily-driver commands;
+`conary --help-advanced` and
+[docs/guides/advanced-commands.md](docs/guides/advanced-commands.md) list the
+packaging and platform surface.
 
-## What Works Today
+### What works today
 
-- Package-manager preview on Fedora 44, Ubuntu 26.04 LTS, and Arch Linux.
-- Source-independent installation of RPM, DEB, and Arch artifacts through
-  typed native lifecycle, dependency, payload, and configuration contracts.
+- Source-independent installation, update, and removal of RPM, DEB, and Arch
+  artifacts through typed native lifecycle, dependency, payload, and
+  configuration contracts.
 - Native package adoption and non-destructive unadoption.
-- Installing CCS packages and converted RPM/DEB/Arch packages with Conary as
-  package authority.
-- Atomic package-state changesets, history, and rollback-oriented state
+- CCS packages and Remi-converted packages with Conary as package authority.
+- Atomic changesets, transaction history, and rollback-oriented state
   tracking.
 - Immutable EROFS/composefs generations on hosts with the needed kernel and
-  tooling.
-- Raw, qcow2, and x86_64 UEFI ISO generation export for validation workflows.
-- Remi authenticated source ingestion, conversion, immutable-catalog, signing,
-  and atomic-activation machinery. The first complete signed public universe
-  remains blocked on [#598](https://github.com/FieldmouseWorks/Conary/issues/598).
+  tooling, with raw, qcow2, and x86_64 UEFI ISO export.
+- Signed self-update from the published release channel.
 
-## What Will Break
+### What will break
 
 - A package that needs a target capability the host does not provide fails
-  exact preflight before mutation.
+  preflight before mutation.
 - Source lifecycle forms outside the implemented RPM, Debian, or ALPM ABI are
-  bugs to model and test; Conary does not invent behavior from command text.
-- Security-only updates fail closed unless a repository declares trusted
-  advisory metadata support.
-- Native transaction-history import is not implemented.
-- Non-x86_64 generation boot assets are still reserved.
-- SBOM/provenance sidecars are not published for the current preview suite.
+  bugs to model and test; Conary does not guess behavior from script text.
+- Remi's first complete signed public universe is still blocked on
+  [#598](https://github.com/FieldmouseWorks/Conary/issues/598), so a package
+  may fail to convert even when the upstream package exists.
+- Generation boot and export proof is x86_64 only.
+- Releases publish checksums, attestations, and detached CCS and bootstrap
+  signatures, but no SBOM or provenance sidecars.
+- conaryd and federation are outside the reliable preview path.
 
-## Common Commands
+## How It Works
 
-```bash
-# Install and inspect packages
-sudo conary install nginx --dry-run
-sudo conary install nginx --yes
-sudo conary list
-sudo conary list nginx --info
-sudo conary list nginx --files
-sudo conary query depends nginx
-sudo conary query whatprovides 'soname(libssl.so.3)'
+The source package format defines the package ABI; Conary owns install,
+update, remove, and rollback; the target supplies an explicitly inventoried
+set of typed host capabilities.
+The primary adoption path is cross-distro package installation. For packages
+already owned by dnf, apt, or pacman, adoption remains available as a
+reversible migration bridge; those native package managers are not runtime
+authority for Conary-owned operations.
 
-# Update Conary-owned packages
-sudo conary update --dry-run
-sudo conary update nginx --yes
+An install runs through one pipeline regardless of source format:
 
-# Build and select immutable generations
-sudo conary system generation build --summary "After nginx setup" --yes
-sudo conary system generation list
-sudo conary system generation switch 1 --yes
-sudo conary system generation rollback --yes
+1. Parse the RPM, DEB, or Arch artifact into a lossless source-authority
+   record and convert it to a CCS lifecycle bundle.
+2. Resolve dependencies with a SAT solver against typed provides, and match
+   source requirements against the typed host capability inventory.
+3. Preflight the exact lifecycle plan: stages, arguments, triggers, and
+   payload boundaries in source-ABI order.
+4. Commit the transaction: store content in the CAS, record the changeset in
+   SQLite, build the generation artifact, and select it.
+5. Execute scriptlets and triggers inside an isolated selected root.
 
-# Export a generation artifact
-sudo conary system generation export --path /conary/generations/1 --format qcow2 --output gen1.qcow2
-sudo conary system generation export --path /conary/generations/1 --format iso --output gen1.iso
-
-# Self-update the CLI
-sudo conary self-update --check
-sudo conary self-update
-```
-
-The default `conary --help` shows the daily-driver commands. The full
-packaging/platform surface is listed by `conary --help-advanced` and in
-[docs/guides/advanced-commands.md](docs/guides/advanced-commands.md).
-
-## Architecture At A Glance
+The full contract is in
+[docs/specs/foreign-package-lifecycle-contracts.md](docs/specs/foreign-package-lifecycle-contracts.md)
+and the subsystem map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Conary is a virtual Rust workspace:
 
 - `apps/conary`: package-manager CLI.
-- `crates/conary-core`: package metadata, repository sync, resolver,
-  transactions, scriptlets, database, CAS, generation, CCS, model, and
-  bootstrap logic.
-- `apps/remi`: public/admin package conversion and serving service.
-- `apps/conaryd`: local daemon with Unix-socket REST/SSE scaffolding.
-- `apps/conary-test`: integration-test harness.
+- `crates/conary-core`: parsers, repositories, resolver, transactions,
+  scriptlets, database, CAS, generations, and CCS. Internal crate, not a
+  stable external API.
+- `apps/remi`: package conversion and serving service.
+- `apps/conaryd`: local daemon with Unix-socket REST/SSE routes.
+- `apps/conary-test`: integration harness that runs the same lifecycle in
+  Podman containers per supported distro, plus QEMU suites for generation boot
+  and export.
 - `crates/conary-bootstrap`, `crates/conary-agent-contract`, and
-  `crates/conary-mcp`: shared runtime and automation support crates.
+  `crates/conary-mcp`: shared runtime and agent-integration crates.
 
-For the maintained architecture map, see
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+## Remi
 
-## Scale And Verification
-
-Conary is a single-maintainer project, so the verification layer carries the
-weight that a team's review would otherwise carry.
-
-Two of those deserve specific mention:
-
-- **Cross-distro proof runs on real hosts, not mocks.** The integration harness
-  boots Fedora, Ubuntu, and Arch VMs and exercises the same RPM, DEB, Arch, and
-  CCS pipeline on each, because the claim being tested is that a package keeps
-  its source semantics on a host whose native format differs. A mocked target
-  cannot prove that.
-- **Documentation claims are gated by CI.** `scripts/check-doc-truth.sh` fails
-  the build when this README, the roadmap, the module docs, or the public
-  websites claim something the code does not do. Release tags, install-command
-  forms, and preview boundaries are all checked against the source tree. The
-  cost of that is real: changing a public claim means changing the code or the
-  check, not the prose.
+Remi is Conary's conversion and package-serving service at
+[remi.conary.io](https://remi.conary.io). It authenticates Fedora, Ubuntu, and
+Arch repositories with pinned trust roots, converts their packages into CCS
+artifacts, and serves them as a signed catalog. Its first complete immutable
+public universe is the current #598 gate; a liveness response alone is not
+package-serving readiness. See [docs/modules/remi.md](docs/modules/remi.md)
+and [docs/guides/self-hosted-remi.md](docs/guides/self-hosted-remi.md).
 
 ## Build From Source
 
@@ -240,54 +202,32 @@ sudo ./target/debug/conary system init
 For an isolated non-root development database, pass a writable `--db-path`;
 subsequent commands must use the same path.
 
-Useful verification commands:
+Repository gates:
 
 ```bash
-cargo build -p conary
-cargo build -p remi
-cargo build -p conaryd
-cargo build -p conary-test
 cargo test -p conary
 cargo test -p conary-core
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
+bash scripts/check-doc-truth.sh
 ```
 
-## Remi
+`scripts/check-doc-truth.sh` runs in CI and fails when this README, the
+roadmap, the module docs, or the public site claim something the source tree
+does not do.
 
-Remi is Conary's conversion and signed-package-universe service at
-[remi.conary.io](https://remi.conary.io). It authenticates supported Fedora,
-Ubuntu, and Arch sources, converts their packages into CCS artifacts, and
-validates the exact source-format lifecycle contract carried by each converted
-artifact. Its first complete immutable public-universe activation is the
-current #598 gate; a liveness response alone is not package-serving readiness.
-There is no operator-review lane between conversion and serving.
+## Contributing
 
-Remi public serving is intentionally conservative while the scriptlet adapter
-surface matures. A package may fail even when the upstream package exists and
-downloads normally. Those failures are preview feedback, not proof that the
-package should be ignored.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the issue, branch, and pull-request
+flow, and [AGENTS.md](AGENTS.md) if you work with a coding agent; both are
+welcome. Security reports go through
+[private advisories](SECURITY.md), not public issues.
 
-See [docs/modules/remi.md](docs/modules/remi.md) and
-[docs/guides/self-hosted-remi.md](docs/guides/self-hosted-remi.md) for service
-details.
-
-## Documentation
-
-- [AGENTS.md](AGENTS.md): repo contract for coding agents.
-- [CONTRIBUTING.md](CONTRIBUTING.md): development setup and contribution flow.
-- [ROADMAP.md](ROADMAP.md): current priorities.
+- [ROADMAP.md](ROADMAP.md): direction and current milestone.
 - [CHANGELOG.md](CHANGELOG.md): release history.
-- [docs/guides/agent-assisted-tester-loop.md](docs/guides/agent-assisted-tester-loop.md): first-wave tester workflow.
-- [docs/operations/release-artifact-matrix.md](docs/operations/release-artifact-matrix.md): release artifact expectations.
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): system architecture.
-- [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md): integration test harness and suites.
+- [docs/INTEGRATION-TESTING.md](docs/INTEGRATION-TESTING.md): integration harness and suites.
 - [docs/SCRIPTLET_SECURITY.md](docs/SCRIPTLET_SECURITY.md): scriptlet sandboxing and policy.
-
-## Community
-
-- [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)
-- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions): questions and ideas.
 
 ## License
 
