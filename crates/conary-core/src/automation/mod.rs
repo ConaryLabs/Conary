@@ -25,7 +25,7 @@ use crate::error::Result;
 use crate::model::{
     AiAssistConfig, AiAssistMode, AutomationCategory, AutomationConfig, AutomationMode,
 };
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Concrete installed package identity for automation execution.
@@ -180,7 +180,7 @@ pub struct AutomationManager {
     config: AutomationConfig,
 
     /// Pending actions awaiting decision
-    pending: HashMap<String, PendingAction>,
+    pending: BTreeMap<String, PendingAction>,
 
     /// Action history
     history: Vec<(PendingAction, ActionStatus)>,
@@ -191,7 +191,7 @@ impl AutomationManager {
     pub fn new(config: AutomationConfig) -> Self {
         Self {
             config,
-            pending: HashMap::new(),
+            pending: BTreeMap::new(),
             history: Vec::new(),
         }
     }
@@ -255,12 +255,12 @@ impl AutomationManager {
         }
     }
 
-    /// Get all pending actions
+    /// Get all pending actions in ascending action-ID order.
     pub fn pending_actions(&self) -> Vec<&PendingAction> {
         self.pending.values().collect()
     }
 
-    /// Get pending actions by category
+    /// Get pending actions by category in ascending action-ID order.
     pub fn pending_by_category(&self, category: AutomationCategory) -> Vec<&PendingAction> {
         self.pending
             .values()
@@ -413,6 +413,47 @@ pub fn parse_duration(s: &str) -> Result<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pending_actions_use_id_order_independent_of_registration_and_reinsertion() {
+        for ids in [
+            ["z-last", "a-first", "m-middle"],
+            ["m-middle", "z-last", "a-first"],
+        ] {
+            let mut manager = AutomationManager::new(AutomationConfig::default());
+            for id in ids {
+                let mut action = action::package_update_action("demo", "1", "2", None);
+                action.id = id.into();
+                manager.register_action(action);
+            }
+            manager
+                .record_decision("a-first", ActionDecision::NeedsDetails)
+                .unwrap();
+            for actions in [
+                manager.pending_actions(),
+                manager.pending_by_category(AutomationCategory::Updates),
+            ] {
+                assert_eq!(
+                    actions
+                        .iter()
+                        .map(|action| action.id.as_str())
+                        .collect::<Vec<_>>(),
+                    ["a-first", "m-middle", "z-last"]
+                );
+            }
+            manager
+                .record_decision("m-middle", ActionDecision::Rejected)
+                .unwrap();
+            assert_eq!(
+                manager
+                    .pending_actions()
+                    .iter()
+                    .map(|action| action.id.as_str())
+                    .collect::<Vec<_>>(),
+                ["a-first", "z-last"]
+            );
+        }
+    }
 
     #[test]
     fn test_parse_duration() {

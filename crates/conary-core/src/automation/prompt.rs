@@ -1,7 +1,7 @@
 // crates/conary-core/src/automation/prompt.rs
 //! Typed automation choices supplied by a caller; terminal interaction belongs to the CLI.
 
-use super::{AutomationManager, PendingAction};
+use super::PendingAction;
 use crate::model::AutomationCategory;
 
 /// Response to the summary prompt
@@ -19,37 +19,71 @@ pub enum SummaryResponse {
     Exit,
 }
 
-/// Select pending actions only for an explicit application decision.
+/// Filter an explicit application decision without changing the caller's check order.
 pub fn actions_for_decision(
-    manager: &AutomationManager,
+    actions: &[PendingAction],
     decision: &SummaryResponse,
 ) -> Vec<PendingAction> {
-    match decision {
-        SummaryResponse::ApplyAll => manager.pending_actions(),
-        SummaryResponse::ReviewCategory(category) => manager.pending_by_category(*category),
-        SummaryResponse::ShowDetails | SummaryResponse::Configure | SummaryResponse::Exit => {
-            Vec::new()
-        }
-    }
-    .into_iter()
-    .cloned()
-    .collect()
+    actions
+        .iter()
+        .filter(|action| match decision {
+            SummaryResponse::ApplyAll => true,
+            SummaryResponse::ReviewCategory(category) => action.category == *category,
+            SummaryResponse::ShowDetails | SummaryResponse::Configure | SummaryResponse::Exit => {
+                false
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::automation::{ActionPayload, InstalledPackageRef};
-    use crate::model::AutomationConfig;
+
+    #[test]
+    fn category_selection_keeps_the_original_relative_order() {
+        use crate::automation::action::package_update_action;
+        let mut first = package_update_action("first", "1", "2", None);
+        first.id = "z-first".into();
+        let mut security = package_update_action("security", "1", "2", None);
+        security.category = AutomationCategory::Security;
+        let mut last = package_update_action("last", "1", "2", None);
+        last.id = "a-last".into();
+        let actions = [first, security, last];
+        let selected = actions_for_decision(
+            &actions,
+            &SummaryResponse::ReviewCategory(AutomationCategory::Updates),
+        );
+        assert_eq!(
+            selected
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            ["z-first", "a-last"]
+        );
+        let selected = actions_for_decision(&actions, &SummaryResponse::ApplyAll);
+        assert_eq!(
+            selected
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>(),
+            actions
+                .iter()
+                .map(|action| action.id.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn only_explicit_application_decisions_select_actions() {
-        let mut manager = AutomationManager::new(AutomationConfig::default());
+        let mut actions = Vec::new();
         for (id, category) in [
             ("security", AutomationCategory::Security),
             ("orphan", AutomationCategory::Orphans),
         ] {
-            manager.register_action(PendingAction {
+            actions.push(PendingAction {
                 id: id.into(),
                 category,
                 summary: id.into(),
@@ -71,11 +105,11 @@ mod tests {
             });
         }
         assert_eq!(
-            actions_for_decision(&manager, &SummaryResponse::ApplyAll).len(),
+            actions_for_decision(&actions, &SummaryResponse::ApplyAll).len(),
             2
         );
         let security = actions_for_decision(
-            &manager,
+            &actions,
             &SummaryResponse::ReviewCategory(AutomationCategory::Security),
         );
         assert_eq!(security.len(), 1);
@@ -85,8 +119,8 @@ mod tests {
             SummaryResponse::Configure,
             SummaryResponse::Exit,
         ] {
-            assert!(actions_for_decision(&manager, &decision).is_empty());
+            assert!(actions_for_decision(&actions, &decision).is_empty());
         }
-        assert_eq!(manager.pending_actions().len(), 2);
+        assert_eq!(actions.len(), 2);
     }
 }

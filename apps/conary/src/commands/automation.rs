@@ -183,6 +183,21 @@ async fn execute_actions(
     db_path: &str,
     root: &str,
 ) -> Result<(usize, usize, usize)> {
+    execute_actions_with(conn, actions, |op| async move {
+        execute_planned_op(&op, db_path, root).await
+    })
+    .await
+}
+
+async fn execute_actions_with<F, Fut>(
+    conn: &rusqlite::Connection,
+    actions: &[conary_core::automation::PendingAction],
+    mut execute: F,
+) -> Result<(usize, usize, usize)>
+where
+    F: FnMut(PlannedOp) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
     let planner = ActionExecutor::new();
     let mut applied = 0;
     let mut failed = 0;
@@ -205,7 +220,7 @@ async fn execute_actions(
         let mut succeeded_ops = 0usize;
         let mut errors = Vec::new();
         for op in &plan.ops {
-            if let Err(e) = execute_planned_op(op, db_path, root).await {
+            if let Err(e) = execute(op.clone()).await {
                 errors.push(format!("{}: {}", format_planned_op(op), e));
             } else {
                 succeeded_ops += 1;
@@ -677,7 +692,7 @@ pub async fn cmd_automation_apply(
     let summary = manager.summary();
 
     let decision = prompt::show_summary(&summary)?;
-    let selected_actions = actions_for_decision(&manager, &decision);
+    let selected_actions = actions_for_decision(&all_actions, &decision);
     match decision {
         SummaryResponse::ApplyAll => {
             println!("Applying all actions...");
