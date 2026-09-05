@@ -2699,12 +2699,12 @@ test_check_release_matrix_rejects_unvalidated_native_oracle_survey() {
     repo="$(create_release_policy_fixture)"
     replace_fixture_text_once \
         "$repo/scripts/produce-native-oracle-lane.py" \
-        '        survey = write_resolution_survey(' \
+        '        survey, lane_outcome = write_resolution_survey(' \
         '        survey = resolution_survey_evidence('
 
     assert_check_release_matrix_fails \
         "$repo" \
-        "native-oracle lane writes and validates diagnostics survey before strict resolution"
+        "native-oracle lane writes and validates diagnostics from one combined resolution walk"
 }
 
 test_check_release_matrix_rejects_omitted_survey_manifest_budget() {

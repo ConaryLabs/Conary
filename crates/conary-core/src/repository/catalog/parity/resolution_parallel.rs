@@ -484,7 +484,7 @@ fn join_workers<T>(handles: Vec<std::thread::ScopedJoinHandle<'_, T>>) -> Result
     Ok(())
 }
 
-fn detected_cpu_limit() -> Result<usize> {
+pub(super) fn detected_cpu_limit() -> Result<usize> {
     let available = std::thread::available_parallelism().map_or(1, NonZeroUsize::get);
     let Some(path) = unified_cgroup_path(Path::new(PROC_SELF_CGROUP))? else {
         return Ok(available);
