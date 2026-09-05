@@ -20,11 +20,7 @@ pub use super::dependency_source::{
 use super::versioning::VersionScheme;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
-
-// ---------------------------------------------------------------------------
 // Capability kinds
-// ---------------------------------------------------------------------------
-
 /// What kind of thing a repository package provides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RepositoryCapabilityKind {
@@ -49,11 +45,7 @@ pub enum RepositoryCapabilityKind {
     /// Anything that does not fit the above categories.
     Generic,
 }
-
-// ---------------------------------------------------------------------------
 // Requirement kinds
-// ---------------------------------------------------------------------------
-
 /// The relationship expressed by a dependency entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RepositoryRequirementKind {
@@ -161,11 +153,7 @@ impl RepositoryRequirementKind {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
 // Conditional / rich dependency behavior
-// ---------------------------------------------------------------------------
-
 /// Diagnostic shape of a parsed dependency expression.
 ///
 /// Resolution uses [`RepositoryRequirementExpression`] directly. This label is
@@ -177,11 +165,7 @@ pub enum ConditionalRequirementBehavior {
     /// Conditional on a boolean predicate (RPM rich deps `(foo if bar)`).
     Conditional,
 }
-
-// ---------------------------------------------------------------------------
 // Provides
-// ---------------------------------------------------------------------------
-
 /// Architecture carried by one source-native provided capability.
 ///
 /// Debian `Provides` atoms may omit a qualifier, advertise the wildcard
@@ -564,11 +548,7 @@ impl RepositoryProvide {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
 // Requirement clauses and groups
-// ---------------------------------------------------------------------------
-
 /// Architecture qualifier attached to one source-native dependency atom.
 ///
 /// Debian dependency names may be unqualified, use the special `:any` or

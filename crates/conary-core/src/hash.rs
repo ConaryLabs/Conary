@@ -320,11 +320,7 @@ pub fn sha256_reader_hex<R: Read + ?Sized>(reader: &mut R) -> io::Result<String>
 pub fn xxh128(data: &[u8]) -> String {
     hash_bytes(HashAlgorithm::Xxh128, data).value
 }
-
-// =============================================================================
 // Verification functions
-// =============================================================================
-
 /// Verification result error
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("{algorithm} mismatch: expected {expected}, got {actual}")]

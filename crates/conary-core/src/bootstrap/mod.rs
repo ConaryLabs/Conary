@@ -291,11 +291,7 @@ impl Bootstrap {
             .get_artifact_path(BootstrapStage::CrossTools)
             .and_then(|p| Toolchain::from_prefix(&p).ok())
     }
-
-    // -----------------------------------------------------------------
     // 6-phase LFS-aligned pipeline methods
-    // -----------------------------------------------------------------
-
     /// Build Phase 1: Cross-toolchain (LFS Chapter 5).
     ///
     /// Uses the host compiler to build a cross-toolchain targeting `LFS_TGT`.

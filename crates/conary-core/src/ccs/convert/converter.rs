@@ -567,7 +567,7 @@ impl NativePackageConverter {
             sha256: ccs_write.ccs_output_sha256.clone(),
             bytes: ccs_write.ccs_output_bytes,
         };
-        // Step 6: Extract source-package provenance information.
+        // Extract source-package provenance information.
         let native_provenance_started = Instant::now();
         let artifact_exists = metadata.package_path.try_exists().map_err(|error| {
             ConversionError::IoError(format!(

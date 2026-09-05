@@ -60,11 +60,7 @@ impl Default for EnhancementRegistry {
         Self::with_builtins()
     }
 }
-
-// ============================================================================
 // Built-in Enhancement Engines
-// ============================================================================
-
 /// Provenance extraction enhancer
 ///
 /// Extracts provenance information from the original package metadata

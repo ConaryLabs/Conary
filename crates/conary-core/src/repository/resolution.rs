@@ -265,14 +265,14 @@ impl<'a> PackageResolver<'a> {
     /// 3. Strategy lookup from routing table or exact repository-package default
     /// 4. Strategy execution in priority order
     pub async fn resolve(&self, name: &str, options: &ResolutionOptions) -> Result<PackageSource> {
-        // Step 0: Check if already installed locally
+        // Check if already installed locally
         if !options.skip_installed
             && let Some(installed) = self.check_installed(name, options)?
         {
             return Ok(installed);
         }
 
-        // Step 1: Repository selection
+        // Repository selection
         let pkg_with_repo =
             PackageSelector::find_best_package(self.conn, name, &options.to_selection_options())?;
 
@@ -284,10 +284,10 @@ impl<'a> PackageResolver<'a> {
             pkg_with_repo.repository.priority
         );
 
-        // Step 2: Get resolution strategies
+        // Get resolution strategies
         let strategies = self.get_strategies(&pkg_with_repo, options)?;
 
-        // Step 3: Try each strategy in order
+        // Try each strategy in order
         let mut delegate_ctx = DelegateContext::new();
         self.try_strategies(&strategies, &pkg_with_repo, options, &mut delegate_ctx)
             .await

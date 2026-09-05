@@ -130,11 +130,7 @@ pub fn compute_generation_delta(old_path: &Path, new_path: &Path) -> Result<Vec<
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    // ---------------------------------------------------------------
     // Helpers
-    // ---------------------------------------------------------------
-
     /// Build a minimal synthetic EROFS-like buffer.
     ///
     /// Real EROFS images begin with 1024 bytes of padding followed by the
@@ -160,11 +156,7 @@ mod tests {
         }
         buf
     }
-
-    // ---------------------------------------------------------------
     // test_roundtrip
-    // ---------------------------------------------------------------
-
     /// Synthetic roundtrip that does not require the composefs-rs feature.
     #[test]
     fn test_roundtrip_synthetic() {
@@ -201,11 +193,7 @@ mod tests {
             "Roundtrip must reconstruct the new image exactly"
         );
     }
-
-    // ---------------------------------------------------------------
     // test_delta_is_compact
-    // ---------------------------------------------------------------
-
     /// Verify that a delta between two similar images is significantly
     /// smaller than the new image itself.
     #[test]
@@ -248,11 +236,7 @@ mod tests {
             new.len()
         );
     }
-
-    // ---------------------------------------------------------------
     // test_identical_images
-    // ---------------------------------------------------------------
-
     /// Delta of identical images should be very small (essentially just
     /// the zstd framing overhead with near-zero content).
     #[test]
@@ -276,11 +260,7 @@ mod tests {
             delta.len()
         );
     }
-
-    // ---------------------------------------------------------------
     // test_empty_old_image
-    // ---------------------------------------------------------------
-
     /// When the old image is empty, the delta is effectively a compressed
     /// copy of the new image (no shared dictionary content).
     #[test]
@@ -303,11 +283,7 @@ mod tests {
             "Delta from empty old image must be non-empty"
         );
     }
-
-    // ---------------------------------------------------------------
     // test_compute_generation_delta (file-based API)
-    // ---------------------------------------------------------------
-
     #[test]
     fn test_compute_generation_delta() {
         let tmp = TempDir::new().unwrap();
@@ -340,11 +316,7 @@ mod tests {
             "File-based delta API must produce correct delta"
         );
     }
-
-    // ---------------------------------------------------------------
     // test_compute_generation_delta_missing_file
-    // ---------------------------------------------------------------
-
     #[test]
     fn test_compute_generation_delta_missing_file() {
         let tmp = TempDir::new().unwrap();
