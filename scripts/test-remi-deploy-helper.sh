@@ -1538,9 +1538,15 @@ test_resolution_survey_restore_outcomes_and_measured_budgets() {
 #!/usr/bin/env bash
 set -euo pipefail
 SURVEY_ID="$1" EXPORT_ID="$2" source_report="$3" source_status="$4"
+repository_root="$PWD"
 cd "$5"
 target=fixture
 helper_stderr="$PWD/helper.stderr"
+export REMI_SSH_TARGET=surveyoperator@fixture
+REMI_SSH_CONFIG="$PWD/config" known_hosts="$PWD/known_hosts"
+printf 'Host fixture\n HostName fixture\n' >"$REMI_SSH_CONFIG"
+printf 'fixture ssh-ed25519 synthetic-key\n' >"$known_hosts"
+[[ -e scripts ]] || ln -s "$repository_root/scripts" scripts
 remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
 remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
 remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
@@ -1557,6 +1563,9 @@ workflow = Path('.github/workflows/survey-remi-resolution.yml').read_text()
 start = workflow.index('          helper_status=0\n')
 end = workflow.index('          scp "${ssh_opts[@]}" "${target}:${remote_output}"', start)
 with Path(sys.argv[1]).open('a') as output:
+    sanitizer_start = workflow.index('          sanitize_helper_stderr() {\n')
+    sanitizer_end = workflow.index('          recover_helper_failure() {\n', sanitizer_start)
+    output.write('\n'.join(line[10:] for line in workflow[sanitizer_start:sanitizer_end].splitlines()) + '\n')
     output.write('\n'.join(line[10:] for line in workflow[start:end].splitlines()) + '\n')
 PYCODE
     local -a cases=(
@@ -2661,11 +2670,11 @@ test_rust_resolution_survey_outcome_fixtures() (
 )
 
 main() {
-    python3 scripts/test-remi-survey-ssh-diagnostic.py
     test_rust_resolution_survey_outcome_fixtures
     if (( only_outcome_fixtures == 1 )); then
         return
     fi
+    python3 scripts/test-remi-survey-ssh-diagnostic.py
     test_deploy_conary_accepts_verified_release
     test_deploy_conary_rejects_checksum_mismatch
     test_deploy_conary_requires_ccs_signature
