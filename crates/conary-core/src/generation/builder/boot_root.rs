@@ -11,8 +11,10 @@ pub enum BootRoot {
     /// The live system's `/boot`: the initramfs is generated from the
     /// generation sysroot, and boot assets may be reused across generations.
     Host,
-    /// An explicit boot directory (test fixtures, staged targets): its runtime
-    /// files are used as they are and never reused across generations.
+    /// An explicit, writable boot directory (test fixtures, staged targets).
+    /// Its runtime files are read as they are and never reused across
+    /// generations; when it lacks the release initramfs or `modules.dep`, the
+    /// builder generates them into this directory with dracut/depmod.
     Staged(PathBuf),
 }
 
