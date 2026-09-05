@@ -758,6 +758,7 @@ cases = (
     ('test_check_release_matrix_rejects_discarded_candidate_failure_inspection', 'replace', '.github/workflows/deploy-remi-candidate.yml', "            > remi-deployment-inspection.json <<'REMOTE_EOF'", "            > /dev/null <<'REMOTE_EOF'", 'candidate deploy retains one validated final typed inspection'),
     ('test_check_release_matrix_rejects_duplicate_conversion_benchmark_authority', 'append', '.github/workflows/remi-conversion-benchmark.yml', '', '\nconcurrency:\n  group: deploy-and-verify\n  cancel-in-progress: false\n', "duplicate key 'concurrency'"),
     ('test_check_release_matrix_rejects_duplicate_fused_conversion_phase', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                | select(.phase == "independent_transport_reopen") ] | length) == 1', '                | select(.phase == "independent_transport_reopen") ] | length) >= 1', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
+    ('test_check_release_matrix_rejects_duplicate_conversion_failure_stage_authority', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '            def helper_stage:', '            def helper_stage:\n            def helper_stage:', 'conversion benchmark has one shared helper failure-stage predicate'),
     ('test_check_release_matrix_rejects_duplicate_native_oracle_lane_selection', 'replace', 'scripts/native-oracle-lane-selection.py', '    if len(set(selected)) != len(selected):', '    if False:', 'native-oracle lane selection closed non-empty duplicate-free parser'),
     ('test_check_release_matrix_rejects_duplicate_survey_transport_copy', 'replace', 'deploy/remi-deploy-helper.sh', '        -C "$output" "${transport_members[@]}"', '        -C "$SURVEY_STAGING" "${transport_members[@]}"', 'resolution survey archives the frozen root-owned snapshot without another full copy'),
     ('test_check_release_matrix_rejects_empty_known_hosts_acceptance', 'replace', '.github/actions/setup-pinned-production-ssh/action.yml', '        [[ -n "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }', '        [[ -z "$SSH_KNOWN_HOSTS" ]] || { echo "production SSH known-hosts pin is required" >&2; exit 1; }', 'fail closed clearly when the known-hosts input is empty'),
@@ -791,6 +792,7 @@ cases = (
     ('test_check_release_matrix_rejects_missing_candidate_failure_artifact', 'replace', '.github/workflows/deploy-remi-candidate.yml', '        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0', '        run: echo "deployment inspection upload removed"', 'candidate deploy retains before-and-after sanitized inspection artifacts'),
     ('test_check_release_matrix_rejects_missing_candidate_phase_evidence', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            start_phase database-transition-and-restart', '            echo "database transition timing removed" >&2', 'candidate deploy retains typed refresh generations, phase timing, and early-failure evidence'),
     ('test_check_release_matrix_rejects_missing_candidate_storage_evidence', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            > remi-predeployment-storage.json', '            > /dev/null', 'candidate deploy retains before-and-after numeric storage evidence'),
+    ('test_check_release_matrix_rejects_missing_shared_candidate_storage_predicate', 'replace', '.github/workflows/deploy-remi-candidate.yml', '            || ! jq -e "$storage_evidence_jq" \\\n              remi-deployment-storage.json >/dev/null; then', '            || ! jq -e "true" \\\n              remi-deployment-storage.json >/dev/null; then', 'candidate deploy reuses one storage-evidence predicate before and after deployment'),
     ('test_check_release_matrix_rejects_missing_exact_ccs_asset_assertion', 'replace', '.github/workflows/release-build.yml', '"release-packages/conary-${VERSION}.ccs"', '"release-packages/conary-${VERSION}.ccs.unchecked"', 'exact version-matching CCS release asset assertion'),
     ('test_check_release_matrix_rejects_missing_fused_ccs_output_hash_work', 'replace', '.github/workflows/remi-conversion-benchmark.yml', '                  "ccs_output_bytes",\n                  "ccs_output_bytes_hashed",', '                  "ccs_output_bytes",', 'conversion benchmark reviewed helper, pinned-host, transport, and public-proof run authority'),
     ('test_check_release_matrix_rejects_missing_live_version_assertion', 'replace', '.github/workflows/release-build.yml', 'bash scripts/release-matrix.sh assert-owned-version "$release" "$version"', 'echo "owned version assertion removed"', 'live suite tag must match the workspace-owned version'),
@@ -977,7 +979,11 @@ PY
 }
 
 run_release_policy_mutation_cases() {
-    local name kind file old new expected repo
+    local name kind file old new expected repo cases_file
+
+    cases_file="${TEST_RUN_ROOT}/release-matrix-mutation-cases"
+    release_matrix_mutation_cases >"$cases_file" ||
+        fail "could not generate release-matrix mutation cases"
 
     while IFS= read -r -d '' name \
         && IFS= read -r -d '' kind \
@@ -1013,7 +1019,7 @@ PY
         assert_check_release_matrix_fails "$repo" "$expected"
         printf 'ok - %s
 ' "$name"
-    done < <(release_matrix_mutation_cases)
+    done <"$cases_file"
 }
 
 

@@ -209,7 +209,7 @@ jobs:
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy inspect-remi-storage" \
             > remi-predeployment-storage.json
-          jq -e '
+          storage_evidence_jq='
             .schema_version == 1
             and (.filesystem.available_bytes | type == "number")
             and .filesystem.available_bytes >= 0
@@ -225,7 +225,8 @@ jobs:
             and .transition_backups.logical_bytes >= 0
             and (.transition_backups.allocated_bytes | type == "number")
             and .transition_backups.allocated_bytes >= 0
-          ' remi-predeployment-storage.json >/dev/null
+          '
+          jq -e "$storage_evidence_jq" remi-predeployment-storage.json >/dev/null
           if [[ "$COMPLETION_MODE" == "private-candidates" ]]; then
             baseline_started_ns="$(date -u +%s%N)"
             set +e
@@ -680,23 +681,8 @@ jobs:
           storage_status=$?
           set -e
           if (( storage_status != 0 )) \
-            || ! jq -e '
-              .schema_version == 1
-              and (.filesystem.available_bytes | type == "number")
-              and .filesystem.available_bytes >= 0
-              and (.database.files | type == "number")
-              and .database.files >= 0
-              and (.database.logical_bytes | type == "number")
-              and .database.logical_bytes >= 0
-              and (.database.allocated_bytes | type == "number")
-              and .database.allocated_bytes >= 0
-              and (.transition_backups.directories | type == "number")
-              and .transition_backups.directories >= 0
-              and (.transition_backups.logical_bytes | type == "number")
-              and .transition_backups.logical_bytes >= 0
-              and (.transition_backups.allocated_bytes | type == "number")
-              and .transition_backups.allocated_bytes >= 0
-            ' remi-deployment-storage.json >/dev/null; then
+            || ! jq -e "$storage_evidence_jq" \
+              remi-deployment-storage.json >/dev/null; then
             echo "deployment did not return valid typed storage evidence" >&2
             exit 1
           fi

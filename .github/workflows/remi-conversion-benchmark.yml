@@ -511,62 +511,65 @@ jobs:
           failure_stage="helper-envelope-invalid"
           helper_status_json=null
           service_outcome=""
+          benchmark_failure_stage_jq='
+            def early_stage:
+              . == "request-validation"
+              or . == "runtime-authority"
+              or . == "systemctl-authority"
+              or . == "account-identity"
+              or . == "binary-config-authority"
+              or . == "live-root-authority"
+              or . == "work-root-type"
+              or . == "work-root-owner"
+              or . == "work-root-mode"
+              or . == "work-root-resolution"
+              or . == "work-root-separation"
+              or . == "work-root-filesystem"
+              or . == "work-root-device"
+              or . == "benchmark-root-authority"
+              or . == "input-target-authority"
+              or . == "source-authentication"
+              or . == "binary-authentication"
+              or . == "private-config-copy"
+              or . == "private-source-copy"
+              or . == "service-active";
+            def stopped_stage:
+              . == "service-stop"
+              or . == "benchmark-command"
+              or . == "raw-report-validation"
+              or . == "public-sidecar-validation"
+              or . == "service-restore";
+            def helper_stage:
+              early_stage
+              or stopped_stage
+              or . == "transport-publication"
+              or . == "internal";
+            def allowed_outcome:
+              . == "not-stopped"
+              or . == "restored"
+              or . == "restore-failed";
+            def stage_outcome($outcome):
+              if early_stage then $outcome == "not-stopped"
+              elif stopped_stage then
+                $outcome == "restored" or $outcome == "restore-failed"
+              elif . == "transport-publication" then $outcome == "restored"
+              elif . == "internal" then ($outcome | allowed_outcome)
+              else false
+              end;
+          '
           envelope_prefix='Conversion benchmark failure: '
           if (( helper_status >= 1 && helper_status <= 254 )) \
             && [[ "$stdout_shape_valid" == "true" \
               && "$helper_record" == "$envelope_prefix"* ]]; then
               envelope_json="${helper_record:${#envelope_prefix}}"
               if canonical_envelope="$(jq -cer \
-                --argjson observed_status "$helper_status" '
-                  def early_stage:
-                    . == "request-validation"
-                    or . == "runtime-authority"
-                    or . == "systemctl-authority"
-                    or . == "account-identity"
-                    or . == "binary-config-authority"
-                    or . == "live-root-authority"
-                    or . == "work-root-type"
-                    or . == "work-root-owner"
-                    or . == "work-root-mode"
-                    or . == "work-root-resolution"
-                    or . == "work-root-separation"
-                    or . == "work-root-filesystem"
-                    or . == "work-root-device"
-                    or . == "benchmark-root-authority"
-                    or . == "input-target-authority"
-                    or . == "source-authentication"
-                    or . == "binary-authentication"
-                    or . == "private-config-copy"
-                    or . == "private-source-copy"
-                    or . == "service-active";
-                  def stopped_stage:
-                    . == "service-stop"
-                    or . == "benchmark-command"
-                    or . == "raw-report-validation"
-                    or . == "public-sidecar-validation"
-                    or . == "service-restore";
-                  def allowed_stage:
-                    early_stage
-                    or stopped_stage
-                    or . == "transport-publication"
-                    or . == "internal";
-                  def allowed_outcome:
-                    . == "not-stopped"
-                    or . == "restored"
-                    or . == "restore-failed";
-                  def stage_outcome($outcome):
-                    if early_stage then $outcome == "not-stopped"
-                    elif stopped_stage then
-                      $outcome == "restored" or $outcome == "restore-failed"
-                    elif . == "transport-publication" then $outcome == "restored"
-                    elif . == "internal" then ($outcome | allowed_outcome)
-                    else false
-                    end;
+                --argjson observed_status "$helper_status" \
+                "$benchmark_failure_stage_jq"'
                   if type == "object"
                     and (keys | sort)
                       == ["schema_version", "service_outcome", "stage", "status"]
                     and .schema_version == 1
-                    and (.stage | type == "string" and allowed_stage)
+                    and (.stage | type == "string" and helper_stage)
                     and (.status | type == "number"
                       and floor == . and . >= 1 and . <= 254)
                     and .status == $observed_status
@@ -651,53 +654,9 @@ jobs:
                 }
               ' > "$failure_record_next"
             chmod 0600 "$failure_record_next"
-            jq -e '
+            jq -e "$benchmark_failure_stage_jq"'
               def sha256: type == "string" and test("^[0-9a-f]{64}$");
               def commit: type == "string" and test("^[0-9a-f]{40}$");
-              def early_stage:
-                . == "request-validation"
-                or . == "runtime-authority"
-                or . == "systemctl-authority"
-                or . == "account-identity"
-                or . == "binary-config-authority"
-                or . == "live-root-authority"
-                or . == "work-root-type"
-                or . == "work-root-owner"
-                or . == "work-root-mode"
-                or . == "work-root-resolution"
-                or . == "work-root-separation"
-                or . == "work-root-filesystem"
-                or . == "work-root-device"
-                or . == "benchmark-root-authority"
-                or . == "input-target-authority"
-                or . == "source-authentication"
-                or . == "binary-authentication"
-                or . == "private-config-copy"
-                or . == "private-source-copy"
-                or . == "service-active";
-              def stopped_stage:
-                . == "service-stop"
-                or . == "benchmark-command"
-                or . == "raw-report-validation"
-                or . == "public-sidecar-validation"
-                or . == "service-restore";
-              def helper_stage:
-                early_stage
-                or stopped_stage
-                or . == "transport-publication"
-                or . == "internal";
-              def allowed_outcome:
-                . == "not-stopped"
-                or . == "restored"
-                or . == "restore-failed";
-              def stage_outcome($outcome):
-                if early_stage then $outcome == "not-stopped"
-                elif stopped_stage then
-                  $outcome == "restored" or $outcome == "restore-failed"
-                elif . == "transport-publication" then $outcome == "restored"
-                elif . == "internal" then ($outcome | allowed_outcome)
-                else false
-                end;
               (keys | sort)
                 == ["benchmark_id", "deployment", "evidence_class", "failure", "request", "schema_version", "workflow"]
               and .schema_version == 1

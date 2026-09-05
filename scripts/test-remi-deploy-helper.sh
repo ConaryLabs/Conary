@@ -1359,8 +1359,12 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     # shellcheck disable=SC2016
     grep -F 'SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"' \
         "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
-    grep -F 'local readiness_attempts_remaining=30' "$helper" >/dev/null ||
-        fail "resolution survey lost its bounded readiness poll"
+    grep -F 'start_and_probe "$SURVEY_READINESS_URL" 30' "$helper" >/dev/null ||
+        fail "resolution survey lost its shared bounded readiness poll"
+    grep -F 'start_and_probe "$HEALTH_URL" 30' "$helper" >/dev/null ||
+        fail "Remi deployment lost its bounded health retry"
+    grep -F 'while (( attempts > 0 )); do' "$helper" >/dev/null ||
+        fail "shared Remi probe lost its bounded retry loop"
     if grep -F 'transport_stage' "$helper" >/dev/null; then
         fail "resolution survey duplicates its frozen output before archiving"
     fi
@@ -1963,38 +1967,32 @@ test_conversion_benchmark_rejects_distinct_xfs_device_before_downtime() {
 test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
     local run_id="benchmark-invalid-binary-$$"
     local fake_root="${tmpdir}/root-${run_id}"
-    local source source_sha256 source_size bin_sha256
+    local source source_sha256 source_size bin_sha256 description profile
+    local expected_bin_sha expected_source_sha expected_source_size mutation
+    local revision_sha key_sha zero_sha row
+    revision_sha="$(printf 'a%.0s' {1..64})"
+    key_sha="$(printf 'b%.0s' {1..64})"
+    zero_sha="$(printf '0%.0s' {1..64})"
     make_benchmark_fixture "$fake_root" "$run_id"
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"
     source_size="$(stat -c '%s' "$source")"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
-    expect_fail "noncanonical benchmark profile" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" 'Fedora 44' \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
-    expect_fail "unsupported canonical benchmark profile" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" debian-13 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
-    expect_fail "oversized benchmark source declaration" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" 8589934593
-    expect_fail "wrong installed benchmark binary digest" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" \
-        0000000000000000000000000000000000000000000000000000000000000000 \
-        fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
+    local -a invalid_request_rows=(
+        "noncanonical benchmark profile|Fedora 44|$bin_sha256|$source_sha256|$source_size"
+        "unsupported canonical benchmark profile|debian-13|$bin_sha256|$source_sha256|$source_size"
+        "oversized benchmark source declaration|fedora-44|$bin_sha256|$source_sha256|8589934593"
+        "wrong installed benchmark binary digest|fedora-44|$zero_sha|$source_sha256|$source_size"
+    )
+    for row in "${invalid_request_rows[@]}"; do
+        IFS='|' read -r description profile expected_bin_sha \
+            expected_source_sha expected_source_size <<<"$row"
+        expect_fail "$description" \
+            run_benchmark_helper "$fake_root" \
+            "$run_id" "$expected_bin_sha" "$profile" \
+            "$revision_sha" "$key_sha" \
+            "$expected_source_sha" "$expected_source_size"
+    done
 
     run_id="benchmark-unreadable-bin-$$"
     fake_root="${tmpdir}/root-${run_id}"
@@ -2016,27 +2014,24 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_size="$(stat -c '%s' "$source")"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
-    expect_fail "wrong staged benchmark source digest" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        0000000000000000000000000000000000000000000000000000000000000000 \
-        "$source_size"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"
-    expect_fail "wrong staged benchmark source size" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" 1
-    chmod 0666 "$source"
-    expect_fail "writable staged benchmark source" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
+    local -a invalid_source_rows=(
+        "wrong staged benchmark source digest|$zero_sha|$source_size|none"
+        "wrong staged benchmark source size|$source_sha256|1|none"
+        "writable staged benchmark source|$source_sha256|$source_size|writable"
+    )
+    for row in "${invalid_source_rows[@]}"; do
+        IFS='|' read -r description expected_source_sha \
+            expected_source_size mutation <<<"$row"
+        if [[ "$mutation" == "writable" ]]; then
+            chmod 0666 "$source"
+        fi
+        expect_fail "$description" \
+            run_benchmark_helper "$fake_root" \
+            "$run_id" "$bin_sha256" fedora-44 \
+            "$revision_sha" "$key_sha" \
+            "$expected_source_sha" "$expected_source_size"
+    done
 
     run_id="benchmark-symlink-source-$$"
     fake_root="${tmpdir}/root-${run_id}"
