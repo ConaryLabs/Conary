@@ -11,9 +11,12 @@ Conary is a cross-distro package manager for Linux, written in Rust. It
 installs RPM, DEB, Arch, and native CCS packages on Fedora, Ubuntu, and Arch
 hosts without invoking dnf, apt, or pacman: an RPM keeps RPM lifecycle and
 dependency semantics on Ubuntu or Arch, a DEB keeps Debian semantics on Fedora
-or Arch, and an Arch package keeps ALPM semantics on Fedora or Ubuntu. Every
-change is one atomic, recorded transaction over content-addressed storage,
-with immutable system generations for rollback.
+or Arch, and an Arch package keeps ALPM semantics on Fedora or Ubuntu. Each
+changeset is one atomic, recorded transaction over content-addressed storage,
+with immutable system generations for rollback. An install that first pulls
+in missing dependencies is not yet one unit: the dependency batch commits as
+its own changeset before the requested package is applied
+([#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
 
 It is for people who want packages from another distribution's repositories
 on the host they already run, without a container or a rebuild, and who are
@@ -119,8 +122,10 @@ packaging and platform surface.
   configuration contracts.
 - Native package adoption and non-destructive unadoption.
 - CCS packages and Remi-converted packages with Conary as package authority.
-- Atomic changesets, transaction history, and rollback-oriented state
-  tracking.
+- Atomic per-changeset transactions, transaction history, and
+  rollback-oriented state tracking. A complete install with missing
+  dependencies is two changesets, not one
+  ([#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
 - Immutable EROFS/composefs generations on hosts with the needed kernel and
   tooling, with raw, qcow2, and x86_64 UEFI ISO export.
 - Signed self-update from the published release channel.
@@ -158,7 +163,8 @@ A native RPM, DEB, or Arch install runs in this order:
    dependencies are downloaded and installed first as their own batch
    transaction, which commits before the requested package is touched. If a
    later step fails, those dependencies stay installed and are recorded with
-   a dependency install reason.
+   a dependency install reason. Making the whole operation one unit is
+   tracked in [#917](https://github.com/FieldmouseWorks/Conary/issues/917).
 3. Plan conflicts and replacements. `--dry-run` stops here: it proves the
    package resolves and prints the package, architecture, file count,
    dependencies that would be installed, and replacements, without changing
