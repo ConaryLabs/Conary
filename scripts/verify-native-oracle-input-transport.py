@@ -16,6 +16,14 @@ import tarfile
 from typing import Any, NoReturn
 from urllib.parse import urlsplit
 
+from native_oracle_common import (
+    canonical_json,
+    plain_file,
+    reject_duplicate_key,
+    require_sha256,
+    sha256_file,
+)
+
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
 PROFILE_ROLES = {
@@ -86,13 +94,6 @@ def exact_int(value: Any, label: str, *, minimum: int | None = None) -> int:
     return value
 
 
-def sha256_string(value: Any, label: str) -> str:
-    value = exact_string(value, label)
-    if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
-        fail(f"{label} must be 64 lowercase hexadecimal characters")
-    return value
-
-
 def identity(value: Any, label: str) -> str:
     value = exact_string(value, label)
     if (
@@ -105,27 +106,8 @@ def identity(value: Any, label: str) -> str:
     return value
 
 
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
 def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value)).hexdigest()
-
-
-def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            fail(f"manifest repeats JSON key {key!r}")
-        result[key] = value
-    return result
 
 
 def load_manifest(data: bytes) -> dict[str, Any]:
@@ -178,7 +160,7 @@ def validate_public_string(value: Any, label: str) -> None:
 def validate_artifact(value: Any, label: str) -> tuple[str, int]:
     value = exact_keys(value, {"sha256", "size"}, label)
     return (
-        sha256_string(value["sha256"], f"{label}.sha256"),
+        require_sha256(value["sha256"], f"{label}.sha256"),
         exact_int(value["size"], f"{label}.size", minimum=0),
     )
 
@@ -245,10 +227,10 @@ def validate_provenance(value: Any, label: str) -> None:
         fail(f"{label}.parser_config disagrees with its ecosystem")
     if trust.get("ecosystem") != trust_format:
         fail(f"{label}.trust_policy disagrees with its ecosystem")
-    parser_digest = sha256_string(
+    parser_digest = require_sha256(
         value["parser_config_sha256"], f"{label}.parser_config_sha256"
     )
-    trust_digest = sha256_string(
+    trust_digest = require_sha256(
         value["trust_policy_sha256"], f"{label}.trust_policy_sha256"
     )
     if digest_json(parser) != parser_digest:
@@ -292,7 +274,7 @@ def validate_source(
         value["repository_identity"], f"{label}.repository_identity"
     )
     validate_stream(value["stream"], f"{label}.stream")
-    sha256_string(value["stream_binding_sha256"], f"{label}.stream_binding_sha256")
+    require_sha256(value["stream_binding_sha256"], f"{label}.stream_binding_sha256")
     if exact_int(
         value["parser_projection_version"], f"{label}.parser_projection_version"
     ) != 2:
@@ -300,7 +282,7 @@ def validate_source(
     validate_provenance(value["provenance"], f"{label}.provenance")
     validate_artifact(value["authenticated_root"], f"{label}.authenticated_root")
     validate_artifact(value["catalog"], f"{label}.catalog")
-    sha256_string(value["logical_digest_sha256"], f"{label}.logical_digest_sha256")
+    require_sha256(value["logical_digest_sha256"], f"{label}.logical_digest_sha256")
     validate_counts(value["counts"], f"{label}.counts")
 
     if (
@@ -309,7 +291,7 @@ def validate_source(
         or value["stream"] != member["stream"]
     ):
         fail(f"{label} disagrees with its profile member")
-    expected_digest = sha256_string(
+    expected_digest = require_sha256(
         member["source_snapshot_sha256"],
         f"{label}.member_source_snapshot_sha256",
     )
@@ -342,7 +324,7 @@ def validate_source(
         previous = key
         result.append(
             (
-                sha256_string(item["sha256"], f"{item_label}.sha256"),
+                require_sha256(item["sha256"], f"{item_label}.sha256"),
                 exact_int(item["size"], f"{item_label}.size", minimum=0),
             )
         )
@@ -381,7 +363,7 @@ def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[st
         fail(f"{label} target architecture disagrees with the supported profile")
     exact_int(value["projection_version"], f"{label}.projection_version", minimum=1)
     validate_artifact(value["catalog"], f"{label}.catalog")
-    sha256_string(value["logical_digest_sha256"], f"{label}.logical_digest_sha256")
+    require_sha256(value["logical_digest_sha256"], f"{label}.logical_digest_sha256")
     validate_counts(value["counts"], f"{label}.counts")
 
     members = exact_list(value["members"], f"{label}.members")
@@ -419,7 +401,7 @@ def validate_revision(value: Any, label: str, profile_name: str) -> list[dict[st
         validate_stream(item["stream"], f"{item_label}.stream")
         exact_int(item["precedence"], f"{item_label}.precedence")
         exact_bool(item["required"], f"{item_label}.required")
-        sha256_string(
+        require_sha256(
             item["source_snapshot_sha256"], f"{item_label}.source_snapshot_sha256"
         )
     if value["counts"]["source_evidence"] != len(members):
@@ -448,7 +430,7 @@ def validate_manifest(
         )
         revision = profile["revision"]
         members = validate_revision(revision, f"{label}.revision", expected_profile)
-        observed_digest = sha256_string(
+        observed_digest = require_sha256(
             profile["profile_revision_sha256"], f"{label}.profile_revision_sha256"
         )
         if observed_digest != expected_digest or digest_json(revision) != observed_digest:
@@ -490,7 +472,7 @@ def validate_manifest(
         item = exact_keys(item, {"sha256", "size"}, label)
         observed_inventory.append(
             (
-                sha256_string(item["sha256"], f"{label}.sha256"),
+                require_sha256(item["sha256"], f"{label}.sha256"),
                 exact_int(item["size"], f"{label}.size", minimum=0),
             )
         )
@@ -506,18 +488,6 @@ def validate_manifest(
         "object_bytes": sum(size for _, size in expected_inventory),
         "inventory": expected_inventory,
     }
-
-
-def plain_file(path: Path, label: str, maximum: int) -> os.stat_result:
-    try:
-        metadata = path.lstat()
-    except OSError as error:
-        fail(f"cannot inspect {label}: {error}")
-    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
-        fail(f"{label} must be a plain file")
-    if metadata.st_size <= 0 or metadata.st_size > maximum:
-        fail(f"{label} size is outside its bounded contract")
-    return metadata
 
 
 def validate_member_name(name: str) -> str:
@@ -605,17 +575,9 @@ def open_transport(
             fail("transport contains missing or unexpected members")
 
     summary["transport_size"] = metadata.st_size
-    summary["transport_sha256"] = hash_file(path)
+    summary["transport_sha256"] = sha256_file(path)
     summary["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
     return manifest_bytes, object_bytes, summary
-
-
-def hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def require_new_path(path: Path, label: str) -> None:
@@ -665,7 +627,7 @@ def parse_candidates(values: list[str]) -> list[tuple[str, str]]:
         profile, separator, digest = value.partition("=")
         if not separator or profile != PUBLIC_PROFILES[index]:
             fail("expected candidates must use canonical Fedora, Ubuntu, Arch order")
-        result.append((profile, sha256_string(digest, f"candidate {profile}")))
+        result.append((profile, require_sha256(digest, f"candidate {profile}")))
     return result
 
 
@@ -719,5 +681,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (OSError, tarfile.TarError, VerificationError) as error:
+    except (OSError, tarfile.TarError, ValueError) as error:
         raise SystemExit(f"native-oracle transport verification failed: {error}") from error

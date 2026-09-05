@@ -155,7 +155,7 @@ REVIEWED_RUN_BLOCK_SHA256 = {
     "Acquire and authenticate exact source bytes":
         "4e8c8e91fb4b79803aed47afc34c1e51034f7e9ccc45a23fd213df924c6d0856",
     "Run through the fixed production helper":
-        "6e520d13ad8d4886b2a184d83ca00e499597709c329930961d62c487ca5e69bb",
+        "47a310adf3dc8dc509ba29892f49568943c5a69b8706029871e1d4b0fecc6004",
     "Record exact production benchmark evidence":
         "b2b00b12d066a9a746fe71f18779d1017b1205e8f9c84f9b03bb4e6cd589fce2",
     "Fail closed on unsuccessful benchmark result":
@@ -490,6 +490,17 @@ def validate_run_steps(steps: dict[str, dict[str, Any]]) -> None:
         require(env == EXPECTED_RUN_ENV[name], environment_error)
         run = step["run"]
         require(isinstance(run, str), RUN_BLOCK_ERRORS[name])
+        if name == "Run through the fixed production helper":
+            require(
+                run.count("benchmark_failure_stage_jq=") == 1
+                and run.count("def early_stage:") == 1
+                and run.count("def stopped_stage:") == 1
+                and run.count("def helper_stage:") == 1
+                and run.count("def stage_outcome($outcome):") == 1
+                and run.count('jq -e "$benchmark_failure_stage_jq"') == 1
+                and run.count('"$benchmark_failure_stage_jq"') == 2,
+                "conversion benchmark has one shared helper failure-stage predicate",
+            )
         observed_digest = hashlib.sha256(run.encode("utf-8")).hexdigest()
         require(observed_digest == expected_digest, RUN_BLOCK_ERRORS[name])
 

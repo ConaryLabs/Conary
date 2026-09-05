@@ -21,7 +21,7 @@ usage() {
     cat >&2 <<'USAGE'
 usage:
   conary-remi-deploy deploy-conary <version> <staging-dir>
-  conary-remi-deploy deploy-remi <version> <bundle.tar.gz> <repositories.toml> <max-concurrent>
+  conary-remi-deploy deploy-remi <version> <sha256> <bundle.tar.gz> <repositories.toml> <max-concurrent>
   conary-remi-deploy deploy-site <site|web> <staging-dir>
   conary-remi-deploy publish-test-artifact <filename> <sha256> <staged-file>
   conary-remi-deploy install-helper <sha256> <helper>
@@ -93,16 +93,11 @@ validate_artifact_filename() {
         die "invalid test-artifact filename: $filename"
 }
 
-validate_export_id() {
-    local export_id="$1"
-    [[ "$export_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
-        die "invalid native-oracle export identity: $export_id"
-}
-
-validate_survey_id() {
-    local survey_id="$1"
-    [[ "$survey_id" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
-        die "invalid resolution-survey identity: $survey_id"
+validate_identity() {
+    local label="$1"
+    local value="$2"
+    [[ "$value" =~ ^[a-z0-9][a-z0-9._-]{0,127}$ ]] ||
+        die "invalid ${label} identity: $value"
 }
 
 validate_profile_id() {
@@ -256,11 +251,59 @@ ensure_runtime_lock_file() {
     install_owned_file 0600 /dev/null "$path"
 }
 
-restart_remi() {
+REMI_SYSTEMCTL=systemctl
+
+configure_systemctl() {
+    local label="$1"
+    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
+    [[ -n "$test_systemctl" ]] || return 0
+    [[ -n "$ROOT" ]] || die "${label} systemctl override requires a fake root"
+    [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
+        die "${label} systemctl test override is not a plain executable"
+    REMI_SYSTEMCTL="$(realpath -e "$test_systemctl")"
+}
+
+remi_systemctl() {
+    "$REMI_SYSTEMCTL" "$@" >/dev/null
+}
+
+start_and_probe() {
+    local url="$1"
+    local attempts="$2"
     [[ "$SKIP_RESTART" == "1" ]] && return 0
-    systemctl restart remi
-    sleep 2
-    curl -fsS "$HEALTH_URL" >/dev/null
+    remi_systemctl start remi || return 1
+    while (( attempts > 0 )); do
+        if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+            return 0
+        fi
+        attempts=$((attempts - 1))
+        if (( attempts > 0 )) && [[ -z "$ROOT" ]]; then
+            sleep 1
+        fi
+    done
+    return 1
+}
+
+extract_verified_remi_candidate() {
+    local version="$1"
+    local expected_sha="$2"
+    local bundle="$3"
+    local candidate="$4"
+    local member occurrences actual_sha
+    member="remi-${version}-linux-x64"
+    occurrences="$(tar tzf "$bundle" | awk -v expected="$member" '
+        $0 == expected { count += 1 }
+        END { print count + 0 }
+    ')" || die "could not inspect candidate bundle"
+    [[ "$occurrences" == "1" ]] ||
+        die "bundle must contain exactly one plain ${member}"
+    tar xOzf "$bundle" -- "$member" >"$candidate" ||
+        die "could not extract ${member} from candidate bundle"
+    chmod 0755 "$candidate"
+    actual_sha="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
+    [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
+    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
+        die "candidate binary version does not match ${version}"
 }
 
 deploy_conary() {
@@ -326,13 +369,16 @@ deploy_conary() {
 
 deploy_remi() {
     local version="$1"
+    local expected_sha="$2"
     local bundle
     local repositories
-    local max_concurrent="$4"
+    local max_concurrent="$5"
     validate_version "$version"
+    validate_sha256 "$expected_sha"
     validate_positive_int "$max_concurrent"
-    bundle="$(real_tmp_path "$2")"
-    repositories="$(real_tmp_path "$3")"
+    configure_systemctl "Remi deployment"
+    bundle="$(real_tmp_path "$3")"
+    repositories="$(real_tmp_path "$4")"
     [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
     [[ -f "$repositories" && ! -L "$repositories" ]] ||
         die "repository manifest is not a plain file: $repositories"
@@ -343,13 +389,10 @@ deploy_remi() {
     backup="${tmpdir}/remi.previous"
     bin="$(root_path /usr/local/bin/remi)"
     had_previous=false
-    trap 'rm -rf "$tmpdir"' RETURN
+    trap 'rm -rf -- "$tmpdir"' EXIT
 
-    tar xzf "$bundle" -C "$tmpdir"
     candidate="${tmpdir}/remi-${version}-linux-x64"
-    [[ -f "$candidate" && ! -L "$candidate" ]] || die "bundle did not contain remi-${version}-linux-x64"
-    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
-        die "candidate binary version does not match ${version}"
+    extract_verified_remi_candidate "$version" "$expected_sha" "$bundle" "$candidate"
 
     runtime_root="$(root_path /conary)"
     runtime_lock="${runtime_root}/.remi-runtime.lock"
@@ -365,7 +408,7 @@ deploy_remi() {
     fi
 
     if [[ "$SKIP_RESTART" != "1" ]]; then
-        systemctl stop remi
+        remi_systemctl stop remi
     fi
 
     if ! transition_manifest="$(
@@ -378,7 +421,7 @@ deploy_remi() {
             --max-concurrent "$max_concurrent"
     )"; then
         if [[ "$had_previous" == true && "$SKIP_RESTART" != "1" ]]; then
-            systemctl start remi || true
+            remi_systemctl start remi || true
         fi
         die "failed to prepare Remi deployment transition"
     fi
@@ -390,16 +433,16 @@ deploy_remi() {
         local rollback_status=0
         "$candidate" deployment rollback --manifest "$transition_manifest" || rollback_status=$?
         if [[ "$had_previous" == true && "$SKIP_RESTART" != "1" ]]; then
-            systemctl start remi || true
+            remi_systemctl start remi || true
         fi
         (( rollback_status == 0 )) ||
             die "failed to install Remi binary and rollback failed with status ${rollback_status}"
         die "failed to install Remi binary"
     fi
 
-    if ! restart_remi; then
+    if ! start_and_probe "$HEALTH_URL" 30; then
         local rollback_status=0
-        [[ "$SKIP_RESTART" == "1" ]] || systemctl stop remi || true
+        [[ "$SKIP_RESTART" == "1" ]] || remi_systemctl stop remi || true
         "$candidate" deployment rollback --manifest "$transition_manifest" || rollback_status=$?
         if [[ "$had_previous" == true ]]; then
             install -m 0755 "$backup" "$bin" || true
@@ -407,7 +450,7 @@ deploy_remi() {
             rm -f "$bin"
         fi
         if [[ "$had_previous" == true ]]; then
-            restart_remi || true
+            start_and_probe "$HEALTH_URL" 30 || true
         fi
         (( rollback_status == 0 )) ||
             die "Remi health check failed and rollback failed with status ${rollback_status}"
@@ -415,6 +458,8 @@ deploy_remi() {
     fi
 
     rm -f "$bundle" "$repositories"
+    rm -rf -- "$tmpdir"
+    trap - EXIT
     echo "Remi deployment transition: ${transition_manifest}"
 }
 
@@ -428,9 +473,8 @@ deploy_site() {
     [[ -f "${staging}/index.html" && ! -L "${staging}/index.html" ]] ||
         die "staging directory is missing plain index.html: $staging"
 
-    local parent target tmp backup
+    local target tmp backup
     target="$(root_path "/conary/${site_target}")"
-    parent="$(dirname "$target")"
     tmp="$(root_path "/conary/.${site_target}.next.$$")"
     backup="$(root_path "/conary/.${site_target}.previous.$$")"
 
@@ -464,7 +508,6 @@ deploy_site() {
     fi
 
     rm -rf "$backup" "$staging"
-    rmdir "$parent" 2>/dev/null || true
 }
 
 publish_test_artifact() {
@@ -652,24 +695,11 @@ inspect_remi_candidate_baseline() {
     bundle="$(real_tmp_path "$3")"
     [[ -f "$bundle" && ! -L "$bundle" ]] || die "bundle path is not a plain file: $bundle"
 
-    local tmpdir member candidate occurrences actual_sha
+    local tmpdir candidate
     tmpdir="$(mktemp -d /tmp/remi-baseline.XXXXXX)"
-    trap 'rm -rf "$tmpdir"' RETURN
-    member="remi-${version}-linux-x64"
-    candidate="${tmpdir}/${member}"
-    occurrences="$(tar tzf "$bundle" | awk -v expected="$member" '
-        $0 == expected { count += 1 }
-        END { print count + 0 }
-    ')" || die "could not inspect candidate bundle"
-    [[ "$occurrences" == "1" ]] ||
-        die "bundle must contain exactly one plain ${member}"
-    tar xOzf "$bundle" -- "$member" >"$candidate" ||
-        die "could not extract ${member} from candidate bundle"
-    chmod 0755 "$candidate"
-    actual_sha="$(sha256sum "$candidate" | cut -d ' ' -f 1)"
-    [[ "$actual_sha" == "$expected_sha" ]] || die "candidate Remi SHA-256 mismatch"
-    [[ "$("$candidate" --version)" == "remi ${version}" ]] ||
-        die "candidate binary version does not match ${version}"
+    trap 'rm -rf -- "$tmpdir"' EXIT
+    candidate="${tmpdir}/remi-${version}-linux-x64"
+    extract_verified_remi_candidate "$version" "$expected_sha" "$bundle" "$candidate"
     local installed baseline_owner
     installed="$(root_path /usr/local/bin/remi)"
     if [[ -e "$installed" || -L "$installed" ]]; then
@@ -680,6 +710,8 @@ inspect_remi_candidate_baseline() {
         baseline_owner="$candidate"
     fi
     "$baseline_owner" deployment baseline --config "$(root_path /etc/conary/remi.toml)"
+    rm -rf -- "$tmpdir"
+    trap - EXIT
 }
 
 inspect_remi_storage() {
@@ -774,7 +806,7 @@ export_native_oracle_inputs() {
     local fedora_sha256="$2"
     local ubuntu_sha256="$3"
     local arch_sha256="$4"
-    validate_export_id "$export_id"
+    validate_identity "native-oracle export" "$export_id"
     validate_sha256 "$fedora_sha256"
     validate_sha256 "$ubuntu_sha256"
     validate_sha256 "$arch_sha256"
@@ -827,33 +859,8 @@ export_native_oracle_inputs() {
 }
 
 SURVEY_REMI_STOPPED=0
-SURVEY_SYSTEMCTL=systemctl
 SURVEY_STAGING=""
 SURVEY_TRANSPORT_NEXT=""
-
-survey_systemctl() {
-    "$SURVEY_SYSTEMCTL" "$@" >/dev/null
-}
-
-survey_start_and_probe() {
-    if ! survey_systemctl start remi; then
-        echo "remi deploy helper: failed to restart Remi after resolution survey" >&2
-        return 1
-    fi
-    local readiness_attempts_remaining=30
-    while (( readiness_attempts_remaining > 0 )); do
-        if curl -fsS --max-time 2 "$SURVEY_READINESS_URL" >/dev/null 2>&1; then
-            SURVEY_REMI_STOPPED=0
-            return 0
-        fi
-        readiness_attempts_remaining=$((readiness_attempts_remaining - 1))
-        if (( readiness_attempts_remaining > 0 )) && [[ -z "$ROOT" ]]; then
-            sleep 1
-        fi
-    done
-    echo "remi deploy helper: Remi readiness check failed after resolution survey" >&2
-    return 1
-}
 
 survey_restore_and_exit() {
     local status="$1"
@@ -864,7 +871,9 @@ survey_restore_and_exit() {
         SURVEY_TRANSPORT_NEXT=""
     fi
     if [[ "$SURVEY_REMI_STOPPED" == "1" ]]; then
-        if ! survey_start_and_probe; then
+        if start_and_probe "$SURVEY_READINESS_URL" 30; then
+            SURVEY_REMI_STOPPED=0
+        else
             if (( status == 0 )); then
                 status=1
             fi
@@ -1062,21 +1071,15 @@ survey_resolution() {
     local survey_id="$1"
     local export_id="$2"
     local transport_arg="$3"
-    validate_survey_id "$survey_id"
-    validate_export_id "$export_id"
+    validate_identity "resolution-survey" "$survey_id"
+    validate_identity "native-oracle export" "$export_id"
 
     [[ -n "$ROOT" || "$(id -u)" == "0" ]] || die "helper must run as root"
     [[ "$SKIP_RESTART" == "0" ]] ||
         die "resolution survey may not skip Remi service restoration"
     require_shared_conary_root
 
-    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
-    if [[ -n "$test_systemctl" ]]; then
-        [[ -n "$ROOT" ]] || die "resolution-survey systemctl override requires a fake root"
-        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
-            die "resolution-survey systemctl test override is not a plain executable"
-        SURVEY_SYSTEMCTL="$(realpath -e "$test_systemctl")"
-    fi
+    configure_systemctl "resolution-survey"
 
     [[ "$transport_arg" == "/tmp/remi-resolution-survey-oracles-${survey_id}.tar" ]] ||
         die "resolution-survey oracle transport path does not match its survey identity"
@@ -1189,10 +1192,10 @@ survey_resolution() {
     [[ "$(stat -c '%u' "$survey_root")" == "$runtime_uid" ]] ||
         die "resolution-survey evidence root has the wrong owner"
 
-    survey_systemctl is-active --quiet remi ||
+    remi_systemctl is-active --quiet remi ||
         die "Remi must be active before a production resolution survey"
     SURVEY_REMI_STOPPED=1
-    survey_systemctl stop remi || die "failed to stop Remi for resolution survey"
+    remi_systemctl stop remi || die "failed to stop Remi for resolution survey"
 
     local inspection="${SURVEY_STAGING}/candidate-inspection.json"
     "$bin" deployment inspect --config "$config" --require-private-candidates \
@@ -1219,13 +1222,11 @@ survey_resolution() {
         command+=(--candidate "${profile}=${revision}")
     done < <(jq -r '.candidates[] | [.profile, .profile_revision_sha256] | @tsv' "$inspection")
     while IFS=$'\t' read -r profile revision architecture; do
-        command+=(--package-oracle "${profile}=${oracle_root}/${profile}/package-oracle")
-    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
-    while IFS=$'\t' read -r profile revision architecture; do
-        command+=(--native-resolution "${profile}=${oracle_root}/${profile}/native-resolution")
-    done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
-    while IFS=$'\t' read -r profile revision architecture; do
-        command+=(--architecture "${profile}=${architecture}")
+        command+=(
+            --package-oracle "${profile}=${oracle_root}/${profile}/package-oracle"
+            --native-resolution "${profile}=${oracle_root}/${profile}/native-resolution"
+            --architecture "${profile}=${architecture}"
+        )
     done < <(jq -r '.profiles[] | [.profile, .profile_revision_sha256, .target_architecture] | @tsv' "$input_manifest")
     command+=(--output-dir "$output")
 
@@ -1284,7 +1285,9 @@ survey_resolution() {
     [[ -z "$unexpected_before_restart" ]] ||
         die "resolution survey output contains a non-plain entry"
 
-    if ! survey_start_and_probe; then
+    if start_and_probe "$SURVEY_READINESS_URL" 30; then
+        SURVEY_REMI_STOPPED=0
+    else
         die "failed to restore Remi after resolution survey"
     fi
 
@@ -1488,33 +1491,12 @@ survey_resolution() {
 }
 
 BENCHMARK_REMI_STOPPED=0
-BENCHMARK_SYSTEMCTL=systemctl
 BENCHMARK_FAILURE_ARMED=0
 BENCHMARK_FAILURE_EMITTED=0
 BENCHMARK_FAILURE_STAGE=internal
 BENCHMARK_SERVICE_OUTCOME=not-stopped
 BENCHMARK_STOP_ATTEMPTED=0
 BENCHMARK_TRANSPORT_NEXT=""
-
-benchmark_systemctl() {
-    "$BENCHMARK_SYSTEMCTL" "$@" >/dev/null
-}
-
-benchmark_start_and_probe() {
-    if ! benchmark_systemctl start remi; then
-        echo "remi deploy helper: failed to restart Remi after conversion benchmark" >&2
-        return 1
-    fi
-    if [[ -z "$ROOT" ]]; then
-        sleep 2
-    fi
-    if ! curl -fsS --max-time 30 "$HEALTH_URL" >/dev/null; then
-        echo "remi deploy helper: Remi liveness check failed after conversion benchmark" >&2
-        return 1
-    fi
-    BENCHMARK_REMI_STOPPED=0
-    BENCHMARK_SERVICE_OUTCOME=restored
-}
 
 benchmark_emit_failure() {
     local status="$1"
@@ -1525,17 +1507,6 @@ benchmark_emit_failure() {
         && "$status" != "0" ]] || return 0
     BENCHMARK_FAILURE_EMITTED=1
 
-    case "$stage" in
-        request-validation|runtime-authority|systemctl-authority|account-identity|\
-        binary-config-authority|live-root-authority|work-root-type|\
-        work-root-owner|work-root-mode|work-root-resolution|\
-        work-root-separation|work-root-filesystem|work-root-device|\
-        benchmark-root-authority|input-target-authority|source-authentication|\
-        binary-authentication|private-config-copy|private-source-copy|\
-        service-active|service-stop|benchmark-command|raw-report-validation|\
-        public-sidecar-validation|service-restore|transport-publication|internal) ;;
-        *) stage=internal ;;
-    esac
     if [[ ! "$status" =~ ^[1-9][0-9]{0,2}$ ]] || (( status > 255 )); then
         status=1
         stage=internal
@@ -1563,6 +1534,7 @@ benchmark_emit_failure() {
             [[ "$service_outcome" == "restored" ]] || stage=internal
             ;;
         internal) ;;
+        *) stage=internal ;;
     esac
     printf 'Conversion benchmark failure: {"schema_version":1,"stage":"%s","status":%s,"service_outcome":"%s"}\n' \
         "$stage" "$status" "$service_outcome"
@@ -1581,7 +1553,10 @@ benchmark_restore_and_exit() {
         BENCHMARK_TRANSPORT_NEXT=""
     fi
     if [[ "$BENCHMARK_REMI_STOPPED" == "1" ]]; then
-        if ! benchmark_start_and_probe; then
+        if start_and_probe "$HEALTH_URL" 30; then
+            BENCHMARK_REMI_STOPPED=0
+            BENCHMARK_SERVICE_OUTCOME=restored
+        else
             BENCHMARK_SERVICE_OUTCOME=restore-failed
             if (( status == 0 )); then
                 status=1
@@ -1671,7 +1646,7 @@ benchmark_remi_conversion() {
     local package_key_sha256="$5"
     local expected_source_sha256="$6"
     local expected_source_size="$7"
-    validate_export_id "$run_id"
+    validate_identity "native-oracle export" "$run_id"
     validate_sha256 "$expected_binary_sha256"
     validate_profile_id "$profile"
     validate_sha256 "$revision_sha256"
@@ -1686,13 +1661,7 @@ benchmark_remi_conversion() {
     require_shared_conary_root
 
     BENCHMARK_FAILURE_STAGE=systemctl-authority
-    local test_systemctl="${CONARY_REMI_DEPLOY_TEST_SYSTEMCTL:-}"
-    if [[ -n "$test_systemctl" ]]; then
-        [[ -n "$ROOT" ]] || die "benchmark systemctl override requires a fake root"
-        [[ -f "$test_systemctl" && ! -L "$test_systemctl" && -x "$test_systemctl" ]] ||
-            die "benchmark systemctl test override is not a plain executable"
-        BENCHMARK_SYSTEMCTL="$(realpath -e "$test_systemctl")"
-    fi
+    configure_systemctl "benchmark"
 
     BENCHMARK_FAILURE_STAGE=account-identity
     local control_uid control_gid runtime_uid runtime_gid source_uid
@@ -1864,14 +1833,14 @@ benchmark_remi_conversion() {
         die "trusted benchmark source copy SHA-256 mismatch"
 
     BENCHMARK_FAILURE_STAGE=service-active
-    benchmark_systemctl is-active --quiet remi ||
+    remi_systemctl is-active --quiet remi ||
         die "Remi must be active before a production conversion benchmark"
 
     BENCHMARK_STOP_ATTEMPTED=1
     BENCHMARK_SERVICE_OUTCOME=restore-failed
     BENCHMARK_REMI_STOPPED=1
     BENCHMARK_FAILURE_STAGE=service-stop
-    benchmark_systemctl stop remi || die "failed to stop Remi for conversion benchmark"
+    remi_systemctl stop remi || die "failed to stop Remi for conversion benchmark"
 
     BENCHMARK_FAILURE_STAGE=benchmark-command
     local command=(
@@ -1939,7 +1908,10 @@ benchmark_remi_conversion() {
     (( public_bytes > 0 )) || die "conversion benchmark public sidecar is empty"
 
     BENCHMARK_FAILURE_STAGE=service-restore
-    if ! benchmark_start_and_probe; then
+    if start_and_probe "$HEALTH_URL" 30; then
+        BENCHMARK_REMI_STOPPED=0
+        BENCHMARK_SERVICE_OUTCOME=restored
+    else
         die "failed to restore Remi after conversion benchmark"
     fi
 
@@ -1981,8 +1953,8 @@ case "${1:-}" in
         deploy_conary "$2" "$3"
         ;;
     deploy-remi)
-        [[ $# -eq 5 ]] || usage
-        deploy_remi "$2" "$3" "$4" "$5"
+        [[ $# -eq 6 ]] || usage
+        deploy_remi "$2" "$3" "$4" "$5" "$6"
         ;;
     deploy-site)
         [[ $# -eq 3 ]] || usage

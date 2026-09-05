@@ -691,6 +691,12 @@ jobs:
           )
           bundle="${bundle_dir}/remi-${VERSION}-linux-x64.tar.gz"
           [[ -s "$bundle" && ! -L "$bundle" ]] || { echo "remi bundle missing, empty, or symlinked" >&2; exit 1; }
+          binary_sha256="$(tar xOzf "$bundle" -- "remi-${VERSION}-linux-x64" |
+            sha256sum | cut -d ' ' -f 1)"
+          [[ "$binary_sha256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "remi bundle did not yield a canonical binary SHA-256" >&2
+            exit 1
+          }
           target="$REMI_SSH_TARGET"
           ssh_opts=(-F "$REMI_SSH_CONFIG")
 
@@ -705,14 +711,17 @@ jobs:
           scp "${ssh_opts[@]}" "$bundle" "${target}:${remote_bundle}"
           scp "${ssh_opts[@]}" deploy/remi-repositories.toml "${target}:${remote_repositories}"
           ssh "${ssh_opts[@]}" "$target" bash -s \
-            "$VERSION" "$remote_bundle" "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
+            "$VERSION" "$binary_sha256" "$remote_bundle" \
+            "$remote_repositories" "$REMI_MAX_CONCURRENT" <<'REMOTE_EOF'
             set -euo pipefail
             VERSION="$1"
-            remote_bundle="$2"
-            remote_repositories="$3"
-            max_concurrent="$4"
+            binary_sha256="$2"
+            remote_bundle="$3"
+            remote_repositories="$4"
+            max_concurrent="$5"
             sudo -n /usr/local/sbin/conary-remi-deploy deploy-remi \
-              "$VERSION" "$remote_bundle" "$remote_repositories" "$max_concurrent"
+              "$VERSION" "$binary_sha256" "$remote_bundle" \
+              "$remote_repositories" "$max_concurrent"
             sudo -n /usr/local/sbin/conary-remi-deploy verify-ingress
 
             for attempt in $(seq 1 120); do

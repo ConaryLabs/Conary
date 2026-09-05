@@ -75,6 +75,9 @@ make_fake_remi_bundle() {
     cat >"$candidate" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ -n "\${CONARY_FAKE_REMI_EXECUTION_MARKER:-}" ]]; then
+    printf 'executed\n' >"\$CONARY_FAKE_REMI_EXECUTION_MARKER"
+fi
 if [[ "\${1:-}" == "--version" ]]; then
     echo "remi ${version}"
     exit 0
@@ -178,6 +181,13 @@ exit 2
 EOF
     chmod 0755 "$candidate"
     tar czf "$bundle" -C "$build_dir" "$(basename "$candidate")"
+}
+
+remi_bundle_binary_sha256() {
+    local bundle="$1"
+    local version="$2"
+    tar xOzf "$bundle" -- "remi-${version}-linux-x64" |
+        sha256sum | cut -d ' ' -f 1
 }
 
 make_fake_benchmark_remi() {
@@ -772,6 +782,7 @@ run_helper() {
     CONARY_REMI_DEPLOY_ROOT="$fake_root" \
     CONARY_REMI_DEPLOY_SKIP_RESTART=1 \
     CONARY_FAKE_INSPECT_DIAGNOSTIC="${CONARY_FAKE_INSPECT_DIAGNOSTIC:-0}" \
+    CONARY_FAKE_REMI_EXECUTION_MARKER="${CONARY_FAKE_REMI_EXECUTION_MARKER:-}" \
         bash "$helper" "$@"
 }
 
@@ -1080,7 +1091,9 @@ test_deploy_remi_uses_candidate_owned_transition() {
     make_fake_remi_bundle "$bundle" 0.8.0
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
 
-    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.0"
     test "$(cat "$fake_root/etc/conary/remi.toml.repository-keys-path")" = \
@@ -1098,7 +1111,9 @@ test_deploy_remi_uses_candidate_owned_transition() {
     repositories="${tmpdir}/repositories-repeat.toml"
     make_fake_remi_bundle "$bundle" 0.8.1
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
-    run_helper "$fake_root" deploy-remi 0.8.1 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.1 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.1)" \
+        "$bundle" "$repositories" 32
 
     test "$("$fake_root/usr/local/bin/remi" --version)" = "remi 0.8.1"
     test "$(cat "$fake_root/conary/repository-keys/preserved")" = "stable-authority"
@@ -1140,6 +1155,33 @@ test_deploy_remi_uses_candidate_owned_transition() {
     expect_fail "conflicting Remi inspection requirements" \
         run_helper "$fake_root" inspect-remi --require-private-candidates \
         --require-repopulated
+}
+
+test_deploy_remi_authenticates_candidate_before_execution() {
+    local fake_root="${tmpdir}/root-remi-digest"
+    local bundle="${tmpdir}/remi-digest.tar.gz"
+    local repositories="${tmpdir}/repositories-digest.toml"
+    local execution_marker="${tmpdir}/candidate-executed"
+    write_config "$fake_root"
+    mkdir -p "$fake_root/usr/local/bin"
+    make_fake_remi_bundle "$bundle" 0.8.0
+    printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
+    CONARY_FAKE_REMI_EXECUTION_MARKER="$execution_marker" \
+        expect_fail "malformed deploy candidate digest" \
+        run_helper "$fake_root" deploy-remi 0.8.0 invalid \
+        "$bundle" "$repositories" 32
+    test ! -e "$execution_marker"
+    test ! -e "$fake_root/usr/local/bin/remi"
+
+    CONARY_FAKE_REMI_EXECUTION_MARKER="$execution_marker" \
+        expect_fail "mismatched deploy candidate digest" \
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        0000000000000000000000000000000000000000000000000000000000000000 \
+        "$bundle" "$repositories" 32
+    test ! -e "$execution_marker"
+    test ! -e "$fake_root/usr/local/bin/remi"
+    test -f "$bundle"
+    test -f "$repositories"
 }
 
 test_candidate_baseline_uses_exact_staged_binary_without_mutation() {
@@ -1259,14 +1301,18 @@ test_deploy_remi_rejects_malformed_authority_root() {
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
 
     expect_fail "insecure repository authority root" \
-        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
     test ! -e "$fake_root/usr/local/bin/remi"
 
     chmod 0700 "$fake_root/conary/repository-keys"
     rmdir "$fake_root/conary/repository-keys"
     ln -s "${tmpdir}" "$fake_root/conary/repository-keys"
     expect_fail "symlinked repository authority root" \
-        run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+        run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
     test ! -e "$fake_root/usr/local/bin/remi"
 }
 
@@ -1315,7 +1361,9 @@ test_export_native_oracle_inputs_uses_exact_public_candidates() {
     mkdir -p "$fake_root/usr/local/bin"
     make_fake_remi_bundle "$bundle" 0.8.0
     printf 'schema_version = 2\nrepositories = []\n' >"$repositories"
-    run_helper "$fake_root" deploy-remi 0.8.0 "$bundle" "$repositories" 32
+    run_helper "$fake_root" deploy-remi 0.8.0 \
+        "$(remi_bundle_binary_sha256 "$bundle" 0.8.0)" \
+        "$bundle" "$repositories" 32
 
     run_helper "$fake_root" export-native-oracle-inputs \
         "$export_id" "$fedora_sha" "$ubuntu_sha" "$arch_sha"
@@ -1359,8 +1407,12 @@ test_resolution_survey_uses_stopped_runtime_and_sanitized_transport() {
     # shellcheck disable=SC2016
     grep -F 'SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"' \
         "$helper" >/dev/null || fail "resolution survey lost its readiness endpoint"
-    grep -F 'local readiness_attempts_remaining=30' "$helper" >/dev/null ||
-        fail "resolution survey lost its bounded readiness poll"
+    grep -F 'start_and_probe "$SURVEY_READINESS_URL" 30' "$helper" >/dev/null ||
+        fail "resolution survey lost its shared bounded readiness poll"
+    grep -F 'start_and_probe "$HEALTH_URL" 30' "$helper" >/dev/null ||
+        fail "Remi deployment lost its bounded health retry"
+    grep -F 'while (( attempts > 0 )); do' "$helper" >/dev/null ||
+        fail "shared Remi probe lost its bounded retry loop"
     if grep -F 'transport_stage' "$helper" >/dev/null; then
         fail "resolution survey duplicates its frozen output before archiving"
     fi
@@ -1963,38 +2015,32 @@ test_conversion_benchmark_rejects_distinct_xfs_device_before_downtime() {
 test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
     local run_id="benchmark-invalid-binary-$$"
     local fake_root="${tmpdir}/root-${run_id}"
-    local source source_sha256 source_size bin_sha256
+    local source source_sha256 source_size bin_sha256 description profile
+    local expected_bin_sha expected_source_sha expected_source_size mutation
+    local revision_sha key_sha zero_sha row
+    revision_sha="$(printf 'a%.0s' {1..64})"
+    key_sha="$(printf 'b%.0s' {1..64})"
+    zero_sha="$(printf '0%.0s' {1..64})"
     make_benchmark_fixture "$fake_root" "$run_id"
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"
     source_size="$(stat -c '%s' "$source")"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
-    expect_fail "noncanonical benchmark profile" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" 'Fedora 44' \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
-    expect_fail "unsupported canonical benchmark profile" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" debian-13 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
-    expect_fail "oversized benchmark source declaration" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" 8589934593
-    expect_fail "wrong installed benchmark binary digest" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" \
-        0000000000000000000000000000000000000000000000000000000000000000 \
-        fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
+    local -a invalid_request_rows=(
+        "noncanonical benchmark profile|Fedora 44|$bin_sha256|$source_sha256|$source_size"
+        "unsupported canonical benchmark profile|debian-13|$bin_sha256|$source_sha256|$source_size"
+        "oversized benchmark source declaration|fedora-44|$bin_sha256|$source_sha256|8589934593"
+        "wrong installed benchmark binary digest|fedora-44|$zero_sha|$source_sha256|$source_size"
+    )
+    for row in "${invalid_request_rows[@]}"; do
+        IFS='|' read -r description profile expected_bin_sha \
+            expected_source_sha expected_source_size <<<"$row"
+        expect_fail "$description" \
+            run_benchmark_helper "$fake_root" \
+            "$run_id" "$expected_bin_sha" "$profile" \
+            "$revision_sha" "$key_sha" \
+            "$expected_source_sha" "$expected_source_size"
+    done
 
     run_id="benchmark-unreadable-bin-$$"
     fake_root="${tmpdir}/root-${run_id}"
@@ -2016,27 +2062,24 @@ test_conversion_benchmark_rejects_invalid_inputs_and_existing_targets() {
     source="/tmp/remi-conversion-source-${run_id}.native"
     source_size="$(stat -c '%s' "$source")"
     bin_sha256="$(sha256sum "$fake_root/usr/local/bin/remi" | cut -d ' ' -f 1)"
-    expect_fail "wrong staged benchmark source digest" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        0000000000000000000000000000000000000000000000000000000000000000 \
-        "$source_size"
     source_sha256="$(sha256sum "$source" | cut -d ' ' -f 1)"
-    expect_fail "wrong staged benchmark source size" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" 1
-    chmod 0666 "$source"
-    expect_fail "writable staged benchmark source" \
-        run_benchmark_helper "$fake_root" \
-        "$run_id" "$bin_sha256" fedora-44 \
-        aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
-        bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
-        "$source_sha256" "$source_size"
+    local -a invalid_source_rows=(
+        "wrong staged benchmark source digest|$zero_sha|$source_size|none"
+        "wrong staged benchmark source size|$source_sha256|1|none"
+        "writable staged benchmark source|$source_sha256|$source_size|writable"
+    )
+    for row in "${invalid_source_rows[@]}"; do
+        IFS='|' read -r description expected_source_sha \
+            expected_source_size mutation <<<"$row"
+        if [[ "$mutation" == "writable" ]]; then
+            chmod 0666 "$source"
+        fi
+        expect_fail "$description" \
+            run_benchmark_helper "$fake_root" \
+            "$run_id" "$bin_sha256" fedora-44 \
+            "$revision_sha" "$key_sha" \
+            "$expected_source_sha" "$expected_source_size"
+    done
 
     run_id="benchmark-symlink-source-$$"
     fake_root="${tmpdir}/root-${run_id}"
@@ -2146,6 +2189,7 @@ main() {
     test_publish_test_artifact_is_verified_atomic_and_idempotent
     test_publish_test_artifact_rejects_unverified_or_mutating_inputs
     test_deploy_remi_uses_candidate_owned_transition
+    test_deploy_remi_authenticates_candidate_before_execution
     test_candidate_baseline_uses_exact_staged_binary_without_mutation
     test_candidate_baseline_uses_installed_schema_owner_after_candidate_verification
     test_shared_conary_root_is_preserved_and_drift_fails_closed

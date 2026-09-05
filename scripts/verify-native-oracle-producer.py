@@ -8,15 +8,10 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 
-
-def require_commit(value: str, label: str) -> str:
-    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise ValueError(f"{label} must be one full lowercase 40-hex SHA")
-    return value
+from native_oracle_common import require_commit
 
 
 def git(repository: Path, arguments: list[str], label: str) -> None:
@@ -37,8 +32,8 @@ def verify(arguments: argparse.Namespace) -> dict[str, str]:
     repository = arguments.repository.resolve()
     if not repository.is_dir():
         raise ValueError("repository must be a directory")
-    deployed_commit = require_commit(arguments.deployed_commit, "deployed commit")
-    producer_commit = require_commit(arguments.producer_commit, "producer commit")
+    deployed_commit = require_commit(arguments.deployed_commit, "deployed commit", "one full lowercase 40-hex SHA")
+    producer_commit = require_commit(arguments.producer_commit, "producer commit", "one full lowercase 40-hex SHA")
     git(repository, ["fetch", "--no-tags", "origin", "main"], "fetch origin main")
     git(
         repository,

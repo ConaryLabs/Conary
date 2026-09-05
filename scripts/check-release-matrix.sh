@@ -1,10 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="${1:-$(git rev-parse --show-toplevel)}"
-cd "$repo_root"
+list_inputs=false
+if [[ "${1:-}" == "--list-inputs" ]]; then
+    list_inputs=true
+    shift
+fi
+[[ $# -le 1 ]] || {
+    echo "usage: $0 [--list-inputs] [repo-root]" >&2
+    exit 2
+}
 
 workspace_manifest="Cargo.toml"
+release_matrix_script="scripts/release-matrix.sh"
 release_build=".github/workflows/release-build.yml"
 deploy_workflow=".github/workflows/deploy-and-verify.yml"
 site_deploy_workflow=".github/workflows/deploy-site.yml"
@@ -18,6 +26,7 @@ r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
 pinned_production_ssh_action=".github/actions/setup-pinned-production-ssh/action.yml"
 conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
+native_oracle_common="scripts/native_oracle_common.py"
 native_oracle_lane_producer="scripts/produce-native-oracle-lane.py"
 native_oracle_lane_assembler="scripts/assemble-native-oracle-lanes.py"
 native_oracle_lane_selector="scripts/native-oracle-lane-selection.py"
@@ -35,6 +44,8 @@ candidate_cache_action=".github/actions/setup-remi-candidate-compiler-cache/acti
 artifact_proof_workflow=".github/workflows/release-artifact-proof.yml"
 cross_source_lifecycle_manifest="apps/conary/tests/integration/remi/manifests/native-cross-source-lifecycle.toml"
 cross_source_lifecycle_script="apps/conary/tests/fixtures/native/run-cross-source-lifecycle-matrix.sh"
+retry_command_script="apps/conary/tests/fixtures/native/retry-command.sh"
+arch_integration_containerfile="apps/conary/tests/integration/remi/containers/Containerfile.arch"
 merge_workflow=".github/workflows/merge-validation.yml"
 pr_workflow=".github/workflows/pr-gate.yml"
 exact_ownership_action=".github/actions/setup-exact-ownership-tests/action.yml"
@@ -239,54 +250,73 @@ validate_release_topology() {
     done
 }
 
-for required_file in \
-    "$workspace_manifest" \
-    "$release_build" \
-    "$deploy_workflow" \
-    "$site_deploy_workflow" \
-    "$candidate_build_workflow" \
-    "$candidate_deploy_workflow" \
-    "$native_oracle_export_workflow" \
-    "$native_oracle_production_workflow" \
-    "$resolution_survey_workflow" \
-    "$conversion_benchmark_workflow" \
-    "$r2_durability_workflow" \
-    "$pinned_production_ssh_action" \
-    "$conversion_workflow_checker" \
-    "$native_oracle_lane_assembler" \
-    "$native_oracle_lane_producer" \
-    "$native_oracle_lane_selector" \
-    "$native_oracle_producer_verifier" \
-    "$native_oracle_transport_verifier" \
-    "$resolution_survey_transport" \
-    "$remi_resolution_survey" \
-    "$candidate_predeployment_filter" \
-    "$candidate_postdeployment_filter" \
-    "$candidate_artifact_script" \
-    "$timed_linker_script" \
-    "$timed_rustc_wrapper" \
-    "$candidate_cache_action" \
-    "$artifact_proof_workflow" \
-    "$merge_workflow" \
-    "$pr_workflow" \
-    "$exact_ownership_action" \
-    "$workspace_setup_action" \
-    "$artifact_matrix" \
-    "$feedback_template" \
-    "$site_preview_release" \
-    "$site_install_page" \
-    "$site_bootstrap_installer" \
-    "$bootstrap_manifest_builder" \
-    "$bootstrap_installer_tests" \
-    "$rpm_containerfile" \
-    "$rpm_spec" \
-    "$deb_containerfile" \
-    "$arch_containerfile" \
-    "$arch_pkgbuild" \
-    "$rpm_build_script" \
-    "$deb_build_script" \
-    "$arch_build_script" \
-    "$ccs_build_script"; do
+required_files=(
+    "$workspace_manifest"
+    "$release_matrix_script"
+    "$release_build"
+    "$deploy_workflow"
+    "$site_deploy_workflow"
+    "$candidate_build_workflow"
+    "$candidate_deploy_workflow"
+    "$native_oracle_export_workflow"
+    "$native_oracle_production_workflow"
+    "$resolution_survey_workflow"
+    "$conversion_benchmark_workflow"
+    "$r2_durability_workflow"
+    "$pinned_production_ssh_action"
+    "$conversion_workflow_checker"
+    "$native_oracle_lane_assembler"
+    "$native_oracle_lane_producer"
+    "$native_oracle_lane_selector"
+    "$native_oracle_producer_verifier"
+    "$native_oracle_transport_verifier"
+    "$native_oracle_common"
+    "$resolution_survey_transport"
+    "$remi_resolution_survey"
+    "$remi_deploy_helper"
+    "$candidate_predeployment_filter"
+    "$candidate_postdeployment_filter"
+    "$candidate_artifact_script"
+    "$timed_linker_script"
+    "$timed_rustc_wrapper"
+    "$static_build_script"
+    "$candidate_cache_action"
+    "$artifact_proof_workflow"
+    "$cross_source_lifecycle_manifest"
+    "$cross_source_lifecycle_script"
+    "$retry_command_script"
+    "$arch_integration_containerfile"
+    "$merge_workflow"
+    "$pr_workflow"
+    "$exact_ownership_action"
+    "$workspace_setup_action"
+    "$artifact_matrix"
+    "$feedback_template"
+    "$site_preview_release"
+    "$site_install_page"
+    "$site_bootstrap_installer"
+    "$bootstrap_manifest_builder"
+    "$bootstrap_installer_tests"
+    "$rpm_containerfile"
+    "$rpm_spec"
+    "$deb_containerfile"
+    "$arch_containerfile"
+    "$arch_pkgbuild"
+    "$rpm_build_script"
+    "$deb_build_script"
+    "$arch_build_script"
+    "$ccs_build_script"
+)
+
+if [[ "$list_inputs" == "true" ]]; then
+    printf '%s\n' "${required_files[@]}"
+    exit 0
+fi
+
+repo_root="${1:-$(git rev-parse --show-toplevel)}"
+cd "$repo_root"
+
+for required_file in "${required_files[@]}"; do
     [[ -f "$required_file" ]] || fail "missing $required_file"
 done
 
@@ -401,6 +431,8 @@ require_job_match "$release_build" workspace-validation "uses: \\./\\.github/act
 require_match "$rpm_containerfile" "^FROM ${fedora_release_image}$" 'RPM Containerfile must use the release-build Fedora image digest'
 require_match "$deb_containerfile" "^FROM ${ubuntu_release_image}$" 'DEB Containerfile must use the release-build Ubuntu image digest'
 require_match "$arch_containerfile" "^FROM ${arch_release_image}$" 'Arch Containerfile must use the release-build Arch image digest'
+require_match "$arch_integration_containerfile" "COPY fixtures/native/retry-command\.sh[\s\S]*${arch_archive_pattern}[\s\S]*retry-command 5[\s\S]*pacman -Syyu --noconfirm --disable-download-timeout" 'Arch integration image must retry its pinned archive sync and package fetch'
+require_match "$retry_command_script" 'attempts:1\.\.10[\s\S]*attempt=1[\s\S]*if "\$@"[\s\S]*attempt.*-ge.*attempts[\s\S]*sleep "\$delay"[\s\S]*delay=\$\(\(delay \* 2\)\)' 'shared integration command retry must be bounded with backoff'
 require_match "$rpm_spec" '^BuildRequires:[[:space:]]+systemd-rpm-macros$' 'RPM spec systemd macro build dependency'
 require_job_match "$release_build" build-rpm 'dnf install -y[\s\S]*systemd-rpm-macros' 'release-build RPM systemd macro dependency'
 require_match "$rpm_containerfile" 'systemd-rpm-macros[\s\S]*rpm --eval '\''%\{_unitdir\}'\''[\s\S]*/usr/lib/systemd/system' 'RPM Containerfile systemd macro dependency and expansion proof'
@@ -567,7 +599,7 @@ require_job_match "$deploy_workflow" deploy-conary 'sha256sum -c SHA256SUMS[\s\S
 require_job_match "$deploy_workflow" prove-conary-release-artifacts 'needs: \[resolve, deploy-conary\][\s\S]*needs\.deploy-conary\.result == '\''success'\''[\s\S]*uses: \./\.github/workflows/release-artifact-proof\.yml[\s\S]*tag_name: \$\{\{ needs\.resolve\.outputs\.tag_name \}\}' 'live Conary deployment must hand the serialized tag to published-artifact proof'
 require_job_match "$deploy_workflow" deploy-remi 'name: Check out deploy-remi workflow repository for local actions[\s\S]*ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*name: Configure pinned production SSH[\s\S]*uses: \./workflow-authority/\.github/actions/setup-pinned-production-ssh' 'live Remi deployment must load the local SSH action from the workflow revision after checking out the release tag'
 require_job_match "$deploy_workflow" deploy-remi 'name: Deploy remi bundle[\s\S]*name: Verify remi health[\s\S]*curl -fsS https://remi\.conary\.io/health >/dev/null[\s\S]*name: Verify remi readiness[\s\S]*body=\$\(curl -fsS --max-time 30 https://remi\.conary\.io/health/ready\)[\s\S]*jq -e '\''\.ready == true'\''' 'exact post-deploy Remi liveness and structured readiness proof'
-require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
+require_job_match "$deploy_workflow" deploy-remi 'bundle_dir="source-artifacts/\$\{BUNDLE_NAME\}"[\s\S]*sha256sum -c SHA256SUMS[\s\S]*bundle="\$\{bundle_dir\}/remi-\$\{VERSION\}-linux-x64\.tar\.gz"[\s\S]*binary_sha256="\$\(tar xOzf "\$bundle"[\s\S]*deploy-remi[\s\S]*"\$VERSION" "\$binary_sha256" "\$remote_bundle"' 'Remi deployment must verify the complete suite checksums before staging its bundle'
 require_job_match "$deploy_workflow" deploy-remi 'deploy-remi[\s\S]*verify-ingress[\s\S]*inspect-remi[\s\S]*--require-repopulated[\s\S]*verify-ingress' 'suite Remi deploy verifies static ingress after mutation and completion'
 require_match "$candidate_build_workflow" 'push:\n[[:space:]]+branches:\n[[:space:]]+- main[\s\S]*workflow_dispatch:[\s\S]*commit_sha:[\s\S]*Exact commit already merged into main' 'candidate artifact build must run for protected main and allow exact reproducibility rebuilds'
 require_job_match "$candidate_build_workflow" build-remi-candidate 'CARGO_ENCODED_RUSTFLAGS: ""[\s\S]*RUSTFLAGS: ""[\s\S]*git merge-base --is-ancestor "\$REQUESTED_SHA" origin/main[\s\S]*setup-remi-candidate-compiler-cache[\s\S]*source-sha: \$\{\{ steps\.candidate\.outputs\.sha \}\}[\s\S]*timed-rustc-wrapper\.sh[\s\S]*cargo build -p remi --release --locked[\s\S]*--stop-server[\s\S]*actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7' 'candidate artifact build must bind protected source, time exact units, and bulk-save the pinned release cache'
@@ -595,12 +627,14 @@ require_job_match "$candidate_deploy_workflow" deploy-remi-candidate '--arg expe
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'WORKFLOW_SHA: \$\{\{ github\.workflow_sha \}\}[\s\S]*git fetch --no-tags origin "\$WORKFLOW_SHA"[\s\S]*git merge-base --is-ancestor "\$WORKFLOW_SHA" origin/main[\s\S]*git show "\$\{WORKFLOW_SHA\}:deploy/remi-postdeployment-fencing\.jq"[\s\S]*> "\$workflow_fencing_policy"[\s\S]*--slurpfile baseline remi-predeployment-inspection\.json[\s\S]*-f "\$workflow_fencing_policy"' 'private candidate deploy evaluates post-transition fencing from the exact workflow authority, independent of the candidate checkout'
 require_match "$candidate_postdeployment_filter" 'def same_fencing_authority\(\$before; \$final\):[\s\S]*\.schema_epoch == \$final\.schema_epoch[\s\S]*\.schema_revision == \$final\.schema_revision' 'candidate deploy scopes comparable fences to one schema authority'
 require_match "$candidate_postdeployment_filter" '\.candidate_verification\.mode == "publication_attested"[\s\S]*\.candidate_verification\.completed_after[\s\S]*== \$final\.deployment\.transition_completed_at[\s\S]*\.candidate_verification\.catalog_files_reopened == 0[\s\S]*\.candidate_verification\.catalog_bytes_hashed == 0[\s\S]*\.candidate_verification\.catalog_bytes_integrity_checked == 0[\s\S]*\.repository_refreshes\[0\][\s\S]*\.scope == \{kind: "all"\}[\s\S]*\.finished_at > \$final\.deployment\.transition_completed_at[\s\S]*\.latest_refresh\.run_id == \.run_id[\s\S]*\.latest_refresh\.finished_at[\s\S]*> \$final\.deployment\.transition_completed_at\)\)[\s\S]*\.successful_profiles \| index\(\$profile\)[\s\S]*if same_fencing_authority\(\$before; \$final\) then[\s\S]*> fencing_epoch\(\$before; \$profile\)[\s\S]*else[\s\S]*fencing_epoch\(\$final; \$profile\) > 0' 'candidate deploy requires a zero-scan publication-attested post-transition refresh, candidate completion, and advances fences only within one schema authority'
-require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deploy-remi "\$1" "\$2" "\$3" "\$4"[\s\S]*verify-ingress[\s\S]*capture_completion_inspection "\$requirement"[\s\S]*verify-ingress' 'candidate deploy verifies static ingress after mutation and completion'
+require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deploy-remi[\s\S]*"\$1" "\$deployed_binary_sha256" "\$2" "\$3" "\$4"[\s\S]*verify-ingress[\s\S]*capture_completion_inspection "\$requirement"[\s\S]*verify-ingress' 'candidate deploy verifies static ingress after mutation and completion'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'if \[\[ "\$COMPLETION_MODE" == "active-repopulation" \]\]; then[\s\S]*\.ready == true[\s\S]*ready_status=.*curl[\s\S]*"200" \|\| "\$ready_status" == "503"[\s\S]*\.ready \| type == "boolean"' 'candidate deploy mode-specific public readiness contract'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'set \+e[\s\S]*ssh "\$\{ssh_opts\[@\]\}" "\$target" bash -s[\s\S]*> remi-deployment-inspection\.json <<.REMOTE_EOF.[\s\S]*deployment_inspection_is_typed\(\)[\s\S]*capture_completion_inspection\(\)[\s\S]*helper_args=\(inspect-remi "\$requirement"\)[\s\S]*"\$\{helper_args\[@\]\}" 2>/dev/null[\s\S]*inspection_failure=predicate-unsatisfied[\s\S]*inspection_failure=command-failed[\s\S]*inspection_failure=invalid-typed-output[\s\S]*emit_captured_inspection_if_typed[\s\S]*attempt < 120[\s\S]*deploy_status=\$\?[\s\S]*latest_refresh\.run_id[\s\S]*latest_refresh\.redactions[\s\S]*exit "\$deploy_status"' 'candidate deploy retains one validated final typed inspection with channel-separated diagnostics'
 forbid_match "$candidate_deploy_workflow" '"\$\{helper_args\[@\]\}" 2>&1' 'candidate deployment inspection JSON mixed with stderr diagnostics'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'deployment_evidence_schema_version: 3[\s\S]*repository_refreshes[\s\S]*start_phase database-transition-and-restart[\s\S]*start_phase ingress-after-transition[\s\S]*start_phase forced-refresh-all[\s\S]*start_phase "forced-refresh-\$\{profile\}"[\s\S]*start_phase private-candidate-inspection[\s\S]*start_phase ingress-after-completion[\s\S]*failure_phase: "remote-session-or-transport"[\s\S]*\.deployment\.outcome == \$expected_outcome[\s\S]*\.deployment\.phases[\s\S]*\.duration_ms >= 0' 'candidate deploy retains typed refresh generations, phase timing, and early-failure evidence'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'inspect-remi-storage[\s\S]*> remi-predeployment-storage\.json[\s\S]*\.filesystem\.available_bytes[\s\S]*\.database\.logical_bytes[\s\S]*\.database\.allocated_bytes[\s\S]*\.transition_backups\.directories[\s\S]*> remi-deployment-storage\.json[\s\S]*Storage evidence \(before -> after\)[\s\S]*remi-deployment-storage\.json[\s\S]*remi-predeployment-storage\.json' 'candidate deploy retains before-and-after numeric storage evidence'
+require_literal_count "$candidate_deploy_workflow" "storage_evidence_jq='" 1 'candidate deploy has one storage-evidence predicate authority'
+require_literal_count "$candidate_deploy_workflow" 'jq -e "$storage_evidence_jq"' 2 'candidate deploy reuses one storage-evidence predicate before and after deployment'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'name: Summarize final typed deployment inspection[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*latest_refresh\.failure_stage[\s\S]*latest_refresh\.failure_category[\s\S]*latest_refresh\.failure_evidence_sha256' 'candidate deploy summarizes sanitized refresh failure authority'
 require_job_match "$candidate_deploy_workflow" deploy-remi-candidate 'name: Upload final sanitized deployment inspection[\s\S]*if: \$\{\{ always\(\) \}\}[\s\S]*uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f[\s\S]*remi-candidate-manifest\.json[\s\S]*remi-deployment-inspection\.json[\s\S]*remi-predeployment-inspection\.json[\s\S]*retention-days: 30' 'candidate deploy retains before-and-after sanitized inspection artifacts plus source provenance'
 require_match "$native_oracle_export_workflow" 'workflow_dispatch:[\s\S]*deployment_run_id:[\s\S]*required: true[\s\S]*permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*cancel-in-progress: false' 'native-oracle export exact deployment input and read-only GitHub permissions'
@@ -644,7 +678,8 @@ require_job_match "$native_oracle_production_workflow" assemble 'if: \$\{\{ alwa
 require_job_match "$native_oracle_production_workflow" assemble '\.schema_version == 2[\s\S]*artifact_type == "native-oracle-three-lane-set"[\s\S]*\[\.lanes\[\]\.profile\] == \["fedora-44", "ubuntu-26\.04", "arch"\][\s\S]*producer_binaries\.package\.sha256[\s\S]*producer_binaries\.resolution\.sha256[\s\S]*github_artifact\.sha256[\s\S]*Upload assembled exact native oracle evidence' 'native-oracle assembly exact three-lane evidence and per-lane digests'
 require_job_match "$native_oracle_production_workflow" complete 'if: \$\{\{ always\(\) \}\}[\s\S]*needs: \[produce, assemble\][\s\S]*test "\$PRODUCER_RESULT" = success[\s\S]*test "\$ASSEMBLY_RESULT" = success' 'native-oracle production requires selected lanes and assembly'
 forbid_match "$native_oracle_production_workflow" 'conversion-crawl|promotion-(prove|activate)|/v1/admin|sudo -n (bash|sh)|ssh ' 'native-oracle production generic or mutating authority'
-require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*canonical_json\(value\) != data[\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
+require_match "$native_oracle_common" 'allow_nan=False[\s\S]*stat\.S_ISREG[\s\S]*stat\.S_ISDIR[\s\S]*object_pairs_hook=reject_duplicate_key[\s\S]*SHA256\.fullmatch\(value\)[\s\S]*COMMIT\.fullmatch\(value\)' 'native-oracle common strict canonical JSON, digest, and plain-path validation'
+require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*load_canonical\([\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
 require_match "$native_oracle_lane_producer" 'NATIVE_PACKAGE_ORACLE_SCHEMA = 1[\s\S]*NATIVE_RESOLUTION_ORACLE_SCHEMA = 3[\s\S]*manifest\.get\("schema_version"\) != required_schema' 'native-oracle lane exact distinct package and resolution schema authority'
 require_match "$native_oracle_lane_producer" 'NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 5[\s\S]*NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 3[\s\S]*producer_binary[\s\S]*must be a regular file, never a symlink[\s\S]*sha256_file[\s\S]*"schema_version": NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA[\s\S]*"producer_commit"[\s\S]*"producer_binaries"' 'native-oracle lane exact producer commit and binary digest binding'
 require_match "$resolution_survey_workflow" 'workflow_dispatch:[\s\S]*oracle_run_id:[\s\S]*required: true[\s\S]*permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*concurrency:[\s\S]*group: deploy-and-verify[\s\S]*cancel-in-progress: false' 'resolution survey exact oracle input, read-only permissions, and shared serialization'
@@ -682,6 +717,7 @@ require_match "$remi_deploy_helper" 'survey_validate_unpacked_oracles\(\)[\s\S]*
 require_match "$remi_deploy_helper" 'profile_results[\s\S]*candidate_manifest_sha256[\s\S]*--slurpfile outcome "\$outcome"[\s\S]*\$result\.candidate\.counts[\s\S]*comparison: \(if \$result\.comparison == null then null else \{[\s\S]*\$result\.comparison\.candidate_manifest_sha256[\s\S]*\} end\)' 'resolution survey helper builds portable transport summaries from bounded Remi outcome authority'
 require_match "$remi_deploy_helper" 'candidate-resolution-implementation\.json[\s\S]*comparison-resolution-implementation\.json[\s\S]*implementation_file: \$candidate_implementation_file[\s\S]*implementation_file: \$comparison_implementation_file[\s\S]*schema_version: 3' 'resolution survey helper retains separately bound worker implementation evidence'
 require_match "$remi_deploy_helper" 'protected_main_commit\(\)[\s\S]*api\.github\.com/repos/FieldmouseWorks/Conary/commits/main[\s\S]*fetch_protected_main_helper\(\)[\s\S]*raw\.githubusercontent\.com/FieldmouseWorks/Conary/\$\{commit\}/deploy/remi-deploy-helper\.sh[\s\S]*canonical_sha256.*== "\$expected_sha"[\s\S]*protected main advanced during helper authorization[\s\S]*install -m 0755 "\$\{staging\}/helper" "\$next"' 'Remi helper updates require exact current protected-main bytes from root-trusted HTTPS authority'
+require_match "$remi_deploy_helper" 'extract_verified_remi_candidate\(\)[\s\S]*bundle must contain exactly one plain[\s\S]*actual_sha=.*sha256sum[\s\S]*"\$actual_sha" == "\$expected_sha"[\s\S]*deploy_remi\(\)[\s\S]*validate_sha256 "\$expected_sha"[\s\S]*extract_verified_remi_candidate "\$version" "\$expected_sha"' 'Remi deployment authenticates one exact candidate member before execution'
 forbid_match "$remi_deploy_helper" 'install -m 0755 "\$source" "\$next"' 'caller-authorized Remi helper replacement'
 forbid_match "$remi_deploy_helper" '--slurpfile (candidate|comparison)' 'resolution survey helper whole-document jq buffering'
 require_match "$remi_deploy_helper" 'tar -cf "\$SURVEY_TRANSPORT_NEXT"[\s\S]*-C "\$SURVEY_STAGING" manifest\.json[\s\S]*-C "\$output" "\$\{transport_members\[@\]\}"' 'resolution survey archives the frozen root-owned snapshot without another full copy'
@@ -692,7 +728,7 @@ forbid_match "$resolution_survey_transport" 'MAX_SURVEY_TRANSPORT_BYTES|plain_fi
 forbid_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\) \{[\s\S]{0,500}transport_size' 'resolution survey arbitrary aggregate oracle input limit'
 require_match "$resolution_survey_transport" 'validate_input_evidence\([\s\S]*deployment != input_deployment[\s\S]*survey binding differs from authenticated input[\s\S]*--input-evidence' 'resolution survey output verifier exact authenticated input bindings'
 require_match "$resolution_survey_transport" 'MAX_SURVEY_DOCUMENTS = len\(PUBLIC_PROFILES\) \* 4[\s\S]*implementation_file[\s\S]*candidate-resolution-implementation\.json[\s\S]*validate_resolution_implementation[\s\S]*comparison-resolution-implementation\.json' 'resolution survey output verifier retains and validates worker implementation evidence'
-require_match "$resolution_survey_transport" 'load_input_package_manifests\([\s\S]*hash_file\(path\) != expected_transport\["sha256"\][\s\S]*oracle transport manifest differs from authenticated input evidence[\s\S]*package manifest differs from authenticated input' 'resolution survey reopens exact authenticated package manifests for candidate reconstruction'
+require_match "$resolution_survey_transport" 'load_input_package_manifests\([\s\S]*sha256_file\(path\) != expected_transport\["sha256"\][\s\S]*oracle transport manifest differs from authenticated input evidence[\s\S]*package manifest differs from authenticated input' 'resolution survey reopens exact authenticated package manifests for candidate reconstruction'
 require_match "$resolution_survey_transport" 'reconstruct_candidate_manifest_sha256\([\s\S]*update_native_outcome_digest\(artifact[\s\S]*candidate_manifest[\s\S]*validate_comparison_survey\([\s\S]*survey\["candidate_manifest_sha256"\] != candidate_manifest_sha256' 'resolution survey comparison binds its streamed reconstructed candidate manifest'
 require_match "$resolution_survey_transport" 'validate_candidate_package_coverage\([\s\S]*StreamingJsonLines\([\s\S]*PACKAGE_ROW_SKIP_SPEC[\s\S]*if actual != expected[\s\S]*root differs from its authenticated package oracle[\s\S]*package root count differs from its authenticated manifest' 'resolution survey candidate roots exactly cover the authenticated package oracle'
 require_match "$resolution_survey_transport" '\n            validate_candidate_package_coverage\([\s\S]*args\.oracle_transport[\s\S]*comparison = profile\["comparison"\][\s\S]*if comparison is None' 'resolution survey validates package coverage before the findings branch'

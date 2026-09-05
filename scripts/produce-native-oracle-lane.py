@@ -18,6 +18,16 @@ import sys
 import tempfile
 from typing import Any
 
+from native_oracle_common import (
+    canonical_json,
+    load_canonical,
+    plain_directory,
+    plain_file,
+    require_commit,
+    require_sha256,
+    sha256_file,
+)
+
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
 
@@ -73,7 +83,6 @@ LANES = {
         "flags": ("--database",),
     },
 }
-SHA256_LENGTH = 64
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 NATIVE_PACKAGE_ORACLE_SCHEMA = 1
 NATIVE_RESOLUTION_ORACLE_SCHEMA = 3
@@ -86,82 +95,14 @@ NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 3
 NATIVE_RESOLUTION_SURVEY_MAX_BYTES = 64 * 1024 * 1024
 
 
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
-
-
-def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON key {key!r}")
-        value[key] = item
-    return value
-
-
-def plain_file(path: Path, label: str, maximum: int | None = None) -> bytes:
-    metadata = path.lstat()
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"{label} must be a regular file, never a symlink")
-    if maximum is not None and metadata.st_size > maximum:
-        raise ValueError(f"{label} exceeds {maximum} bytes")
-    return path.read_bytes()
-
-
-def plain_directory(path: Path, label: str) -> None:
-    metadata = path.lstat()
-    if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError(f"{label} must be a directory, never a symlink")
-
-
-def load_canonical(
-    path: Path, label: str, maximum: int = MAX_MANIFEST_BYTES
-) -> tuple[Any, bytes]:
-    data = plain_file(path, label, maximum)
-    value = json.loads(data, object_pairs_hook=reject_duplicate_key)
-    if canonical_json(value) != data:
-        raise ValueError(f"{label} is not canonical JSON")
-    return value, data
-
-
 def require_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != expected:
         raise ValueError(f"{label} has incomplete or unknown fields")
     return value
 
 
-def require_sha256(value: Any, label: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != SHA256_LENGTH
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
-    return value
-
-
-def require_commit(value: Any, label: str) -> str:
-    if (
-        not isinstance(value, str)
-        or len(value) != 40
-        or any(character not in "0123456789abcdef" for character in value)
-    ):
-        raise ValueError(f"{label} must be a full lowercase commit digest")
-    return value
-
-
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def producer_binary(path: Path, expected_name: str, label: str) -> dict[str, str]:
@@ -212,7 +153,8 @@ def validate_input(root: Path, selected_profile: str) -> tuple[dict[str, Any], d
         raise ValueError("native-oracle object directory disagrees with the manifest")
     for digest, size in inventory:
         path = objects_root / digest
-        data = plain_file(path, f"native-oracle object {digest}")
+        plain_file(path, f"native-oracle object {digest}")
+        data = path.read_bytes()
         if len(data) != size or sha256(data) != digest:
             raise ValueError(f"native-oracle object {digest} changed size or digest")
 
@@ -381,11 +323,17 @@ def resolution_survey_evidence(
             f"native resolution survey diagnostic outcome {index}",
         )
         root_key = record["root_package_key_sha256"]
+        try:
+            require_sha256(
+                root_key,
+                f"native resolution survey diagnostic outcome {index} root digest",
+            )
+        except ValueError as error:
+            raise ValueError(
+                "native resolution survey diagnostic outcome is invalid"
+            ) from error
         if (
-            not isinstance(root_key, str)
-            or len(root_key) != SHA256_LENGTH
-            or any(character not in "0123456789abcdef" for character in root_key)
-            or (previous_root is not None and root_key <= previous_root)
+            (previous_root is not None and root_key <= previous_root)
             or record["outcome"]
             != {"status": "not_installable", "reason": "conflicting_closure"}
             or not isinstance(record["native_explanation"], dict)
@@ -505,7 +453,9 @@ def oracle_evidence(
             raise ValueError(f"{label} schema must be an unsigned 32-bit integer")
         if found in (1, 2):
             raise ResolutionBundleRebuildRequired(found)
-    artifact = plain_file(directory / artifact_name, f"{label} artifact")
+    artifact_path = directory / artifact_name
+    plain_file(artifact_path, f"{label} artifact")
+    artifact = artifact_path.read_bytes()
     if manifest.get("schema_version") != required_schema:
         raise ValueError(f"{label} schema must be {required_schema}")
     if manifest.get("profile") != profile["revision"]["profile"] or manifest.get("profile_revision_sha256") != profile["profile_revision_sha256"]:
