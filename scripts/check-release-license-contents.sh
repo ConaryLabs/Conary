@@ -88,7 +88,10 @@ case "$kind" in
             fail "ccs needs the conary binary, the MIT and Apache texts, and the trust policy as arguments"
         [[ -f "$policy" && ! -L "$policy" ]] || fail "ccs trust policy $policy is missing"
         "$conary" ccs verify "$artifact" --policy "$policy" >/dev/null || fail "ccs artifact $artifact fails its own verification"
-        inspection="$("$conary" ccs inspect "$artifact" --files --format json --policy "$policy")" || fail "ccs artifact $artifact could not be inspected"
+        # `ccs inspect` reads the package untrusted and takes no policy; only
+        # `ccs verify` does. Verification above proves the signed digests the
+        # inspection reports.
+        inspection="$("$conary" ccs inspect "$artifact" --files --format json)" || fail "ccs artifact $artifact could not be inspected"
         for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
             member="${pair%%:*}"; reference="${pair#*:}"
             actual="$(jq -r --arg path "/${client_license_dir}/${member}" '[.files[] | select(.path == $path) | .content.sha256] | if length == 1 then .[0] else "" end' <<<"$inspection")"
