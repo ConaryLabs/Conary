@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 12
+last_updated: 2026-09-05
+revision: 13
 status: postponed
 target_release: unassigned
 summary: Postponed multi-venue launch packet for the first cross-distro tester loop
@@ -97,7 +97,8 @@ partial attempts are useful too.
 
 ```text
 I've been using Codex as one of the coding and review agents while building
-Conary, a free, MIT/Apache-2.0-licensed Rust package manager and Linux system manager.
+Conary, a free Rust package manager and Linux system manager (client and
+libraries MIT/Apache-2.0; the Remi server is AGPL-3.0-or-later).
 
 This is a real multi-crate systems project. AGENTS.md defines the repository
 contract, a path router identifies each subsystem's owner and proof, and the
@@ -136,7 +137,8 @@ partial attempts, and unpleasant surprises are useful evidence.
 
 ```text
 I built Conary, a Rust package manager and Linux system manager, with Claude
-Code as one of the coding and review agents. It is MIT/Apache-2.0-licensed, has no paid
+Code as one of the coding and review agents. Its client and libraries are MIT/Apache-2.0-licensed (the Remi server is
+AGPL-3.0-or-later), it has no paid
 tier, and requires no sign-up.
 
 Claude Code worked from a repo-owned contract: CLAUDE.md imports AGENTS.md, and
