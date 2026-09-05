@@ -1,0 +1,152 @@
+name: nightly-release
+
+on:
+  schedule:
+    - cron: '30 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: nightly-release
+  cancel-in-progress: false
+
+jobs:
+  select-green-main:
+    name: select-green-main
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.nightly.outputs.commit_sha }}
+      tag_name: ${{ steps.nightly.outputs.tag_name }}
+      outcome: ${{ steps.nightly.outputs.outcome }}
+      state: ${{ steps.nightly.outputs.state }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/nightly-release.py
+            scripts/release-matrix.sh
+          sparse-checkout-cone-mode: false
+      - name: Resolve and tag the newest green main commit
+        id: nightly
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --force --tags origin \
+            refs/heads/main:refs/remotes/origin/main
+          selection="$(python3 workflow-authority/scripts/nightly-release.py select)"
+          commit_sha="$(jq -er '.commit_sha' <<< "$selection")"
+          selected_by="$(jq -er '.outcome' <<< "$selection")"
+          nightly_date="$(jq -er '.date' <<< "$selection")"
+          git merge-base --is-ancestor "$commit_sha" origin/main || {
+            echo "successful merge-validation commit is no longer on main: ${commit_sha}" >&2
+            exit 1
+          }
+          git checkout --detach "$commit_sha"
+
+          if [[ "$selected_by" == "selected_by_existing_date_tag" ]]; then
+            tag_name="$(jq -er '.tag_name' <<< "$selection")"
+          else
+            [[ "$selected_by" == "selected_by_green_run" ]]
+            capability="$(python3 workflow-authority/scripts/nightly-release.py preflight --commit "$commit_sha" --workflow-commit "$WORKFLOW_COMMIT" --date "$nightly_date")"
+            if [[ "$(jq -r '.state' <<< "$capability")" == "unsupported_commit" ]]; then
+              echo 'state=unsupported_commit' >> "$GITHUB_OUTPUT"
+              echo 'outcome=skipped' >> "$GITHUB_OUTPUT"
+              echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            [[ "$(jq -r '.state' <<< "$capability")" == "supported_commit" ]]
+            tag_name="$(jq -er '.tag_name' <<< "$capability")"
+          fi
+
+          resolved="$(python3 workflow-authority/scripts/nightly-release.py resolve --tag "$tag_name" --commit "$commit_sha")"
+          state="$(jq -r '.state' <<< "$resolved")"
+          tag_name="$(jq -r '.tag_name' <<< "$resolved")"
+          outcome="$(jq -r '.outcome' <<< "$resolved")"
+
+          if [[ "$state" == "no_tag" ]]; then
+            tag_object="$(
+              gh api --method POST \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2026-03-10' \
+                "repos/${GITHUB_REPOSITORY}/git/tags" \
+                -f tag="$tag_name" \
+                -f message="Conary ${tag_name} automated nightly pre-release" \
+                -f object="$commit_sha" \
+                -f type=commit \
+                --jq '.sha'
+            )"
+            [[ "$tag_object" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "GitHub did not return an annotated tag object" >&2
+              exit 1
+            }
+            gh api --method POST \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2026-03-10' \
+              "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${tag_name}" \
+              -f sha="$tag_object" >/dev/null
+
+          fi
+
+          echo "state=${state}" >> "$GITHUB_OUTPUT"
+          echo "outcome=${outcome}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          echo "$resolved" >> "$GITHUB_STEP_SUMMARY"
+
+  build-and-publish:
+    name: build-and-publish
+    needs: select-green-main
+    if: ${{ needs.select-green-main.outputs.outcome == 'build' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-build.yml
+    with:
+      tag_name: ${{ needs.select-green-main.outputs.tag_name }}
+      channel: nightly
+    secrets: inherit
+
+  prove-existing-release:
+    name: prove-existing-release
+    needs: select-green-main
+    if: ${{ needs.select-green-main.outputs.outcome == 'proof' }}
+    uses: ./.github/workflows/release-artifact-proof.yml
+    with:
+      tag_name: ${{ needs.select-green-main.outputs.tag_name }}
+    secrets: inherit
+
+  retain-nightly-releases:
+    name: retain-nightly-releases
+    needs: [select-green-main, build-and-publish, prove-existing-release]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Delete nightly releases older than 14 days
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          python3 scripts/nightly-release.py retain

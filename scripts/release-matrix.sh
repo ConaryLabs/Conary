@@ -15,6 +15,10 @@ Usage:
   scripts/release-matrix.sh artifacts
   scripts/release-matrix.sh field <release> <field>
   scripts/release-matrix.sh artifact-field <product> <field>
+  scripts/release-matrix.sh validate-version <version> [stable|nightly]
+  scripts/release-matrix.sh version-channel <version>
+  scripts/release-matrix.sh stable-version <version>
+  scripts/release-matrix.sh render-version <version> <cargo|rpm|deb|arch|ccs|tag>
   scripts/release-matrix.sh resolve-tag <tag> [--format shell|json]
   scripts/release-matrix.sh canonical-tag <release> <version>
   scripts/release-matrix.sh latest-version-from-list <release> <tag...>
@@ -45,7 +49,79 @@ is_artifact_product() {
 }
 
 is_release_version() {
+    release_channel_for_version "$1" >/dev/null 2>&1
+}
+
+is_stable_version() {
     [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+is_real_utc_date() {
+    local value="$1"
+    local rendered
+
+    [[ "$value" =~ ^[0-9]{8}$ ]] || return 1
+    rendered="$(date -u -d "${value:0:4}-${value:4:2}-${value:6:2}" +%Y%m%d 2>/dev/null)" || return 1
+    [[ "$rendered" == "$value" ]]
+}
+
+release_channel_for_version() {
+    local version="$1"
+    local nightly_date
+
+    if is_stable_version "$version"; then
+        printf '%s\n' stable
+        return
+    fi
+    if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.([0-9]{8})$ ]]; then
+        nightly_date="${BASH_REMATCH[1]}"
+        is_real_utc_date "$nightly_date" || return 1
+        printf '%s\n' nightly
+        return
+    fi
+    return 1
+}
+
+stable_version_for() {
+    local version="$1"
+    local channel
+
+    channel="$(release_channel_for_version "$version")" || return 1
+    case "$channel" in
+        stable) printf '%s\n' "$version" ;;
+        nightly) printf '%s\n' "${version%%-nightly.*}" ;;
+    esac
+}
+
+render_version() {
+    local version="$1" target="$2" channel base nightly_date
+    channel="$(release_channel_for_version "$version")" || die "invalid release version: $version"
+    case "$target" in
+        cargo|rpm|deb|arch|ccs|tag) ;;
+        *) die "unknown version target: $target" ;;
+    esac
+    if [[ "$channel" == stable ]]; then
+        printf '%s\n' "$version"
+        return
+    fi
+    base="$(stable_version_for "$version")"
+    nightly_date="${version##*-nightly.}"
+    case "$target" in
+        cargo|ccs|tag) printf '%s\n' "$version" ;;
+        rpm|deb) printf '%s~nightly.%s\n' "$base" "$nightly_date" ;;
+        arch) printf '%snightly%s\n' "$base" "$nightly_date" ;;
+    esac
+}
+
+authority_target() {
+    case "$1" in
+        Cargo.toml) printf '%s\n' cargo ;;
+        packaging/rpm/conary.spec) printf '%s\n' rpm ;;
+        packaging/arch/PKGBUILD) printf '%s\n' arch ;;
+        packaging/deb/debian/changelog) printf '%s\n' deb ;;
+        packaging/ccs/ccs.toml) printf '%s\n' ccs ;;
+        *) die "unknown version authority: $1" ;;
+    esac
 }
 
 workspace_member_manifests() {
@@ -208,8 +284,9 @@ json_array_from_lines() {
 
 resolve_tag_version() {
     local tag="$1"
-    if [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-        printf '%s\n' "${BASH_REMATCH[1]}"
+    local version="${tag#v}"
+    if [[ "$tag" == v* ]] && is_release_version "$version"; then
+        printf '%s\n' "$version"
         return
     fi
     die "unknown current release tag: $tag"
@@ -290,6 +367,14 @@ max_owned_version() {
     local file
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
+    # Native renderings are not SemVer and must never enter sort -V together.
+    local workspace_version
+    workspace_version="$(extract_version_from_authority_file Cargo.toml)"
+    if [[ "$(release_channel_for_version "$workspace_version")" == nightly ]]; then
+        assert_owned_version "$release" "$workspace_version"
+        printf '%s\n' "$workspace_version"
+        return
+    fi
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "version authority file missing: $file"
         versions+=("$(extract_version_from_authority_file "$file")")
@@ -301,7 +386,7 @@ max_owned_version() {
 assert_owned_version() {
     local release="$1"
     local expected_version="$2"
-    local file actual_version field workspace_publish
+    local file actual_version field workspace_publish authority_version
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
     is_release_version "$expected_version" || die "invalid release version: $expected_version"
@@ -309,8 +394,9 @@ assert_owned_version() {
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "version authority file missing: $file"
         actual_version="$(extract_version_from_authority_file "$file")"
-        [[ "$actual_version" == "$expected_version" ]] ||
-            die "suite version mismatch: $file is $actual_version, expected $expected_version"
+        authority_version="$(render_version "$expected_version" "$(authority_target "$file")")"
+        [[ "$actual_version" == "$authority_version" ]] ||
+            die "suite version mismatch: $file is $actual_version, expected $authority_version"
     done < <(version_authority_files)
 
     workspace_publish="$({
@@ -347,10 +433,12 @@ metadata_json() {
     local version="$2"
     local tag="$3"
     local dry_run="$4"
-    local expected_tag product first=true
+    local expected_tag product first=true channel stable_version
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
     is_release_version "$version" || die "invalid release version: $version"
+    channel="$(release_channel_for_version "$version")"
+    stable_version="$(stable_version_for "$version")"
     expected_tag="$(canonical_tag_prefix_for "$release")${version}"
     [[ "$tag" == "$expected_tag" ]] || die "tag $tag does not match suite version $version"
     [[ "$dry_run" == "true" || "$dry_run" == "false" ]] || die "dry_run must be true or false"
@@ -360,6 +448,8 @@ metadata_json() {
     printf ',"canonical_tag_prefix":'; print_json_string "$(canonical_tag_prefix_for "$release")"
     printf ',"tag_name":'; print_json_string "$tag"
     printf ',"version":'; print_json_string "$version"
+    printf ',"channel":'; print_json_string "$channel"
+    printf ',"stable_version":'; print_json_string "$stable_version"
     printf ',"bundle_name":'; print_json_string "$(release_bundle_name_for "$release")"
     printf ',"deploy_mode":'; print_json_string "$(release_deploy_mode_for "$release")"
     printf ',"artifact_patterns":'; all_artifact_patterns | json_array_from_lines
@@ -384,7 +474,7 @@ metadata_json() {
 resolve_tag_cmd() {
     local tag="$1"
     local format="shell"
-    local version
+    local version channel stable_version
 
     while [[ $# -gt 1 ]]; do
         shift
@@ -399,12 +489,16 @@ resolve_tag_cmd() {
     done
 
     version="$(resolve_tag_version "$tag")"
+    channel="$(release_channel_for_version "$version")"
+    stable_version="$(stable_version_for "$version")"
     case "$format" in
         shell)
             printf 'release=suite\n'
             printf 'canonical_tag_prefix=v\n'
             printf 'tag_name=%s\n' "$tag"
             printf 'version=%s\n' "$version"
+            printf 'channel=%s\n' "$channel"
+            printf 'stable_version=%s\n' "$stable_version"
             printf 'bundle_name=suite-bundle\n'
             printf 'deploy_mode=suite\n'
             ;;
@@ -412,6 +506,8 @@ resolve_tag_cmd() {
             printf '{"release":"suite","canonical_tag_prefix":"v","tag_name":'
             print_json_string "$tag"
             printf ',"version":'; print_json_string "$version"
+            printf ',"channel":'; print_json_string "$channel"
+            printf ',"stable_version":'; print_json_string "$stable_version"
             printf ',"bundle_name":"suite-bundle","deploy_mode":"suite"}\n'
             ;;
         *) die "unknown format: $format" ;;
@@ -441,6 +537,25 @@ main() {
             [[ $# -eq 2 ]] || usage
             is_artifact_product "$1" || die "unknown artifact product: $1"
             artifact_field_value "$1" "$2"
+            ;;
+        render-version)
+            [[ $# -eq 2 ]] || usage
+            render_version "$1" "$2"
+            ;;
+        validate-version)
+            [[ $# -ge 1 && $# -le 2 ]] || usage
+            channel="$(release_channel_for_version "$1")" || die "invalid release version: $1"
+            [[ $# -eq 1 || "$channel" == "$2" ]] ||
+                die "release version $1 is channel $channel, expected $2"
+            printf '%s\n' "$channel"
+            ;;
+        version-channel)
+            [[ $# -eq 1 ]] || usage
+            release_channel_for_version "$1" || die "invalid release version: $1"
+            ;;
+        stable-version)
+            [[ $# -eq 1 ]] || usage
+            stable_version_for "$1" || die "invalid release version: $1"
             ;;
         resolve-tag)
             [[ $# -ge 1 ]] || usage

@@ -3,6 +3,16 @@ name: release-build
 on:
   push:
     tags: ['v*']
+  workflow_call:
+    inputs:
+      tag_name:
+        description: Annotated suite tag to build and publish.
+        required: true
+        type: string
+      channel:
+        description: Typed release channel. Reusable live builds accept nightly only.
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag_name:
@@ -12,6 +22,13 @@ on:
         description: Skip live publication side effects.
         required: false
         default: "true"
+      channel:
+        description: Typed release channel. Manual builds remain stable dry-runs.
+        required: true
+        default: stable
+        type: choice
+        options:
+          - stable
 
 permissions:
   contents: read
@@ -27,7 +44,11 @@ jobs:
       release: ${{ steps.meta.outputs.release }}
       tag_name: ${{ steps.meta.outputs.tag_name }}
       version: ${{ steps.meta.outputs.version }}
+      channel: ${{ steps.meta.outputs.channel }}
+      stable_version: ${{ steps.meta.outputs.stable_version }}
       dry_run: ${{ steps.meta.outputs.dry_run }}
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      commit_sha: ${{ steps.meta.outputs.commit_sha }}
       bundle_name: ${{ steps.meta.outputs.bundle_name }}
       deploy_mode: ${{ steps.meta.outputs.deploy_mode }}
       artifact_patterns: ${{ steps.meta.outputs.artifact_patterns }}
@@ -41,42 +62,67 @@ jobs:
         env:
           DISPATCH_TAG_NAME: ${{ github.event.inputs.tag_name }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DISPATCH_CHANNEL: ${{ github.event.inputs.channel }}
+          CALL_TAG_NAME: ${{ inputs.tag_name }}
+          CALL_CHANNEL: ${{ inputs.channel }}
         run: |
           set -euo pipefail
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+          # Reusable workflows inherit the caller's event (schedule/dispatch).
+          if [[ "$CALL_CHANNEL" == "nightly" && -n "$CALL_TAG_NAME" ]]; then
+            tag_name="$CALL_TAG_NAME"
+            dry_run="false"
+            requested_channel="$CALL_CHANNEL"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             tag_name="$DISPATCH_TAG_NAME"
             dry_run="${DISPATCH_DRY_RUN:-true}"
+            requested_channel="${DISPATCH_CHANNEL:-stable}"
           else
             tag_name="${GITHUB_REF#refs/tags/}"
             dry_run="false"
+            requested_channel="stable"
           fi
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && "$dry_run" != "true" ]]; then
+          if [[ "$CALL_CHANNEL" != "nightly" && "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && ("$dry_run" != "true" || "$requested_channel" != "stable") ]]; then
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
+            exit 1
+          fi
+          if [[ "$CALL_CHANNEL" == "nightly" && -z "$CALL_TAG_NAME" ]]; then
+            echo "nightly reusable inputs require an exact tag_name" >&2
             exit 1
           fi
 
           mkdir -p release-metadata
           bash scripts/release-matrix.sh resolve-tag "$tag_name" --format shell > release-metadata/resolved.env
           source release-metadata/resolved.env
+          [[ "$channel" == "$requested_channel" ]] || {
+            echo "tag channel ${channel} does not match requested channel ${requested_channel}" >&2
+            exit 1
+          }
 
           if [[ "$dry_run" != "true" ]]; then
             [[ "$(git cat-file -t "refs/tags/${tag_name}")" == "tag" ]] || {
               echo "live suite tag ${tag_name} must be annotated" >&2
               exit 1
             }
-            [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/tags/${tag_name}^{}")" ]] || {
+            tag_commit="$(git rev-parse "refs/tags/${tag_name}^{}")"
+            if [[ "$channel" == "stable" && "$(git rev-parse HEAD)" != "$tag_commit" ]]; then
               echo "checkout does not match the peeled suite tag ${tag_name}" >&2
               exit 1
-            }
+            fi
             git fetch --no-tags origin \
               refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "refs/tags/${tag_name}^{}" origin/main || {
               echo "live suite tag ${tag_name} is not reachable from origin/main" >&2
               exit 1
             }
-            bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
+            if [[ "$channel" == "stable" ]]; then
+              bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
+            fi
+            checkout_ref="$tag_name"
+          else
+            tag_commit="${GITHUB_SHA}"
+            checkout_ref="${GITHUB_SHA}"
           fi
 
           bash scripts/release-matrix.sh metadata-json "$release" "$version" "$tag_name" "$dry_run" > release-metadata/metadata.json
@@ -85,7 +131,11 @@ jobs:
           echo "release=${release}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+          echo "stable_version=${stable_version}" >> "$GITHUB_OUTPUT"
           echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          echo "commit_sha=${tag_commit}" >> "$GITHUB_OUTPUT"
           echo "bundle_name=${bundle_name}" >> "$GITHUB_OUTPUT"
           echo "deploy_mode=${deploy_mode}" >> "$GITHUB_OUTPUT"
           echo "artifact_patterns=${artifact_patterns}" >> "$GITHUB_OUTPUT"
@@ -104,12 +154,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: ./.github/actions/setup-rust-workspace
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           components: clippy,rustfmt
           toolchain: 1.98.0
       - name: Enable exact ownership-test namespaces
-        uses: ./.github/actions/setup-exact-ownership-tests
+        uses: ./workflow-authority/.github/actions/setup-exact-ownership-tests
       - name: Check formatting
         run: cargo fmt --check
       - name: Run clippy
@@ -130,6 +192,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
@@ -149,21 +212,16 @@ jobs:
         run: >-
           bash scripts/ci-install-ubuntu-packages.sh
           libssl-dev liblzma-dev libseccomp-dev pkg-config cmake
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -240,22 +298,18 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -299,22 +353,18 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -353,22 +403,18 @@ jobs:
           runuser -u builder -- rustup default 1.98.0
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -393,6 +439,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 1
+          persist-credentials: false
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -400,6 +450,7 @@ jobs:
       - name: Collect artifacts and checksums
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
         run: |
           set -euo pipefail
@@ -409,6 +460,18 @@ jobs:
             \( -name '*.ccs' -o -name '*.rpm' -o -name '*.deb' -o -name '*.pkg.tar.zst' \) \
             -exec cp {} release-packages/ \;
           cp release-artifacts/release-metadata/metadata.json release-packages/metadata.json
+
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            rpm_version="$(bash scripts/release-matrix.sh render-version "$VERSION" rpm)"
+            deb_version="$(bash scripts/release-matrix.sh render-version "$VERSION" deb)"
+            arch_version="$(bash scripts/release-matrix.sh render-version "$VERSION" arch)"
+            mv "release-packages/conary-${rpm_version}-1.fc44.x86_64.rpm" \
+              "release-packages/conary-${VERSION}-1.fc44.x86_64.rpm"
+            mv "release-packages/conary_${deb_version}-1_amd64.deb" \
+              "release-packages/conary_${VERSION}-1_amd64.deb"
+            mv "release-packages/conary-${arch_version}-1-x86_64.pkg.tar.zst" \
+              "release-packages/conary-${VERSION}-1-x86_64.pkg.tar.zst"
+          fi
 
           require_exact_asset() {
             local label="$1"
@@ -508,25 +571,30 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust-workspace
+          persist-credentials: false
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           toolchain: 1.98.0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -571,25 +639,30 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust-workspace
+          persist-credentials: false
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           toolchain: 1.98.0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -634,25 +707,30 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
           fetch-depth: 0
-      - uses: ./.github/actions/setup-rust-workspace
+          persist-credentials: false
+      - name: Check out workflow authority for local actions
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          sparse-checkout: .github/actions
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: ./workflow-authority/.github/actions/setup-rust-workspace
         with:
           toolchain: 1.98.0
-      - name: Prepare dry-run release tree
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+      - name: Prepare release tree
+        if: ${{ needs.prepare.outputs.dry_run == 'true' || needs.prepare.outputs.channel == 'nightly' }}
         shell: bash
         env:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          dry_run: ${{ needs.prepare.outputs.dry_run }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
-          if [[ "$dry_run" != "true" ]]; then
-            echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
-            exit 1
-          fi
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
@@ -706,6 +784,10 @@ jobs:
             image: docker.io/library/archlinux@sha256:fe6972d4dc1f660c0c10f4c41b2de8986bab89e7e2955378f8beadb8ebcd7433
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 1
+          persist-credentials: false
       - name: Download the complete Conary release bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -788,6 +870,19 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.prepare.outputs.checkout_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-authority
+          persist-credentials: false
+          sparse-checkout: |
+            scripts/nightly-release.py
+            scripts/release-matrix.sh
+          sparse-checkout-cone-mode: false
       - name: Download every product bundle
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -795,6 +890,8 @@ jobs:
       - name: Assemble and verify the synchronized suite
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          STABLE_VERSION: ${{ needs.prepare.outputs.stable_version }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
@@ -834,11 +931,15 @@ jobs:
 
           jq -e \
             --arg version "$VERSION" \
+            --arg stable_version "$STABLE_VERSION" \
+            --arg channel "$CHANNEL" \
             --arg tag "v${VERSION}" \
             '.schema_version == 1 and
              (.dry_run | type) == "boolean" and
              .release == "suite" and
              .version == $version and
+             .stable_version == $stable_version and
+             .channel == $channel and
              .tag_name == $tag and
              .bundle_name == "suite-bundle" and
              .deploy_mode == "suite" and
@@ -891,7 +992,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          EXPECTED_COMMIT: ${{ github.sha }}
+          CHANNEL: ${{ needs.prepare.outputs.channel }}
+          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -920,20 +1022,47 @@ jobs:
               exit 1
             fi
           else
+            release_flags=()
+            if [[ "$CHANNEL" == "nightly" ]]; then
+              release_flags+=(--prerelease)
+            else
+              release_flags+=(--generate-notes)
+            fi
             gh release create "$TAG_NAME" \
               --draft \
-              --generate-notes \
+              "${release_flags[@]}" \
               --title "Conary ${TAG_NAME} synchronized suite" \
               --verify-tag
           fi
 
           generated_notes="$(mktemp)"
           release_notes="$(mktemp)"
-          gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$TAG_NAME" \
-            --jq '.body' > "$generated_notes"
-          {
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            boundary="$(python3 workflow-authority/scripts/nightly-release.py notes-boundary --tag "$TAG_NAME")"
+            previous_tag="$(jq -er '.previous_tag_name' <<< "$boundary")"
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG_NAME" \
+              -f previous_tag_name="$previous_tag" \
+              --jq '.body' > "$generated_notes"
+            notes_heading="Merged pull requests since ${previous_tag}"
+            {
+              cat <<EOF
+          ## Conary ${TAG_NAME} nightly pre-release
+
+          This automated snapshot is not a production candidate.
+
+          ## ${notes_heading}
+
+          EOF
+              cat "$generated_notes"
+            } > "$release_notes"
+          else
+            gh api --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG_NAME" \
+              --jq '.body' > "$generated_notes"
+            {
             cat <<EOF
           ## Conary ${TAG_NAME} synchronized pre-alpha suite
 
@@ -988,7 +1117,8 @@ jobs:
 
           EOF
             cat "$generated_notes"
-          } > "$release_notes"
+            } > "$release_notes"
+          fi
           gh release edit "$TAG_NAME" --notes-file "$release_notes"
           rm -f -- "$generated_notes" "$release_notes"
 
@@ -1016,6 +1146,9 @@ jobs:
           rm -f -- "$remote_assets" "$local_names" "$remote_names"
 
           verify_release_tag "before publication"
+          if [[ "$CHANNEL" == "nightly" ]]; then
+            gh release edit "$TAG_NAME" --prerelease
+          fi
           gh release edit "$TAG_NAME" --draft=false
 
           release_state="$(
@@ -1026,8 +1159,17 @@ jobs:
           )"
           jq -e \
             --arg tag "$TAG_NAME" \
-            '.tag_name == $tag and .draft == false and .immutable == true' \
+            --argjson prerelease "$([[ "$CHANNEL" == "nightly" ]] && printf true || printf false)" \
+            '.tag_name == $tag and .draft == false and .immutable == true and .prerelease == $prerelease' \
             <<< "$release_state" >/dev/null || {
             echo "published release ${TAG_NAME} is not exact and immutable" >&2
             exit 1
           }
+
+  prove-nightly-release:
+    name: prove-nightly-release
+    if: ${{ needs.prepare.outputs.channel == 'nightly' && needs.prepare.outputs.dry_run == 'false' }}
+    needs: [prepare, bundle-suite]
+    uses: ./.github/workflows/release-artifact-proof.yml
+    with:
+      tag_name: ${{ needs.prepare.outputs.tag_name }}

@@ -1,7 +1,7 @@
 ---
-last_updated: 2026-08-28
-revision: 29
-summary: Record immutable v0.16.1 historical evidence, build-once exact-main Remi candidates with bulk compiler reuse and attributable timings, and the unassigned external tester authority
+last_updated: 2026-09-05
+revision: 36
+summary: Recover the existing UTC-date nightly before selecting a newer green commit
 ---
 
 # Release Artifact Matrix
@@ -17,6 +17,56 @@ QEMU/KVM evidence may support a preview row only when it names the absolute run
 date, distro, suite, and pass counts.
 
 ## Current Release Suite
+
+Nightly selection first discovers any valid typed nightly tag for today's UTC
+date, regardless of its stable base. That existing annotated tag selects its
+peeled commit before any green-run API lookup; the summary records
+`selected_by_existing_date_tag`, the tag, date, and commit. It resumes through
+`tag_without_release`, `draft_release`, `published_without_proof`, or `proved`
+even when a newer commit has turned green. Malformed lookalikes remain ignored
+non-authority. Multiple valid tags for the date fail as `ambiguous_nightly_date`.
+Only an absent date tag permits green-commit selection and the new-tag preflight
+below. Existing-tag recovery does not require an older commit to contain a newer
+running workflow revision. Selection pins the UTC date for the whole run, so a
+midnight rollover during preflight cannot change its intended tag date.
+
+Before creating a nightly tag, `nightly-release.py preflight` verifies the
+selected checkout matches the green commit and contains the running workflow's
+`github.sha` as an ancestor. The selected tree's own `release.sh suite --dry-run`
+must produce the stable base; its matrix must validate the full nightly version
+and render every target, and its `release.sh suite --dry-run --target <nightly>`
+must accept that target. These checks do not prepare or rewrite the tree.
+A commit older than the running workflow or lacking these capabilities reports
+`state: unsupported_commit`, `outcome: skipped`, the selected commit, and the
+failed capability in the step summary. The selection step exits successfully
+before recovery, build, or any tag-creation API call. Git operational failures
+and a mismatched checkout remain typed failures rather than unsupported content.
+
+The signed bootstrap installer reads Debian versions from the verified local
+package and the installed dpkg database. Only when `dpkg --compare-versions`
+reports the requested version as older does the exact local `apt-get install -y`
+transaction add `--allow-downgrades`; absent, equal, and newer requests do not.
+Fedora keeps `dnf install -y <exact-local-rpm>`: DNF5 already installs the exact
+requested version regardless of the installed version, including downgrades.
+Neither `dnf downgrade` nor `--allowerasing` is necessary; the latter permits
+dependency removals, and `--allow-downgrade` controls dependencies, not the exact
+target. This follows the pinned [DNF5 5.2.17.0 install documentation](https://github.com/rpm-software-management/dnf5/blob/043c5d1152a5adb2eaf3031620e49a659a0040ee/doc/commands/install.8.rst).
+Arch retains `pacman -U --noconfirm -- <exact-local-package>`, which already
+permits native downgrades. Full signed suite identity remains mandatory for
+both the installed-version short-circuit and post-install health check.
+
+During historical nightly tag discovery, tags rejected by the matrix grammar
+are non-authority: `ignored_malformed_tag` and the tag name are recorded in the
+step summary and on stderr. They cannot be selected, deleted by retention, or
+block valid nightly creation/recovery. Explicit requested tags remain strictly
+validated. Resolution stdout remains one typed JSON result for workflow callers.
+Release notes use the same validation through `nightly-release.py notes-boundary`.
+Excluding the current tag, the newest valid nightly by creator timestamp wins;
+ties use the numeric stable version and nightly date, independent of listing
+order. If none is valid, the latest validated stable tag by the same ordering
+is the boundary. The step summary records `previous_tag_name`, `boundary_channel`,
+and `fallback_to_stable`; no valid boundary fails as `notes_boundary_missing`
+instead of delegating selection to GitHub's implicit boundary heuristics.
 
 Issue [#428](https://github.com/FieldmouseWorks/Conary/issues/428) established the
 current hard-cut topology: all eight Cargo packages inherit one root workspace
@@ -63,6 +113,109 @@ and released-artifact proof both completed the clean three-host bootstrap path.
 Workspace version `0.16.1` and the published release are synchronized.
 Protected tag `v0.16.0` remains reserved evidence for a failed
 version-validation run and has no GitHub release; it was not moved or reused.
+
+## Nightly Pre-Release Channel
+
+The typed `stable` channel uses `MAJOR.MINOR.PATCH`. The typed `nightly`
+channel uses `MAJOR.MINOR.PATCH-nightly.YYYYMMDD`, and the suffix must name a
+real UTC calendar date. At `30 6 * * *`, or on manual dispatch,
+`.github/workflows/nightly-release.yml` selects the newest `main` commit whose
+`merge-validation` run concluded successfully. It computes the next stable
+base from `scripts/release.sh suite --dry-run`, creates one annotated
+`v<version>` tag through the GitHub REST API, and calls the shared release
+build with `channel: nightly`.
+
+Nightly package construction first runs `scripts/release.sh suite
+--prepare-only --target <full-nightly-version>` in the runner checkout. The five
+authority files receive the ecosystem renderings of that full version; a nightly
+never rewrites or commits them on `main`. `assert-owned-version` checks each
+file against its rendered value and is read-only. Release metadata records both
+the full nightly version and its stable base; the base is informational, never
+package or binary identity. The published GitHub release is
+marked as a prerelease, its notes list merged pull-request titles since the
+previous nightly tag, and `release-artifact-proof` runs against the published
+tag. Tags created with `GITHUB_TOKEN` intentionally do not trigger the
+tag-push release workflow a second time.
+
+`scripts/release-matrix.sh render-version <version> <target>` is the single
+typed rendering owner. It returns a raw version value, without field labels or
+the tag's `v` prefix. Stable `0.17.0` renders as `0.17.0` on every target.
+The pinned upstream rules and expected ordering for this nightly are:
+
+| Target | Rendering of `0.17.0-nightly.20260905` | Ordering against `0.17.0` and pinned authority |
+| --- | --- | --- |
+| `cargo` | `0.17.0-nightly.20260905` | Lower: [SemVer 2.0.0 sections 9 and 11](https://semver.org/spec/v2.0.0.html#spec-item-9) |
+| `rpm` | `0.17.0~nightly.20260905` | Lower: tilde prerelease operator, [RPM 6.0.2 rpm-version(7), 2026-08-20](https://rpm.org/docs/6.0.x/man/rpm-version.7) |
+| `deb` | `0.17.0~nightly.20260905` | Lower: tilde precedes even an empty part, [Debian Policy 4.7.4.1 section 5.6.12](https://www.debian.org/doc/debian-policy/ch-controlfields.html#version) |
+| `arch` | `0.17.0nightly20260905` | Lower: alphabetic suffix directly after the numeric segment, [pacman 7.1.0 vercmp(8), 2026-05-06](https://man.archlinux.org/man/core/pacman/vercmp.8.en) |
+| `ccs` | `0.17.0-nightly.20260905` | Lower: Conary version scheme uses SemVer 2.0.0 |
+| `tag` | `0.17.0-nightly.20260905` | Canonical tag is `v0.17.0-nightly.20260905`; no package ordering |
+
+RPM writes `Version: 0.17.0~nightly.20260905`; Arch writes
+`pkgver=0.17.0nightly20260905`. The Arch rendering uses neither a hyphen nor
+a tilde; see [pacman 7.1.0 PKGBUILD(5), pkgver](https://man.archlinux.org/man/core/pacman/PKGBUILD.5.en).
+The ordering table pins the expected RPM/pacman behavior when their comparison
+tools are absent from the runner. Tests assert every rendering exactly and run
+`dpkg --compare-versions '0.17.0~nightly.20260905' lt '0.17.0'` with the real
+Debian comparator; they also use `vercmp` when installed. No local comparator
+substitutes for an ecosystem's ordering implementation.
+
+Immutable source pins for those native manuals are
+[RPM 6.0.2, `a7f89afb`](https://github.com/rpm-software-management/rpm/blob/a7f89afb57a98f6419d0eff35ca792198293b682/docs/man/rpm-version.7.scd),
+[Debian Policy 4.7.4.1, `f2b46743`](https://salsa.debian.org/dbnpolicy/policy/-/blob/f2b46743e3fb22fb3f461c28ffff4c2788a75bed/policy/ch-controlfields.rst),
+and pacman 7.1.0, `5683f847`:
+[vercmp(8)](https://gitlab.archlinux.org/pacman/pacman/-/blob/5683f8477a0afcc6b331766175a83445b2dcfe89/doc/vercmp.8.asciidoc)
+and [PKGBUILD(5)](https://gitlab.archlinux.org/pacman/pacman/-/blob/5683f8477a0afcc6b331766175a83445b2dcfe89/doc/PKGBUILD.5.asciidoc).
+
+CCS manifest validation delegates to `repository::versioning::validate_repo_version`
+with `VersionScheme::Conary`, which parses `semver::Version`.
+`self_update::versioning` likewise parses and compares full SemVer values.
+Both already accept prereleases and order them below the matching stable
+release. No CCS grammar, persisted schema, compatibility adapter, or rebuild
+requirement changes in this correction.
+
+Native source archives and build outputs use their rendered package version.
+Release-page basenames use the full suite version (`conary-0.17.0-nightly.20260905...`),
+so bundling normalizes the three native filenames without changing package
+metadata. Cargo and CCS retain the full SemVer version throughout. All four
+binaries report the full suite version; the preview installer's health check
+and `release-artifact-proof` require that exact identity, including the date.
+
+The nightly workflow uses `scripts/nightly-release.py` to resolve the selected
+commit's state. Tag existence alone is never completion. The step summary
+records schema-versioned JSON with `state`, `outcome`, tag, commit, and release ID.
+
+| State | Outcome | Action |
+| --- | --- | --- |
+| `no_tag` | `build` | Create the annotated tag, build, publish, then prove |
+| `tag_without_release` | `build` | Reuse the existing tag, build, publish, then prove |
+| `draft_release` | `build` | Resume the draft publication and run proof |
+| `published_without_proof` | `proof` | Run `release-artifact-proof` only; never replace published assets |
+| `proved` | `skipped` | No build or proof work needed |
+
+The aggregate `release-artifact-proof` job emits a versioned Actions receipt
+only after all native lifecycle jobs succeed. Its artifact name binds the
+immutable release ID, peeled commit, and run attempt. Recovery accepts it only
+from the nightly or artifact-proof workflow on reviewed `main`, with a successful
+terminal proof job in that exact attempt and receipt timestamps within that job.
+An absent, expired, failed, stale, or differently bound receipt causes proof to
+run again. This receipt represents the existing native artifact-proof scope,
+not additional real-mount or production proof. Reusable release invocations
+are detected from typed nightly channel/tag inputs, never the caller event name.
+
+All releases, including nightly prereleases, remain immutable. Retention deletes
+whole published nightly prerelease records older than 14 days, including their
+assets; it never deletes individual assets or protected tags. GitHub explicitly
+permits [deleting a whole immutable release](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases#what-immutable-releases-protect).
+Immutability is repository-wide and has no per-release opt-out. A rejected
+DELETE fails with typed `retention_delete_failed`, `release_id`, and `api_status`
+(the HTTP status, or `transport_error` when no HTTP response was received).
+Successful deletion records `release_deleted` and status 204. Drafts, stable
+releases, and releases exactly at the 14-day boundary are retained.
+
+A nightly is automated validation
+evidence and is not a production candidate: it does not deploy Conary, Remi,
+conaryd, or conary-test, and it does not become external-tester authority.
 
 Between suite releases, `.github/workflows/build-remi-candidate.yml` constructs
 one exact release-profile Remi artifact for every protected `main` commit. Its

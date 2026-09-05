@@ -81,6 +81,7 @@ jobs:
           release="$(sed -n 's/^release=//p' <<< "$resolved")"
           resolved_tag="$(sed -n 's/^tag_name=//p' <<< "$resolved")"
           resolved_version="$(sed -n 's/^version=//p' <<< "$resolved")"
+          resolved_channel="$(sed -n 's/^channel=//p' <<< "$resolved")"
           [[ "$release" == "suite" && "$resolved_tag" == "$RELEASE_TAG" ]] || {
             echo "tag does not resolve to the canonical Conary suite release" >&2
             exit 1
@@ -143,6 +144,15 @@ jobs:
             echo "release metadata is not a live publication" >&2
             exit 1
           }
+          if [[ "$resolved_channel" == "nightly" ]]; then
+            (
+              cd "$tag_tree"
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              CONARY_RELEASE_LOCKFILE_MODE=online \
+                ./scripts/release.sh suite --prepare-only --target "$resolved_version"
+            )
+          fi
           bash "$tag_tree/scripts/release-matrix.sh" assert-owned-version suite "$version"
 
           case "$NATIVE_FORMAT" in
@@ -285,3 +295,24 @@ jobs:
             exit 1
           fi
           echo "published native package lifecycle matrix result: $MATRIX_RESULT"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Bind the successful nightly proof to its immutable release
+        id: receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag_name }}
+        run: >-
+          python3 scripts/nightly-release.py receipt
+          --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/nightly-proof.json"
+      - name: Retain the typed nightly proof receipt
+        if: ${{ steps.receipt.outputs.name != '' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ steps.receipt.outputs.name }}
+          path: ${{ runner.temp }}/nightly-proof.json
+          if-no-files-found: error
+          retention-days: 30

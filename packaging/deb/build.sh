@@ -15,6 +15,7 @@ OUTPUT="$SCRIPT_DIR/output"
 
 VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
 bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
+NATIVE_VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" render-version "$VERSION" deb)"
 NAME="conary"
 
 USE_PODMAN=false
@@ -94,7 +95,7 @@ else
     cp "$TMPDIR"/*.deb "$OUTPUT/"
 fi
 
-EXPECTED_DEB="$OUTPUT/${NAME}_${VERSION}-1_amd64.deb"
+EXPECTED_DEB="$OUTPUT/${NAME}_${NATIVE_VERSION}-1_amd64.deb"
 if [[ ! -s "$EXPECTED_DEB" || -L "$EXPECTED_DEB" ]]; then
     echo "Expected DEB not found: $EXPECTED_DEB" >&2
     exit 1

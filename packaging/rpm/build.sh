@@ -16,8 +16,9 @@ OUTPUT="$SCRIPT_DIR/output"
 
 VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
 bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
+NATIVE_VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" render-version "$VERSION" rpm)"
 NAME="conary"
-TARNAME="$NAME-$VERSION"
+TARNAME="$NAME-$NATIVE_VERSION"
 
 USE_PODMAN=false
 for arg in "$@"; do
@@ -125,7 +126,7 @@ fi
 
 shopt -s nullglob
 rpm_outputs=("$OUTPUT"/*.rpm)
-versioned_rpm_outputs=("$OUTPUT/$NAME-$VERSION-"*.x86_64.rpm)
+versioned_rpm_outputs=("$OUTPUT/$NAME-$NATIVE_VERSION-"*.x86_64.rpm)
 if [[ ${#rpm_outputs[@]} -ne 1 ||
       ${#versioned_rpm_outputs[@]} -ne 1 ||
       "${rpm_outputs[0]:-}" != "${versioned_rpm_outputs[0]:-}" ||

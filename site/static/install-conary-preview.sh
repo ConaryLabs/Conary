@@ -18,6 +18,18 @@ die() {
     exit 1
 }
 
+is_suite_version() {
+    local value="$1"
+    local nightly_date rendered
+
+    [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] && return 0
+    [[ "$value" =~ ^[0-9]+\.[0-9]+\.[0-9]+-nightly\.([0-9]{8})$ ]] || return 1
+    nightly_date="${BASH_REMATCH[1]}"
+    rendered="$(date -u -d "${nightly_date:0:4}-${nightly_date:4:2}-${nightly_date:6:2}" +%Y%m%d 2>/dev/null)" ||
+        return 1
+    [[ "$rendered" == "$nightly_date" ]]
+}
+
 if [[ -n "${CONARY_BOOTSTRAP_PUBLIC_KEY_DER_BASE64:-}" ]]; then
     [[ "${CONARY_BOOTSTRAP_TESTING:-}" == 1 ]] ||
         die "release-key override is available only to the test harness"
@@ -256,7 +268,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
 done < "$manifest_path"
 
 [[ "$schema" == conary-bootstrap-v1 ]] || die "unsupported bootstrap manifest schema"
-[[ "$suite_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid suite version authority"
+is_suite_version "$suite_version" || die "invalid suite version authority"
 [[ "$tag_name" == "v${suite_version}" ]] || die "tag and suite version authority disagree"
 [[ "$artifact_count" -eq 3 ]] || die "manifest must declare exactly three artifacts"
 [[ "$fedora_count" -eq 1 && "$ubuntu_count" -eq 1 && "$arch_count" -eq 1 ]] ||
@@ -283,8 +295,30 @@ actual_digest="$(sha256sum "$artifact_path" | awk '{print $1}')"
 [[ "$actual_digest" == "$selected_digest" ]] || die "artifact SHA-256 verification failed"
 
 case "$selected_format" in
+    # DNF5 exact local install already upgrades/downgrades the target (see release matrix).
     rpm) install_command=(sudo dnf install -y "$artifact_path") ;;
-    deb) install_command=(sudo apt-get install -y -- "$artifact_path") ;;
+    deb)
+        # Read native versions from verified bytes and the native installed database.
+        requested_native="$(dpkg-deb --field "$artifact_path" Version)" || die "cannot read Debian package version"
+        dpkg --validate-version "$requested_native" || die "invalid Debian package version"
+        downgrade_options=()
+        if installed_native="$(dpkg-query --show --showformat='${db:Status-Status}\t${Version}' conary 2>/dev/null)"; then
+            if [[ "$installed_native" == installed$'\t'* ]]; then
+                installed_native="${installed_native#*$'\t'}"
+                dpkg --validate-version "$installed_native" || die "invalid installed Debian version"
+                if dpkg --compare-versions "$requested_native" lt "$installed_native"; then
+                    downgrade_options=(--allow-downgrades)
+                else
+                    comparison_status=$?
+                    [[ "$comparison_status" -eq 1 ]] || die "Debian version comparison failed"
+                fi
+            fi
+        else
+            query_status=$?
+            [[ "$query_status" -eq 1 ]] || die "cannot query installed Debian package"
+        fi
+        install_command=(sudo apt-get install -y "${downgrade_options[@]}" -- "$artifact_path")
+        ;;
     arch) install_command=(sudo pacman -U --noconfirm -- "$artifact_path") ;;
     *) die "internal unsupported package format" ;;
 esac
@@ -306,6 +340,7 @@ if [[ "$apply" != true ]]; then
     exit 0
 fi
 
+# Both checks bind the full signed suite version, including the nightly date.
 if command -v conary >/dev/null 2>&1 && [[ "$(conary --version 2>/dev/null || true)" == "conary ${suite_version}" ]]; then
     printf 'Exact Conary release is already installed; skipping the package transaction.\n'
 else

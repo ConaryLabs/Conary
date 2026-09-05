@@ -118,7 +118,7 @@ set -euo pipefail
 printf '%q ' "$@" >> "$MOCK_INSTALL_LOG"
 printf '\n' >> "$MOCK_INSTALL_LOG"
 [[ "${MOCK_INSTALL_FAIL:-0}" != 1 ]] || exit 42
-: > "$MOCK_INSTALLED_STATE"
+printf '%s\n' "${MOCK_POST_INSTALL_VERSION:-$MOCK_VERSION}" > "$MOCK_INSTALLED_STATE"
 EOF
 
 cat > "${mock_bin}/conary" <<'EOF'
@@ -126,7 +126,7 @@ cat > "${mock_bin}/conary" <<'EOF'
 set -euo pipefail
 [[ -f "$MOCK_INSTALLED_STATE" ]] || exit 1
 case "${1:-}" in
-    --version) printf 'conary %s\n' "$MOCK_VERSION" ;;
+    --version) printf 'conary %s\n' "$(cat "$MOCK_INSTALLED_STATE")" ;;
     repo)
         [[ "${2:-}" == list ]]
         [[ "${MOCK_HEALTH_FAIL:-0}" != 1 ]]
@@ -136,6 +136,21 @@ case "${1:-}" in
 esac
 EOF
 chmod +x "${mock_bin}/curl" "${mock_bin}/uname" "${mock_bin}/sudo" "${mock_bin}/conary"
+
+# Mock only package metadata I/O; ordering uses the host's real dpkg comparator.
+cat > "${mock_bin}/dpkg-deb" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == --field && -f "$2" && "$3" == Version && $# == 3 ]] || exit 2
+printf '%s\n' "$MOCK_DEB_VERSION"
+EOF
+cat > "${mock_bin}/dpkg-query" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == --show && "$2" == '--showformat=${db:Status-Status}\t${Version}' && "$3" == conary && $# == 3 ]] || exit 2
+[[ "${MOCK_QUERY_STATUS:-0}" == 0 ]] || exit "$MOCK_QUERY_STATUS"
+[[ -n "$MOCK_DEB_INSTALLED" ]] || exit 1
+printf '%s\t%s' "${MOCK_DEB_STATUS:-installed}" "$MOCK_DEB_INSTALLED"
+EOF
+chmod +x "${mock_bin}/dpkg-deb" "${mock_bin}/dpkg-query"
 
 fedora_os="${TEST_ROOT}/fedora-os-release"
 ubuntu_os="${TEST_ROOT}/ubuntu-os-release"
@@ -162,6 +177,11 @@ run_installer() {
             MOCK_INSTALL_LOG="$install_log" \
             MOCK_INSTALLED_STATE="$installed_state" \
             MOCK_VERSION="$version" \
+            MOCK_DEB_VERSION="${MOCK_DEB_VERSION:-9.8.7-1}" \
+            MOCK_DEB_INSTALLED="${MOCK_DEB_INSTALLED:-}" \
+            MOCK_DEB_STATUS="${MOCK_DEB_STATUS:-installed}" \
+            MOCK_QUERY_STATUS="${MOCK_QUERY_STATUS:-0}" \
+            MOCK_POST_INSTALL_VERSION="${MOCK_POST_INSTALL_VERSION:-$version}" \
             MOCK_UNAME="${MOCK_UNAME:-x86_64}" \
             MOCK_INSTALL_FAIL="${MOCK_INSTALL_FAIL:-0}" \
             MOCK_HEALTH_FAIL="${MOCK_HEALTH_FAIL:-0}" \
@@ -290,5 +310,83 @@ assert_contains "$output" "package-owned repository health check failed"
 run_installer "$fedora_os" --apply
 [[ "$status" -ne 0 ]] || fail "apply without confirmation unexpectedly passed"
 assert_contains "$output" "requires explicit --apply --yes confirmation"
+
+version=9.8.8-nightly.20260228
+tag="v${version}"
+rpm="conary-${version}-1.fc44.x86_64.rpm"
+deb="conary_${version}-1_amd64.deb"
+arch="conary-${version}-1-x86_64.pkg.tar.zst"
+printf 'nightly rpm release bytes\n' > "${release_files}/${rpm}"
+printf 'nightly deb release bytes\n' > "${release_files}/${deb}"
+printf 'nightly arch release bytes\n' > "${release_files}/${arch}"
+rm -f -- "$manifest" "${manifest}.sig"
+bash "$MANIFEST_BUILDER" "$tag" "$version" "$release_files" "$manifest"
+cp "${release_files}/${rpm}" "${downloads}/${rpm}"
+cp "${release_files}/${deb}" "${downloads}/${deb}"
+cp "${release_files}/${arch}" "${downloads}/${arch}"
+sign_manifest
+rm -f -- "$install_log" "$installed_state"
+run_installer "$fedora_os" --apply --yes
+[[ "$status" -eq 0 ]] || fail "nightly apply failed: $output"
+assert_contains "$output" "Conary ${version} is installed"
+
+for previous in 9.8.8 9.8.8-nightly.20260227; do
+    printf '%s\n' "$previous" > "$installed_state"
+    rm -f -- "$install_log"
+    run_installer "$fedora_os" --apply --yes
+    [[ "$status" -eq 0 && -s "$install_log" ]] || fail "$previous must upgrade to the requested full nightly: $output"
+    [[ "$(cat "$installed_state")" == "$version" ]] || fail "nightly installation lost full version"
+done
+rm -f -- "$install_log"
+run_installer "$fedora_os" --apply --yes
+[[ "$status" -eq 0 && ! -e "$install_log" ]] || fail "same nightly must skip its transaction: $output"
+assert_contains "$output" 'Exact Conary release is already installed'
+
+printf '%s\n' 9.8.8 > "$installed_state"
+MOCK_POST_INSTALL_VERSION=9.8.8 run_installer "$fedora_os" --apply --yes
+[[ "$status" -ne 0 ]] || fail "stable binary must fail nightly post-install health check"
+assert_contains "$output" 'installed Conary version health check failed'
+
+# Exact native transactions: stable installed, signed nightly requested.
+# Normalize only the temporary directory; compare every command argument.
+assert_transaction() {
+    local expected="$1" artifact="$2" actual path
+    actual="$(<"$install_log")"
+    # The logger has a trailing space after the last argument.
+    actual="${actual% }"
+    path="${actual##* }"
+    [[ "${path##*/}" == "$artifact" ]] || fail "wrong transaction artifact: $actual"
+    [[ "$actual" == "$expected $path" ]] || fail "wrong transaction argv: $actual"
+}
+for ecosystem in fedora ubuntu arch; do
+    printf '%s\n' 9.8.8 > "$installed_state"
+    rm -f -- "$install_log"
+    case "$ecosystem" in
+        fedora) host="$fedora_os"; expected='dnf install -y'; artifact="$rpm" ;;
+        ubuntu) host="$ubuntu_os"; expected='apt-get install -y --allow-downgrades --'; artifact="$deb" ;;
+        arch) host="$arch_os"; expected='pacman -U --noconfirm --'; artifact="$arch" ;;
+    esac
+    MOCK_DEB_VERSION=9.8.8~nightly.20260228-1 MOCK_DEB_INSTALLED=9.8.8-1 run_installer "$host" --apply --yes
+    [[ "$status" -eq 0 ]] || fail "$ecosystem stable-to-nightly transaction failed: $output"
+    assert_transaction "$expected" "$artifact"
+done
+
+# Absent, older and equal native packages do not receive downgrade permission.
+for installed in '' 9.8.7-1 9.8.8~nightly.20260227-1 9.8.8~nightly.20260228-1; do
+    printf '%s\n' 9.8.7 > "$installed_state"
+    rm -f -- "$install_log"
+    MOCK_DEB_VERSION=9.8.8~nightly.20260228-1 MOCK_DEB_INSTALLED="$installed" run_installer "$ubuntu_os" --apply --yes
+    [[ "$status" -eq 0 ]] || fail "Debian non-downgrade failed: $output"
+    assert_transaction 'apt-get install -y --' "$deb"
+done
+MOCK_DEB_VERSION=9.8.8~nightly.20260228-1 MOCK_DEB_INSTALLED=9.8.8-1 MOCK_DEB_STATUS=config-files run_installer "$ubuntu_os"
+[[ "$status" -eq 0 && "$output" != *--allow-downgrades* ]] || fail "removed package authorized downgrade"
+rm -f -- "$install_log"
+MOCK_QUERY_STATUS=2 run_installer "$ubuntu_os" --apply --yes
+[[ "$status" -ne 0 && ! -e "$install_log" ]] || fail "query failure allowed mutation"
+assert_contains "$output" 'cannot query installed Debian package'
+MOCK_DEB_VERSION=invalid run_installer "$ubuntu_os" --apply --yes
+[[ "$status" -ne 0 && ! -e "$install_log" ]] || fail "invalid version allowed mutation"
+assert_contains "$output" 'invalid Debian package version'
 
 printf 'release bootstrap installer tests passed\n'
