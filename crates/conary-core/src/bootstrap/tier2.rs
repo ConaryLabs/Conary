@@ -382,18 +382,10 @@ mod tests {
     }
 
     #[test]
-    fn test_tier2_includes_openssh() {
-        assert!(TIER2_ORDER.contains(&"openssh"));
-    }
-
-    #[test]
-    fn test_tier2_includes_conary() {
-        assert!(TIER2_ORDER.contains(&"conary"));
-    }
-
-    #[test]
-    fn test_tier2_includes_rust() {
-        assert!(TIER2_ORDER.contains(&"rust"));
+    fn tier2_order_includes_the_self_hosting_packages() {
+        for package in ["openssh", "conary", "rust"] {
+            assert!(TIER2_ORDER.contains(&package), "{package}");
+        }
     }
 
     #[test]

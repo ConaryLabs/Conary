@@ -3,27 +3,15 @@
 use super::*;
 
 #[test]
-fn test_parse_license_string_simple() {
-    let licenses = parse_license_string("MIT");
-    assert_eq!(licenses, vec!["MIT"]);
-}
-
-#[test]
-fn test_parse_license_string_or() {
-    let licenses = parse_license_string("GPL-2.0 or MIT");
-    assert_eq!(licenses, vec!["GPL-2.0", "MIT"]);
-}
-
-#[test]
-fn test_parse_license_string_and() {
-    let licenses = parse_license_string("GPL-2.0 AND Apache-2.0");
-    assert_eq!(licenses, vec!["GPL-2.0", "Apache-2.0"]);
-}
-
-#[test]
-fn test_parse_license_string_complex() {
-    let licenses = parse_license_string("(GPL-2.0 OR MIT)");
-    assert_eq!(licenses, vec!["GPL-2.0", "MIT"]);
+fn parse_license_string_splits_each_documented_form() {
+    for (input, expected) in [
+        ("MIT", vec!["MIT"]),
+        ("GPL-2.0 or MIT", vec!["GPL-2.0", "MIT"]),
+        ("GPL-2.0 AND Apache-2.0", vec!["GPL-2.0", "Apache-2.0"]),
+        ("(GPL-2.0 OR MIT)", vec!["GPL-2.0", "MIT"]),
+    ] {
+        assert_eq!(parse_license_string(input), expected, "{input:?}");
+    }
 }
 
 #[test]
@@ -100,11 +88,7 @@ fn test_to_provenance() {
     assert!(full_prov.build.host_attestation.is_some());
     assert!(full_prov.build.build_start.is_some());
 }
-
-// =========================================================================
 // Additional Provenance Tests (Task 538)
-// =========================================================================
-
 #[test]
 fn test_parse_license_string_comma_separated() {
     let licenses = parse_license_string("MIT, Apache-2.0, BSD-3-Clause");

@@ -444,40 +444,26 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_gcc_version() {
-        let output = "gcc (GCC) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.";
-        assert_eq!(
-            Toolchain::parse_version_output(output),
-            Some("15.2.0".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_glibc_version() {
-        let output = "ldd (GNU libc) 2.42\nCopyright (C) 2025 Free Software Foundation, Inc.";
-        assert_eq!(
-            Toolchain::parse_version_output(output),
-            Some("2.42".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_binutils_version() {
-        let output = "GNU ld (GNU Binutils) 2.45";
-        assert_eq!(
-            Toolchain::parse_version_output(output),
-            Some("2.45".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_version_empty() {
-        assert_eq!(Toolchain::parse_version_output(""), None);
-    }
-
-    #[test]
-    fn test_parse_version_no_version() {
-        assert_eq!(Toolchain::parse_version_output("no version here"), None);
+    fn parse_version_output_reads_each_tool_banner() {
+        for (output, expected) in [
+            (
+                "gcc (GCC) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.",
+                Some("15.2.0"),
+            ),
+            (
+                "ldd (GNU libc) 2.42\nCopyright (C) 2025 Free Software Foundation, Inc.",
+                Some("2.42"),
+            ),
+            ("GNU ld (GNU Binutils) 2.45", Some("2.45")),
+            ("", None),
+            ("no version here", None),
+        ] {
+            assert_eq!(
+                Toolchain::parse_version_output(output),
+                expected.map(str::to_string),
+                "{output:?}"
+            );
+        }
     }
 
     #[test]
