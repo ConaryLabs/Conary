@@ -60,7 +60,6 @@ impl Trigger {
         Ok(trigger)
     }
 
-    /// Create a new trigger with description
     pub fn with_description(mut self, description: &str) -> Self {
         self.description = Some(description.to_string());
         self

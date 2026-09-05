@@ -66,7 +66,6 @@ impl BuildProvenance {
         self.build_deps.push(dep);
     }
 
-    /// Set host attestation
     pub fn set_host_attestation(&mut self, attestation: HostAttestation) {
         self.host_attestation = Some(attestation);
     }
@@ -267,7 +266,6 @@ pub struct HostAttestation {
 }
 
 impl HostAttestation {
-    /// Create attestation from current system
     pub fn from_current_system() -> Self {
         Self {
             arch: std::env::consts::ARCH.to_string(),

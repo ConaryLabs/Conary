@@ -121,7 +121,6 @@ impl AutomationScheduler {
         self.state.pause_reason = None;
     }
 
-    /// Get current scheduler state
     pub fn state(&self) -> &SchedulerState {
         &self.state
     }
@@ -262,7 +261,6 @@ impl AutomationDaemon {
         tracing::info!("Automation daemon stopping");
     }
 
-    /// Get the scheduler
     pub fn scheduler(&self) -> &AutomationScheduler {
         &self.scheduler
     }

@@ -97,7 +97,6 @@ impl StageConfig {
         self
     }
 
-    /// Set the tool prefix
     pub fn with_tool_prefix(mut self, prefix: String) -> Self {
         self.tool_prefix = Some(prefix);
         self

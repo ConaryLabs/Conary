@@ -92,10 +92,8 @@ pub trait PackageFormat {
     where
         Self: Sized;
 
-    /// Get the package name
     fn name(&self) -> &str;
 
-    /// Get the package version
     fn version(&self) -> &str;
 
     /// Monotonic signed CCS build release, absent for a source-native

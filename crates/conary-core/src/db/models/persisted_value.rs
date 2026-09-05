@@ -60,7 +60,6 @@ impl PersistedValueCorruption {
         self.column
     }
 
-    /// The invalid persisted value.
     pub fn value(&self) -> &str {
         self.source.value()
     }

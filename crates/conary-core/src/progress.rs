@@ -63,10 +63,8 @@ pub trait ProgressTracker: Send + Sync {
     /// Set the total (length) of the progress
     fn set_length(&self, length: u64);
 
-    /// Get current position
     fn position(&self) -> u64;
 
-    /// Get total length
     fn length(&self) -> u64;
 
     /// Finish progress successfully with a message

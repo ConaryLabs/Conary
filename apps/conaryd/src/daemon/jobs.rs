@@ -78,7 +78,6 @@ impl DaemonJob {
         self
     }
 
-    /// Set client info
     pub fn with_client_info(mut self, info: String) -> Self {
         self.client_info = Some(info);
         self

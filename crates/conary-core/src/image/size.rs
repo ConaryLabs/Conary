@@ -54,17 +54,14 @@ impl FromStr for ImageSize {
 }
 
 impl ImageSize {
-    /// Get size in bytes.
     pub fn bytes(&self) -> u64 {
         self.0
     }
 
-    /// Get size in megabytes.
     pub fn megabytes(&self) -> u64 {
         self.0 / (1024 * 1024)
     }
 
-    /// Get size in gigabytes.
     pub fn gigabytes(&self) -> u64 {
         self.0 / (1024 * 1024 * 1024)
     }

@@ -485,7 +485,6 @@ fn process_service_event(event: ServiceEvent) -> Option<MdnsEvent> {
     }
 }
 
-/// Get the local hostname
 fn get_local_hostname() -> Option<String> {
     // Try gethostname
     #[cfg(unix)]

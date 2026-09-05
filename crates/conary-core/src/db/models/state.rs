@@ -91,7 +91,6 @@ impl SystemState {
         Ok(state)
     }
 
-    /// Get the next state number
     pub fn next_state_number(conn: &Connection) -> Result<i64> {
         let max: Option<i64> =
             conn.query_row("SELECT MAX(state_number) FROM system_states", [], |row| {

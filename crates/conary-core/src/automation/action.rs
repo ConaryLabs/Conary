@@ -128,7 +128,6 @@ fn stable_action_id(
     format!("automation-{:016x}", hasher.finish())
 }
 
-/// Creates a security update action
 pub fn security_update_action(
     packages: &[String],
     target_version: &str,
@@ -167,7 +166,6 @@ pub fn security_update_action(
     builder.build()
 }
 
-/// Creates an orphan cleanup action
 pub fn orphan_cleanup_action(
     installed: &[InstalledPackageRef],
     packages: &[String],
@@ -188,7 +186,6 @@ pub fn orphan_cleanup_action(
         .build()
 }
 
-/// Creates a package update action
 pub fn package_update_action(
     package: &str,
     current_version: &str,
@@ -213,7 +210,6 @@ pub fn package_update_action(
     .build()
 }
 
-/// Creates a major upgrade action
 pub fn major_upgrade_action(
     package: &str,
     current_version: &str,
@@ -245,7 +241,6 @@ pub fn major_upgrade_action(
     builder.build()
 }
 
-/// Creates an integrity repair action
 pub fn integrity_repair_action(files: &[String], installed: InstalledPackageRef) -> PendingAction {
     let summary = format!(
         "Repair {} corrupted files in {}",

@@ -251,7 +251,6 @@ impl IdleTracker {
         self.last_activity.elapsed() >= self.timeout
     }
 
-    /// Get time until timeout
     pub fn time_until_timeout(&self) -> Duration {
         let elapsed = self.last_activity.elapsed();
         if elapsed >= self.timeout {
@@ -327,7 +326,6 @@ impl SystemdManager {
         }
     }
 
-    /// Get the watchdog interval
     pub fn watchdog_interval(&self) -> Option<Duration> {
         self.watchdog.as_ref().map(|wd| wd.interval())
     }

@@ -311,7 +311,6 @@ impl RecipeGraph {
         self.bootstrap_edges.clear();
     }
 
-    /// Get all marked bootstrap edges
     pub fn bootstrap_edges(&self) -> &HashSet<(String, String)> {
         &self.bootstrap_edges
     }

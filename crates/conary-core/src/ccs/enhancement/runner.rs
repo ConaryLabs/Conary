@@ -485,7 +485,6 @@ pub struct EnhancementSummary {
 }
 
 impl EnhancementSummary {
-    /// Create a summary from results
     pub fn from_results(results: Vec<EnhancementResult_>) -> Self {
         let succeeded = results.iter().filter(|r| r.is_success()).count();
         let failed = results.len() - succeeded;

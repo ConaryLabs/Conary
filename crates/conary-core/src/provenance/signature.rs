@@ -186,7 +186,6 @@ impl Signature {
         }
     }
 
-    /// Set the algorithm
     pub fn with_algorithm(mut self, algorithm: &str) -> Self {
         self.algorithm = Some(algorithm.to_string());
         self

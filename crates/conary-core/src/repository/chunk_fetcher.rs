@@ -24,7 +24,6 @@ use tracing::{debug, info, warn};
 pub struct ChunkData {
     /// The chunk hash (SHA-256)
     pub hash: String,
-    /// The chunk data
     pub data: Vec<u8>,
     /// Which fetcher retrieved this chunk
     pub source: String,

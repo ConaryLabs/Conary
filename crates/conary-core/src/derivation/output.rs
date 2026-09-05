@@ -52,7 +52,6 @@ pub struct OutputManifest {
 /// A complete package output: the manifest plus its serialized bytes and hash.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageOutput {
-    /// The output manifest.
     pub manifest: OutputManifest,
     /// Serialized (TOML) manifest bytes.
     pub manifest_bytes: Vec<u8>,

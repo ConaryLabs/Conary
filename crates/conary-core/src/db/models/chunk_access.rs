@@ -192,7 +192,6 @@ impl ChunkAccess {
         Ok(results)
     }
 
-    /// Get largest chunks
     pub fn get_largest_chunks(conn: &Connection, limit: usize) -> Result<Vec<Self>> {
         let sql = format!(
             "SELECT {} FROM chunk_access ORDER BY size_bytes DESC LIMIT ?1",
