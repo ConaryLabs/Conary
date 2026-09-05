@@ -1,7 +1,8 @@
 # Conary
 
 [![Merge validation](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Client license: MIT OR Apache-2.0](https://img.shields.io/badge/Client%20license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Remi license: AGPL-3.0-or-later](https://img.shields.io/badge/Remi%20license-AGPL--3.0--or--later-blue.svg)](apps/remi/LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/FieldmouseWorks/Conary?label=release)](https://github.com/FieldmouseWorks/Conary/releases/latest)
 
 **Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)

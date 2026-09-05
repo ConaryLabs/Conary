@@ -206,6 +206,8 @@ if missing:
     sys.exit("missing live release proof: " + ", ".join(missing))
 PY
 require_match scripts/remi-candidate-artifact.sh '-C "\$license_dir" LICENSE' 'candidate bundle AGPL text'
+require_match README.md 'Client%20license-MIT%20OR%20Apache--2\.0' 'README client license badge'
+require_match README.md 'Remi%20license-AGPL--3\.0--or--later' 'README Remi license badge'
 require_match README.md 'LICENSE-MIT' 'README dual-license link'
 require_match README.md 'apps/remi/LICENSE' 'README Remi license link'
 
