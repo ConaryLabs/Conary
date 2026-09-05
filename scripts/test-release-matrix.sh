@@ -796,6 +796,7 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_unredirected_survey_recovery_stderr', 'replace', '.github/workflows/survey-remi-resolution.yml', '>"$recovery_archive" 2>"$recovery_stderr"; then', '>"$recovery_archive"; then', 'resolution survey recovery export confines stderr privately and reports a sanitized failure'),
     ('test_check_release_matrix_rejects_survey_recovery_input_binding', 'replace', '.github/workflows/survey-remi-resolution.yml', '\n                --input-evidence resolution-survey-input-verification.json \\', '\n                # recovery input binding removed', 'resolution survey recovery invocation preserves authenticated input binding'),
     ('test_check_release_matrix_rejects_survey_outcome_document_count', 'replace', 'deploy/remi-deploy-helper.sh', 'clause("outcome.document_count"; length == 1)', 'clause("outcome.document_count"; length >= 0)', 'resolution survey validates named clauses against one outcome document and reports sanitized evidence'),
     ('test_check_release_matrix_rejects_survey_outcome_rust_fixture', 'replace', 'apps/remi/src/server/resolution_survey.rs', 'serde_json::to_string_pretty(&outcome)', 'serde_json::to_string_pretty(&"hard-coded-shape")', 'resolution survey Rust serialization writes fixtures consumed by the exact helper predicate'),

@@ -358,12 +358,15 @@ jobs:
             local workflow_status="$1" recovery_state=fetch_failed
             local observed_status="${helper_status:-$workflow_status}"
             local recovery_archive="$RUNNER_TEMP/resolution-survey-recovery.tar"
+            local recovery_stderr="$RUNNER_TEMP/resolution-survey-recovery.stderr"
+            : >"$recovery_stderr"
+            chmod 0600 "$recovery_stderr"
             # The recovery command is fixed and derives all host paths from the
             # same typed identities. It does not depend on the failed report.
             # shellcheck disable=SC2029
             if ssh "${ssh_opts[@]}" "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy export-resolution-survey-evidence '$SURVEY_ID' '$EXPORT_ID'" \
-              >"$recovery_archive"; then
+              >"$recovery_archive" 2>"$recovery_stderr"; then
               recovery_state=validation_failed
               if python3 scripts/remi-resolution-survey-transport.py verify-recovery \
                 --survey-id "$SURVEY_ID" --export-id "$EXPORT_ID" \
@@ -371,8 +374,10 @@ jobs:
                 --transport "$recovery_archive" --output resolution-survey-recovery; then
                 recovery_state=retrieved
               fi
+            else
+              echo 'resolution survey recovery: fetch_failed (retained evidence export failed)' >&2
             fi
-            rm -f -- "$recovery_archive"
+            rm -f -- "$recovery_archive" "$recovery_stderr"
             jq -cn --argjson status "$observed_status" --argjson workflow_status "$workflow_status" \
               --arg survey_id "$SURVEY_ID" --arg export_id "$EXPORT_ID" \
               --arg recovery "$recovery_state" --rawfile stderr "$helper_stderr" '
