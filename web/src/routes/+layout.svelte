@@ -86,7 +86,7 @@
 				{#each projectLinks as link}
 					<a href={link.href}>{link.label} <span aria-hidden="true">↗</span></a>
 				{/each}
-				<a href="https://github.com/ConaryLabs/Conary">GitHub <span aria-hidden="true">↗</span></a>
+				<a href="https://github.com/FieldmouseWorks/Conary">GitHub <span aria-hidden="true">↗</span></a>
 			</nav>
 		</div>
 		<div class="container footer-bottom">
