@@ -3,6 +3,12 @@
 // CI signing helper: reads an Ed25519 seed from RELEASE_SIGNING_KEY,
 // materializes the matching CCS release authority, or signs a file hash.
 
+#![allow(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "Standalone CI executable: stdout carries signature bytes; stderr carries diagnostics"
+)]
+
 use std::env;
 use std::fs::{self, File};
 use std::io::Read;
