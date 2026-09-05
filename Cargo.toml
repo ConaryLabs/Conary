@@ -18,7 +18,7 @@ version = "0.16.1"
 edition = "2024"
 rust-version = "1.98.0"
 authors = ["Conary Contributors"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 publish = false
 
 [patch.crates-io]

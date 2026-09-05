@@ -612,7 +612,7 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/remi "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64"
+          tar czf "release-packages/remi-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "remi-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE/apps/remi" LICENSE
           cp release-metadata/metadata.json release-packages/metadata.json
       - name: Upload remi bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0

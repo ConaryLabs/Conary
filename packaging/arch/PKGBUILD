@@ -9,7 +9,7 @@ pkgrel=1
 pkgdesc='Early-preview Linux package manager with native-package adoption'
 arch=('x86_64')
 url='https://github.com/FieldmouseWorks/Conary'
-license=('MIT')
+license=('MIT' 'Apache-2.0')
 depends=('openssl' 'xz' 'libseccomp')
 makedepends=('cargo' 'pkg-config' 'cmake' 'perl')
 # Suite releases publish one installable package and no discarded debug split package.
@@ -66,7 +66,8 @@ package() {
     target/release/$pkgname system completions fish > "$pkgdir/usr/share/fish/vendor_completions.d/$pkgname.fish"
 
     # License
-    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+    install -Dm644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 
     # Config and data directories
     install -d "$pkgdir/etc/$pkgname"
