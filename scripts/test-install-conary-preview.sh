@@ -161,7 +161,7 @@ run_installer() {
             FIXTURE_DOWNLOAD_DIR="$downloads" \
             MOCK_INSTALL_LOG="$install_log" \
             MOCK_INSTALLED_STATE="$installed_state" \
-            MOCK_VERSION="${mock_version:-$version}" \
+            MOCK_VERSION="$version" \
             MOCK_UNAME="${MOCK_UNAME:-x86_64}" \
             MOCK_INSTALL_FAIL="${MOCK_INSTALL_FAIL:-0}" \
             MOCK_HEALTH_FAIL="${MOCK_HEALTH_FAIL:-0}" \
@@ -292,7 +292,6 @@ run_installer "$fedora_os" --apply
 assert_contains "$output" "requires explicit --apply --yes confirmation"
 
 version=9.8.8-nightly.20260228
-mock_version=9.8.8
 tag="v${version}"
 rpm="conary-${version}-1.fc44.x86_64.rpm"
 deb="conary_${version}-1_amd64.deb"

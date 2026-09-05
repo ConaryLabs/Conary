@@ -269,7 +269,6 @@ done < "$manifest_path"
 
 [[ "$schema" == conary-bootstrap-v1 ]] || die "unsupported bootstrap manifest schema"
 is_suite_version "$suite_version" || die "invalid suite version authority"
-installed_version="${suite_version%%-nightly.*}"
 [[ "$tag_name" == "v${suite_version}" ]] || die "tag and suite version authority disagree"
 [[ "$artifact_count" -eq 3 ]] || die "manifest must declare exactly three artifacts"
 [[ "$fedora_count" -eq 1 && "$ubuntu_count" -eq 1 && "$arch_count" -eq 1 ]] ||
@@ -319,13 +318,13 @@ if [[ "$apply" != true ]]; then
     exit 0
 fi
 
-if command -v conary >/dev/null 2>&1 && [[ "$(conary --version 2>/dev/null || true)" == "conary ${installed_version}" ]]; then
+if command -v conary >/dev/null 2>&1 && [[ "$(conary --version 2>/dev/null || true)" == "conary ${suite_version}" ]]; then
     printf 'Exact Conary release is already installed; skipping the package transaction.\n'
 else
     "${install_command[@]}" || die "native package transaction failed"
 fi
 
-[[ "$(conary --version 2>/dev/null || true)" == "conary ${installed_version}" ]] ||
+[[ "$(conary --version 2>/dev/null || true)" == "conary ${suite_version}" ]] ||
     die "installed Conary version health check failed"
 conary repo list >/dev/null || die "package-owned repository health check failed"
 printf 'Conary %s is installed and package-owned repository state is inspectable.\n' "$suite_version"

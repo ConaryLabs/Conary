@@ -68,7 +68,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+          # Reusable workflows inherit the caller's event (schedule/dispatch).
+          if [[ "$CALL_CHANNEL" == "nightly" ]]; then
+            tag_name="$CALL_TAG_NAME"
+            dry_run="false"
+            requested_channel="$CALL_CHANNEL"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             tag_name="$DISPATCH_TAG_NAME"
             dry_run="${DISPATCH_DRY_RUN:-true}"
             requested_channel="${DISPATCH_CHANNEL:-stable}"
@@ -82,7 +87,7 @@ jobs:
             requested_channel="stable"
           fi
 
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && ("$dry_run" != "true" || "$requested_channel" != "stable") ]]; then
+          if [[ "$CALL_CHANNEL" != "nightly" && "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && ("$dry_run" != "true" || "$requested_channel" != "stable") ]]; then
             echo "workflow_dispatch is dry-run only; push the canonical tag for live releases" >&2
             exit 1
           fi
@@ -218,21 +223,19 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build CCS package
         env:
           RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
           VERSION: ${{ needs.prepare.outputs.version }}
-          STABLE_VERSION: ${{ needs.prepare.outputs.stable_version }}
           DRY_RUN: ${{ needs.prepare.outputs.dry_run }}
           DRY_RUN_SIGNING_KEY: 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
         run: |
@@ -256,10 +259,10 @@ jobs:
           trap 'rm -rf -- "$authority_dir"' EXIT
           target/release/examples/sign_hash --write-ccs-authority "$authority_dir"
           bash packaging/ccs/build.sh \
-            --version "$STABLE_VERSION" \
+            --version "$VERSION" \
             --key "$authority_dir/release.private"
           target/release/conary ccs verify \
-            "packaging/ccs/output/conary-${STABLE_VERSION}.ccs" \
+            "packaging/ccs/output/conary-${VERSION}.ccs" \
             --policy "$authority_dir/trust-policy.toml"
       - name: Upload CCS artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -308,14 +311,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build RPM
@@ -364,14 +366,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build DEB
@@ -415,14 +416,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Fix ownership for makepkg
@@ -454,7 +454,6 @@ jobs:
       - name: Collect artifacts and checksums
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
-          STABLE_VERSION: ${{ needs.prepare.outputs.stable_version }}
           CHANNEL: ${{ needs.prepare.outputs.channel }}
           TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
         run: |
@@ -467,13 +466,14 @@ jobs:
           cp release-artifacts/release-metadata/metadata.json release-packages/metadata.json
 
           if [[ "$CHANNEL" == "nightly" ]]; then
-            mv "release-packages/conary-${STABLE_VERSION}.ccs" \
-              "release-packages/conary-${VERSION}.ccs"
-            mv "release-packages/conary-${STABLE_VERSION}-1.fc44.x86_64.rpm" \
+            rpm_version="$(bash scripts/release-matrix.sh render-version "$VERSION" rpm)"
+            deb_version="$(bash scripts/release-matrix.sh render-version "$VERSION" deb)"
+            arch_version="$(bash scripts/release-matrix.sh render-version "$VERSION" arch)"
+            mv "release-packages/conary-${rpm_version}-1.fc44.x86_64.rpm" \
               "release-packages/conary-${VERSION}-1.fc44.x86_64.rpm"
-            mv "release-packages/conary_${STABLE_VERSION}-1_amd64.deb" \
+            mv "release-packages/conary_${deb_version}-1_amd64.deb" \
               "release-packages/conary_${VERSION}-1_amd64.deb"
-            mv "release-packages/conary-${STABLE_VERSION}-1-x86_64.pkg.tar.zst" \
+            mv "release-packages/conary-${arch_version}-1-x86_64.pkg.tar.zst" \
               "release-packages/conary-${VERSION}-1-x86_64.pkg.tar.zst"
           fi
 
@@ -596,14 +596,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build remi release binary
@@ -665,14 +664,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build conaryd release binary
@@ -734,14 +732,13 @@ jobs:
           release: ${{ needs.prepare.outputs.release }}
           tag_name: ${{ needs.prepare.outputs.tag_name }}
           version: ${{ needs.prepare.outputs.version }}
-          stable_version: ${{ needs.prepare.outputs.stable_version }}
           CONARY_RELEASE_LOCKFILE_MODE: online
         run: |
           set -euo pipefail
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --global --add safe.directory "$(pwd)"
-          ./scripts/release.sh "$release" --prepare-only --target "$stable_version"
+          ./scripts/release.sh "$release" --prepare-only --target "$version"
           [[ "$tag_name" == "v${version}" ]]
           bash scripts/release-matrix.sh assert-owned-version "$release" "$version"
       - name: Build conary-test release binary
@@ -958,7 +955,7 @@ jobs:
               "$extracted/${product}-${VERSION}-linux-x64"
             chmod +x "suite-packages/${product}-${VERSION}-linux-x64"
             version_output="$("suite-packages/${product}-${VERSION}-linux-x64" --version)"
-            [[ "$version_output" == "${product} ${STABLE_VERSION}" ]] || {
+            [[ "$version_output" == "${product} ${VERSION}" ]] || {
               echo "unexpected ${product} version output: ${version_output}" >&2
               exit 1
             }

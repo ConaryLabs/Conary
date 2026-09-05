@@ -15,8 +15,9 @@ OUTPUT="$SCRIPT_DIR/output"
 
 VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" workspace-version)"
 bash "$REPO_ROOT/scripts/release-matrix.sh" assert-owned-version suite "$VERSION"
+NATIVE_VERSION="$(bash "$REPO_ROOT/scripts/release-matrix.sh" render-version "$VERSION" arch)"
 NAME="conary"
-TARNAME="$NAME-$VERSION"
+TARNAME="$NAME-$NATIVE_VERSION"
 
 USE_PODMAN=false
 for arg in "$@"; do
@@ -106,7 +107,7 @@ else
     echo "[4/4] Done."
 fi
 
-EXPECTED_PACKAGE="$OUTPUT/${NAME}-${VERSION}-1-x86_64.pkg.tar.zst"
+EXPECTED_PACKAGE="$OUTPUT/${NAME}-${NATIVE_VERSION}-1-x86_64.pkg.tar.zst"
 shopt -s nullglob
 package_outputs=("$OUTPUT"/*.pkg.tar.zst)
 if [[ ${#package_outputs[@]} -ne 1 ||

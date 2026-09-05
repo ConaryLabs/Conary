@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 30
-summary: Add typed nightly pre-releases from the newest merge-validated main commit while retaining stable suite authority and deployment boundaries
+revision: 31
+summary: Preserve full nightly identity across Cargo, native packages, CCS, installation, and release proof with ecosystem-owned ordering
 ---
 
 # Release Artifact Matrix
@@ -76,14 +76,53 @@ base from `scripts/release.sh suite --dry-run`, creates one annotated
 build with `channel: nightly`.
 
 Nightly package construction first runs `scripts/release.sh suite
---prepare-only --target <stable-base>` in the runner checkout. The five
-checked-in version authorities therefore remain the stable base; a nightly
-never rewrites or commits them on `main`. Release metadata records both the
-full nightly version and its stable base. The published GitHub release is
+--prepare-only --target <full-nightly-version>` in the runner checkout. The five
+authority files receive the ecosystem renderings of that full version; a nightly
+never rewrites or commits them on `main`. `assert-owned-version` checks each
+file against its rendered value and is read-only. Release metadata records both
+the full nightly version and its stable base; the base is informational, never
+package or binary identity. The published GitHub release is
 marked as a prerelease, its notes list merged pull-request titles since the
 previous nightly tag, and `release-artifact-proof` runs against the published
 tag. Tags created with `GITHUB_TOKEN` intentionally do not trigger the
 tag-push release workflow a second time.
+
+`scripts/release-matrix.sh render-version <version> <target>` is the single
+typed rendering owner. It returns a raw version value, without field labels or
+the tag's `v` prefix. Stable `0.17.0` renders as `0.17.0` on every target.
+The pinned upstream rules and expected ordering for this nightly are:
+
+| Target | Rendering of `0.17.0-nightly.20260905` | Ordering against `0.17.0` and pinned authority |
+| --- | --- | --- |
+| `cargo` | `0.17.0-nightly.20260905` | Lower: [SemVer 2.0.0 sections 9 and 11](https://semver.org/spec/v2.0.0.html#spec-item-9) |
+| `rpm` | `0.17.0~nightly.20260905` | Lower: tilde prerelease operator, [RPM 6.0.2 rpm-version(7), 2026-08-20](https://rpm.org/docs/6.0.x/man/rpm-version.7) |
+| `deb` | `0.17.0~nightly.20260905` | Lower: tilde precedes even an empty part, [Debian Policy 4.7.4.1 section 5.6.12](https://www.debian.org/doc/debian-policy/ch-controlfields.html#version) |
+| `arch` | `0.17.0nightly20260905` | Lower: alphabetic suffix directly after the numeric segment, [pacman 7.1.0 vercmp(8), 2026-05-06](https://man.archlinux.org/man/core/pacman/vercmp.8.en) |
+| `ccs` | `0.17.0-nightly.20260905` | Lower: Conary version scheme uses SemVer 2.0.0 |
+| `tag` | `0.17.0-nightly.20260905` | Canonical tag is `v0.17.0-nightly.20260905`; no package ordering |
+
+RPM writes `Version: 0.17.0~nightly.20260905`; Arch writes
+`pkgver=0.17.0nightly20260905`. The Arch rendering uses neither a hyphen nor
+a tilde; see [pacman 7.1.0 PKGBUILD(5), pkgver](https://man.archlinux.org/man/core/pacman/PKGBUILD.5.en).
+The ordering table pins the expected RPM/pacman behavior when their comparison
+tools are absent from the runner. Tests assert every rendering exactly and run
+`dpkg --compare-versions '0.17.0~nightly.20260905' lt '0.17.0'` with the real
+Debian comparator; they also use `vercmp` when installed. No local comparator
+substitutes for an ecosystem's ordering implementation.
+
+CCS manifest validation delegates to `repository::versioning::validate_repo_version`
+with `VersionScheme::Conary`, which parses `semver::Version`.
+`self_update::versioning` likewise parses and compares full SemVer values.
+Both already accept prereleases and order them below the matching stable
+release. No CCS grammar, persisted schema, compatibility adapter, or rebuild
+requirement changes in this correction.
+
+Native source archives and build outputs use their rendered package version.
+Release-page basenames use the full suite version (`conary-0.17.0-nightly.20260905...`),
+so bundling normalizes the three native filenames without changing package
+metadata. Cargo and CCS retain the full SemVer version throughout. All four
+binaries report the full suite version; the preview installer's health check
+and `release-artifact-proof` require that exact identity, including the date.
 
 The nightly workflow deletes nightly GitHub release records older than 14
 days. It never deletes their protected tags. A nightly is automated validation

@@ -18,6 +18,7 @@ Usage:
   scripts/release-matrix.sh validate-version <version> [stable|nightly]
   scripts/release-matrix.sh version-channel <version>
   scripts/release-matrix.sh stable-version <version>
+  scripts/release-matrix.sh render-version <version> <cargo|rpm|deb|arch|ccs|tag>
   scripts/release-matrix.sh resolve-tag <tag> [--format shell|json]
   scripts/release-matrix.sh canonical-tag <release> <version>
   scripts/release-matrix.sh latest-version-from-list <release> <tag...>
@@ -89,6 +90,37 @@ stable_version_for() {
     case "$channel" in
         stable) printf '%s\n' "$version" ;;
         nightly) printf '%s\n' "${version%%-nightly.*}" ;;
+    esac
+}
+
+render_version() {
+    local version="$1" target="$2" channel base nightly_date
+    channel="$(release_channel_for_version "$version")" || die "invalid release version: $version"
+    case "$target" in
+        cargo|rpm|deb|arch|ccs|tag) ;;
+        *) die "unknown version target: $target" ;;
+    esac
+    if [[ "$channel" == stable ]]; then
+        printf '%s\n' "$version"
+        return
+    fi
+    base="$(stable_version_for "$version")"
+    nightly_date="${version##*-nightly.}"
+    case "$target" in
+        cargo|ccs|tag) printf '%s\n' "$version" ;;
+        rpm|deb) printf '%s~nightly.%s\n' "$base" "$nightly_date" ;;
+        arch) printf '%snightly%s\n' "$base" "$nightly_date" ;;
+    esac
+}
+
+authority_target() {
+    case "$1" in
+        Cargo.toml) printf '%s\n' cargo ;;
+        packaging/rpm/conary.spec) printf '%s\n' rpm ;;
+        packaging/arch/PKGBUILD) printf '%s\n' arch ;;
+        packaging/deb/debian/changelog) printf '%s\n' deb ;;
+        packaging/ccs/ccs.toml) printf '%s\n' ccs ;;
+        *) die "unknown version authority: $1" ;;
     esac
 }
 
@@ -335,6 +367,14 @@ max_owned_version() {
     local file
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
+    # Native renderings are not SemVer and must never enter sort -V together.
+    local workspace_version
+    workspace_version="$(extract_version_from_authority_file Cargo.toml)"
+    if [[ "$(release_channel_for_version "$workspace_version")" == nightly ]]; then
+        assert_owned_version "$release" "$workspace_version"
+        printf '%s\n' "$workspace_version"
+        return
+    fi
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "version authority file missing: $file"
         versions+=("$(extract_version_from_authority_file "$file")")
@@ -350,11 +390,11 @@ assert_owned_version() {
 
     [[ "$release" == "suite" ]] || die "unknown release: $release"
     is_release_version "$expected_version" || die "invalid release version: $expected_version"
-    authority_version="$(stable_version_for "$expected_version")"
 
     while IFS= read -r file; do
         [[ -f "$file" ]] || die "version authority file missing: $file"
         actual_version="$(extract_version_from_authority_file "$file")"
+        authority_version="$(render_version "$expected_version" "$(authority_target "$file")")"
         [[ "$actual_version" == "$authority_version" ]] ||
             die "suite version mismatch: $file is $actual_version, expected $authority_version"
     done < <(version_authority_files)
@@ -497,6 +537,10 @@ main() {
             [[ $# -eq 2 ]] || usage
             is_artifact_product "$1" || die "unknown artifact product: $1"
             artifact_field_value "$1" "$2"
+            ;;
+        render-version)
+            [[ $# -eq 2 ]] || usage
+            render_version "$1" "$2"
             ;;
         validate-version)
             [[ $# -ge 1 && $# -le 2 ]] || usage

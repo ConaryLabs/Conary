@@ -21,7 +21,7 @@ version covers every workspace package and all four artifact products.
 Options:
   --dry-run          Show the inferred or explicit release without changing files.
   --prepare-only     Update and stage release files without committing or tagging.
-  --target VERSION   Use one explicit exact MAJOR.MINOR.PATCH suite version.
+  --target VERSION   Use an exact stable or MAJOR.MINOR.PATCH-nightly.YYYYMMDD version.
 
 Release commits are reviewed and merged before the exact merge commit receives
 its annotated v* tag. This script intentionally does not create commits or tags.
@@ -196,17 +196,22 @@ update_workspace_version() {
 
 update_packaging_versions() {
     local new_version="$1"
+    local rpm_version arch_version deb_version ccs_version
+    rpm_version="$(bash "$MATRIX" render-version "$new_version" rpm)"
+    arch_version="$(bash "$MATRIX" render-version "$new_version" arch)"
+    deb_version="$(bash "$MATRIX" render-version "$new_version" deb)"
+    ccs_version="$(bash "$MATRIX" render-version "$new_version" ccs)"
     local deb_date tmp
 
     deb_date="$(date -R)"
-    sed -i "s/^Version:.*$/Version:        ${new_version}/" packaging/rpm/conary.spec
-    sed -i "s/^pkgver=.*$/pkgver=${new_version}/" packaging/arch/PKGBUILD
-    sed -i "s/^version = \".*\"/version = \"${new_version}\"/" packaging/ccs/ccs.toml
+    sed -i "s/^Version:.*$/Version:        ${rpm_version}/" packaging/rpm/conary.spec
+    sed -i "s/^pkgver=.*$/pkgver=${arch_version}/" packaging/arch/PKGBUILD
+    sed -i "s/^version = \".*\"/version = \"${ccs_version}\"/" packaging/ccs/ccs.toml
 
-    if [[ "$(sed -n '1s/^[^(]*(\([^)]*\)-[0-9][^)]*) .*/\1/p' packaging/deb/debian/changelog)" != "$new_version" ]]; then
+    if [[ "$(sed -n '1s/^[^(]*(\([^)]*\)-[0-9][^)]*) .*/\1/p' packaging/deb/debian/changelog)" != "$deb_version" ]]; then
         tmp="$(mktemp)"
         {
-            printf 'conary (%s-1) unstable; urgency=medium\n\n' "$new_version"
+            printf 'conary (%s-1) unstable; urgency=medium\n\n' "$deb_version"
             printf '  * Release %s\n\n' "$new_version"
             printf ' -- Conary Contributors <contributors@conary.io>  %s\n\n' "$deb_date"
             cat packaging/deb/debian/changelog
@@ -289,8 +294,8 @@ main() {
 
     [[ -n "$mode" ]] || die "select exactly one of --dry-run or --prepare-only"
     if [[ -n "$target_version" ]]; then
-        bash "$MATRIX" validate-version "$target_version" stable >/dev/null 2>&1 ||
-            die "release target must be an exact MAJOR.MINOR.PATCH version"
+        bash "$MATRIX" validate-version "$target_version" >/dev/null 2>&1 ||
+            die "release target must be an exact stable or dated nightly version"
     fi
 
     local history_version history_tag manifest_version current_version level new_version
@@ -301,7 +306,7 @@ main() {
     history_version="$(history_baseline_version)"
     history_tag="$(history_baseline_tag "$history_version" 2>/dev/null || true)"
     manifest_version="$(bash "$MATRIX" max-owned-version suite)"
-    current_version="$(version_max "$history_version" "$manifest_version")"
+    current_version="$(version_max "$history_version" "$(bash "$MATRIX" stable-version "$manifest_version")")"
 
     printf '=== Conary synchronized suite release ===\n'
     printf '  Previous suite tags considered: %s\n' "${previous_tags[*]:-none}"
@@ -309,7 +314,7 @@ main() {
     printf '  Current version authority: %s\n' "$manifest_version"
 
     if [[ -n "$target_version" ]]; then
-        version_lt "$history_version" "$target_version" ||
+        version_lt "$history_version" "$(bash "$MATRIX" stable-version "$target_version")" ||
             die "explicit release target ${target_version} must be greater than published baseline ${history_version}"
         [[ -n "$(commits_for_suite "$history_tag")" ]] ||
             die "explicit release target has no suite changes since ${history_tag}"
@@ -323,7 +328,9 @@ main() {
         printf '  Target authority: conventional commits (%s)\n' "$level"
     fi
 
-    if version_lt "$new_version" "$manifest_version"; then
+    # Compare the stable numeric floors only; prerelease ordering belongs to
+    # ecosystem comparators, not sort -V. A nightly can prepare its stable base.
+    if version_lt "$(bash "$MATRIX" stable-version "$new_version")" "$(bash "$MATRIX" stable-version "$manifest_version")"; then
         die "release target ${new_version} would be lower than current version authority ${manifest_version}"
     fi
 
