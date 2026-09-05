@@ -13,10 +13,19 @@
 set -euo pipefail
 
 # Paths that cannot change the conary runtime, its tests, or its CI policy.
-# Non-Markdown files under docs/ (ownership data read by scripts) run everything.
+# Markdown counts only in documentation trees: top level, docs/, and .github/.
+# Markdown under apps/, crates/, packaging/, or test fixtures is payload (native
+# fixture stages are built into packages) and runs everything, as do the
+# non-Markdown files under docs/ that scripts read as ownership data.
 no_runtime_impact() {
   local path="$1"
   case "$path" in
+    */*.md)
+      case "$path" in
+        docs/*.md | .github/*.md) return 0 ;;
+        *) return 1 ;;
+      esac
+      ;;
     *.md) return 0 ;;
     LICENSE | LICENSE.* | LICENSES/*) return 0 ;;
     CODEOWNERS | .github/CODEOWNERS) return 0 ;;
