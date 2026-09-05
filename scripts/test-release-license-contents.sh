@@ -105,6 +105,26 @@ printf 'not the license\n' > "$tmp/remi/LICENSE"
 tar czf "$tmp/remi-1.0.0-linux-x64.tar.gz" -C "$tmp/remi" remi-1.0.0-linux-x64 LICENSE
 expect_fail "remi tar with the wrong LICENSE text" remi-tar "$tmp/remi-1.0.0-linux-x64.tar.gz" apps/remi/LICENSE
 
+# --- client tarballs: binary plus both texts, digest-checked ---
+mkdir -p "$tmp/client"
+printf '#!/bin/sh\necho conaryd\n' > "$tmp/client/conaryd-1.0.0-linux-x64"
+cp LICENSE-MIT LICENSE-APACHE "$tmp/client/"
+tar czf "$tmp/conaryd-1.0.0-linux-x64.tar.gz" -C "$tmp/client" conaryd-1.0.0-linux-x64 LICENSE-MIT LICENSE-APACHE
+expect_pass "client tar with both texts" client-tar "$tmp/conaryd-1.0.0-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
+tar czf "$tmp/conaryd-1.0.0-linux-x64.tar.gz" -C "$tmp/client" conaryd-1.0.0-linux-x64 LICENSE-MIT
+expect_fail "client tar missing LICENSE-APACHE" client-tar "$tmp/conaryd-1.0.0-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
+printf 'wrong\n' > "$tmp/client/LICENSE-MIT"
+tar czf "$tmp/conaryd-1.0.0-linux-x64.tar.gz" -C "$tmp/client" conaryd-1.0.0-linux-x64 LICENSE-MIT LICENSE-APACHE
+expect_fail "client tar with the wrong MIT text" client-tar "$tmp/conaryd-1.0.0-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
+
+# --- suite assets: the three texts published next to the standalone binaries ---
+mkdir -p "$tmp/suite"
+cp LICENSE-MIT LICENSE-APACHE "$tmp/suite/"
+cp apps/remi/LICENSE "$tmp/suite/LICENSE-AGPL-3.0-remi"
+expect_pass "suite with all three texts" suite "$tmp/suite" LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
+rm "$tmp/suite/LICENSE-AGPL-3.0-remi"
+expect_fail "suite missing the Remi AGPL text" suite "$tmp/suite" LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
+
 if [[ "$failures" -ne 0 ]]; then
     echo "$failures release license contents checks failed" >&2
     exit 1

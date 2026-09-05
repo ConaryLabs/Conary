@@ -694,8 +694,12 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conaryd "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64"
+          tar czf "release-packages/conaryd-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conaryd-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require both license texts inside the conaryd bundle
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh client-tar "release-packages/conaryd-${VERSION}-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
       - name: Upload conaryd bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -762,8 +766,12 @@ jobs:
         run: |
           mkdir -p release-packages
           cp target/release/conary-test "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64"
-          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64"
+          tar czf "release-packages/conary-test-${{ needs.prepare.outputs.version }}-linux-x64.tar.gz" -C release-packages "conary-test-${{ needs.prepare.outputs.version }}-linux-x64" -C "$GITHUB_WORKSPACE" LICENSE-MIT LICENSE-APACHE
           cp release-metadata/metadata.json release-packages/metadata.json
+      - name: Require both license texts inside the conary-test bundle
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/check-release-license-contents.sh client-tar "release-packages/conary-test-${VERSION}-linux-x64.tar.gz" LICENSE-MIT LICENSE-APACHE
       - name: Upload conary-test bundle
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -936,6 +944,11 @@ jobs:
           copy_exact "release-artifacts/conaryd-bundle/conaryd-${VERSION}-linux-x64.tar.gz" "conaryd-${VERSION}-linux-x64.tar.gz"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64" "conary-test-${VERSION}-linux-x64"
           copy_exact "release-artifacts/conary-test-bundle/conary-test-${VERSION}-linux-x64.tar.gz" "conary-test-${VERSION}-linux-x64.tar.gz"
+          # License texts accompany every standalone binary on the release page.
+          copy_exact LICENSE-MIT LICENSE-MIT
+          copy_exact LICENSE-APACHE LICENSE-APACHE
+          copy_exact apps/remi/LICENSE LICENSE-AGPL-3.0-remi
+          bash scripts/check-release-license-contents.sh suite suite-packages LICENSE-MIT LICENSE-APACHE apps/remi/LICENSE
 
           if [[ -s release-artifacts/release-bundle/REHEARSAL_SIGNING_PUBLIC_KEY.txt ]]; then
             copy_exact \
@@ -986,8 +999,8 @@ jobs:
             mapfile -d '' assets < <(
               find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%P\0' | sort -z
             )
-            [[ ${#assets[@]} -eq 14 || ${#assets[@]} -eq 15 ]] || {
-              echo "expected 14 live suite assets or 15 rehearsal assets; found ${#assets[@]}" >&2
+            [[ ${#assets[@]} -eq 17 || ${#assets[@]} -eq 18 ]] || {
+              echo "expected 17 live suite assets or 18 rehearsal assets; found ${#assets[@]}" >&2
               exit 1
             }
             sha256sum -- "${assets[@]}" > SHA256SUMS

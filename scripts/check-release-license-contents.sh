@@ -10,6 +10,8 @@
 #   check-release-license-contents.sh arch <file.pkg.tar.zst>
 #   check-release-license-contents.sh ccs <file.ccs> <conary-binary>
 #   check-release-license-contents.sh remi-tar <remi-<version>-linux-x64.tar.gz> [<agpl-text>]
+#   check-release-license-contents.sh client-tar <product-<version>-linux-x64.tar.gz> <LICENSE-MIT> <LICENSE-APACHE>
+#   check-release-license-contents.sh suite <suite-packages-dir> <LICENSE-MIT> <LICENSE-APACHE> <remi-agpl-text>
 set -euo pipefail
 
 fail() {
@@ -20,7 +22,19 @@ fail() {
 kind="${1:-}"
 artifact="${2:-}"
 [[ -n "$kind" && -n "$artifact" ]] || fail "usage: $0 <rpm|deb|arch|ccs|remi-tar> <artifact> [tool-or-text]"
-[[ -f "$artifact" && ! -L "$artifact" ]] || fail "artifact is not a plain file: $artifact"
+if [[ "$kind" == suite ]]; then
+    [[ -d "$artifact" ]] || fail "suite directory is missing: $artifact"
+else
+    [[ -f "$artifact" && ! -L "$artifact" ]] || fail "artifact is not a plain file: $artifact"
+fi
+
+sha256_of() { sha256sum "$1" | cut -d ' ' -f 1; }
+require_same_text() {
+    local actual_file="$1" expected_file="$2" label="$3"
+    [[ -f "$expected_file" ]] || fail "$label reference text $expected_file is missing"
+    [[ -f "$actual_file" && ! -L "$actual_file" ]] || fail "$label $actual_file is missing"
+    [[ "$(sha256_of "$actual_file")" == "$(sha256_of "$expected_file")" ]] || fail "$label $actual_file differs from $expected_file"
+}
 
 client_license_dir='usr/share/licenses/conary'
 client_doc_dir='usr/share/doc/conary'
@@ -70,6 +84,27 @@ case "$kind" in
             expected_sha="$(sha256sum "$agpl_text" | cut -d ' ' -f 1)"
             [[ "$bundled" == "$expected_sha" ]] || fail "remi bundle LICENSE differs from $agpl_text"
         fi
+        ;;
+    client-tar)
+        mit_text="${3:-}"; apache_text="${4:-}"
+        [[ -n "$mit_text" && -n "$apache_text" ]] || fail "client-tar needs the MIT and Apache texts as the third and fourth arguments"
+        listing="$(tar -tzf "$artifact" | sort)"
+        base="$(basename "$artifact" .tar.gz)"
+        expected="$(printf '%s\n%s\n%s\n' LICENSE-APACHE LICENSE-MIT "$base" | sort)"
+        [[ "$listing" == "$expected" ]] ||
+            fail "client bundle $artifact members are not exactly $base, LICENSE-MIT, LICENSE-APACHE: $(tr '\n' ' ' <<<"$listing")"
+        for pair in "LICENSE-MIT:$mit_text" "LICENSE-APACHE:$apache_text"; do
+            member="${pair%%:*}"; reference="${pair#*:}"
+            [[ "$(tar -xOzf "$artifact" "$member" | sha256sum | cut -d ' ' -f 1)" == "$(sha256_of "$reference")" ]] ||
+                fail "client bundle $artifact member $member differs from $reference"
+        done
+        ;;
+    suite)
+        mit_text="${3:-}"; apache_text="${4:-}"; agpl_text="${5:-}"
+        [[ -n "$mit_text" && -n "$apache_text" && -n "$agpl_text" ]] || fail "suite needs the MIT, Apache, and AGPL texts as arguments"
+        require_same_text "$artifact/LICENSE-MIT" "$mit_text" "suite asset"
+        require_same_text "$artifact/LICENSE-APACHE" "$apache_text" "suite asset"
+        require_same_text "$artifact/LICENSE-AGPL-3.0-remi" "$agpl_text" "suite asset"
         ;;
     *)
         fail "unknown artifact kind: $kind"

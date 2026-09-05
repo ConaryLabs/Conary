@@ -118,7 +118,10 @@ require_live_line packaging/rpm/conary.spec 'install -Dpm 0644 LICENSE-APACHE %\
 require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
 require_live_line packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
 require_match .github/workflows/release-build.yml 'apps/remi" LICENSE' 'remi tarball AGPL text'
-for kind in rpm deb arch ccs remi-tar; do
+require_live_line packaging/deb/debian/rules 'dh_compress -X LICENSE-MIT -X LICENSE-APACHE' 'debian rules license compress exclusion'
+require_match .github/workflows/release-build.yml 'copy_exact apps/remi/LICENSE LICENSE-AGPL-3\.0-remi' 'suite release AGPL asset'
+require_match .github/workflows/release-build.yml 'check-release-license-contents\.sh suite suite-packages' 'suite release license asset proof'
+for kind in rpm deb arch ccs remi-tar client-tar; do
     require_match .github/workflows/release-build.yml "check-release-license-contents\.sh ${kind} " "release-build packaged-contents proof for ${kind}"
 done
 require_match scripts/remi-candidate-artifact.sh '-C "\$license_dir" LICENSE' 'candidate bundle AGPL text'

@@ -114,6 +114,10 @@ sed -i 's|^\(\s*\)install -Dm644 LICENSE-APACHE|\1# install -Dm644 LICENSE-APACH
 expect_failure "PKGBUILD Apache install commented out" "$root"
 
 make_fixture "$root"
+sed -i '/dh_compress -X LICENSE-MIT/d' "$root/packaging/deb/debian/rules"
+expect_failure "debian rules compressing the license texts" "$root"
+
+make_fixture "$root"
 sed -i '/check-release-license-contents.sh rpm /d' "$root/.github/workflows/release-build.yml"
 expect_failure "release-build without the rpm contents proof" "$root"
 

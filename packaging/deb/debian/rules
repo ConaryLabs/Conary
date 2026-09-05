@@ -55,5 +55,8 @@ override_dh_autoreconf:
 override_dh_autoreconf_clean:
 
 # Cargo release profile already strips the binary
+override_dh_compress:
+	dh_compress -X LICENSE-MIT -X LICENSE-APACHE
+
 override_dh_dwz:
 override_dh_strip:
