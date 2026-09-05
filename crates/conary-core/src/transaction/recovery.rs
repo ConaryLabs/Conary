@@ -48,17 +48,29 @@ impl TransactionEngine {
 
     /// Recover the selected boot generation, allowing the explicit recovery
     /// command to promote the latest valid artifact when `/conary/current` is
-    /// missing or invalid.
-    pub fn recover_boot_selection(&self, conn: &Connection) -> Result<RecoveryEvidence> {
+    /// missing or invalid. Report the validated policy synchronously before
+    /// recovery work so the caller can render the explicit-off console warning.
+    pub fn recover_boot_selection(
+        &self,
+        conn: &Connection,
+        report_policy: impl FnOnce(&VerityPolicy),
+    ) -> Result<RecoveryEvidence> {
         let cmdline = std::fs::read_to_string("/proc/cmdline")?;
-        self.recover_boot_selection_with_verity(conn, &VerityPolicy::from_kernel_cmdline(&cmdline))
+        self.recover_boot_selection_with_verity(
+            conn,
+            &VerityPolicy::from_kernel_cmdline(&cmdline),
+            report_policy,
+        )
     }
 
     fn recover_boot_selection_with_verity(
         &self,
         conn: &Connection,
         verity: &VerityPolicy,
+        report_policy: impl FnOnce(&VerityPolicy),
     ) -> Result<RecoveryEvidence> {
+        verity.requires_verification()?;
+        report_policy(verity);
         self.recover_boot_selection_with_runtime(conn, verity, &HostRecoveryRuntime)
     }
 
@@ -71,9 +83,6 @@ impl TransactionEngine {
         // Validate before DB inspection, repair, scanning or mount reuse. An
         // invalid command line is not a damaged artifact that can be bypassed.
         verity.requires_verification()?;
-        if let Some(warning) = verity.warning() {
-            eprintln!("{warning}");
-        }
         self.recover_with_policy(
             conn,
             RecoveryScanPolicy::SelectedOrLatestArtifact,
@@ -377,6 +386,7 @@ mod tests {
                     .recover_boot_selection_with_verity(
                         &conn,
                         &VerityPolicy::from_kernel_cmdline(cmdline),
+                        |_| {},
                     )
                     .unwrap_err();
                 let reason = VerityPolicyError::MissingGenerationVerity { generation: 1 };
@@ -454,7 +464,9 @@ mod tests {
                 "conary.verity=off conary.verity={value}"
             ));
             let error = engine
-                .recover_boot_selection_with_verity(&conn, &policy)
+                .recover_boot_selection_with_verity(&conn, &policy, |_| {
+                    panic!("invalid policy must not be reported as actionable")
+                })
                 .unwrap_err();
             assert!(matches!(
                 error,
@@ -462,6 +474,25 @@ mod tests {
                     if actual == value
             ));
             assert!(!tmp.path().join("current").exists());
+        }
+    }
+
+    #[test]
+    fn validated_policy_is_reported_before_recovery_can_fail() {
+        let tmp = TempDir::new().unwrap();
+        let engine =
+            TransactionEngine::new(crate::transaction::TransactionConfig::new(tmp.path())).unwrap();
+        // No schema: recovery must fail at DB inspection, after the caller has
+        // received the exact policy and had a chance to warn on the console.
+        let conn = Connection::open_in_memory().unwrap();
+        for cmdline in ["quiet", "conary.verity=on", "conary.verity=off"] {
+            let policy = VerityPolicy::from_kernel_cmdline(cmdline);
+            let mut reported = None;
+            let result = engine.recover_boot_selection_with_verity(&conn, &policy, |value| {
+                reported = Some(value.clone());
+            });
+            assert!(result.is_err());
+            assert_eq!(reported, Some(policy));
         }
     }
 

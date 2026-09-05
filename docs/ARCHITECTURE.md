@@ -1,6 +1,6 @@
 ---
 last_updated: 2026-09-05
-revision: 68
+revision: 69
 summary: Describe workspace ownership, release boundaries, package transactions, source and trust contracts, immutable catalogs, generation state, service boundaries, and operator surfaces.
 ---
 
@@ -529,9 +529,12 @@ The deployed-system `deploy/dracut` hook invokes `conary system generation
 recover`, which consumes this Rust policy before repair, artifact scanning or
 mount reuse. The `packaging/dracut/90conary` generator and bootstrap-generated
 `/init` cannot execute conary before switch_root: neither image installs the
-binary. Both use the same shell adapter, tested against the Rust policy for
-argument precedence, rejection, mount options and downgrade warnings. These
-are execution adapters, not independent policy owners. Consolidating all three
+binary. Core reports the validated typed policy to the CLI before recovery work;
+the CLI renders the explicit-off warning through its UI, without relying on
+tracing filters. Both binary-free boot paths use the same shell adapter, tested
+against the Rust policy for argument precedence, rejection, mount options and
+downgrade warnings. These are execution adapters, not independent policy owners.
+Consolidating all three
 initramfs implementations and their tool inventories is tracked in
 [#863](https://github.com/FieldmouseWorks/Conary/issues/863).
 

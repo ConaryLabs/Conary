@@ -722,7 +722,11 @@ pub fn cmd_generation_recover(db_path: &str) -> Result<()> {
             ));
         }
     }
-    engine.recover_boot_selection(&conn)?;
+    engine.recover_boot_selection(&conn, |policy| {
+        if let Some(warning) = policy.warning() {
+            crate::ui::warn(warning);
+        }
+    })?;
 
     // Restore the /etc overlay after recovery mounts the generation.
     // recover() mounts the composefs image at <root>/mnt; the writable
