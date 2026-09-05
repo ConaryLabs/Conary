@@ -2,9 +2,14 @@
 """Table-driven recovery, proof-receipt, and retention conformance fixtures."""
 
 import copy
+from contextlib import redirect_stdout, redirect_stderr
 from datetime import datetime, timezone
 import importlib.util
+import io
+import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -40,6 +45,43 @@ class API:
 
 
 class NightlyTests(unittest.TestCase):
+    def test_malformed_discovery_is_non_authority(self):
+        malformed = "v0.17.0-nightly.preview"
+
+        def git(*args):
+            if args[0] == "tag":
+                return malformed + "\n" + TAG
+            self.assertNotIn(malformed, " ".join(args))
+            return "tag" if args[0] == "cat-file" else COMMIT
+
+        with tempfile.TemporaryDirectory() as directory:
+            summary = Path(directory) / "summary"
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.object(nightly, "git", side_effect=git), \
+                    patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)), \
+                    redirect_stdout(stdout), redirect_stderr(stderr):
+                result = nightly.resolve(API(status=404), TAG, COMMIT)
+                nightly.report(result)
+            self.assertEqual(json.loads(stdout.getvalue()), result)
+            self.assertEqual(result["state"], "tag_without_release")
+            self.assertEqual(result["tag_name"], TAG)
+            ignored = json.loads(stderr.getvalue())
+            self.assertEqual(ignored["outcome"], "ignored_malformed_tag")
+            self.assertEqual(ignored["tag_name"], malformed)
+            self.assertIn("ignored_malformed_tag", summary.read_text())
+        # Explicit targets remain strict; only historical discovery may skip.
+        with self.assertRaises(nightly.Failure):
+            nightly.resolve(API(status=404), malformed, COMMIT)
+
+    def test_malformed_release_is_not_retention_authority(self):
+        api = API(status=204, rows={"releases": [
+            {**RELEASE, "tag_name": "v0.17.0-nightly.preview"}, RELEASE,
+        ]})
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as diagnostics:
+            nightly.retain(api, datetime(2026, 9, 20, tzinfo=timezone.utc))
+        self.assertEqual(api.calls, [("DELETE", "releases/42")])
+        self.assertEqual(json.loads(diagnostics.getvalue())["outcome"], "ignored_malformed_tag")
+
     def test_recovery_state_table(self):
         cases = (
             (False, None, 404, False, "no_tag", "build"),

@@ -1,7 +1,7 @@
 ---
 last_updated: 2026-09-05
-revision: 32
-summary: Resume nightly publication and exact-release proof through typed recovery states; retain whole immutable nightly releases for fourteen days
+revision: 33
+summary: Native signed-version downgrade transactions and malformed historical nightly tag non-authority
 ---
 
 # Release Artifact Matrix
@@ -17,6 +17,25 @@ QEMU/KVM evidence may support a preview row only when it names the absolute run
 date, distro, suite, and pass counts.
 
 ## Current Release Suite
+
+The signed bootstrap installer reads Debian versions from the verified local
+package and the installed dpkg database. Only when `dpkg --compare-versions`
+reports the requested version as older does the exact local `apt-get install -y`
+transaction add `--allow-downgrades`; absent, equal, and newer requests do not.
+Fedora keeps `dnf install -y <exact-local-rpm>`: DNF5 already installs the exact
+requested version regardless of the installed version, including downgrades.
+Neither `dnf downgrade` nor `--allowerasing` is necessary; the latter permits
+dependency removals, and `--allow-downgrade` controls dependencies, not the exact
+target. This follows the pinned [DNF5 5.2.17.0 install documentation](https://github.com/rpm-software-management/dnf5/blob/043c5d1152a5adb2eaf3031620e49a659a0040ee/doc/commands/install.8.rst).
+Arch retains `pacman -U --noconfirm -- <exact-local-package>`, which already
+permits native downgrades. Full signed suite identity remains mandatory for
+both the installed-version short-circuit and post-install health check.
+
+During historical nightly tag discovery, tags rejected by the matrix grammar
+are non-authority: `ignored_malformed_tag` and the tag name are recorded in the
+step summary and on stderr. They cannot be selected, deleted by retention, or
+block valid nightly creation/recovery. Explicit requested tags remain strictly
+validated. Resolution stdout remains one typed JSON result for workflow callers.
 
 Issue [#428](https://github.com/FieldmouseWorks/Conary/issues/428) established the
 current hard-cut topology: all eight Cargo packages inherit one root workspace

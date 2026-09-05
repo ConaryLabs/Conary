@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +43,16 @@ def tag_metadata(tag):
     if result.returncode:
         raise Failure("invalid_tag", tag_name=tag)
     return json.loads(result.stdout)
+
+
+def discovered_tag_metadata(tag):
+    try:
+        return tag_metadata(tag)
+    except Failure as error:
+        if error.record["outcome"] != "invalid_tag":
+            raise
+        report({"schema_version": 1, "outcome": "ignored_malformed_tag", "tag_name": tag}, diagnostic=True)
+        return {"channel": None}
 
 
 class GitHub:
@@ -147,7 +158,7 @@ def resolve(api, candidate_tag, commit):
         raise Failure("invalid_nightly_target")
     matches = []
     for tag in git("tag", "--list", "v*-nightly.*").splitlines():
-        if tag_metadata(tag)["channel"] == "nightly" and git("rev-parse", f"refs/tags/{tag}^{{}}") == commit:
+        if discovered_tag_metadata(tag)["channel"] == "nightly" and git("rev-parse", f"refs/tags/{tag}^{{}}") == commit:
             if git("cat-file", "-t", f"refs/tags/{tag}") != "tag":
                 raise Failure("unannotated_nightly_tag", tag_name=tag)
             matches.append(tag)
@@ -182,7 +193,7 @@ def retain(api, now):
         # Discovery narrows candidates; matrix grammar establishes authority.
         if "-nightly." not in tag:
             continue
-        if tag_metadata(tag)["channel"] != "nightly":
+        if discovered_tag_metadata(tag)["channel"] != "nightly":
             continue
         if release.get("draft") is not False or release.get("prerelease") is not True:
             continue
@@ -199,9 +210,9 @@ def retain(api, now):
         report({"schema_version": 1, "outcome": "release_deleted", "release_id": release_id, "api_status": status})
 
 
-def report(record):
+def report(record, diagnostic=False):
     rendered = json.dumps(record, sort_keys=True)
-    print(rendered)
+    print(rendered, file=sys.stderr if diagnostic else sys.stdout)
     if path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(path, "a") as stream:
             stream.write(f"\n```json\n{rendered}\n```\n")

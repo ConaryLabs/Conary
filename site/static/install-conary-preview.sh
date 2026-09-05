@@ -295,8 +295,30 @@ actual_digest="$(sha256sum "$artifact_path" | awk '{print $1}')"
 [[ "$actual_digest" == "$selected_digest" ]] || die "artifact SHA-256 verification failed"
 
 case "$selected_format" in
+    # DNF5 exact local install already upgrades/downgrades the target (see release matrix).
     rpm) install_command=(sudo dnf install -y "$artifact_path") ;;
-    deb) install_command=(sudo apt-get install -y -- "$artifact_path") ;;
+    deb)
+        # Read native versions from verified bytes and the native installed database.
+        requested_native="$(dpkg-deb --field "$artifact_path" Version)" || die "cannot read Debian package version"
+        dpkg --validate-version "$requested_native" || die "invalid Debian package version"
+        downgrade_options=()
+        if installed_native="$(dpkg-query --show --showformat='${db:Status-Status}\t${Version}' conary 2>/dev/null)"; then
+            if [[ "$installed_native" == installed$'\t'* ]]; then
+                installed_native="${installed_native#*$'\t'}"
+                dpkg --validate-version "$installed_native" || die "invalid installed Debian version"
+                if dpkg --compare-versions "$requested_native" lt "$installed_native"; then
+                    downgrade_options=(--allow-downgrades)
+                else
+                    comparison_status=$?
+                    [[ "$comparison_status" -eq 1 ]] || die "Debian version comparison failed"
+                fi
+            fi
+        else
+            query_status=$?
+            [[ "$query_status" -eq 1 ]] || die "cannot query installed Debian package"
+        fi
+        install_command=(sudo apt-get install -y "${downgrade_options[@]}" -- "$artifact_path")
+        ;;
     arch) install_command=(sudo pacman -U --noconfirm -- "$artifact_path") ;;
     *) die "internal unsupported package format" ;;
 esac
