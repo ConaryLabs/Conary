@@ -7,7 +7,6 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ROOT="${CONARY_REMI_DEPLOY_ROOT:-}"
 SKIP_RESTART="${CONARY_REMI_DEPLOY_SKIP_RESTART:-0}"
 HEALTH_URL="${CONARY_REMI_DEPLOY_HEALTH_URL:-http://localhost:8081/health}"
-SURVEY_READINESS_URL="${CONARY_REMI_DEPLOY_SURVEY_READINESS_URL:-http://localhost:8081/health/ready}"
 SITE_HOME_URL="${CONARY_REMI_DEPLOY_SITE_HOME_URL:-https://conary.io/}"
 SITE_INSTALLER_URL="${CONARY_REMI_DEPLOY_SITE_INSTALLER_URL:-https://conary.io/install-conary-preview.sh}"
 SITE_ORIGIN_RESOLVE="${CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE:-conary.io:443:127.0.0.1}"
@@ -267,7 +266,7 @@ remi_systemctl() {
     "$REMI_SYSTEMCTL" "$@" >/dev/null
 }
 
-start_and_probe() {
+benchmark_start_and_probe() {
     local url="$1"
     local attempts="$2"
     [[ "$SKIP_RESTART" == "1" ]] && return 0
@@ -282,6 +281,127 @@ start_and_probe() {
         fi
     done
     return 1
+}
+
+# Root-owned operator evidence, independent of the service's mutable data.
+READINESS_INSPECTION='{}'
+READINESS_FAILURE=""
+READINESS_CLOCK=""
+READINESS_CURL=curl
+READINESS_JOURNAL=journalctl
+
+readiness_seconds() {
+    if [[ -n "$READINESS_CLOCK" ]]; then
+        "$READINESS_CLOCK"
+    else
+        local uptime rest
+        read -r uptime rest </proc/uptime
+        printf '%s\n' "${uptime%%.*}"
+    fi
+}
+
+configure_readiness() {
+    local name value
+    for name in CLOCK CURL JOURNAL; do
+        local variable="CONARY_REMI_DEPLOY_TEST_${name}"
+        value="${!variable:-}"
+        [[ -n "$value" ]] || continue
+        [[ -n "$ROOT" && -f "$value" && ! -L "$value" && -x "$value" ]] ||
+            die "readiness test override requires a fake root and plain executable"
+        printf -v "READINESS_${name}" '%s' "$(realpath -e "$value")"
+    done
+}
+
+readiness_state_path() {
+    root_path /var/lib/conary-remi-deploy/readiness.json
+}
+
+start_and_probe() {
+    [[ "$SKIP_RESTART" == "1" ]] && return 0
+    configure_readiness
+    local state state_root previous=null basis=3540 source=issue_913_startup_evidence
+    state="$(readiness_state_path)"
+    state_root="$(dirname "$state")"
+    if [[ ! -e "$state_root" && ! -L "$state_root" ]]; then
+        install -d -m 0700 "$state_root"
+    fi
+    [[ -d "$state_root" && ! -L "$state_root" && "$(stat -c '%a:%u' "$state_root")" == "700:$(id -u)" ]] ||
+        die "readiness evidence root is not a private control-owned directory"
+    if [[ -e "$state" || -L "$state" ]]; then
+        [[ -f "$state" && ! -L "$state" ]] || die "readiness evidence is not a plain file"
+        # Obsolete or malformed operator evidence is non-authority: rebuild the
+        # measurement using the documented bootstrap evidence, never deserialize it.
+        if previous="$(jq -er '
+            select(.schema_version == 1)
+            | .last_ready_duration_seconds
+            | select(type == "number" and floor == . and . >= 0 and . <= 7200)
+        ' "$state" 2>/dev/null)"; then
+            basis="$previous"
+            source=last_recorded_duration
+        else
+            previous=null
+        fi
+    fi
+    # #913: 59 minute catalog reopen/completion evidence seeds unmeasured hosts.
+    # Twice the last successful duration, at least one second, at most two hours.
+    local budget=$(( (basis > 0 ? basis : 1) * 2 ))
+    (( budget <= 7200 )) || budget=7200
+    local started now elapsed remaining probe_timeout systemctl_status=0
+    local outcome=restore_failed reason=readiness_timeout ready=null
+    started="$(readiness_seconds)"
+    timeout "$budget" "$REMI_SYSTEMCTL" start remi >/dev/null 2>&1 || systemctl_status=$?
+    if (( systemctl_status == 0 )); then
+        while true; do
+            now="$(readiness_seconds)"
+            elapsed=$((now - started))
+            remaining=$((budget - elapsed))
+            (( remaining > 0 )) || break
+            probe_timeout=$((remaining < 2 ? remaining : 2))
+            if "$READINESS_CURL" -fsS --max-time "$probe_timeout" "$HEALTH_URL" >/dev/null 2>&1; then
+                now="$(readiness_seconds)"
+                if (( now - started <= budget )); then
+                    outcome=restored
+                    reason=ready
+                    ready=$((now - started))
+                    previous="$ready"
+                fi
+                break
+            fi
+            if [[ -z "$READINESS_CLOCK" ]]; then
+                now="$(readiness_seconds)"
+                (( now - started < budget )) && sleep 1
+            fi
+        done
+    else
+        reason=systemctl_failed
+    fi
+    now="$(readiness_seconds)"
+    elapsed=$((now - started))
+    if [[ "$outcome" == restored ]]; then
+        elapsed="$ready"
+    fi
+    READINESS_INSPECTION="$(jq -cnS \
+        --arg outcome "$outcome" --arg reason "$reason" --arg source "$source" \
+        --argjson basis "$basis" --argjson budget "$budget" \
+        --argjson elapsed "$elapsed" --argjson ready "$ready" \
+        --argjson previous "$previous" --argjson systemctl_status "$systemctl_status" '
+        {schema_version:1, outcome:$outcome, reason:$reason,
+         probe:"deploy_health", budget_source:$source, basis_seconds:$basis,
+         multiplier:2, ceiling_seconds:7200, budget_seconds:$budget,
+         elapsed_seconds:$elapsed, restart_to_ready_seconds:$ready,
+         last_ready_duration_seconds:$previous, systemctl_status:$systemctl_status}
+    ')"
+    local next
+    next="$(mktemp "${state_root}/.readiness.XXXXXX")"
+    printf '%s\n' "$READINESS_INSPECTION" >"$next"
+    mv -f -- "$next" "$state"
+    READINESS_FAILURE="${reason}: systemctl status ${systemctl_status}, elapsed ${elapsed}s, budget ${budget}s"
+    [[ "$outcome" == restored ]]
+}
+
+readiness_failure_diagnostic() {
+    printf '%s\n' "$READINESS_FAILURE"
+    "$READINESS_JOURNAL" -u remi -n 30 --no-pager 2>&1 || true
 }
 
 extract_verified_remi_candidate() {
@@ -440,7 +560,9 @@ deploy_remi() {
         die "failed to install Remi binary"
     fi
 
-    if ! start_and_probe "$HEALTH_URL" 30; then
+    if ! start_and_probe; then
+        local failure_diagnostic
+        failure_diagnostic="$(readiness_failure_diagnostic)"
         local rollback_status=0
         [[ "$SKIP_RESTART" == "1" ]] || remi_systemctl stop remi || true
         "$candidate" deployment rollback --manifest "$transition_manifest" || rollback_status=$?
@@ -450,11 +572,11 @@ deploy_remi() {
             rm -f "$bin"
         fi
         if [[ "$had_previous" == true ]]; then
-            start_and_probe "$HEALTH_URL" 30 || true
+            start_and_probe || true
         fi
         (( rollback_status == 0 )) ||
             die "Remi health check failed and rollback failed with status ${rollback_status}"
-        die "Remi health check failed after deployment"
+        die "Remi health check failed after deployment: ${failure_diagnostic}"
     fi
 
     rm -f "$bundle" "$repositories"
@@ -683,7 +805,13 @@ inspect_remi() {
     if [[ -n "$completed_after" ]]; then
         args+=(--accept-candidates-completed-after "$completed_after")
     fi
-    "$bin" "${args[@]}"
+    local readiness='{}' state
+    state="$(readiness_state_path)"
+    if [[ -f "$state" && ! -L "$state" ]]; then
+        readiness="$(jq -c 'if .schema_version == 1 then . else
+            {schema_version:1,outcome:"measurement_required"} end' "$state")"
+    fi
+    "$bin" "${args[@]}" | jq --argjson readiness "$readiness" '. + {restart_readiness:$readiness}'
 }
 
 inspect_remi_candidate_baseline() {
@@ -871,9 +999,10 @@ survey_restore_and_exit() {
         SURVEY_TRANSPORT_NEXT=""
     fi
     if [[ "$SURVEY_REMI_STOPPED" == "1" ]]; then
-        if start_and_probe "$SURVEY_READINESS_URL" 30; then
+        if start_and_probe; then
             SURVEY_REMI_STOPPED=0
         else
+            echo "remi deploy helper: failed to restore Remi after resolution survey: $(readiness_failure_diagnostic)" >&2
             if (( status == 0 )); then
                 status=1
             fi
@@ -1285,11 +1414,20 @@ survey_resolution() {
     [[ -z "$unexpected_before_restart" ]] ||
         die "resolution survey output contains a non-plain entry"
 
-    if start_and_probe "$SURVEY_READINESS_URL" 30; then
-        SURVEY_REMI_STOPPED=0
-    else
-        die "failed to restore Remi after resolution survey"
+    # Retain the exact control-owned snapshot before attempting restoration.
+    local retained="${survey_staging_root}/completed-resolution-survey-${survey_id}"
+    mkdir -m 0700 "$retained" || die "resolution survey retained target already exists"
+    mv -- "$frozen_output" "${retained}/survey-output"
+    frozen_output="${retained}/survey-output"
+    local restore_outcome=restored restore_diagnostic=""
+    if ! start_and_probe; then
+        restore_outcome=restore_failed
+        restore_diagnostic="$(readiness_failure_diagnostic)"
     fi
+    # Exactly one bounded restore attempt. Cleanup must not silently retry it.
+    SURVEY_REMI_STOPPED=0
+    printf '%s\n' "$READINESS_INSPECTION" >"${retained}/restore.json"
+    chmod 0600 "${retained}/restore.json"
 
     jq -e \
         --arg output "$output" '
@@ -1482,12 +1620,37 @@ survey_resolution() {
     public_sha256="$(sha256sum "$public_transport" | cut -d ' ' -f 1)"
     public_bytes="$(stat -c '%s' "$public_transport")"
 
+    install -m 0600 "$survey_manifest" "${retained}/manifest.json"
+    local restore_transport="/tmp/remi-resolution-survey-${survey_id}.restore.json"
+    local restore_next restore_sha256
+    restore_next="$(mktemp "${SURVEY_STAGING}/restore.XXXXXX")"
+    jq -cnS --arg survey_id "$survey_id" --arg export_id "$export_id" \
+        --arg sha256 "$public_sha256" --argjson size "$public_bytes" \
+        --argjson readiness "$READINESS_INSPECTION" '
+        {schema_version:1, survey_id:$survey_id, export_id:$export_id,
+         retained:{kind:"completed_resolution_survey",id:$survey_id},
+         transport:{sha256:$sha256,size:$size}, restore:$readiness}
+    ' >"$restore_next"
+    install -m 0600 "$restore_next" "${retained}/restore.json"
+    if [[ -z "$ROOT" ]]; then
+        chown "${SUDO_UID:-0}:${SUDO_GID:-0}" "$restore_next"
+    fi
+    # /tmp may be a separate filesystem; publish via a private temporary there.
+    SURVEY_TRANSPORT_NEXT="$(mktemp "/tmp/remi-resolution-survey-${survey_id}.XXXXXX")"
+    cp --preserve=mode,ownership "$restore_next" "$SURVEY_TRANSPORT_NEXT"
+    ln "$SURVEY_TRANSPORT_NEXT" "$restore_transport" || die "survey restore transport target appeared during publication"
+    rm -f "$SURVEY_TRANSPORT_NEXT"
+    SURVEY_TRANSPORT_NEXT=""
+    restore_sha256="$(sha256sum "$restore_transport" | cut -d ' ' -f 1)"
     trap - EXIT INT TERM
     rm -rf -- "$SURVEY_STAGING"
     SURVEY_STAGING=""
-    printf 'Resolution survey: survey=%s export=%s transport=%s sha256=%s bytes=%s candidate_failures=%s comparison_mismatches=%s\n' \
+    printf 'Resolution survey: survey=%s export=%s transport=%s sha256=%s bytes=%s candidate_failures=%s comparison_mismatches=%s restore_outcome=%s restore_sha256=%s\n' \
         "$survey_id" "$export_id" "$public_transport" "$public_sha256" "$public_bytes" \
-        "$candidate_failures" "$comparison_mismatches"
+        "$candidate_failures" "$comparison_mismatches" "$restore_outcome" "$restore_sha256"
+    if [[ "$restore_outcome" == restore_failed ]]; then
+        die "failed to restore Remi after resolution survey: ${restore_diagnostic}"
+    fi
 }
 
 BENCHMARK_REMI_STOPPED=0
@@ -1553,7 +1716,7 @@ benchmark_restore_and_exit() {
         BENCHMARK_TRANSPORT_NEXT=""
     fi
     if [[ "$BENCHMARK_REMI_STOPPED" == "1" ]]; then
-        if start_and_probe "$HEALTH_URL" 30; then
+        if benchmark_start_and_probe "$HEALTH_URL" 30; then
             BENCHMARK_REMI_STOPPED=0
             BENCHMARK_SERVICE_OUTCOME=restored
         else
@@ -1908,7 +2071,7 @@ benchmark_remi_conversion() {
     (( public_bytes > 0 )) || die "conversion benchmark public sidecar is empty"
 
     BENCHMARK_FAILURE_STAGE=service-restore
-    if start_and_probe "$HEALTH_URL" 30; then
+    if benchmark_start_and_probe "$HEALTH_URL" 30; then
         BENCHMARK_REMI_STOPPED=0
         BENCHMARK_SERVICE_OUTCOME=restored
     else

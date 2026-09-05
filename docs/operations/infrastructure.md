@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-09-03
-revision: 94
+last_updated: 2026-09-05
+revision: 95
 summary: Document non-secret CI, release, deployment, hosting, agent-operation, and production evidence workflows; host-local access belongs in ignored LOCAL_ACCESS.md.
 ---
 
@@ -341,16 +341,41 @@ workflow.
   authenticates every archive member there,
   stops Remi, reads the exact candidate revisions from the stopped deployment's
   own candidate pointers, runs `remi resolution-survey` as `conary`, freezes its
-  output into root-owned staging while Remi remains stopped, and always restores
-  the service and polls `/health/ready` to a bounded successful result before it
-  interprets the command result. Remi's top-level status `101` is a successful
+  output while Remi remains stopped, and retains that root-owned snapshot at
+  `/conary/evidence/.remi-operator-staging/completed-resolution-survey-<survey-id>/survey-output`.
+  <!-- repo-path: hypothetical -->
+  It then attempts service restoration using the deploy helper's `/health`
+  endpoint (listener startup; publication readiness remains `/health/ready`).
+  Deploy and survey probes measure monotonic restart-to-ready seconds, including
+  `systemctl start`, and persist a sanitized schema-1 inspection at
+  `/var/lib/conary-remi-deploy/readiness.json`. <!-- repo-path: external -->
+  `inspect-remi` includes it as `restart_readiness`. The budget is twice the last
+  successful recorded duration (with a one-second measurement floor), capped at
+  7,200 seconds including service start and probes. Until a current measurement
+  exists, the basis is the 3,540-second catalog reopen/completion evidence in
+  #913 (deploy run 33933238628), giving 7,080 seconds. Obsolete or malformed
+  measurements are non-authority and rebuilt using that evidence; failed probes
+  retain the last successful duration and record elapsed time with a null
+  restart-to-ready duration.
+  A completed survey publishes its unchanged sanitized transport even when
+  restoration reports `restore_failed`. The separately digest-bound schema-1
+  `resolution-survey-restore.json` binds survey/export identities, the exact
+  transport digest/size, typed retained location, and restore timing/outcome.
+  The host retains `manifest.json` and `restore.json` alongside `survey-output`;
+  operators resolve `completed_resolution_survey/<survey-id>` to the directory
+  above. Retained snapshots require explicit operator removal after retrieval.
+  The workflow checks helper status against the typed outcome, independently
+  reopens the same survey transport, uploads evidence and counts, and only then
+  fails on restoration. Restore failure diagnostics include systemctl status or
+  readiness timeout, elapsed/budget seconds, and the last 30 Remi journal lines.
+  Cleanup never retries an exhausted restore budget. Remi's top-level status `101` is a successful
   operator result only when the typed outcome records findings. The returned
   seven-day artifact contains only
   canonical survey JSON, a digest/size/binding manifest, and public verification
   records, including the authenticated three-lane assembly. Raw deployment
   inspection and survey stderr remain confined to mode-`0600` root-controlled
   staging, are destroyed during helper cleanup, and are never written to SSH or
-  workflow logs; public failures use typed helper messages. Neither helper
+  workflow logs; restore failures additionally expose the requested journal tail. Neither helper
   input admission nor runner output verification places an invented aggregate
   ceiling on survey transport that the producer contract does not establish;
   the uncompressed input archive uses GNU base-256 tar headers, avoiding an

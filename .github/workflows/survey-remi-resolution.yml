@@ -342,6 +342,7 @@ jobs:
           target="$REMI_SSH_TARGET"
           remote_input="/tmp/remi-resolution-survey-oracles-${SURVEY_ID}.tar"
           remote_output="/tmp/remi-resolution-survey-${SURVEY_ID}.tar"
+          remote_restore="/tmp/remi-resolution-survey-${SURVEY_ID}.restore.json"
           remote_helper="/tmp/remi-resolution-survey-helper-${SURVEY_ID}"
           local_output="remi-resolution-survey-${SURVEY_ID}.tar"
           helper="${RUNNER_TEMP}/remi-resolution-survey-helper-${SURVEY_ID}"
@@ -357,7 +358,7 @@ jobs:
               # Every interpolated remote value is typed above.
               # shellcheck disable=SC2029
               ssh "${ssh_opts[@]}" "$target" \
-                "rm -f -- '$remote_input' '$remote_output' '$remote_helper'" >/dev/null 2>&1
+                "rm -f -- '$remote_input' '$remote_output' '$remote_restore' '$remote_helper'" >/dev/null 2>&1
               set -e
             fi
             return "$status"
@@ -413,18 +414,20 @@ jobs:
           ssh "${ssh_opts[@]}" "$target" \
             "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha256' '$remote_helper'"
           scp "${ssh_opts[@]}" "$INPUT_TRANSPORT" "${target}:${remote_input}"
+          helper_status=0
           report="$({
             # Survey and export identities plus the path are locally typed.
             # shellcheck disable=SC2029
             ssh "${ssh_opts[@]}" "$target" \
               "sudo -n /usr/local/sbin/conary-remi-deploy survey-resolution '$SURVEY_ID' '$EXPORT_ID' '$remote_input'"
-          } 2>&1)" || {
-            printf '%s\n' "$report" >&2
+          })" || helper_status=$?
+          (( helper_status == 0 || helper_status == 1 )) || {
+            echo "resolution-survey SSH/helper failed with status $helper_status" >&2
             exit 1
           }
           report_line="$(tail -n 1 <<<"$report")"
           prefix="Resolution survey: survey=${SURVEY_ID} export=${EXPORT_ID} transport=${remote_output} sha256="
-          [[ "$report_line" =~ ^${prefix}([0-9a-f]{64})\ bytes=([1-9][0-9]*)\ candidate_failures=([0-9]+)\ comparison_mismatches=([0-9]+)$ ]] || {
+          [[ "$report_line" =~ ^${prefix}([0-9a-f]{64})\ bytes=([1-9][0-9]*)\ candidate_failures=([0-9]+)\ comparison_mismatches=([0-9]+)\ restore_outcome=(restored|restore_failed)\ restore_sha256=([0-9a-f]{64})$ ]] || {
             echo "production helper returned malformed resolution-survey evidence" >&2
             exit 1
           }
@@ -432,6 +435,42 @@ jobs:
           reported_bytes="${BASH_REMATCH[2]}"
           candidate_failures="${BASH_REMATCH[3]}"
           comparison_mismatches="${BASH_REMATCH[4]}"
+          restore_outcome="${BASH_REMATCH[5]}"
+          restore_sha256="${BASH_REMATCH[6]}"
+          [[ "$helper_status:$restore_outcome" == 0:restored \
+            || "$helper_status:$restore_outcome" == 1:restore_failed ]] || {
+            echo "survey restore outcome disagrees with helper exit status" >&2
+            exit 1
+          }
+          scp "${ssh_opts[@]}" "${target}:${remote_restore}" resolution-survey-restore.json
+          [[ "$(sha256sum resolution-survey-restore.json | cut -d ' ' -f 1)" == "$restore_sha256" ]]
+          jq -e --arg survey_id "$SURVEY_ID" --arg export_id "$EXPORT_ID" \
+            --arg outcome "$restore_outcome" --arg sha256 "$reported_sha256" \
+            --argjson size "$reported_bytes" '
+            def seconds: type == "number" and floor == . and . >= 0;
+            .schema_version == 1 and .survey_id == $survey_id and .export_id == $export_id
+            and .retained == {kind:"completed_resolution_survey",id:$survey_id}
+            and .transport == {sha256:$sha256,size:$size}
+            and (.restore |
+              .schema_version == 1 and .outcome == $outcome and .probe == "deploy_health"
+              and .multiplier == 2 and .ceiling_seconds == 7200
+              and (.basis_seconds | seconds) and .basis_seconds <= 7200
+              and .budget_seconds == ([([.basis_seconds,1] | max) * 2,7200] | min)
+              and (.elapsed_seconds | seconds) and (.systemctl_status | seconds)
+              and (.budget_source == "last_recorded_duration" or
+                (.budget_source == "issue_913_startup_evidence" and .basis_seconds == 3540))
+              and (if .outcome == "restored" then
+                .reason == "ready" and .systemctl_status == 0
+                and .restart_to_ready_seconds == .elapsed_seconds
+                and .last_ready_duration_seconds == .restart_to_ready_seconds
+                and .elapsed_seconds <= .budget_seconds
+              else
+                .restart_to_ready_seconds == null
+                and ((.reason == "systemctl_failed" and .systemctl_status > 0) or
+                  (.reason == "readiness_timeout" and .systemctl_status == 0
+                    and .elapsed_seconds >= .budget_seconds))
+              end))
+          ' resolution-survey-restore.json >/dev/null
           scp "${ssh_opts[@]}" "${target}:${remote_output}" "$local_output"
           [[ "$(sha256sum "$local_output" | cut -d ' ' -f 1)" == "$reported_sha256" \
             && "$(stat -c '%s' "$local_output")" == "$reported_bytes" ]] || {
@@ -441,9 +480,10 @@ jobs:
           # Both remote paths are derived from typed identities.
           # shellcheck disable=SC2029
           ssh "${ssh_opts[@]}" "$target" \
-            "rm -f -- '$remote_input' '$remote_output'"
+            "rm -f -- '$remote_input' '$remote_output' '$remote_restore'"
           remote_possible=0
           {
+            echo "restore_outcome=$restore_outcome"
             echo "transport=$local_output"
             echo "transport_sha256=$reported_sha256"
             echo "transport_bytes=$reported_bytes"
@@ -495,6 +535,7 @@ jobs:
             resolution-survey-verification.json
             resolution-survey-input-verification.json
             resolution-survey-oracle-set.json
+            resolution-survey-restore.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
@@ -509,6 +550,12 @@ jobs:
           set -euo pipefail
           {
             echo "### Production resolution survey"
+            jq -r '
+              "- restore outcome: `\(.restore.outcome)`\n" +
+              "- restart to ready (seconds): `\(.restore.restart_to_ready_seconds)`\n" +
+              "- restore elapsed / budget (seconds): `\(.restore.elapsed_seconds) / \(.restore.budget_seconds)`\n" +
+              "- retained host evidence: `completed_resolution_survey/\(.retained.id)`"
+            ' resolution-survey-restore.json
             echo
             echo "- oracle run: \`$ORACLE_RUN_ID\`"
             echo "- GitHub artifact: \`$ARTIFACT_ID\`"
@@ -534,3 +581,14 @@ jobs:
                    else (.comparison.outcome_histogram | map("\(.pair.oracle)->\(.pair.candidate)=\(.count)") | join(", ")) end)
             ' resolution-survey-verification.json
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Require successful Remi restoration after survey upload
+        env:
+          RESTORE_OUTCOME: ${{ steps.survey.outputs.restore_outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RESTORE_OUTCOME" == restored ]] || {
+            echo "restore_failed: completed survey evidence was retained and uploaded" >&2
+            exit 1
+          }
