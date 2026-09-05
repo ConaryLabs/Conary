@@ -69,11 +69,12 @@ bash ./install-conary-preview.sh --apply --yes
 ```
 
 The native package runs `conary system init` on install, which creates the
-root-owned database and seeds the default repositories, including Remi. Then
-pick a source whose package format differs from the host and run the bounded
-loop:
+root-owned database and seeds the Remi repository definitions but does not
+download their metadata. Sync first, then pick a source whose package format
+differs from the host and run the bounded loop:
 
 ```bash
+sudo conary repo sync  # every enabled Remi feed; they are named remi-<profile>
 source=ubuntu-26.04  # on Fedora or Arch; use fedora-44 on Ubuntu
 sudo conary install htop --from "$source" --dry-run
 sudo conary install htop --from "$source" --yes
@@ -156,13 +157,21 @@ An install runs through one pipeline regardless of source format:
    source requirements against the typed host capability inventory.
 3. Preflight the exact lifecycle plan: stages, arguments, triggers, and
    payload boundaries in source-ABI order.
-4. Commit the transaction: store content in the CAS, record the changeset in
-   SQLite, build the generation artifact, and select it.
-5. Execute scriptlets and triggers inside an isolated selected root.
+4. Fetch content into the CAS and materialize an isolated selected root from
+   the current generation or DB/CAS state.
+5. Inside that root and one SQLite transaction, run the lifecycle scriptlets,
+   payload, config decisions, and triggers, then bind the exact selected-root
+   snapshot. Any failure here rolls back the database transaction and
+   discards the root; nothing has been committed yet.
+6. Commit SQLite, then publish the recorded generation and select it. A
+   publication failure after commit leaves typed debt for deterministic
+   retry.
 
-The full contract is in
-[docs/specs/foreign-package-lifecycle-contracts.md](docs/specs/foreign-package-lifecycle-contracts.md)
-and the subsystem map in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+That ordering is implemented in
+`apps/conary/src/commands/install/batch/execution.rs` and documented under
+"Composefs-native transactions" in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The lifecycle contract itself is
+[docs/specs/foreign-package-lifecycle-contracts.md](docs/specs/foreign-package-lifecycle-contracts.md).
 
 Conary is a virtual Rust workspace:
 
