@@ -46,8 +46,7 @@ jobs:
             exit 1
           }
           merge_base="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
-          git diff --name-only "$merge_base" "$HEAD_SHA" |
-            bash scripts/pr-gate-scope.sh | tee -a "$GITHUB_OUTPUT"
+          bash scripts/pr-gate-scope.sh "$merge_base" "$HEAD_SHA" | tee -a "$GITHUB_OUTPUT"
 
   native-matrix-artifacts:
     name: native-matrix-artifacts

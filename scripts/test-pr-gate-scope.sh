@@ -35,6 +35,37 @@ expect "empty change list fails closed" true ""
 expect "missing trailing newline is still read" false "docs/a.md"
 expect "cargo manifest runs the matrices" true "Cargo.toml\n"
 
+# Revision mode must not let rename detection hide a runtime-impacting source.
+fixture="$(mktemp -d)"
+trap 'rm -rf "$fixture"' EXIT
+(
+  cd "$fixture"
+  git init -q
+  git config user.email test@example.invalid
+  git config user.name test
+  printf 'FROM scratch\n' > Containerfile
+  git add Containerfile
+  git commit -q -m base
+  base="$(git rev-parse HEAD)"
+  git mv Containerfile README.md
+  git commit -q -m rename
+  head="$(git rev-parse HEAD)"
+  actual="$(bash "$repo_root/scripts/pr-gate-scope.sh" "$base" "$head")"
+  [[ "$actual" == "native_matrices=true" ]] || {
+    echo "FAIL: renamed runtime file must run the matrices, got '$actual'" >&2
+    exit 1
+  }
+  printf '# doc\n' >> README.md
+  git commit -q -am docs
+  docs_head="$(git rev-parse HEAD)"
+  actual="$(bash "$repo_root/scripts/pr-gate-scope.sh" "$head" "$docs_head")"
+  [[ "$actual" == "native_matrices=false" ]] || {
+    echo "FAIL: markdown-only revision range must skip the matrices, got '$actual'" >&2
+    exit 1
+  }
+  echo "ok: revision mode disables rename detection"
+) || failures=$((failures + 1))
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures pr-gate scope checks failed" >&2
   exit 1
