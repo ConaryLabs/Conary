@@ -97,7 +97,7 @@ partial attempts are useful too.
 
 ```text
 I've been using Codex as one of the coding and review agents while building
-Conary, a free, MIT-licensed Rust package manager and Linux system manager.
+Conary, a free, MIT/Apache-2.0-licensed Rust package manager and Linux system manager.
 
 This is a real multi-crate systems project. AGENTS.md defines the repository
 contract, a path router identifies each subsystem's owner and proof, and the
@@ -136,7 +136,7 @@ partial attempts, and unpleasant surprises are useful evidence.
 
 ```text
 I built Conary, a Rust package manager and Linux system manager, with Claude
-Code as one of the coding and review agents. It is MIT-licensed, has no paid
+Code as one of the coding and review agents. It is MIT/Apache-2.0-licensed, has no paid
 tier, and requires no sign-up.
 
 Claude Code worked from a repo-owned contract: CLAUDE.md imports AGENTS.md, and

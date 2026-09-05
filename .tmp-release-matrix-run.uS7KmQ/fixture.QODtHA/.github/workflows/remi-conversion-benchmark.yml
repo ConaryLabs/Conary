@@ -1,0 +1,1297 @@
+name: remi-conversion-benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_run_id:
+        description: Successful private-candidate deployment run owning the benchmark authority.
+        required: true
+        type: string
+      profile:
+        description: Exact public source profile to benchmark.
+        required: true
+        type: choice
+        options:
+          - fedora-44
+          - ubuntu-26.04
+          - arch
+      profile_revision_sha256:
+        description: Exact registered profile revision to hold constant across benchmark runs.
+        required: true
+        type: string
+      package_key_sha256:
+        description: Exact immutable-catalog package-key SHA-256.
+        required: true
+        type: string
+      source_url:
+        description: Credential-free HTTPS URL for the exact native source artifact.
+        required: true
+        type: string
+      source_sha256:
+        description: Exact lowercase SHA-256 of the native source artifact.
+        required: true
+        type: string
+      source_size_bytes:
+        description: Exact native source artifact size in bytes.
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: deploy-and-verify
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: benchmark exact production conversion
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: production
+    steps:
+      - name: Check out exact protected benchmark operator
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a protected-main workflow revision
+        env:
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || {
+            echo "conversion benchmark must be dispatched from main" >&2
+            exit 1
+          }
+          [[ "$WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "workflow authority is not a canonical commit SHA" >&2
+            exit 1
+          }
+          [[ "$(git rev-parse HEAD)" == "$WORKFLOW_SHA" ]] || {
+            echo "checkout does not match the executing workflow revision" >&2
+            exit 1
+          }
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
+            echo "benchmark operator must already be merged into origin/main" >&2
+            exit 1
+          }
+
+      - name: Bind successful exact private-candidate deployment
+        id: deployment
+        env:
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[0-9]+$ ]] || {
+            echo "deployment_run_id must be a decimal GitHub Actions run id" >&2
+            exit 1
+          }
+          source_run="$(gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${DEPLOYMENT_RUN_ID}")"
+          jq -e \
+            --argjson run_id "$DEPLOYMENT_RUN_ID" \
+            --arg repository "$GITHUB_REPOSITORY" '
+              .id == $run_id
+              and .event == "workflow_dispatch"
+              and .status == "completed"
+              and .conclusion == "success"
+              and .head_branch == "main"
+              and .head_repository.full_name == $repository
+              and (.head_sha | test("^[0-9a-f]{40}$"))
+              and (.path | startswith(".github/workflows/deploy-remi-candidate.yml"))
+            ' <<<"$source_run" >/dev/null || {
+              echo "source run is not an exact successful protected-main Remi deployment" >&2
+              exit 1
+            }
+          echo "head_sha=$(jq -r '.head_sha' <<<"$source_run")" >> "$GITHUB_OUTPUT"
+
+      - name: Download exact sanitized deployment evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: remi-deployment-inspection-${{ inputs.deployment_run_id }}
+          path: ${{ runner.temp }}/deployment-inspection
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.deployment_run_id }}
+
+      - name: Reopen exact deployment and candidate identities
+        id: authority
+        env:
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          INSPECTION_DIR: ${{ runner.temp }}/deployment-inspection
+          PROFILE: ${{ inputs.profile }}
+          REQUESTED_REVISION: ${{ inputs.profile_revision_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          inspection="$INSPECTION_DIR/remi-deployment-inspection.json"
+          manifest="$INSPECTION_DIR/remi-candidate-manifest.json"
+          for evidence in "$inspection" "$manifest"; do
+            [[ -f "$evidence" && ! -L "$evidence" ]] || {
+              echo "deployment artifact is missing required regular evidence" >&2
+              exit 1
+            }
+          done
+          case "$PROFILE" in
+            fedora-44|ubuntu-26.04|arch) ;;
+            *)
+              echo "unsupported benchmark profile" >&2
+              exit 1
+              ;;
+          esac
+          [[ "$REQUESTED_REVISION" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "profile_revision_sha256 must be an exact lowercase SHA-256" >&2
+            exit 1
+          }
+
+          jq -e \
+            --arg commit "$DEPLOYED_COMMIT_SHA" \
+            --arg profile "$PROFILE" '
+              . as $inspection
+              | .deployment_evidence_schema_version == 3
+              and .inspection_available == true
+              and .deployment.commit_sha == $commit
+              and (.deployment.binary_sha256 | test("^[0-9a-f]{64}$"))
+              and .deployment.completion_mode == "private-candidates"
+              and .deployment.outcome == "complete"
+              and .deployment.failure_phase == null
+              and (.deployment.transition_completed_at | type == "number")
+              and (.deployment.repository_refreshes | type == "array")
+              and (.deployment.repository_refreshes | length) >= 1
+              and .deployment.repository_refreshes[0].scope == {kind: "all"}
+              and (.candidates | map(.profile))
+                == ["fedora-44", "ubuntu-26.04", "arch"]
+              and all(.candidates[];
+                (.profile_revision_sha256 | test("^[0-9a-f]{64}$"))
+                and (.run_id | type == "string")
+                and (.packages | type == "number")
+                and .packages > 0
+                and (.configured_sources | type == "number")
+                and .configured_sources > 0
+                and .latest_refresh.run_id == .run_id
+                and .latest_refresh.state == "candidate"
+                and (.latest_refresh.started_at | type == "number")
+                and (.latest_refresh.finished_at | type == "number")
+                and (.latest_refresh.finished_at
+                  > $inspection.deployment.transition_completed_at)
+                and (. as $candidate
+                  | any($inspection.deployment.repository_refreshes[];
+                      (.successful_profiles | index($candidate.profile)) != null
+                      and $candidate.latest_refresh.started_at >= .started_at
+                      and $candidate.latest_refresh.finished_at <= .finished_at)))
+              and any(.candidates[]; .profile == $profile)
+            ' "$inspection" >/dev/null || {
+              echo "deployment evidence does not prove the selected exact private candidate" >&2
+              exit 1
+            }
+
+          binary_sha256="$(jq -er '.deployment.binary_sha256' "$inspection")"
+          jq -e \
+            --arg commit "$DEPLOYED_COMMIT_SHA" \
+            --arg binary_sha256 "$binary_sha256" '
+              .schema_version == 2
+              and .source.commit_sha == $commit
+              and .source.clean == true
+              and .build.package == "remi"
+              and (.build.version | type == "string" and length > 0)
+              and .build.profile == "release"
+              and .build.command == "cargo build -p remi --release --locked"
+              and .build.conary_git_commit == $commit
+              and .build.conary_git_dirty == "false"
+              and .artifact.binary_sha256 == $binary_sha256
+              and (.artifact.binary_bytes | type == "number")
+              and .artifact.binary_bytes > 0
+            ' "$manifest" >/dev/null || {
+              echo "candidate manifest does not bind the clean exact deployed binary" >&2
+              exit 1
+            }
+
+          cp -- "$inspection" remi-deployment-inspection.json
+          cp -- "$manifest" remi-candidate-manifest.json
+          {
+            echo "revision=$REQUESTED_REVISION"
+            echo "binary_sha256=$binary_sha256"
+            echo "version=$(jq -er '.build.version' "$manifest")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Acquire and authenticate exact source bytes
+        env:
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          PACKAGE_KEY_SHA256: ${{ inputs.package_key_sha256 }}
+          PROFILE: ${{ inputs.profile }}
+          REVISION: ${{ steps.authority.outputs.revision }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          SOURCE_SIZE_BYTES: ${{ inputs.source_size_bytes }}
+          SOURCE_URL: ${{ inputs.source_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PACKAGE_KEY_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "package_key_sha256 must be an exact lowercase SHA-256" >&2
+            exit 1
+          }
+          [[ "$SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "source_sha256 must be an exact lowercase SHA-256" >&2
+            exit 1
+          }
+          [[ "$SOURCE_SIZE_BYTES" =~ ^[1-9][0-9]{0,9}$ ]] || {
+            echo "source_size_bytes must be a positive decimal byte count" >&2
+            exit 1
+          }
+          source_size=$((10#$SOURCE_SIZE_BYTES))
+          (( source_size <= 8 * 1024 * 1024 * 1024 )) || {
+            echo "source_size_bytes exceeds the 8 GiB production staging limit" >&2
+            exit 1
+          }
+          python3 - <<'PY'
+          import os
+          from urllib.parse import urlsplit
+
+          value = os.environ["SOURCE_URL"]
+          parsed = urlsplit(value)
+          valid = (
+              1 <= len(value) <= 4096
+              and all(ord(character) >= 0x20 for character in value)
+              and parsed.scheme == "https"
+              and parsed.hostname is not None
+              and parsed.username is None
+              and parsed.password is None
+              and not parsed.query
+              and not parsed.fragment
+          )
+          if not valid:
+              raise SystemExit("source_url must be one credential-free HTTPS URL without query or fragment")
+          PY
+
+          source_path="${RUNNER_TEMP}/remi-conversion-source.native"
+          curl_error="${RUNNER_TEMP}/remi-conversion-source-curl.stderr"
+          rm -f -- "$source_path" "$curl_error"
+          if ! curl \
+            --proto '=https' \
+            --proto-redir '=https' \
+            --location \
+            --fail \
+            --silent \
+            --connect-timeout 30 \
+            --max-time 3600 \
+            --max-filesize "$source_size" \
+            --output "$source_path" \
+            "$SOURCE_URL" 2>"$curl_error"; then
+            rm -f -- "$source_path" "$curl_error"
+            echo "exact source artifact download failed" >&2
+            exit 1
+          fi
+          rm -f -- "$curl_error"
+          [[ -f "$source_path" && ! -L "$source_path" ]] || {
+            echo "downloaded source artifact is not a regular file" >&2
+            exit 1
+          }
+          observed_size="$(stat -c %s -- "$source_path")"
+          observed_sha256="$(sha256sum "$source_path" | cut -d ' ' -f 1)"
+          [[ "$observed_size" == "$SOURCE_SIZE_BYTES" ]] || {
+            echo "downloaded source artifact size differs from the exact input" >&2
+            exit 1
+          }
+          [[ "$observed_sha256" == "$SOURCE_SHA256" ]] || {
+            echo "downloaded source artifact digest differs from the exact input" >&2
+            exit 1
+          }
+          chmod 0600 "$source_path"
+
+          jq -n \
+            --argjson deployment_run_id "$DEPLOYMENT_RUN_ID" \
+            --arg deployed_commit_sha "$DEPLOYED_COMMIT_SHA" \
+            --arg profile "$PROFILE" \
+            --arg revision "$REVISION" \
+            --arg package_key_sha256 "$PACKAGE_KEY_SHA256" \
+            --arg source_sha256 "$SOURCE_SHA256" \
+            --argjson source_size_bytes "$SOURCE_SIZE_BYTES" '
+              {
+                schema_version: 1,
+                deployment_run_id: $deployment_run_id,
+                deployed_commit_sha: $deployed_commit_sha,
+                profile: $profile,
+                profile_revision_sha256: $revision,
+                package_key_sha256: $package_key_sha256,
+                source_artifact: {
+                  acquisition: "credential_free_https",
+                  sha256: $source_sha256,
+                  size_bytes: $source_size_bytes
+                }
+              }
+            ' > remi-conversion-source-verification-v1.json
+
+      - name: Configure pinned production SSH
+        id: production-ssh
+        uses: ./.github/actions/setup-pinned-production-ssh
+        with:
+          private-key: ${{ secrets.REMI_SSH_KEY }}
+          known-hosts: ${{ secrets.REMI_SSH_KNOWN_HOSTS }}
+          target: ${{ secrets.REMI_SSH_TARGET }}
+      - name: Run through the fixed production helper
+        id: benchmark
+        env:
+          BINARY_SHA256: ${{ steps.authority.outputs.binary_sha256 }}
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          DEPLOYMENT_RUN_ID: ${{ inputs.deployment_run_id }}
+          PACKAGE_KEY_SHA256: ${{ inputs.package_key_sha256 }}
+          PROFILE: ${{ inputs.profile }}
+          REMI_SSH_CONFIG: ${{ steps.production-ssh.outputs.config-path }}
+          REMI_SSH_KEY_PATH: ${{ steps.production-ssh.outputs.key-path }}
+          REMI_SSH_KNOWN_HOSTS_PATH: ${{ steps.production-ssh.outputs.known-hosts-path }}
+          REMI_SSH_TARGET: ${{ secrets.REMI_SSH_TARGET }}
+          REMI_VERSION: ${{ steps.authority.outputs.version }}
+          REVISION: ${{ steps.authority.outputs.revision }}
+          SOURCE_SHA256: ${{ inputs.source_sha256 }}
+          SOURCE_SIZE_BYTES: ${{ inputs.source_size_bytes }}
+          WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          target="$REMI_SSH_TARGET"
+          for digest in "$BINARY_SHA256" "$REVISION" "$PACKAGE_KEY_SHA256" "$SOURCE_SHA256"; do
+            [[ "$digest" =~ ^[0-9a-f]{64}$ ]] || {
+              echo "benchmark authority contains a malformed SHA-256" >&2
+              exit 1
+            }
+          done
+          [[ "$DEPLOYMENT_RUN_ID" =~ ^[1-9][0-9]*$ \
+            && "$WORKFLOW_RUN_ID" =~ ^[1-9][0-9]*$ \
+            && "$WORKFLOW_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ \
+            && "$REMI_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+              echo "benchmark run identity is malformed" >&2
+              exit 1
+          }
+
+          benchmark_id="${DEPLOYMENT_RUN_ID}-${WORKFLOW_RUN_ID}-${WORKFLOW_RUN_ATTEMPT}"
+          remote_source="/tmp/remi-conversion-source-${benchmark_id}.native"
+          remote_transport="/tmp/remi-conversion-benchmark-${benchmark_id}.json"
+          remote_helper="/tmp/remi-deploy-helper-${benchmark_id}"
+          local_source="${RUNNER_TEMP}/remi-conversion-source.native"
+          local_transport="${RUNNER_TEMP}/remi-conversion-benchmark-${benchmark_id}.json"
+          helper="${RUNNER_TEMP}/remi-deploy-helper-${benchmark_id}"
+          key="$REMI_SSH_KEY_PATH"
+          known_hosts="$REMI_SSH_KNOWN_HOSTS_PATH"
+          helper_stdout="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stdout"
+          helper_stderr="${RUNNER_TEMP}/remi-conversion-benchmark-helper.stderr"
+          failure_record="remi-conversion-benchmark-failure-v1.json"
+          failure_record_next="${failure_record}.next"
+          remote_cleanup_possible=0
+          cleanup() {
+            status=$?
+            set +e
+            if (( remote_cleanup_possible == 1 )); then
+              # Every interpolated remote path is derived from decimal run ids.
+              # shellcheck disable=SC2029
+              ssh "${ssh_opts[@]}" "$target" \
+                "rm -f -- '$remote_source' '$remote_transport' '$remote_helper'" \
+                >/dev/null 2>&1
+            fi
+            rm -f -- \
+              "$key" \
+              "$known_hosts" \
+              "$helper" \
+              "$helper_stdout" \
+              "$helper_stderr" \
+              "$failure_record_next" \
+              "$local_source"
+            set -e
+            return "$status"
+          }
+          trap cleanup EXIT
+          rm -f -- "$failure_record" "$failure_record_next"
+
+          [[ -f "$local_source" && ! -L "$local_source" ]] || {
+            echo "authenticated runner source artifact disappeared" >&2
+            exit 1
+          }
+          [[ "$(stat -c %s -- "$local_source")" == "$SOURCE_SIZE_BYTES" \
+            && "$(sha256sum "$local_source" | cut -d ' ' -f 1)" == "$SOURCE_SHA256" ]] || {
+              echo "authenticated runner source artifact changed before staging" >&2
+              exit 1
+          }
+
+          git show "${WORKFLOW_SHA}:deploy/remi-deploy-helper.sh" > "$helper"
+          [[ -s "$helper" && ! -L "$helper" ]] || {
+            echo "exact workflow authority has no regular Remi deploy helper" >&2
+            exit 1
+          }
+          helper_sha256="$(sha256sum "$helper" | cut -d ' ' -f 1)"
+
+          ssh_opts=(-F "$REMI_SSH_CONFIG")
+
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy verify-access"
+          remote_cleanup_possible=1
+          scp "${ssh_opts[@]}" "$helper" "${target}:${remote_helper}"
+          # Every interpolated remote value is typed above.
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy install-helper '$helper_sha256' '$remote_helper'"
+          scp "${ssh_opts[@]}" "$local_source" "${target}:${remote_source}"
+
+          # Every interpolated helper argument is typed above.
+          rm -f -- "$helper_stdout" "$helper_stderr"
+          set +e
+          # shellcheck disable=SC2029
+          ssh "${ssh_opts[@]}" "$target" \
+            "sudo -n /usr/local/sbin/conary-remi-deploy benchmark-remi-conversion '$benchmark_id' '$BINARY_SHA256' '$PROFILE' '$REVISION' '$PACKAGE_KEY_SHA256' '$SOURCE_SHA256' '$SOURCE_SIZE_BYTES'" \
+            >"$helper_stdout" 2>"$helper_stderr"
+          helper_status=$?
+          set -e
+          [[ -f "$helper_stdout" && ! -L "$helper_stdout" \
+            && -f "$helper_stderr" && ! -L "$helper_stderr" ]] || {
+              rm -f -- "$helper_stdout" "$helper_stderr"
+              echo "production helper did not return isolated regular output" >&2
+              exit 1
+          }
+          rm -f -- "$helper_stderr"
+          [[ ! -e "$helper_stderr" ]] || {
+            echo "private production helper diagnostics were not removed" >&2
+            exit 1
+          }
+
+          stdout_shape_valid=false
+          helper_record=""
+          if stdout_bytes="$(stat -c %s -- "$helper_stdout")" \
+            && [[ "$stdout_bytes" =~ ^[1-9][0-9]{0,3}$ ]] \
+            && (( stdout_bytes <= 4096 )) \
+            && [[ "$(wc -l < "$helper_stdout")" == "1" ]] \
+            && grep -aEx '[ -~]+' "$helper_stdout" >/dev/null; then
+              IFS= read -r helper_record < "$helper_stdout"
+              if (( ${#helper_record} + 1 == stdout_bytes )); then
+                stdout_shape_valid=true
+              fi
+          fi
+
+          success_record_valid=false
+          reported_sha256=""
+          reported_bytes=""
+          if (( helper_status == 0 )) && [[ "$stdout_shape_valid" == "true" ]]; then
+            label=""
+            operation=""
+            run_field=""
+            transport_field=""
+            sha_field=""
+            bytes_field=""
+            extra=""
+            read -r label operation run_field transport_field sha_field bytes_field extra \
+              <<<"$helper_record"
+            if [[ "$label" == "Conversion" \
+              && "$operation" == "benchmark:" \
+              && "$run_field" == "run=${benchmark_id}" \
+              && "$transport_field" == "transport=${remote_transport}" \
+              && "$sha_field" =~ ^sha256=[0-9a-f]{64}$ \
+              && "$bytes_field" =~ ^bytes=[1-9][0-9]{0,7}$ \
+              && -z "$extra" ]]; then
+                reported_sha256="${sha_field#sha256=}"
+                reported_bytes="${bytes_field#bytes=}"
+                expected_success_record="Conversion benchmark: run=${benchmark_id} transport=${remote_transport} sha256=${reported_sha256} bytes=${reported_bytes}"
+                if [[ "$helper_record" == "$expected_success_record" ]] \
+                  && (( 10#$reported_bytes <= 16 * 1024 * 1024 )); then
+                    success_record_valid=true
+                fi
+            fi
+          fi
+
+          helper_envelope_valid=false
+          failure_stage="helper-envelope-invalid"
+          helper_status_json=null
+          service_outcome=""
+          envelope_prefix='Conversion benchmark failure: '
+          if (( helper_status >= 1 && helper_status <= 254 )) \
+            && [[ "$stdout_shape_valid" == "true" \
+              && "$helper_record" == "$envelope_prefix"* ]]; then
+              envelope_json="${helper_record:${#envelope_prefix}}"
+              if canonical_envelope="$(jq -cer \
+                --argjson observed_status "$helper_status" '
+                  def early_stage:
+                    . == "request-validation"
+                    or . == "runtime-authority"
+                    or . == "systemctl-authority"
+                    or . == "account-identity"
+                    or . == "binary-config-authority"
+                    or . == "live-root-authority"
+                    or . == "work-root-type"
+                    or . == "work-root-owner"
+                    or . == "work-root-mode"
+                    or . == "work-root-resolution"
+                    or . == "work-root-separation"
+                    or . == "work-root-filesystem"
+                    or . == "work-root-device"
+                    or . == "benchmark-root-authority"
+                    or . == "input-target-authority"
+                    or . == "source-authentication"
+                    or . == "binary-authentication"
+                    or . == "private-config-copy"
+                    or . == "private-source-copy"
+                    or . == "service-active";
+                  def stopped_stage:
+                    . == "service-stop"
+                    or . == "benchmark-command"
+                    or . == "raw-report-validation"
+                    or . == "public-sidecar-validation"
+                    or . == "service-restore";
+                  def allowed_stage:
+                    early_stage
+                    or stopped_stage
+                    or . == "transport-publication"
+                    or . == "internal";
+                  def allowed_outcome:
+                    . == "not-stopped"
+                    or . == "restored"
+                    or . == "restore-failed";
+                  def stage_outcome($outcome):
+                    if early_stage then $outcome == "not-stopped"
+                    elif stopped_stage then
+                      $outcome == "restored" or $outcome == "restore-failed"
+                    elif . == "transport-publication" then $outcome == "restored"
+                    elif . == "internal" then ($outcome | allowed_outcome)
+                    else false
+                    end;
+                  if type == "object"
+                    and (keys | sort)
+                      == ["schema_version", "service_outcome", "stage", "status"]
+                    and .schema_version == 1
+                    and (.stage | type == "string" and allowed_stage)
+                    and (.status | type == "number"
+                      and floor == . and . >= 1 and . <= 254)
+                    and .status == $observed_status
+                    and (.service_outcome | type == "string" and allowed_outcome)
+                    and (.stage as $stage | .service_outcome as $outcome
+                      | $stage | stage_outcome($outcome))
+                  then {
+                    schema_version: .schema_version,
+                    stage: .stage,
+                    status: .status,
+                    service_outcome: .service_outcome
+                  }
+                  else error("invalid conversion benchmark helper failure envelope")
+                  end
+                ' <<<"$envelope_json" 2>/dev/null)" \
+                && [[ "$canonical_envelope" == "$envelope_json" ]]; then
+                  helper_envelope_valid=true
+                  failure_stage="$(jq -er '.stage' <<<"$canonical_envelope")"
+                  helper_status_json="$helper_status"
+                  service_outcome="$(jq -er '.service_outcome' <<<"$canonical_envelope")"
+              fi
+          fi
+
+          rm -f -- "$helper_stdout"
+          [[ ! -e "$helper_stdout" ]] || {
+            echo "production helper output was not removed after validation" >&2
+            exit 1
+          }
+
+          if (( helper_status != 0 )) || [[ "$success_record_valid" != "true" ]]; then
+            jq -cne \
+              --arg benchmark_id "$benchmark_id" \
+              --arg binary_sha256 "$BINARY_SHA256" \
+              --arg binary_version "$REMI_VERSION" \
+              --arg deployed_commit_sha "$DEPLOYED_COMMIT_SHA" \
+              --argjson deployment_run_id "$DEPLOYMENT_RUN_ID" \
+              --arg failure_stage "$failure_stage" \
+              --argjson helper_envelope_valid "$helper_envelope_valid" \
+              --arg helper_sha256 "$helper_sha256" \
+              --argjson helper_status "$helper_status_json" \
+              --argjson ssh_status "$helper_status" \
+              --arg package_key_sha256 "$PACKAGE_KEY_SHA256" \
+              --arg profile "$PROFILE" \
+              --arg revision "$REVISION" \
+              --arg service_outcome "$service_outcome" \
+              --arg source_sha256 "$SOURCE_SHA256" \
+              --argjson source_size_bytes "$SOURCE_SIZE_BYTES" \
+              --arg workflow_commit_sha "$WORKFLOW_SHA" \
+              --argjson workflow_run_attempt "$WORKFLOW_RUN_ATTEMPT" \
+              --argjson workflow_run_id "$WORKFLOW_RUN_ID" '
+                {
+                  schema_version: 1,
+                  evidence_class: "conversion-benchmark-failure",
+                  benchmark_id: $benchmark_id,
+                  deployment: {
+                    run_id: $deployment_run_id,
+                    commit_sha: $deployed_commit_sha,
+                    binary_sha256: $binary_sha256,
+                    binary_version: $binary_version
+                  },
+                  workflow: {
+                    commit_sha: $workflow_commit_sha,
+                    helper_sha256: $helper_sha256,
+                    run_id: $workflow_run_id,
+                    run_attempt: $workflow_run_attempt
+                  },
+                  request: {
+                    profile: $profile,
+                    profile_revision_sha256: $revision,
+                    package_key_sha256: $package_key_sha256,
+                    source_artifact_sha256: $source_sha256,
+                    source_size_bytes: $source_size_bytes
+                  },
+                  failure: {
+                    stage: $failure_stage,
+                    ssh_status: $ssh_status,
+                    helper_status: $helper_status,
+                    service_outcome:
+                      (if $helper_envelope_valid then $service_outcome else null end),
+                    helper_envelope_valid: $helper_envelope_valid
+                  }
+                }
+              ' > "$failure_record_next"
+            chmod 0600 "$failure_record_next"
+            jq -e '
+              def sha256: type == "string" and test("^[0-9a-f]{64}$");
+              def commit: type == "string" and test("^[0-9a-f]{40}$");
+              def early_stage:
+                . == "request-validation"
+                or . == "runtime-authority"
+                or . == "systemctl-authority"
+                or . == "account-identity"
+                or . == "binary-config-authority"
+                or . == "live-root-authority"
+                or . == "work-root-type"
+                or . == "work-root-owner"
+                or . == "work-root-mode"
+                or . == "work-root-resolution"
+                or . == "work-root-separation"
+                or . == "work-root-filesystem"
+                or . == "work-root-device"
+                or . == "benchmark-root-authority"
+                or . == "input-target-authority"
+                or . == "source-authentication"
+                or . == "binary-authentication"
+                or . == "private-config-copy"
+                or . == "private-source-copy"
+                or . == "service-active";
+              def stopped_stage:
+                . == "service-stop"
+                or . == "benchmark-command"
+                or . == "raw-report-validation"
+                or . == "public-sidecar-validation"
+                or . == "service-restore";
+              def helper_stage:
+                early_stage
+                or stopped_stage
+                or . == "transport-publication"
+                or . == "internal";
+              def allowed_outcome:
+                . == "not-stopped"
+                or . == "restored"
+                or . == "restore-failed";
+              def stage_outcome($outcome):
+                if early_stage then $outcome == "not-stopped"
+                elif stopped_stage then
+                  $outcome == "restored" or $outcome == "restore-failed"
+                elif . == "transport-publication" then $outcome == "restored"
+                elif . == "internal" then ($outcome | allowed_outcome)
+                else false
+                end;
+              (keys | sort)
+                == ["benchmark_id", "deployment", "evidence_class", "failure", "request", "schema_version", "workflow"]
+              and .schema_version == 1
+              and .evidence_class == "conversion-benchmark-failure"
+              and (.benchmark_id | type == "string"
+                and test("^[1-9][0-9]*-[1-9][0-9]*-[1-9][0-9]*$"))
+              and (.deployment | keys | sort)
+                == ["binary_sha256", "binary_version", "commit_sha", "run_id"]
+              and (.deployment.run_id | type == "number" and floor == . and . > 0)
+              and (.deployment.commit_sha | commit)
+              and (.deployment.binary_sha256 | sha256)
+              and (.deployment.binary_version | type == "string"
+                and test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))
+              and (.workflow | keys | sort)
+                == ["commit_sha", "helper_sha256", "run_attempt", "run_id"]
+              and (.workflow.commit_sha | commit)
+              and (.workflow.helper_sha256 | sha256)
+              and (.workflow.run_id | type == "number" and floor == . and . > 0)
+              and (.workflow.run_attempt | type == "number" and floor == . and . > 0)
+              and (.request | keys | sort)
+                == ["package_key_sha256", "profile", "profile_revision_sha256", "source_artifact_sha256", "source_size_bytes"]
+              and (.request.profile == "fedora-44"
+                or .request.profile == "ubuntu-26.04"
+                or .request.profile == "arch")
+              and (.request.profile_revision_sha256 | sha256)
+              and (.request.package_key_sha256 | sha256)
+              and (.request.source_artifact_sha256 | sha256)
+              and (.request.source_size_bytes | type == "number"
+                and floor == . and . > 0 and . <= 8589934592)
+              and (.failure | keys | sort)
+                == ["helper_envelope_valid", "helper_status", "service_outcome", "ssh_status", "stage"]
+              and ((.failure.helper_envelope_valid | type) == "boolean")
+              and (.failure.ssh_status | type == "number"
+                and floor == . and . >= 0 and . <= 255)
+              and (if .failure.helper_envelope_valid
+                then (.failure.helper_status | type == "number"
+                    and floor == . and . >= 1 and . <= 254)
+                  and .failure.helper_status == .failure.ssh_status
+                  and (.failure.stage | type == "string" and helper_stage)
+                  and (.failure.service_outcome | type == "string" and allowed_outcome)
+                  and (.failure.stage as $stage
+                    | .failure.service_outcome as $outcome
+                    | $stage | stage_outcome($outcome))
+                else .failure.stage == "helper-envelope-invalid"
+                  and .failure.helper_status == null
+                  and .failure.service_outcome == null
+                end)
+              and all(.. | strings;
+                length <= 4096
+                and (contains("/") | not)
+                and (contains("\\") | not)
+                and (test("[[:cntrl:]]") | not))
+            ' "$failure_record_next" >/dev/null || {
+              echo "conversion benchmark failure evidence is invalid" >&2
+              exit 1
+            }
+            mv -- "$failure_record_next" "$failure_record"
+            echo "result=failure" >> "$GITHUB_OUTPUT"
+            echo "fixed production conversion benchmark operation failed" >&2
+            exit 0
+          fi
+
+          scp "${ssh_opts[@]}" "${target}:${remote_transport}" "$local_transport"
+          [[ -f "$local_transport" && ! -L "$local_transport" ]] || {
+            echo "benchmark public transport is not a regular file" >&2
+            exit 1
+          }
+          observed_sha256="$(sha256sum "$local_transport" | cut -d ' ' -f 1)"
+          observed_bytes="$(stat -c %s -- "$local_transport")"
+          [[ "$observed_sha256" == "$reported_sha256" \
+            && "$observed_bytes" == "$reported_bytes" ]] || {
+              echo "benchmark public transport changed across SSH" >&2
+              exit 1
+          }
+
+          jq -e \
+            --arg binary_sha256 "$BINARY_SHA256" \
+            --arg commit "$DEPLOYED_COMMIT_SHA" \
+            --arg package_key_sha256 "$PACKAGE_KEY_SHA256" \
+            --arg profile "$PROFILE" \
+            --arg remi_version "$REMI_VERSION" \
+            --arg revision "$REVISION" \
+            --arg source_sha256 "$SOURCE_SHA256" \
+            --argjson source_size_bytes "$SOURCE_SIZE_BYTES" '
+              def sha256: type == "string" and test("^[0-9a-f]{64}$");
+              def uint:
+                type == "number"
+                and . >= 0
+                and . <= 9007199254740991
+                and floor == .;
+              def positive_uint:
+                uint and . > 0;
+              def expected_roots: [
+                "benchmark_cache",
+                "benchmark_chunks",
+                "benchmark_database",
+                "operator_source_artifact",
+                "repository_keys",
+                "source_catalogs",
+                "source_config",
+                "source_database",
+                "staged_source_artifact",
+                "work_root"
+              ];
+              def timing_shape_without_work:
+                (keys | sort) == [
+                  "distro",
+                  "package",
+                  "phases",
+                  "skipped_phases",
+                  "source",
+                  "success",
+                  "total_ms",
+                  "version",
+                  "work"
+                ]
+                and (.distro | type == "string" and length > 0)
+                and (.package | type == "string" and length > 0)
+                and (.version | type == "string" and length > 0)
+                and (.source | (keys | sort)) == [
+                  "architecture",
+                  "checksum",
+                  "declared_size_bytes",
+                  "source_profile",
+                  "version"
+                ]
+                and (.source.source_profile | type == "string" and length > 0)
+                and (.source.version | type == "string" and length > 0)
+                and (.source.architecture == null
+                  or (.source.architecture | type == "string" and length > 0))
+                and (.source.checksum | type == "string" and length > 0)
+                and (.source.declared_size_bytes | positive_uint)
+                and (.phases | type == "array")
+                and all(.phases[];
+                  (keys | sort) == ["duration_ms", "phase"]
+                  and (.phase | type == "string" and length > 0)
+                  and (.duration_ms | uint))
+                and (.skipped_phases | type == "array")
+                and all(.skipped_phases[]; type == "string" and length > 0)
+                and (.total_ms | uint)
+                and .success == true;
+              def work_shape:
+                (keys | sort) == [
+                  "admitted_local_bytes",
+                  "archive_compression_block_bytes",
+                  "archive_compression_blocks",
+                  "archive_compression_buffer_ceiling_bytes",
+                  "archive_compression_input_bytes",
+                  "archive_compression_workers",
+                  "archive_input_bytes",
+                  "archive_members_traversed",
+                  "cas_canonical_bytes_reread",
+                  "cas_canonical_name_barriers",
+                  "cas_fallback_directory_syncs",
+                  "cas_fallback_object_syncs",
+                  "cas_hits",
+                  "cas_incoming_bytes_hashed",
+                  "cas_misses",
+                  "cas_objects_hashed",
+                  "cas_persistent_bytes_written",
+                  "cas_race_losers",
+                  "cas_staged_data_barriers",
+                  "ccs_output_bytes",
+                  "ccs_output_bytes_hashed",
+                  "complete_archive_copy_bytes",
+                  "complete_archive_hash_bytes",
+                  "downloaded_bytes",
+                  "independent_transport_reopen_ccs_bytes",
+                  "independent_transport_reopen_decode_block_bytes",
+                  "independent_transport_reopen_decode_blocks",
+                  "independent_transport_reopen_decode_buffer_ceiling_bytes",
+                  "independent_transport_reopen_decode_workers",
+                  "independent_transport_reopen_decoded_bytes",
+                  "independent_transport_reopen_object_bytes_hashed",
+                  "maximum_retained_staging_bytes",
+                  "native_archive_entries_traversed",
+                  "native_archive_passes",
+                  "native_decompressed_archive_bytes_read",
+                  "native_intermediate_archive_bytes_read",
+                  "native_intermediate_archive_bytes_written",
+                  "native_intermediate_archive_file_syncs",
+                  "native_payload_bytes_hashed",
+                  "native_payload_bytes_spooled",
+                  "native_payload_declared_bytes",
+                  "native_payload_entries",
+                  "native_payload_files_spooled",
+                  "native_payload_regular_files",
+                  "native_payload_spool_bytes_reread",
+                  "native_payload_spool_file_reopens",
+                  "native_payload_spool_file_syncs",
+                  "native_source_archive_bytes_read",
+                  "native_source_archive_opens",
+                  "payload_chunk_identity_bytes_hashed",
+                  "payload_chunks_derived",
+                  "payload_crypto_bytes_hashed",
+                  "payload_files_examined",
+                  "payload_source_bytes_read",
+                  "payload_source_bytes_reread",
+                  "payload_source_files_opened",
+                  "payload_source_files_reopened",
+                  "payload_whole_content_bytes_hashed",
+                  "r2",
+                  "repository_checksum_bytes_hashed",
+                  "signed_object_bytes",
+                  "signed_object_count",
+                  "source_artifact_bytes",
+                  "source_bytes_hashed",
+                  "staged_object_bytes_written",
+                  "staged_object_canonical_bytes_reread",
+                  "staged_object_deduplicated_bytes",
+                  "staged_object_deduplications",
+                  "staged_object_file_syncs",
+                  "staged_object_shard_syncs",
+                  "staged_unique_objects",
+                  "unique_payload_chunks_derived"
+                ]
+                and ([to_entries[] | select(.key != "r2") | .value]
+                  | all(.[]; uint))
+                and (.r2 | (keys | sort)) == [
+                  "bytes_written",
+                  "head_requests",
+                  "hits",
+                  "misses",
+                  "put_requests"
+                ]
+                and (.r2 | all(.[]; uint));
+              def timing_shape:
+                timing_shape_without_work and (.work | work_shape);
+              def output_shape:
+                (keys | sort) == [
+                  "ccs_sha256",
+                  "ccs_size_bytes",
+                  "independent_complete_archive_hash_bytes",
+                  "independent_complete_archive_hash_ms",
+                  "independent_transport_reopen_bytes",
+                  "independent_transport_reopen_ms",
+                  "signed_object_bytes",
+                  "signed_object_count",
+                  "signed_object_set_sha256",
+                  "transport_sha256"
+                ]
+                and (.ccs_sha256 | sha256)
+                and (.ccs_size_bytes | positive_uint)
+                and (.transport_sha256 | sha256)
+                and (.signed_object_set_sha256 | sha256)
+                and (.signed_object_count | positive_uint)
+                and (.signed_object_bytes | positive_uint)
+                and (.independent_transport_reopen_ms | uint)
+                and (.independent_transport_reopen_bytes | positive_uint)
+                and (.independent_complete_archive_hash_ms | uint)
+                and (.independent_complete_archive_hash_bytes | positive_uint);
+              def view_shape:
+                (keys | sort) == ["duration_ms", "executed"]
+                and (.executed | type == "boolean")
+                and (.duration_ms | uint);
+              def conversion_core_ms:
+                ([.phases[]
+                  | select(.phase == "native_archive_parse_and_spool"
+                    or .phase == "artifact_identity_and_authority_validation"
+                    or .phase == "metadata_lifecycle_and_authority_projection"
+                    or .phase == "output_workspace_preparation"
+                    or .phase == "payload_derivation_and_object_staging"
+                    or .phase == "control_projection_and_signing"
+                    or .phase == "archive_assembly_and_gzip"
+                    or .phase == "native_provenance_projection")
+                  | .duration_ms] | add // 0);
+              def output_identity: {
+                ccs_sha256,
+                ccs_size_bytes,
+                transport_sha256,
+                signed_object_set_sha256,
+                signed_object_count,
+                signed_object_bytes,
+                independent_transport_reopen_bytes,
+                independent_complete_archive_hash_bytes
+              };
+              . as $report
+              | .repetitions[0] as $cold
+              | .repetitions[1] as $hot
+              | (keys | sort) == [
+                "authority",
+                "environment",
+                "raw_report",
+                "repetitions",
+                "schema_version",
+                "setup",
+                "subject"
+              ]
+              and .schema_version == 6
+              and (.raw_report | keys | sort)
+                == ["schema_version", "sha256", "size_bytes"]
+              and .raw_report.schema_version == 8
+              and (.raw_report.sha256 | sha256)
+              and (.raw_report.size_bytes | type == "number")
+              and .raw_report.size_bytes > 0
+              and .environment.hardware_label == "remi-production-i7-8700-xfs"
+              and .environment.remi_version == $remi_version
+              and .environment.source_commit == $commit
+              and .environment.source_dirty == false
+              and .environment.binary_sha256 == $binary_sha256
+              and (.environment | has("binary_path") | not)
+              and (.environment.roots | map(.role) | sort) == expected_roots
+              and all(.environment.roots[];
+                (keys | sort) == ["block_size", "filesystem_type", "role"]
+                and .filesystem_type == "0x58465342"
+                and (.block_size | type == "number")
+                and .block_size > 0)
+              and .authority.selection_kind == "pinned"
+              and .authority.source_profile == $profile
+              and .authority.profile.resource_sha256 == $revision
+              and .subject.package_key_sha256 == $package_key_sha256
+              and .subject.source_artifact_sha256 == $source_sha256
+              and .subject.source_size_bytes == $source_size_bytes
+              and (.repetitions | length) == 2
+              and (.repetitions | map(.iteration)) == [1, 2]
+              and (.repetitions | map(.cache_state)) == ["cold", "hot"]
+              and all(.repetitions[];
+                (keys | sort)
+                  == ["cache_state", "iteration", "output", "process", "timing", "views"]
+                and (.timing | timing_shape)
+                and (.output | output_shape)
+                and (.views | (keys | sort)) == ["conversion_core", "end_to_end"]
+                and (.views.conversion_core | view_shape)
+                and (.views.end_to_end | view_shape)
+                and .timing.package == $report.subject.name
+                and .timing.version == $report.subject.version
+                and .timing.source.source_profile == $report.authority.source_profile
+                and .timing.source.version == $report.subject.version
+                and .timing.source.architecture == $report.subject.architecture
+                and .timing.source.checksum == $report.subject.repository_checksum
+                and .timing.source.declared_size_bytes == $report.subject.source_size_bytes
+                and .views.end_to_end.executed == true
+                and .views.end_to_end.duration_ms == .timing.total_ms
+                and .output.independent_transport_reopen_bytes
+                  == .output.ccs_size_bytes
+                and .output.independent_complete_archive_hash_bytes
+                  == .output.ccs_size_bytes)
+              and ($cold.timing.phases | map(.phase)) == [
+                "package_lookup",
+                "cache_lookup",
+                "local_artifact_admission",
+                "checksum",
+                "native_archive_parse_and_spool",
+                "artifact_identity_and_authority_validation",
+                "metadata_lifecycle_and_authority_projection",
+                "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
+                "control_projection_and_signing",
+                "archive_assembly_and_gzip",
+                "native_provenance_projection",
+                "complete_archive_copy",
+                "independent_transport_reopen",
+                "complete_archive_hash",
+                "database_persistence"
+              ]
+              and $cold.timing.skipped_phases == [
+                "download",
+                "durable_cas_ingestion",
+                "r2_write_through"
+              ]
+              and $cold.views.conversion_core.executed == true
+              and $cold.views.conversion_core.duration_ms
+                == ($cold.timing | conversion_core_ms)
+              and ([ $cold.timing.phases[]
+                | select(.phase == "independent_transport_reopen") ] | length) == 1
+              and ($cold.timing.phases[]
+                | select(.phase == "independent_transport_reopen")
+                | .duration_ms) <= $cold.timing.total_ms
+              and ($cold.timing.work as $work
+                | $cold.output as $output
+                | $work.downloaded_bytes == 0
+                and $work.admitted_local_bytes == $source_size_bytes
+                and $work.repository_checksum_bytes_hashed == $source_size_bytes
+                and $work.source_artifact_bytes == $source_size_bytes
+                and $work.source_bytes_hashed == $source_size_bytes
+                and $work.payload_files_examined == $work.native_payload_entries
+                and $work.payload_source_files_opened
+                  == $work.native_payload_regular_files
+                and $work.payload_source_files_reopened == 0
+                and $work.payload_source_bytes_read
+                  == $work.native_payload_declared_bytes
+                and $work.payload_source_bytes_reread == 0
+                and $work.payload_whole_content_bytes_hashed
+                  == $work.payload_source_bytes_read
+                and $work.payload_chunk_identity_bytes_hashed
+                  <= $work.payload_source_bytes_read
+                and $work.payload_chunk_identity_bytes_hashed
+                  <= (9007199254740991
+                    - $work.payload_whole_content_bytes_hashed)
+                and $work.payload_crypto_bytes_hashed
+                  == ($work.payload_chunk_identity_bytes_hashed
+                    + $work.payload_whole_content_bytes_hashed)
+                and $work.unique_payload_chunks_derived
+                  <= $work.payload_chunks_derived
+                and $work.staged_unique_objects
+                  <= (9007199254740991
+                    - $work.staged_object_deduplications)
+                and $work.payload_chunks_derived
+                  <= (9007199254740991
+                    - $work.payload_source_files_opened)
+                and ($work.staged_unique_objects
+                  + $work.staged_object_deduplications)
+                    <= ($work.payload_chunks_derived
+                      + $work.payload_source_files_opened)
+                and $work.staged_unique_objects == $output.signed_object_count
+                and $work.staged_object_bytes_written == $output.signed_object_bytes
+                and $work.staged_object_bytes_written
+                  <= (9007199254740991
+                    - $work.staged_object_deduplicated_bytes)
+                and ($work.staged_object_bytes_written
+                  + $work.staged_object_deduplicated_bytes)
+                    == $work.payload_source_bytes_read
+                and $work.staged_object_canonical_bytes_reread == 0
+                and $work.staged_object_file_syncs == 0
+                and $work.staged_object_shard_syncs == 0
+                and $work.archive_compression_input_bytes >= $work.archive_input_bytes
+                and $work.archive_compression_workers > 0
+                and $work.archive_compression_workers <= 64
+                and $work.archive_compression_block_bytes == 1048576
+                and $work.archive_compression_blocks
+                  == (($work.archive_compression_input_bytes + 1048575) / 1048576 | floor)
+                and $work.archive_compression_buffer_ceiling_bytes
+                  == (1048576
+                    + (2 * $work.archive_compression_workers + 1)
+                      * (1048576 + 1048576 + 104857 + 128))
+                and (if $profile == "fedora-44" then
+                  $work.native_payload_files_spooled > 0
+                  and $work.native_payload_bytes_spooled > 0
+                  and $work.native_payload_bytes_spooled
+                    == $work.native_payload_declared_bytes
+                  and $work.native_payload_spool_file_reopens == 0
+                  and $work.native_payload_spool_bytes_reread >= 0
+                  and ($work.native_payload_bytes_hashed
+                    == $work.native_payload_bytes_spooled
+                  or $work.native_payload_bytes_hashed
+                      - $work.native_payload_bytes_spooled
+                        == $work.native_payload_bytes_spooled)
+                else true end)
+                and $work.ccs_output_bytes == $output.ccs_size_bytes
+                and $work.ccs_output_bytes_hashed == $output.ccs_size_bytes
+                and $work.independent_transport_reopen_ccs_bytes
+                  == $output.ccs_size_bytes
+                and $work.independent_transport_reopen_decode_workers > 0
+                and $work.independent_transport_reopen_decode_workers <= 64
+                and $work.independent_transport_reopen_decoded_bytes
+                  == $work.archive_compression_input_bytes
+                and $work.independent_transport_reopen_decode_block_bytes == 1048576
+                and $work.independent_transport_reopen_decode_blocks
+                  == (($work.independent_transport_reopen_decoded_bytes + 1048575)
+                    / 1048576 | floor)
+                and $work.independent_transport_reopen_decode_buffer_ceiling_bytes
+                  == ((2 * $work.independent_transport_reopen_decode_workers + 2)
+                    * (1048576 + 1048576 + 104857 + 156))
+                and $work.complete_archive_hash_bytes == $output.ccs_size_bytes
+                and $work.complete_archive_copy_bytes == $output.ccs_size_bytes
+                and $work.signed_object_count == $output.signed_object_count
+                and $work.signed_object_bytes == $output.signed_object_bytes
+                and $work.independent_transport_reopen_object_bytes_hashed
+                  == $output.signed_object_bytes
+                and $work.cas_incoming_bytes_hashed == $output.signed_object_bytes
+                and $work.cas_persistent_bytes_written == $output.signed_object_bytes
+                and $work.cas_objects_hashed == $output.signed_object_count
+                and $work.cas_hits == 0
+                and $work.cas_misses == $output.signed_object_count
+                and $work.cas_race_losers == 0
+                and $work.cas_staged_data_barriers == 1
+                and $work.cas_canonical_name_barriers == 1
+                and $work.cas_fallback_object_syncs == 0
+                and $work.cas_fallback_directory_syncs == 0
+                and $work.cas_canonical_bytes_reread == 0
+                and ($work.r2 | all(.[]; . == 0)))
+              and ($hot.timing.phases | map(.phase)) == [
+                "package_lookup",
+                "cache_lookup"
+              ]
+              and $hot.timing.skipped_phases == [
+                "local_artifact_admission",
+                "download",
+                "checksum",
+                "native_archive_parse_and_spool",
+                "artifact_identity_and_authority_validation",
+                "metadata_lifecycle_and_authority_projection",
+                "output_workspace_preparation",
+                "payload_derivation_and_object_staging",
+                "control_projection_and_signing",
+                "archive_assembly_and_gzip",
+                "native_provenance_projection",
+                "complete_archive_copy",
+                "independent_transport_reopen",
+                "complete_archive_hash",
+                "durable_cas_ingestion",
+                "r2_write_through",
+                "database_persistence"
+              ]
+              and $hot.views.conversion_core.executed == false
+              and $hot.views.conversion_core.duration_ms == 0
+              and ($hot.timing.work | all(.. | numbers; . == 0))
+              and ($hot.output | output_identity)
+                == ($cold.output | output_identity)
+              and ([paths
+                | select(.[-1] == "path"
+                  or .[-1] == "device_id"
+                  or .[-1] == "binary_path"
+                  or .[-1] == "error")] | length) == 0
+              and all(.. | strings;
+                length <= 4096
+                and (contains("/") | not)
+                and (contains("\\") | not))
+            ' "$local_transport" >/dev/null || {
+              echo "benchmark public transport contradicts the exact protected request" >&2
+              exit 1
+          }
+
+          cp -- "$local_transport" remi-conversion-benchmark-public-v6.json
+          {
+            echo "result=success"
+            echo "benchmark_id=$benchmark_id"
+            echo "public_sha256=$reported_sha256"
+            echo "public_bytes=$reported_bytes"
+            echo "raw_sha256=$(jq -er '.raw_report.sha256' "$local_transport")"
+            echo "raw_bytes=$(jq -er '.raw_report.size_bytes' "$local_transport")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload public-sanitized benchmark failure evidence
+        if: ${{ steps.benchmark.outputs.result == 'failure' }}
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-conversion-benchmark-failure-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: remi-conversion-benchmark-failure-v1.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Upload public-sanitized benchmark evidence
+        if: ${{ steps.benchmark.outputs.result == 'success' }}
+        id: upload
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: remi-conversion-benchmark-${{ inputs.deployment_run_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            remi-conversion-benchmark-public-v6.json
+            remi-conversion-source-verification-v1.json
+            remi-deployment-inspection.json
+            remi-candidate-manifest.json
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Record exact production benchmark evidence
+        if: ${{ steps.benchmark.outputs.result == 'success' }}
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          BENCHMARK_ID: ${{ steps.benchmark.outputs.benchmark_id }}
+          BINARY_SHA256: ${{ steps.authority.outputs.binary_sha256 }}
+          DEPLOYED_COMMIT_SHA: ${{ steps.deployment.outputs.head_sha }}
+          PROFILE: ${{ inputs.profile }}
+          PUBLIC_BYTES: ${{ steps.benchmark.outputs.public_bytes }}
+          PUBLIC_SHA256: ${{ steps.benchmark.outputs.public_sha256 }}
+          RAW_BYTES: ${{ steps.benchmark.outputs.raw_bytes }}
+          RAW_SHA256: ${{ steps.benchmark.outputs.raw_sha256 }}
+          REVISION: ${{ steps.authority.outputs.revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "### Exact production conversion benchmark"
+            echo
+            echo "- benchmark: \`$BENCHMARK_ID\`"
+            echo "- deployed commit: \`$DEPLOYED_COMMIT_SHA\`"
+            echo "- binary SHA-256: \`$BINARY_SHA256\`"
+            echo "- profile: \`$PROFILE\`"
+            echo "- profile revision: \`$REVISION\`"
+            echo "- raw private report: \`$RAW_SHA256\` / $RAW_BYTES bytes"
+            echo "- public projection: \`$PUBLIC_SHA256\` / $PUBLIC_BYTES bytes"
+            echo "- GitHub artifact: \`$ARTIFACT_ID\`"
+            echo "- GitHub artifact digest: \`$ARTIFACT_DIGEST\`"
+            jq -r '.repetitions[]
+              | "- iteration \(.iteration) `\(.cache_state)`: "
+                + "conversion core \(.views.conversion_core.duration_ms) ms; "
+                + "end to end \(.views.end_to_end.duration_ms) ms"' \
+              remi-conversion-benchmark-public-v6.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail closed on unsuccessful benchmark result
+        if: ${{ always() && steps.benchmark.outputs.result != 'success' }}
+        env:
+          BENCHMARK_RESULT: ${{ steps.benchmark.outputs.result }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$BENCHMARK_RESULT" == "failure" ]] || {
+            echo "conversion benchmark completed without one typed result" >&2
+            exit 1
+          }
+          echo "fixed production conversion benchmark operation failed" >&2
+          exit 1

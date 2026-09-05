@@ -546,4 +546,4 @@ privately using the contact listed there.
 
 ## License
 
-Conary is licensed under the [MIT License](LICENSE). By submitting a pull request, you agree that your contributions will be licensed under the same terms.
+The Conary client and every library crate are dual-licensed under the [MIT License](LICENSE-MIT) and the [Apache License, Version 2.0](LICENSE-APACHE); the Remi server under `apps/remi` is licensed under the [GNU AGPL v3 or later](apps/remi/LICENSE). By submitting a pull request, you agree that your contribution is licensed under the terms that apply to the files you change, and that contributions to the dual-licensed crates may be used under either license. `scripts/check-license-authority.sh` pins each crate to its declared license.
