@@ -88,6 +88,16 @@ sed -i '/^Files: apps\/remi\/\*$/,/^$/d' "$root/packaging/deb/debian/copyright"
 expect_failure "missing Remi Debian stanza" "$root"
 
 make_fixture "$root"
+# Only the Remi paragraph's own License line changes; the AGPL text paragraph
+# later in the file still carries a License: AGPL-3.0+ header.
+sed -i '/^Files: apps\/remi\/\*$/,/^$/ s/^License: AGPL-3.0+$/License: MIT/' "$root/packaging/deb/debian/copyright"
+expect_failure "Remi paragraph relicensed while the AGPL text paragraph remains" "$root"
+
+make_fixture "$root"
+sed -i '/^Files: \*$/,/^$/ s/^License: MIT or Apache-2.0$/License: AGPL-3.0+/' "$root/packaging/deb/debian/copyright"
+expect_failure "client paragraph declared AGPL" "$root"
+
+make_fixture "$root"
 sed -i 's#install -Dpm 0644 LICENSE-MIT debian/conary/usr/share/doc/conary/LICENSE-MIT#install -Dpm 0644 LICENSE debian/conary/usr/share/doc/conary/LICENSE#' "$root/packaging/deb/debian/rules"
 expect_failure "debian rules installing a bare LICENSE" "$root"
 

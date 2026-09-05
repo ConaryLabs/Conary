@@ -66,10 +66,26 @@ require_match packaging/rpm/conary.spec '^License:[[:space:]]+MIT OR Apache-2\.0
 require_match packaging/rpm/conary.spec '^%license LICENSE-MIT LICENSE-APACHE$' 'rpm %license files'
 require_match packaging/arch/PKGBUILD "^license=\\('MIT' 'Apache-2\\.0'\\)$" 'PKGBUILD license array'
 require_match packaging/ccs/ccs.toml '^license = "MIT OR Apache-2\.0"$' 'ccs manifest license'
-require_match packaging/deb/debian/copyright '^License: MIT or Apache-2\.0$' 'debian copyright Files stanza'
-require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian copyright Apache text'
-require_match packaging/deb/debian/copyright '^Files: apps/remi/\*$' 'debian copyright Remi stanza'
-require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright Remi AGPL license'
+# DEP-5 paragraphs are blank-line separated; the License field must be read
+# from the same paragraph as its Files field, never from elsewhere in the file.
+dep5_paragraph_license() {
+    local file="$1" files_glob="$2"
+    awk -v files="Files: ${files_glob}" '
+        /^$/ { in_paragraph = 0; next }
+        $0 == files { in_paragraph = 1; next }
+        in_paragraph && /^License: / { sub(/^License: /, ""); print; exit }
+    ' "$file"
+}
+require_dep5_license() {
+    local file="$1" files_glob="$2" expected="$3" actual
+    actual="$(dep5_paragraph_license "$file" "$files_glob")"
+    [[ "$actual" == "$expected" ]] ||
+        fail "$file paragraph 'Files: $files_glob' declares License '${actual:-<none>}', expected '$expected'"
+}
+require_dep5_license packaging/deb/debian/copyright '*' 'MIT or Apache-2.0'
+require_dep5_license packaging/deb/debian/copyright 'apps/remi/*' 'AGPL-3.0+'
+require_match packaging/deb/debian/copyright '^License: Apache-2\.0$' 'debian copyright Apache text paragraph'
+require_match packaging/deb/debian/copyright '^License: AGPL-3\.0\+$' 'debian copyright AGPL text paragraph'
 require_match packaging/ccs/build.sh 'LICENSE-APACHE' 'ccs bundle Apache license install'
 require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-MIT ' 'debian rules MIT install'
 require_match packaging/deb/debian/rules 'install -Dpm 0644 LICENSE-APACHE ' 'debian rules Apache install'
