@@ -140,6 +140,7 @@ crates/conary-core/      Core library crate
     |   +-- builder.rs   Public generation-builder hub
     |   +-- builder/create.rs Generation creation orchestration
     |   +-- builder/rebuild.rs Recovery rebuild orchestration
+    |   +-- builder/boot_root.rs Typed boot-root policy (Host vs Staged)
     |   +-- builder/boot_assets.rs Runtime/generation boot asset resolution
     |   +-- builder/boot_reuse.rs Typed unchanged-boot reuse eligibility
     |   +-- builder/initramfs.rs Dracut initramfs generation support
@@ -601,7 +602,10 @@ Submodules: builder.rs (public
 generation-builder hub),
 builder/create.rs and builder/rebuild.rs (generation creation and recovery
 rebuild orchestration), builder/carrier_capabilities.rs (persisted target
-capability projection), builder/boot_assets.rs, builder/boot_reuse.rs,
+capability projection), builder/boot_root.rs (the typed `BootRoot` policy:
+`Host` generates the initramfs from the generation sysroot and may reuse boot
+assets across generations, `Staged` uses an explicit directory as-is),
+builder/boot_assets.rs, builder/boot_reuse.rs,
 builder/initramfs.rs,
 builder/kernel.rs, and builder/sysroot.rs (runtime boot asset and sysroot
 materialization support), builder/root_validation.rs and
