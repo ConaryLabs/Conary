@@ -15,6 +15,9 @@ use super::{
 };
 use crate::error::{Error, Result};
 use crate::repository::architecture::require_known_package_architecture;
+use crate::repository::catalog::parity::support::{
+    Counter, RegularFileError, checked_increment, require_regular_file,
+};
 use crate::repository::catalog::{
     CatalogProvideRecordV1, CatalogRequirementAtomV1, CatalogRequirementGroupV1, ProfileRevisionV2,
     SourceEcosystemV1, SourceMetadataObjectRoleV1, SourceMetadataObjectV1, SourceSnapshotV1,
@@ -93,7 +96,10 @@ pub fn produce_rpm_parity_oracle(
     let mut selected_packages = 0_u64;
     let mut exact_duplicates = 0_u64;
     for index in 0..pool.package_count() {
-        native_packages = checked_increment(native_packages, "native RPM package rows")?;
+        native_packages = checked_increment(
+            native_packages,
+            Counter::NativeRows("native RPM package rows"),
+        )?;
         let package = pool.package(index)?;
         let row = project_package(profile, inputs, &package)?;
         let bytes = crate::json::canonical_json(&row).map_err(|error| {
@@ -120,14 +126,20 @@ pub fn produce_rpm_parity_oracle(
                     profile.profile, row.name, row.version, row.architecture
                 )));
             }
-            exact_duplicates = checked_increment(exact_duplicates, "exact RPM duplicates")?;
+            exact_duplicates = checked_increment(
+                exact_duplicates,
+                Counter::NativeRows("exact RPM duplicates"),
+            )?;
             continue;
         }
         spool.execute(
             "INSERT INTO packages (package_key_sha256, row_json) VALUES (?1, ?2)",
             params![row.package_key_sha256, bytes],
         )?;
-        selected_packages = checked_increment(selected_packages, "selected RPM package rows")?;
+        selected_packages = checked_increment(
+            selected_packages,
+            Counter::NativeRows("selected RPM package rows"),
+        )?;
     }
     if native_packages
         != selected_packages
@@ -158,7 +170,7 @@ pub fn produce_rpm_parity_oracle(
             Error::InternalError(format!("reopen staged RPM parity row: {error}"))
         })?;
         writer.package(&package)?;
-        written = checked_increment(written, "written RPM package rows")?;
+        written = checked_increment(written, Counter::NativeRows("written RPM package rows"))?;
     }
     if written != selected_packages {
         return Err(Error::InternalError(format!(
@@ -219,8 +231,16 @@ fn validate_inputs(profile: &ProfileRevisionV2, inputs: &[RpmParityMemberInput<'
             )));
         }
         rpm_metadata_objects(snapshot)?;
-        require_regular_file(input.primary, "RPM primary metadata")?;
-        require_regular_file(input.filelists, "RPM filelists metadata")?;
+        require_regular_file(
+            input.primary,
+            "RPM primary metadata",
+            RegularFileError::Config,
+        )?;
+        require_regular_file(
+            input.filelists,
+            "RPM filelists metadata",
+            RegularFileError::Config,
+        )?;
     }
     Ok(())
 }
@@ -253,7 +273,11 @@ fn stage_verified_object(
         .ok_or_else(|| Error::ConfigError(format!("RPM {label} source path has no file name")))?;
     let destination = directory.join(format!("{label}-{}", basename.to_string_lossy()));
     fs::copy(source, &destination)?;
-    require_regular_file(&destination, &format!("staged RPM {label} metadata"))?;
+    require_regular_file(
+        &destination,
+        &format!("staged RPM {label} metadata"),
+        RegularFileError::Config,
+    )?;
     let metadata = fs::metadata(&destination)?;
     if metadata.len() != object.size {
         return Err(Error::ChecksumMismatch {
@@ -317,7 +341,11 @@ fn project_package(
     require_known_package_architecture(VersionScheme::Rpm, &architecture)?;
     let architecture = Some(architecture);
     let checksum = package.checksum()?;
-    validate_sha256(&checksum, &name)?;
+    if !crate::hash::is_canonical_sha256(&checksum) {
+        return Err(Error::ParseError(format!(
+            "libsolv package '{name}' has invalid SHA-256 '{checksum}'"
+        )));
+    }
     let location = package.location()?;
     crate::repository::parsers::common::validate_filename(&location).map_err(Error::ParseError)?;
     let base_url = snapshot
@@ -789,26 +817,22 @@ fn decode_expression(dependency: &SolvDependency<'_>) -> Result<RepositoryRequir
         ));
     }
     let relation = dependency.relation()?;
+    let operator = match relation.flags {
+        ffi::REL_GT => Some(">"),
+        ffi::REL_EQ => Some("="),
+        ffi::REL_LT => Some("<"),
+        flags if flags == ffi::REL_GT | ffi::REL_EQ => Some(">="),
+        flags if flags == ffi::REL_LT | ffi::REL_EQ => Some("<="),
+        _ => None,
+    };
+    if let Some(operator) = operator {
+        let name = relation.name_dependency()?.atom()?;
+        let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
+        return Ok(RepositoryRequirementExpression::Atom(
+            RepositoryRequirementClause::versioned(name, format!("{operator} {version}")),
+        ));
+    }
     match relation.flags {
-        flags
-            if matches!(flags, ffi::REL_GT | ffi::REL_EQ | ffi::REL_LT)
-                || flags == ffi::REL_GT | ffi::REL_EQ
-                || flags == ffi::REL_LT | ffi::REL_EQ =>
-        {
-            let name = relation.name_dependency()?.atom()?;
-            let version = canonical_rpm_evr(&relation.evr_dependency()?.atom()?)?.to_string();
-            let operator = match relation.flags {
-                ffi::REL_GT => ">",
-                ffi::REL_EQ => "=",
-                ffi::REL_LT => "<",
-                flags if flags == ffi::REL_GT | ffi::REL_EQ => ">=",
-                flags if flags == ffi::REL_LT | ffi::REL_EQ => "<=",
-                _ => unreachable!("matched RPM version relation"),
-            };
-            Ok(RepositoryRequirementExpression::Atom(
-                RepositoryRequirementClause::versioned(name, format!("{operator} {version}")),
-            ))
-        }
         ffi::REL_AND | ffi::REL_OR => {
             let left = decode_expression(&relation.name_dependency()?)?;
             let right = decode_expression(&relation.evr_dependency()?)?;
@@ -963,36 +987,4 @@ fn canonical_rpm_evr(value: &str) -> Result<&str> {
     let value = crate::repository::rpm_dependency::canonicalize_source_rpm_evr(value)
         .map_err(Error::ParseError)?;
     Ok(value.strip_prefix("0:").unwrap_or(value))
-}
-
-fn validate_sha256(value: &str, package: &str) -> Result<()> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-    {
-        return Err(Error::ParseError(format!(
-            "libsolv package '{package}' has invalid SHA-256 '{value}'"
-        )));
-    }
-    Ok(())
-}
-
-fn require_regular_file(path: &Path, label: &str) -> Result<()> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        Error::ConfigError(format!("inspect {label} '{}': {error}", path.display()))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        return Err(Error::ConfigError(format!(
-            "{label} '{}' must be a regular file, never a symlink",
-            path.display()
-        )));
-    }
-    Ok(())
-}
-
-fn checked_increment(value: u64, label: &str) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| Error::InternalError(format!("{label} exceed u64")))
 }

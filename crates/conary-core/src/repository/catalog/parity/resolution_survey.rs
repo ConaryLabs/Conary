@@ -15,6 +15,7 @@ use super::resolution_contract::{
 pub(super) use super::resolution_root::{
     NativeRootResolutionError, NativeRootResolutionResult, NativeRootResolutionSuccess,
 };
+use super::support::{Counter, checked_increment};
 use crate::error::{Error, Result};
 
 #[allow(unused_imports)] // Consumed by feature-gated native explanation builders.
@@ -184,7 +185,8 @@ impl NativeResolutionSurveyV1 {
                     reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
                 } => {
                     evidence_withholding_started = true;
-                    withheld_explanations = checked_increment(withheld_explanations)?;
+                    withheld_explanations =
+                        checked_increment(withheld_explanations, Counter::Survey("native"))?;
                 }
                 explanation => {
                     if evidence_withholding_started {
@@ -193,7 +195,8 @@ impl NativeResolutionSurveyV1 {
                                 .to_string(),
                         ));
                     }
-                    retained_explanations = checked_increment(retained_explanations)?;
+                    retained_explanations =
+                        checked_increment(retained_explanations, Counter::Survey("native"))?;
                     let remaining_bytes = self
                         .evidence_byte_limit
                         .checked_sub(retained_evidence_bytes)
@@ -658,13 +661,6 @@ pub fn write_native_resolution_survey(
 ) -> Result<()> {
     survey.validate()?;
     write_private_canonical_json(path, survey, "native resolution survey")
-}
-
-#[allow(dead_code)]
-fn checked_increment(value: u64) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| Error::ConfigError("native resolution survey count exceeds u64".to_string()))
 }
 
 #[cfg(test)]

@@ -17,6 +17,7 @@ use super::resolution_survey::{
     NATIVE_RESOLUTION_SURVEY_EVIDENCE_BYTE_LIMIT, NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT,
     NativeResolutionSurveyErrorVariantV1,
 };
+use super::support::{Counter, checked_increment};
 use super::survey_support::{canonical_value_size_with_limit, write_private_canonical_json};
 use crate::error::{Error, Result};
 use crate::repository::catalog::ProfileRevisionV2;
@@ -135,13 +136,14 @@ impl ConaryResolutionSurveyV1 {
             outcome.validate()?;
             match outcome.outcome {
                 NativeResolutionOutcomeV1::Resolved { .. } => {
-                    resolved = checked_increment(resolved)?;
+                    resolved = checked_increment(resolved, Counter::Survey("Conary"))?;
                 }
                 NativeResolutionOutcomeV1::Unresolved { .. } => {
-                    unresolved = checked_increment(unresolved)?;
+                    unresolved = checked_increment(unresolved, Counter::Survey("Conary"))?;
                 }
                 NativeResolutionOutcomeV1::NotInstallable { .. } => {
-                    not_installable = checked_increment(not_installable)?;
+                    not_installable =
+                        checked_increment(not_installable, Counter::Survey("Conary"))?;
                 }
             }
         }
@@ -168,7 +170,7 @@ impl ConaryResolutionSurveyV1 {
                     reason: ConaryResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
                 } => {
                     withholding_started = true;
-                    withheld = checked_increment(withheld)?;
+                    withheld = checked_increment(withheld, Counter::Survey("Conary"))?;
                 }
                 explanation => {
                     if withholding_started {
@@ -195,7 +197,7 @@ impl ConaryResolutionSurveyV1 {
                             "Conary resolution survey evidence exceeds u64".to_string(),
                         )
                     })?;
-                    retained = checked_increment(retained)?;
+                    retained = checked_increment(retained, Counter::Survey("Conary"))?;
                 }
             }
         }
@@ -483,7 +485,8 @@ impl ConaryResolutionSurveyCollector {
         root: &NativeParityPackageV1,
         result: ConaryRootResolutionResult,
     ) -> Result<()> {
-        self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
+        self.counts.roots_walked =
+            checked_increment(self.counts.roots_walked, Counter::Survey("Conary"))?;
         match result {
             Ok(outcome) => self.outcome(root, outcome)?,
             Err(failure) => self.failure(root, *failure)?,
@@ -498,14 +501,18 @@ impl ConaryResolutionSurveyCollector {
     ) -> Result<()> {
         match &outcome {
             NativeResolutionOutcomeV1::Resolved { .. } => {
-                self.counts.resolved_roots = checked_increment(self.counts.resolved_roots)?;
+                self.counts.resolved_roots =
+                    checked_increment(self.counts.resolved_roots, Counter::Survey("Conary"))?;
             }
             NativeResolutionOutcomeV1::Unresolved { .. } => {
-                self.counts.unresolved_roots = checked_increment(self.counts.unresolved_roots)?;
+                self.counts.unresolved_roots =
+                    checked_increment(self.counts.unresolved_roots, Counter::Survey("Conary"))?;
             }
             NativeResolutionOutcomeV1::NotInstallable { .. } => {
-                self.counts.not_installable_roots =
-                    checked_increment(self.counts.not_installable_roots)?;
+                self.counts.not_installable_roots = checked_increment(
+                    self.counts.not_installable_roots,
+                    Counter::Survey("Conary"),
+                )?;
             }
         }
         self.outcomes.push(ConaryResolutionSurveyRootOutcomeV1 {
@@ -524,13 +531,14 @@ impl ConaryResolutionSurveyCollector {
         root: &NativeParityPackageV1,
         failure: ConaryRootResolutionError,
     ) -> Result<()> {
-        self.counts.failed_roots = checked_increment(self.counts.failed_roots)?;
+        self.counts.failed_roots =
+            checked_increment(self.counts.failed_roots, Counter::Survey("Conary"))?;
         let kind = ConaryResolutionSurveyErrorKindV1 {
             error_variant: NativeResolutionSurveyErrorVariantV1::from_error(&failure.error),
             reason: failure.reason,
         };
         let count = self.histogram.entry(kind.clone()).or_default();
-        *count = checked_increment(*count)?;
+        *count = checked_increment(*count, Counter::Survey("Conary"))?;
         if self.failures.len() < CONARY_RESOLUTION_SURVEY_FAILURE_LIMIT {
             let explanation = self.retain_explanation(failure.explanation)?;
             self.failures.push(ConaryResolutionSurveyFailureV1 {
@@ -566,12 +574,14 @@ impl ConaryResolutionSurveyCollector {
                     .ok_or_else(|| {
                         Error::ConfigError("Conary survey evidence exceeds u64".to_string())
                     })?;
-                self.retained_explanations = checked_increment(self.retained_explanations)?;
+                self.retained_explanations =
+                    checked_increment(self.retained_explanations, Counter::Survey("Conary"))?;
                 return Ok(explanation);
             }
             self.evidence_budget_exhausted = true;
         }
-        self.withheld_explanations = checked_increment(self.withheld_explanations)?;
+        self.withheld_explanations =
+            checked_increment(self.withheld_explanations, Counter::Survey("Conary"))?;
         Ok(ConaryResolutionSurveyNativeExplanationV1::Withheld {
             reason: ConaryResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
         })
@@ -745,12 +755,6 @@ fn solvable(
         repository_name: package.repository_name.clone(),
         source_profile: package.repository_profile.clone(),
     }
-}
-
-fn checked_increment(value: u64) -> Result<u64> {
-    value
-        .checked_add(1)
-        .ok_or_else(|| Error::ConfigError("Conary resolution survey count exceeds u64".to_string()))
 }
 
 #[cfg(test)]

@@ -124,17 +124,26 @@ impl NativeResolutionSurveyCollector {
             outcome,
             explanation,
         } = success;
-        self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
+        self.counts.roots_walked =
+            checked_increment(self.counts.roots_walked, super::Counter::Survey("native"))?;
         match &outcome {
             NativeResolutionOutcomeV1::Resolved { .. } => {
-                self.counts.resolved_roots = checked_increment(self.counts.resolved_roots)?;
+                self.counts.resolved_roots = checked_increment(
+                    self.counts.resolved_roots,
+                    super::Counter::Survey("native"),
+                )?;
             }
             NativeResolutionOutcomeV1::Unresolved { .. } => {
-                self.counts.unresolved_roots = checked_increment(self.counts.unresolved_roots)?;
+                self.counts.unresolved_roots = checked_increment(
+                    self.counts.unresolved_roots,
+                    super::Counter::Survey("native"),
+                )?;
             }
             NativeResolutionOutcomeV1::NotInstallable { .. } => {
-                self.counts.not_installable_roots =
-                    checked_increment(self.counts.not_installable_roots)?;
+                self.counts.not_installable_roots = checked_increment(
+                    self.counts.not_installable_roots,
+                    super::Counter::Survey("native"),
+                )?;
             }
         }
         let is_conflicting_closure = matches!(
@@ -145,7 +154,10 @@ impl NativeResolutionSurveyCollector {
         );
         match (is_conflicting_closure, explanation) {
             (true, Some(explanation)) => {
-                self.total_diagnostic_outcomes = checked_increment(self.total_diagnostic_outcomes)?;
+                self.total_diagnostic_outcomes = checked_increment(
+                    self.total_diagnostic_outcomes,
+                    super::Counter::Survey("native"),
+                )?;
                 if self.diagnostic_outcomes.len()
                     < NATIVE_RESOLUTION_SURVEY_DIAGNOSTIC_OUTCOME_LIMIT
                 {
@@ -213,8 +225,10 @@ impl NativeResolutionSurveyCollector {
             explanation,
             wire_identity,
         } = failure;
-        self.counts.roots_walked = checked_increment(self.counts.roots_walked)?;
-        self.counts.failed_roots = checked_increment(self.counts.failed_roots)?;
+        self.counts.roots_walked =
+            checked_increment(self.counts.roots_walked, super::Counter::Survey("native"))?;
+        self.counts.failed_roots =
+            checked_increment(self.counts.failed_roots, super::Counter::Survey("native"))?;
         let (error_variant, error_message) = wire_identity.unwrap_or_else(|| {
             (
                 NativeResolutionSurveyErrorVariantV1::from_error(&error),
@@ -226,7 +240,7 @@ impl NativeResolutionSurveyCollector {
             reason,
         };
         let count = self.histogram.entry(kind.clone()).or_default();
-        *count = checked_increment(*count)?;
+        *count = checked_increment(*count, super::Counter::Survey("native"))?;
         if self.failures.len() < NATIVE_RESOLUTION_SURVEY_FAILURE_LIMIT {
             let native_explanation = self.retain_explanation(explanation)?;
             self.failures.push(NativeResolutionSurveyFailureV1 {
@@ -254,7 +268,8 @@ impl NativeResolutionSurveyCollector {
             }
         ) {
             self.evidence_budget_exhausted = true;
-            self.withheld_explanations = checked_increment(self.withheld_explanations)?;
+            self.withheld_explanations =
+                checked_increment(self.withheld_explanations, super::Counter::Survey("native"))?;
             return Ok(explanation);
         }
         if !self.evidence_budget_exhausted {
@@ -273,12 +288,16 @@ impl NativeResolutionSurveyCollector {
                         )
                     })?;
                 self.retained_evidence_bytes = retained_evidence_bytes;
-                self.retained_explanations = checked_increment(self.retained_explanations)?;
+                self.retained_explanations = checked_increment(
+                    self.retained_explanations,
+                    super::Counter::Survey("native"),
+                )?;
                 return Ok(explanation);
             }
             self.evidence_budget_exhausted = true;
         }
-        self.withheld_explanations = checked_increment(self.withheld_explanations)?;
+        self.withheld_explanations =
+            checked_increment(self.withheld_explanations, super::Counter::Survey("native"))?;
         Ok(NativeResolutionSurveyNativeExplanationV1::Withheld {
             reason: NativeResolutionSurveyEvidenceWithheldReasonV1::EvidenceBudgetExhausted,
         })
