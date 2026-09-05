@@ -10,6 +10,8 @@ cd "$repo_root"
 
 errors=0
 
+GITHUB_REPOSITORY_SLUG="FieldmouseWorks/Conary"
+
 if ! command -v rg >/dev/null 2>&1; then
     echo "ERROR: ripgrep (rg) is required for docs truth checks" >&2
     exit 1
@@ -539,7 +541,7 @@ check_release_doc_versions() {
 
     require_match \
         "README.md" \
-        'img\.shields\.io/github/v/release/ConaryLabs/Conary\?label=release.*github\.com/ConaryLabs/Conary/releases/latest' \
+        "img\.shields\.io/github/v/release/${GITHUB_REPOSITORY_SLUG}\?label=release.*github\.com/${GITHUB_REPOSITORY_SLUG}/releases/latest" \
         "derived latest-release badge"
     require_match \
         "README.md" \
@@ -547,7 +549,7 @@ check_release_doc_versions() {
         "development-head release channel authority"
     require_match \
         "README.md" \
-        'Latest published, artifact-verified release.*github\.com/ConaryLabs/Conary/releases/latest.*[Rr]elease artifact matrix' \
+        "Latest published, artifact-verified release.*github\.com/${GITHUB_REPOSITORY_SLUG}/releases/latest.*[Rr]elease artifact matrix" \
         "derived published-release channel"
     require_match \
         "README.md" \
@@ -555,7 +557,7 @@ check_release_doc_versions() {
         "unassigned external tester pin"
     require_match \
         "SECURITY.md" \
-        'Latest immutable preview release.*github\.com/ConaryLabs/Conary/releases/latest.*Yes' \
+        "Latest immutable preview release.*github\.com/${GITHUB_REPOSITORY_SLUG}/releases/latest.*Yes" \
         "derived supported-release row"
 
     for path in README.md SECURITY.md; do
@@ -664,7 +666,7 @@ check_release_doc_versions() {
                 report_error "$file:$line_no has candidate launch link or checklist item outside ${candidate_link_label}: $text"
             fi
         done < <(
-            rg -nH -- 'github\.com/ConaryLabs/Conary/(blob|releases/tag)/v|Publish immutable `v' "$planned_doc" ||
+            rg -nH -- "github\.com/${GITHUB_REPOSITORY_SLUG}/(blob|releases/tag)/v|Publish immutable \`v" "$planned_doc" ||
                 true
         )
     fi

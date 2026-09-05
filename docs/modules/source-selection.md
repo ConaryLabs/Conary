@@ -220,7 +220,7 @@ idempotently. It is never derived from a CCS package key.
 For a noncanonical Remi endpoint, `repo add` requires one or more authenticated
 `targets.public` files through the repeatable `--ccs-package-key` option and
 persists them transactionally with the repository. It never imports canonical
-ConaryLabs keys from a profile name alone or accepts a key delivered by the
+FieldmouseWorks keys from a profile name alone or accepts a key delivered by the
 same unauthenticated package response. Install derives exact repository
 provenance, admits only that repository's active keys, and fails closed for an
 unknown or cross-profile signer. Retired keys remain history, not install

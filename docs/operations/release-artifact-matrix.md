@@ -18,7 +18,7 @@ date, distro, suite, and pass counts.
 
 ## Current Release Suite
 
-Issue [#428](https://github.com/ConaryLabs/Conary/issues/428) established the
+Issue [#428](https://github.com/FieldmouseWorks/Conary/issues/428) established the
 current hard-cut topology: all eight Cargo packages inherit one root workspace
 version; four artifact products are built from one reviewed suite commit; and
 one annotated `vMAJOR.MINOR.PATCH` tag publishes one GitHub release. Conary and

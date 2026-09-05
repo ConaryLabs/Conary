@@ -13,7 +13,7 @@ pub async fn openapi_spec() -> Response {
             "title": "Remi Admin API",
             "description": "Administration API for the Remi package server. Manage admin tokens, repositories, and test-harness operations. Designed for human and LLM agent consumption.",
             "version": env!("CARGO_PKG_VERSION"),
-            "contact": { "name": "Conary Labs" }
+            "contact": { "name": "FieldmouseWorks" }
         },
         "servers": [
             { "url": "/", "description": "Current admin API origin (direct admin listener or reverse-proxied public endpoint)" }

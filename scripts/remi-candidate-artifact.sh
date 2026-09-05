@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+EXPECTED_REPOSITORY="FieldmouseWorks/Conary"
+
 usage() {
     cat >&2 <<'EOF'
 Usage:
@@ -370,7 +372,7 @@ verify_artifact() {
         --arg rust_toolchain "$(workspace_rust_version)" \
         --arg rustc_verbose_sha256 "$manifest_rustc_sha" \
         --arg target "$manifest_target" \
-        --arg repository "${GITHUB_REPOSITORY:-ConaryLabs/Conary}" \
+        --arg repository "${GITHUB_REPOSITORY:-$EXPECTED_REPOSITORY}" \
         --arg event "$expected_event" \
         --argjson run_id "$expected_run_id" '
           .schema_version == 2

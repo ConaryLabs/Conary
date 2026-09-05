@@ -26,10 +26,10 @@ Thank you for your interest in contributing to Conary. Whether you are fixing a 
 ### Your First Contribution
 
 Not sure where to start? Browse
-[open issues](https://github.com/ConaryLabs/Conary/issues), especially
+[open issues](https://github.com/FieldmouseWorks/Conary/issues), especially
 `good first issue` and `help wanted`. If the problem or desired outcome is
 still unclear, open a thread in
-[GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) and a
+[GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions) and a
 maintainer can help turn it into a real, bounded issue.
 
 Small first contributions often include:
@@ -61,7 +61,7 @@ git clone https://github.com/YOUR_USERNAME/Conary.git
 cd Conary
 
 # Add upstream remote
-git remote add upstream https://github.com/ConaryLabs/Conary.git
+git remote add upstream https://github.com/FieldmouseWorks/Conary.git
 ```
 
 ### Using Coding Assistants
@@ -536,7 +536,7 @@ Before proposing significant architectural changes, please open an issue to disc
 
 ## Getting Help
 
-If you have questions about contributing, feel free to start a thread in [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions) or open an issue on the [GitHub repository](https://github.com/ConaryLabs/Conary). We are happy to help newcomers find their way around the codebase.
+If you have questions about contributing, feel free to start a thread in [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions) or open an issue on the [GitHub repository](https://github.com/FieldmouseWorks/Conary). We are happy to help newcomers find their way around the codebase.
 
 ## Code of Conduct
 

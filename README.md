@@ -1,17 +1,17 @@
 # Conary
 
-[![Merge validation](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/ConaryLabs/Conary/actions/workflows/merge-validation.yml)
+[![Merge validation](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml/badge.svg?branch=main)](https://github.com/FieldmouseWorks/Conary/actions/workflows/merge-validation.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/ConaryLabs/Conary?label=release)](https://github.com/ConaryLabs/Conary/releases/latest)
+[![Latest release](https://img.shields.io/github/v/release/FieldmouseWorks/Conary?label=release)](https://github.com/FieldmouseWorks/Conary/releases/latest)
 
-**Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
+**Website:** [conary.io](https://conary.io) | **Packages:** [remi.conary.io](https://remi.conary.io) | **Discussions:** [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)
 
 ## Release Channels
 
 | Channel | Current state | Authority |
 | --- | --- | --- |
 | Development head | Root [`Cargo.toml`](Cargo.toml) `[workspace.package]` version | Repository source authority |
-| Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
+| Latest published, artifact-verified release | [Latest immutable GitHub release](https://github.com/FieldmouseWorks/Conary/releases/latest) | [Release artifact matrix](docs/operations/release-artifact-matrix.md) |
 | Current external tester pin | **None** | W7 passed; assignment waits for the signed public universe, daily-driver floor, synchronized release, and launch proof in [launch status](docs/roadmaps/launch-status.json) |
 
 Conary is a cross-distro package manager for Linux, written in Rust. It
@@ -66,7 +66,7 @@ attach only a reviewed support bundle.
 
 ## Try It
 
-The [latest immutable GitHub release](https://github.com/ConaryLabs/Conary/releases/latest)
+The [latest immutable GitHub release](https://github.com/FieldmouseWorks/Conary/releases/latest)
 is the current artifact-verified synchronized suite. The
 [release artifact matrix](docs/operations/release-artifact-matrix.md) records
 its exact tag, complete asset set, historical deployments, and three-distro
@@ -140,7 +140,7 @@ first when the command supports it.
 - Raw, qcow2, and x86_64 UEFI ISO generation export for validation workflows.
 - Remi authenticated source ingestion, conversion, immutable-catalog, signing,
   and atomic-activation machinery. The first complete signed public universe
-  remains blocked on [#598](https://github.com/ConaryLabs/Conary/issues/598).
+  remains blocked on [#598](https://github.com/FieldmouseWorks/Conary/issues/598).
 
 ## What Will Break
 
@@ -230,7 +230,7 @@ Two of those deserve specific mention:
 Conary requires Rust 1.98.0+ on Linux.
 
 ```bash
-git clone https://github.com/ConaryLabs/Conary.git
+git clone https://github.com/FieldmouseWorks/Conary.git
 cd Conary
 cargo build -p conary
 sudo ./target/debug/conary system init
@@ -285,7 +285,7 @@ details.
 
 ## Community
 
-- [GitHub Discussions](https://github.com/ConaryLabs/Conary/discussions)
+- [GitHub Discussions](https://github.com/FieldmouseWorks/Conary/discussions)
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License

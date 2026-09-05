@@ -43,7 +43,7 @@ id = "fork-builder"
 cargo_name = "fork"
 kind = "git-dependency"
 declaration = "Cargo.toml:[workspace.dependencies].fork"
-git = "https://github.com/ConaryLabs/fork"
+git = "https://github.com/FieldmouseWorks/fork"
 rev = "1111111111111111111111111111111111111111"
 upstream = "https://github.com/upstream/fork"
 upstream_repo = "upstream/fork"
@@ -67,7 +67,7 @@ members = []
 demo = { path = "third_party/demo" }
 
 [workspace.dependencies]
-fork = { git = "https://github.com/ConaryLabs/fork", rev = "1111111111111111111111111111111111111111" }
+fork = { git = "https://github.com/FieldmouseWorks/fork", rev = "1111111111111111111111111111111111111111" }
 """,
         encoding="utf-8",
     )
@@ -221,7 +221,7 @@ class UpstreamExitTests(unittest.TestCase):
     def test_git_integration_detects_contained_pin(self) -> None:
         entry = {
             "id": "fork",
-            "git": "https://github.com/ConaryLabs/fork",
+            "git": "https://github.com/FieldmouseWorks/fork",
             "rev": "1" * 40,
             "upstream_repo": "upstream/fork",
             "upstream_ref": "main",

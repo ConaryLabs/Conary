@@ -65,7 +65,7 @@ package_once() {
     local output="$1"
     (
         cd "$fixture"
-        GITHUB_REPOSITORY=ConaryLabs/Conary \
+        GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         GITHUB_WORKFLOW=pr-gate \
         GITHUB_EVENT_NAME=pull_request \
         RUNNER_OS=Linux \
@@ -100,7 +100,7 @@ cmp "$tmpdir/first-manifest.json" "$tmpdir/second-manifest.json"
 rm -rf "$fixture/target"
 (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         scripts/native-matrix-artifact.sh verify \
             "$first" "$commit" 1234 pull_request >"$tmpdir/verified.json"
 )
@@ -116,7 +116,7 @@ cp "$first/native-matrix-artifacts.tar.gz" "$tmpdir/bundle-backup"
 printf '%s\n' corrupt >>"$first/native-matrix-artifacts.tar.gz"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         scripts/native-matrix-artifact.sh verify "$first" "$commit" 1234 pull_request
 ) >"$tmpdir/corrupt.out" 2>"$tmpdir/corrupt.err"; then
     fail "corrupt bundle passed verification"
@@ -127,7 +127,7 @@ mv "$tmpdir/bundle-backup" "$first/native-matrix-artifacts.tar.gz"
 
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         scripts/native-matrix-artifact.sh verify "$first" \
             0000000000000000000000000000000000000000 1234 pull_request
 ) >"$tmpdir/commit.out" 2>"$tmpdir/commit.err"; then
@@ -142,7 +142,7 @@ jq '.build.cargo_incremental = "1"' \
 mv "$tmpdir/mutated-manifest.json" "$first/native-matrix-artifact-manifest.json"
 if (
     cd "$fixture"
-    GITHUB_REPOSITORY=ConaryLabs/Conary \
+    GITHUB_REPOSITORY=FieldmouseWorks/Conary \
         scripts/native-matrix-artifact.sh verify "$first" "$commit" 1234 pull_request
 ) >"$tmpdir/policy.out" 2>"$tmpdir/policy.err"; then
     fail "mismatched build policy passed verification"

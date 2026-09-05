@@ -123,7 +123,7 @@ derivation or a named profile.
 Each component includes:
 - Package URL (PURL): `pkg:conary/name@version?arch=x86_64`
 - SHA-256 hash from first file entry
-- Tool metadata (vendor: ConaryLabs, version from Cargo)
+- Tool metadata (vendor: FieldmouseWorks, version from Cargo)
 
 Output to stdout or file via `--output`.
 

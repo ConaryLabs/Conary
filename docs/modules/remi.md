@@ -1178,7 +1178,7 @@ and preserves the pins. Installation then verifies a downloaded CCS against the 
 its exact repository provenance, so a key for one profile cannot authorize
 another. The self-hosted key option cannot replace canonical catalog authority.
 
-Self-hosted Remi has no implicit ConaryLabs authority. Its operator must move
+Self-hosted Remi has no implicit FieldmouseWorks authority. Its operator must move
 the appropriate `targets.public` file over an independently authenticated
 administrative channel and pass it to `conary repo add --ccs-package-key`.
 Serving that key beside the package would not establish trust. Key rotation

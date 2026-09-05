@@ -27,7 +27,7 @@ comments.
 ## Show HN Submission
 
 - **Title:** `Show HN: Conary - install RPM, DEB, and Arch packages across distros`
-- **URL:** `https://github.com/ConaryLabs/Conary`
+- **URL:** `https://github.com/FieldmouseWorks/Conary`
 - **Reschedule state:** TBD after external launch-gate clearance
 
 Submit the repository URL, then add the following opening comment.
@@ -72,13 +72,13 @@ the executor enforcement contract automatically. Unsupported requirements fail
 before mutation; there is no capability-approval bypass.
 
 Agent-assisted walkthrough, including download and checksum verification:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
 
 Privacy-safe feedback form:
-https://github.com/ConaryLabs/Conary/issues/new?template=pre_alpha_feedback.md
+https://github.com/FieldmouseWorks/Conary/issues/new?template=pre_alpha_feedback.md
 
 Adoption still exists as a migration path for systems already owned by another
 package manager, but it is not this test. The feedback I care about here is
@@ -114,13 +114,13 @@ The pinned guide asks an agent to preflight a disposable supported VM, verify
 the release checksum, select a source format different from the host format,
 explain the complete dry-run, ask before live mutations, keep a private
 transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
 
 Repository:
-https://github.com/ConaryLabs/Conary
+https://github.com/FieldmouseWorks/Conary
 
 Pinned release:
-https://github.com/ConaryLabs/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
 
 I'm interested both in product defects and in whether repo-owned instructions
 make Codex useful as a supervised systems-test operator. Exact failures,
@@ -152,11 +152,11 @@ contracts while owning the transaction and rollback on the target.
 The guide tells Claude Code to confirm a disposable supported VM, verify the
 pinned release checksum, inspect the complete dry-run, ask before every live
 mutation, keep a private transcript, and draft privacy-safe feedback:
-https://github.com/ConaryLabs/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
+https://github.com/FieldmouseWorks/Conary/blob/main/docs/guides/agent-assisted-tester-loop.md
 
 Repository and pinned release:
-https://github.com/ConaryLabs/Conary
-https://github.com/ConaryLabs/Conary/releases/tag/v0.16.1
+https://github.com/FieldmouseWorks/Conary
+https://github.com/FieldmouseWorks/Conary/releases/tag/v0.16.1
 
 The useful feedback is where a source-native contract fails, whether Conary
 explains it precisely, whether install/update/remove behave consistently, and
