@@ -12,11 +12,20 @@ import mmap
 import os
 from pathlib import Path, PurePosixPath
 import re
-import stat
 import sys
 import tarfile
 import tempfile
 from typing import Any, Iterator, NoReturn
+
+from native_oracle_common import (
+    canonical_json,
+    plain_directory,
+    plain_file,
+    reject_duplicate_key,
+    require_commit,
+    require_sha256,
+    sha256_file,
+)
 
 
 PUBLIC_PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
@@ -39,8 +48,6 @@ PROFILE_PRODUCER_BINARIES = {
     "ubuntu-26.04": ("conary-debian-oracle", "conary-debian-resolution-oracle"),
     "arch": ("conary-alpm-oracle", "conary-alpm-resolution-oracle"),
 }
-SHA256 = re.compile(r"^[0-9a-f]{64}$")
-COMMIT = re.compile(r"^[0-9a-f]{40}$")
 IDENTITY = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RUN_ID = re.compile(r"^[1-9][0-9]*$")
 MAX_MANIFEST_BYTES = 1024 * 1024
@@ -108,21 +115,6 @@ def fail(message: str) -> NoReturn:
     raise ValidationError(message)
 
 
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
-    ).encode()
-
-
-def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            fail(f"JSON repeats key {key!r}")
-        value[key] = item
-    return value
-
-
 def decode_json(data: bytes, label: str) -> Any:
     try:
         return json.loads(
@@ -138,26 +130,6 @@ def decode_json(data: bytes, label: str) -> Any:
 
 def sha256_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def hash_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def require_sha256(value: Any, label: str) -> str:
-    if not isinstance(value, str) or SHA256.fullmatch(value) is None:
-        fail(f"{label} must be one lowercase SHA-256")
-    return value
-
-
-def require_commit(value: Any, label: str) -> str:
-    if not isinstance(value, str) or COMMIT.fullmatch(value) is None:
-        fail(f"{label} must be one lowercase commit SHA")
-    return value
 
 
 def require_identity(value: Any, label: str) -> str:
@@ -215,27 +187,6 @@ def require_rust_identity(value: Any, label: str) -> str:
     return value
 
 
-def plain_file(path: Path, label: str, maximum: int | None = None) -> os.stat_result:
-    try:
-        metadata = path.lstat()
-    except OSError as error:
-        fail(f"cannot inspect {label}: {error}")
-    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
-        fail(f"{label} must be a plain file")
-    if maximum is not None and (metadata.st_size <= 0 or metadata.st_size > maximum):
-        fail(f"{label} size is outside its bounded contract")
-    return metadata
-
-
-def plain_directory(path: Path, label: str) -> None:
-    try:
-        metadata = path.lstat()
-    except OSError as error:
-        fail(f"cannot inspect {label}: {error}")
-    if not stat.S_ISDIR(metadata.st_mode) or path.is_symlink():
-        fail(f"{label} must be a plain directory")
-
-
 def load_json(path: Path, label: str, *, canonical: bool = False) -> tuple[Any, bytes]:
     metadata = plain_file(path, label, MAX_MANIFEST_BYTES)
     data = path.read_bytes()
@@ -282,9 +233,14 @@ def validate_run(
         or not isinstance(value.get("head_repository"), dict)
         or value["head_repository"].get("full_name") != repository
         or value.get("path") != workflow
-        or COMMIT.fullmatch(value.get("head_sha", "")) is None
     ):
         fail(f"{label} is not one exact successful protected-main workflow run")
+    try:
+        require_commit(value.get("head_sha"), f"{label} head commit")
+    except ValueError as error:
+        raise ValidationError(
+            f"{label} is not one exact successful protected-main workflow run"
+        ) from error
     return value
 
 
@@ -322,7 +278,7 @@ def validate_artifact_binding(
     manifest_bytes = canonical_json(manifest)
     manifest_sha256 = sha256_bytes(manifest_bytes)
     metadata = plain_file(artifact_path, f"{label} artifact")
-    artifact_sha256 = hash_file(artifact_path)
+    artifact_sha256 = sha256_file(artifact_path)
     if (
         bound.get("schema_version") != manifest.get("schema_version")
         or bound.get("manifest_sha256") != manifest_sha256
@@ -818,7 +774,7 @@ def build_input(args: argparse.Namespace) -> None:
     for name, path in files:
         metadata = plain_file(path, f"oracle transport member {name}")
         file_inventory.append(
-            {"path": name, "sha256": hash_file(path), "size": metadata.st_size}
+            {"path": name, "sha256": sha256_file(path), "size": metadata.st_size}
         )
     manifest = {
         "schema_version": INPUT_MANIFEST_SCHEMA,
@@ -884,7 +840,7 @@ def build_input(args: argparse.Namespace) -> None:
         ],
         "manifest_sha256": sha256_bytes(manifest_bytes),
         "transport": {
-            "sha256": hash_file(args.output),
+            "sha256": sha256_file(args.output),
             "size": plain_file(args.output, "oracle transport").st_size,
         },
     }
@@ -2083,7 +2039,7 @@ def load_input_package_manifests(
     metadata = plain_file(path, "authenticated oracle transport")
     if (
         metadata.st_size != expected_transport["size"]
-        or hash_file(path) != expected_transport["sha256"]
+        or sha256_file(path) != expected_transport["sha256"]
     ):
         fail("oracle transport differs from authenticated input evidence")
     try:
@@ -2977,7 +2933,7 @@ def verify_staged_output(
         "profiles": profiles,
         "counts": counts,
         "manifest_sha256": sha256_bytes(manifest_bytes),
-        "transport": {"sha256": hash_file(args.transport), "size": metadata.st_size},
+        "transport": {"sha256": sha256_file(args.transport), "size": metadata.st_size},
     }
     write_new(args.evidence, canonical_json(evidence))
     print(canonical_json(evidence).decode())
@@ -3065,5 +3021,5 @@ if __name__ == "__main__":
     except SchemaRebuildRequired as error:
         print(canonical_json(error.evidence).decode(), file=sys.stderr)
         raise SystemExit(3) from error
-    except (OSError, tarfile.TarError, ValidationError) as error:
+    except (OSError, tarfile.TarError, ValueError) as error:
         raise SystemExit(f"Remi resolution-survey transport validation failed: {error}") from error

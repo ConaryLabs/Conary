@@ -725,6 +725,7 @@ release_matrix_mutation_cases() {
 import sys
 
 cases = (
+    ('test_check_release_matrix_rejects_loose_native_oracle_common_digest', 'replace', 'scripts/native_oracle_common.py', 'SHA256.fullmatch(value)', 'SHA256.match(value)', 'native-oracle common strict canonical JSON, digest, and plain-path validation'),
     ('test_check_release_matrix_rejects_aliased_conversion_benchmark_authority', 'replace', '.github/workflows/remi-conversion-benchmark.yml', 'concurrency:', 'concurrency: &shared_concurrency', 'forbidden YAML anchors or aliases'),
     ('test_check_release_matrix_rejects_all_profile_retry', 'replace', '.github/workflows/deploy-remi-candidate.yml', 'refresh?force=true&profile=${profile}', 'refresh?force=true', 'retries only exact failed public profiles'),
     ('test_check_release_matrix_rejects_ambiguous_candidate_completion_mode', 'replace', '.github/workflows/deploy-remi-candidate.yml', '          - private-candidates', '          - candidate-ish', 'candidate deploy explicit typed completion mode'),

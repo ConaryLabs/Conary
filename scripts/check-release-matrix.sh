@@ -26,6 +26,7 @@ r2_durability_workflow=".github/workflows/remi-r2-durability.yml"
 pinned_production_ssh_action=".github/actions/setup-pinned-production-ssh/action.yml"
 conversion_workflow_checker="scripts/check-remi-conversion-workflow.py"
 native_oracle_transport_verifier="scripts/verify-native-oracle-input-transport.py"
+native_oracle_common="scripts/native_oracle_common.py"
 native_oracle_lane_producer="scripts/produce-native-oracle-lane.py"
 native_oracle_lane_assembler="scripts/assemble-native-oracle-lanes.py"
 native_oracle_lane_selector="scripts/native-oracle-lane-selection.py"
@@ -267,6 +268,7 @@ required_files=(
     "$native_oracle_lane_selector"
     "$native_oracle_producer_verifier"
     "$native_oracle_transport_verifier"
+    "$native_oracle_common"
     "$resolution_survey_transport"
     "$remi_resolution_survey"
     "$remi_deploy_helper"
@@ -668,7 +670,8 @@ require_job_match "$native_oracle_production_workflow" assemble 'if: \$\{\{ alwa
 require_job_match "$native_oracle_production_workflow" assemble '\.schema_version == 2[\s\S]*artifact_type == "native-oracle-three-lane-set"[\s\S]*\[\.lanes\[\]\.profile\] == \["fedora-44", "ubuntu-26\.04", "arch"\][\s\S]*producer_binaries\.package\.sha256[\s\S]*producer_binaries\.resolution\.sha256[\s\S]*github_artifact\.sha256[\s\S]*Upload assembled exact native oracle evidence' 'native-oracle assembly exact three-lane evidence and per-lane digests'
 require_job_match "$native_oracle_production_workflow" complete 'if: \$\{\{ always\(\) \}\}[\s\S]*needs: \[produce, assemble\][\s\S]*test "\$PRODUCER_RESULT" = success[\s\S]*test "\$ASSEMBLY_RESULT" = success' 'native-oracle production requires selected lanes and assembly'
 forbid_match "$native_oracle_production_workflow" 'conversion-crawl|promotion-(prove|activate)|/v1/admin|sudo -n (bash|sh)|ssh ' 'native-oracle production generic or mutating authority'
-require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*canonical_json\(value\) != data[\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
+require_match "$native_oracle_common" 'allow_nan=False[\s\S]*stat\.S_ISREG[\s\S]*stat\.S_ISDIR[\s\S]*object_pairs_hook=reject_duplicate_key[\s\S]*SHA256\.fullmatch\(value\)[\s\S]*COMMIT\.fullmatch\(value\)' 'native-oracle common strict canonical JSON, digest, and plain-path validation'
+require_match "$native_oracle_lane_producer" 'PUBLIC_PROFILES = \("fedora-44", "ubuntu-26\.04", "arch"\)[\s\S]*load_canonical\([\s\S]*native-oracle object directory disagrees[\s\S]*profile_revision_sha256[\s\S]*source_snapshot_sha256[\s\S]*authenticated roles changed[\s\S]*package_oracle_manifest_sha256' 'native-oracle lane strict typed ordering, digest, role, and oracle binding'
 require_match "$native_oracle_lane_producer" 'NATIVE_PACKAGE_ORACLE_SCHEMA = 1[\s\S]*NATIVE_RESOLUTION_ORACLE_SCHEMA = 3[\s\S]*manifest\.get\("schema_version"\) != required_schema' 'native-oracle lane exact distinct package and resolution schema authority'
 require_match "$native_oracle_lane_producer" 'NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 5[\s\S]*NATIVE_RESOLUTION_SURVEY_EVIDENCE_SCHEMA = 3[\s\S]*producer_binary[\s\S]*must be a regular file, never a symlink[\s\S]*sha256_file[\s\S]*"schema_version": NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA[\s\S]*"producer_commit"[\s\S]*"producer_binaries"' 'native-oracle lane exact producer commit and binary digest binding'
 require_match "$resolution_survey_workflow" 'workflow_dispatch:[\s\S]*oracle_run_id:[\s\S]*required: true[\s\S]*permissions:[\s\S]*actions: read[\s\S]*contents: read[\s\S]*concurrency:[\s\S]*group: deploy-and-verify[\s\S]*cancel-in-progress: false' 'resolution survey exact oracle input, read-only permissions, and shared serialization'
@@ -716,7 +719,7 @@ forbid_match "$resolution_survey_transport" 'MAX_SURVEY_TRANSPORT_BYTES|plain_fi
 forbid_match "$remi_deploy_helper" 'survey_validate_oracle_transport\(\) \{[\s\S]{0,500}transport_size' 'resolution survey arbitrary aggregate oracle input limit'
 require_match "$resolution_survey_transport" 'validate_input_evidence\([\s\S]*deployment != input_deployment[\s\S]*survey binding differs from authenticated input[\s\S]*--input-evidence' 'resolution survey output verifier exact authenticated input bindings'
 require_match "$resolution_survey_transport" 'MAX_SURVEY_DOCUMENTS = len\(PUBLIC_PROFILES\) \* 4[\s\S]*implementation_file[\s\S]*candidate-resolution-implementation\.json[\s\S]*validate_resolution_implementation[\s\S]*comparison-resolution-implementation\.json' 'resolution survey output verifier retains and validates worker implementation evidence'
-require_match "$resolution_survey_transport" 'load_input_package_manifests\([\s\S]*hash_file\(path\) != expected_transport\["sha256"\][\s\S]*oracle transport manifest differs from authenticated input evidence[\s\S]*package manifest differs from authenticated input' 'resolution survey reopens exact authenticated package manifests for candidate reconstruction'
+require_match "$resolution_survey_transport" 'load_input_package_manifests\([\s\S]*sha256_file\(path\) != expected_transport\["sha256"\][\s\S]*oracle transport manifest differs from authenticated input evidence[\s\S]*package manifest differs from authenticated input' 'resolution survey reopens exact authenticated package manifests for candidate reconstruction'
 require_match "$resolution_survey_transport" 'reconstruct_candidate_manifest_sha256\([\s\S]*update_native_outcome_digest\(artifact[\s\S]*candidate_manifest[\s\S]*validate_comparison_survey\([\s\S]*survey\["candidate_manifest_sha256"\] != candidate_manifest_sha256' 'resolution survey comparison binds its streamed reconstructed candidate manifest'
 require_match "$resolution_survey_transport" 'validate_candidate_package_coverage\([\s\S]*StreamingJsonLines\([\s\S]*PACKAGE_ROW_SKIP_SPEC[\s\S]*if actual != expected[\s\S]*root differs from its authenticated package oracle[\s\S]*package root count differs from its authenticated manifest' 'resolution survey candidate roots exactly cover the authenticated package oracle'
 require_match "$resolution_survey_transport" '\n            validate_candidate_package_coverage\([\s\S]*args\.oracle_transport[\s\S]*comparison = profile\["comparison"\][\s\S]*if comparison is None' 'resolution survey validates package coverage before the findings branch'

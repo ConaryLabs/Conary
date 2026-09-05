@@ -15,6 +15,15 @@ import subprocess
 import sys
 from typing import Any
 
+from native_oracle_common import (
+    canonical_json,
+    load_canonical,
+    plain_directory,
+    require_commit,
+    require_sha256,
+    sha256_file,
+)
+
 
 PROFILES = ("fedora-44", "ubuntu-26.04", "arch")
 
@@ -88,65 +97,8 @@ NATIVE_ORACLE_LANE_EVIDENCE_SCHEMA = 5
 NATIVE_ORACLE_THREE_LANE_SET_SCHEMA = 2
 
 
-def canonical_json(value: Any) -> bytes:
-    return json.dumps(
-        value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
-    ).encode()
-
-
-def reject_duplicate_key(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError(f"duplicate JSON key {key!r}")
-        value[key] = item
-    return value
-
-
-def plain_directory(path: Path, label: str) -> None:
-    if not stat.S_ISDIR(path.lstat().st_mode):
-        raise ValueError(f"{label} must be a directory, never a symlink")
-
-
-def plain_file(path: Path, label: str, maximum: int | None = None) -> bytes:
-    metadata = path.lstat()
-    if not stat.S_ISREG(metadata.st_mode):
-        raise ValueError(f"{label} must be a regular file, never a symlink")
-    if maximum is not None and metadata.st_size > maximum:
-        raise ValueError(f"{label} exceeds {maximum} bytes")
-    return path.read_bytes()
-
-
-def load_canonical(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
-    data = plain_file(path, label, MAX_JSON_BYTES)
-    value = json.loads(data, object_pairs_hook=reject_duplicate_key)
-    if not isinstance(value, dict) or canonical_json(value) != data:
-        raise ValueError(f"{label} is not a canonical JSON object")
-    return value, data
-
-
 def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def require_sha256(value: Any, label: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise ValueError(f"{label} must be a lowercase SHA-256")
-    return value
-
-
-def require_commit(value: Any, label: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise ValueError(f"{label} must be a full lowercase commit SHA")
-    return value
 
 
 def require_positive(value: Any, label: str) -> int:
