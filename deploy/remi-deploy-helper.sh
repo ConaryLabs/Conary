@@ -12,6 +12,7 @@ SITE_INSTALLER_URL="${CONARY_REMI_DEPLOY_SITE_INSTALLER_URL:-https://conary.io/i
 SITE_ORIGIN_RESOLVE="${CONARY_REMI_DEPLOY_SITE_ORIGIN_RESOLVE:-conary.io:443:127.0.0.1}"
 
 die() {
+    SURVEY_FAILURE_MESSAGE="$*"
     echo "remi deploy helper: $*" >&2
     exit 1
 }
@@ -29,6 +30,7 @@ usage:
   conary-remi-deploy inspect-remi-storage
   conary-remi-deploy export-native-oracle-inputs <export-id> <fedora-sha256> <ubuntu-sha256> <arch-sha256>
   conary-remi-deploy survey-resolution <survey-id> <export-id> <oracle-transport-path>
+  conary-remi-deploy export-resolution-survey-evidence <survey-id> <export-id>
   conary-remi-deploy benchmark-remi-conversion <run-id> <installed-binary-sha256> <profile> <revision-sha256> <package-key-sha256> <source-sha256> <source-size>
   conary-remi-deploy verify-ingress
   conary-remi-deploy verify-access
@@ -989,6 +991,130 @@ export_native_oracle_inputs() {
 SURVEY_REMI_STOPPED=0
 SURVEY_STAGING=""
 SURVEY_TRANSPORT_NEXT=""
+SURVEY_RETAINED=""
+SURVEY_COMMAND_STATUS=null
+SURVEY_FAILURE_MESSAGE=""
+
+survey_sanitize_json() {
+    jq -cS '
+        def redact: if test("(/conary/|/etc/|/tmp/|/data/|/home/)") then "<redacted-host-path>" else . end;
+        walk(if type == "string" then redact
+             elif type == "object" then with_entries(.key |= redact) else . end)
+    '
+}
+
+survey_sanitize_outcome() {
+    local outcome="$1" sanitized
+    if [[ ! -f "$outcome" ]]; then
+        printf '%s\n' '{"document_state":"not_written"}'
+    elif [[ ! -s "$outcome" ]]; then
+        printf '%s\n' '{"document_state":"empty","source_bytes":0}'
+    elif sanitized="$(jq -es 'if length == 1 then .[0] else error("document_count") end
+        | if type == "object" and has("output_dir") then .output_dir = "<survey-output>" else . end' \
+        "$outcome" 2>/dev/null | survey_sanitize_json)"; then
+        printf '%s\n' "$sanitized"
+    else
+        jq -cn --argjson bytes "$(stat -c '%s' "$outcome")" \
+            --arg sha256 "$(sha256sum "$outcome" | cut -d ' ' -f 1)" \
+            '{document_state:"invalid_json",source_bytes:$bytes,source_sha256:$sha256}'
+    fi
+}
+
+survey_retain_diagnostics() {
+    [[ -n "$SURVEY_RETAINED" ]] || return 0
+    if [[ -n "$SURVEY_STAGING" ]]; then
+        survey_sanitize_outcome "${SURVEY_STAGING}/outcome.json" >"${SURVEY_RETAINED}/outcome.json"
+        chmod 0600 "${SURVEY_RETAINED}/outcome.json"
+        if [[ -f "${SURVEY_STAGING}/outcome.json" ]]; then
+            install -m 0600 "${SURVEY_STAGING}/outcome.json" "${SURVEY_RETAINED}/outcome.raw.json"
+        fi
+        if [[ -f "${SURVEY_STAGING}/diagnostic.log" ]]; then
+            # Keep the causal stderr for host-local investigation; it is never
+            # part of the public recovery allowlist.
+            install -m 0600 "${SURVEY_STAGING}/diagnostic.log" "${SURVEY_RETAINED}/diagnostic.log"
+        fi
+    fi
+    if [[ "$READINESS_INSPECTION" != '{}' && ! -f "${SURVEY_RETAINED}/restore.json" ]]; then
+        printf '%s\n' "$READINESS_INSPECTION" >"${SURVEY_RETAINED}/restore.json"
+        chmod 0600 "${SURVEY_RETAINED}/restore.json"
+    fi
+}
+
+survey_record_failure() {
+    local status="$1"
+    [[ -n "$SURVEY_RETAINED" ]] || return 0
+    survey_retain_diagnostics
+    jq -cn --argjson status "$status" --argjson survey_status "$SURVEY_COMMAND_STATUS" \
+        --arg message "${SURVEY_FAILURE_MESSAGE:-survey helper exited without a diagnostic}" '
+        {schema_version:1,outcome:"helper_failed",status:$status,
+         survey_status:$survey_status,message:$message}
+    ' | survey_sanitize_json >"${SURVEY_RETAINED}/helper.json"
+    chmod 0600 "${SURVEY_RETAINED}/helper.json"
+}
+
+# A fixed, read-only export of retained diagnostics. These bytes do not confer
+# survey authority: only verify-output may verify the existing survey transport.
+export_resolution_survey_evidence() {
+    local survey_id="$1" export_id="$2"
+    validate_identity resolution-survey "$survey_id"
+    validate_identity native-oracle-export "$export_id"
+    [[ -n "$ROOT" || "$(id -u)" == 0 ]] || die "helper must run as root"
+    local retained staging availability=not_retained input_sha256=null
+    retained="$(root_path "/conary/evidence/.remi-operator-staging/completed-resolution-survey-${survey_id}")"
+    staging="$(mktemp -d /tmp/remi-survey-recovery.XXXXXX)"
+    trap 'rm -rf -- "$staging"' EXIT
+    local rows="${staging}/files.jsonl" skipped="${staging}/skipped.jsonl"
+    : >"$rows"
+    : >"$skipped"
+    local -a members=()
+    local path file size sha256
+    if [[ -e "$retained" || -L "$retained" ]]; then
+        [[ -d "$retained" && ! -L "$retained" && "$(stat -c '%a:%u' "$retained")" == "700:$(id -u)" ]] ||
+            die "survey recovery root is not a private control-owned directory"
+        availability=retained
+        if [[ -f "$retained/input-manifest.json" && ! -L "$retained/input-manifest.json" ]]; then
+            jq -e --arg survey "$survey_id" --arg export "$export_id" '
+                .schema_version == 2 and .survey_id == $survey and .export_id == $export
+            ' "$retained/input-manifest.json" >/dev/null || die "survey recovery input binding disagrees"
+            input_sha256="\"$(sha256sum "$retained/input-manifest.json" | cut -d ' ' -f 1)\""
+        fi
+        for path in outcome.json restore.json helper.json input-manifest.json manifest.json \
+            survey-output/{fedora-44,ubuntu-26.04,arch}.{candidate-resolution-survey,candidate-resolution-implementation,native-resolution-comparison-survey,comparison-resolution-implementation}.json; do
+            file="${retained}/${path}"
+            [[ -e "$file" || -L "$file" ]] || continue
+            [[ -f "$file" && ! -L "$file" && "$(stat -c '%a:%u' "$file")" == "600:$(id -u)" ]] ||
+                die "survey recovery member is not private control-owned data"
+            if [[ "$path" == survey-output/* ]]; then
+                [[ -d "$retained/survey-output" && ! -L "$retained/survey-output" \
+                    && "$(stat -c '%a:%u' "$retained/survey-output")" == "700:$(id -u)" ]] ||
+                    die "survey recovery output is not a private control-owned directory"
+            fi
+            if grep -F -e /conary/ -e /etc/ -e /tmp/ -e /data/ -e /home/ "$file" >/dev/null; then
+                jq -cn --arg path "$path" '{path:$path,reason:"private_host_path"}' >>"$skipped"
+                continue
+            fi
+            sha256="$(sha256sum "$file" | cut -d ' ' -f 1)"
+            size="$(stat -c '%s' "$file")"
+            jq -cn --arg path "$path" --arg sha256 "$sha256" --argjson size "$size" \
+                '{path:$path,sha256:$sha256,size:$size}' >>"$rows"
+            members+=("$path")
+        done
+    fi
+    jq -cnS --arg survey_id "$survey_id" --arg export_id "$export_id" \
+        --arg availability "$availability" --argjson input_sha256 "$input_sha256" \
+        --slurpfile files "$rows" --slurpfile skipped "$skipped" '
+        {schema_version:1,kind:"resolution_survey_recovery",authority:"diagnostic_only",
+         survey_id:$survey_id,export_id:$export_id,availability:$availability,
+         input_manifest_sha256:$input_sha256,files:$files,withheld:$skipped}
+    ' >"$staging/recovery.json"
+    if (( ${#members[@]} > 0 )); then
+        tar -cf - -C "$staging" recovery.json -C "$retained" "${members[@]}"
+    else
+        tar -cf - -C "$staging" recovery.json
+    fi
+    rm -rf -- "$staging"
+    trap - EXIT
+}
 
 survey_restore_and_exit() {
     local status="$1"
@@ -1008,11 +1134,58 @@ survey_restore_and_exit() {
             fi
         fi
     fi
+    if (( status != 0 )); then
+        survey_record_failure "$status"
+    fi
     if [[ -n "$SURVEY_STAGING" ]]; then
         rm -rf -- "$SURVEY_STAGING"
         SURVEY_STAGING=""
     fi
     exit "$status"
+}
+
+survey_validate_outcome() {
+    local outcome="$1" output="$2"
+    jq -es --arg output "$output" '
+        def clause($name; predicate):
+            if (try predicate catch false) then . else $name | halt_error(1) end;
+        def uint: type == "number" and floor == . and . >= 0;
+        clause("outcome.document_count"; length == 1)
+        | .[0]
+        | clause("outcome.object"; type == "object")
+        | clause("outcome.keys"; keys == ["candidate_failures", "comparison_mismatches",
+            "comparison_profiles", "output_dir", "profile_results", "profiles", "roots_walked"])
+        | clause("outcome.output_dir"; .output_dir == $output)
+        | clause("outcome.profiles"; .profiles == 3)
+        | clause("outcome.integer_counts";
+            all(.roots_walked, .candidate_failures, .comparison_mismatches, .comparison_profiles; uint)
+            and .comparison_profiles <= 3)
+        | clause("outcome.profile_results"; .profile_results | type == "array" and length == 3)
+        | clause("outcome.profile_order";
+            [.profile_results[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
+        | clause("profile.keys"; all(.profile_results[]; keys == ["candidate", "comparison", "profile"]))
+        | clause("candidate.keys"; all(.profile_results[];
+            (.candidate | keys) == ["counts", "total_failures"]))
+        | clause("candidate.counts"; all(.profile_results[];
+            (.candidate.counts | type == "object") and (.candidate.total_failures | uint)))
+        | clause("comparison.null_or_object"; all(.profile_results[];
+            if .candidate.total_failures == 0 then
+                (.comparison | type == "object")
+                and ((.comparison | keys) == ["candidate_manifest_sha256", "counts", "total_mismatches"])
+                and (.comparison.candidate_manifest_sha256 | type == "string" and test("^[0-9a-f]{64}$"))
+                and (.comparison.counts | type == "object")
+                and (.comparison.total_mismatches | uint)
+            else .comparison == null end))
+        | clause("aggregate.roots_walked";
+            .roots_walked == ([.profile_results[].candidate.counts.roots_walked] | add))
+        | clause("aggregate.candidate_failures";
+            .candidate_failures == ([.profile_results[].candidate.total_failures] | add))
+        | clause("aggregate.comparison_profiles";
+            .comparison_profiles == ([.profile_results[].comparison | select(. != null)] | length))
+        | clause("aggregate.comparison_mismatches";
+            .comparison_mismatches == ([.profile_results[] | .comparison.total_mismatches // 0] | add))
+        | true
+    ' "$outcome"
 }
 
 survey_validate_oracle_transport() {
@@ -1323,6 +1496,10 @@ survey_resolution() {
 
     remi_systemctl is-active --quiet remi ||
         die "Remi must be active before a production resolution survey"
+    local retained="${survey_staging_root}/completed-resolution-survey-${survey_id}"
+    mkdir -m 0700 "$retained" || die "resolution survey retained target already exists"
+    SURVEY_RETAINED="$retained"
+    install -m 0600 "$input_manifest" "$retained/input-manifest.json"
     SURVEY_REMI_STOPPED=1
     remi_systemctl stop remi || die "failed to stop Remi for resolution survey"
 
@@ -1373,6 +1550,8 @@ survey_resolution() {
         survey_status=$?
     fi
 
+    SURVEY_COMMAND_STATUS="$survey_status"
+    survey_retain_diagnostics
     [[ -d "$output" && ! -L "$output" && "$(stat -c '%a' "$output")" == "700" ]] ||
         die "resolution survey did not create its private output directory"
     [[ "$(stat -c '%u' "$output")" == "$runtime_uid" ]] ||
@@ -1415,8 +1594,6 @@ survey_resolution() {
         die "resolution survey output contains a non-plain entry"
 
     # Retain the exact control-owned snapshot before attempting restoration.
-    local retained="${survey_staging_root}/completed-resolution-survey-${survey_id}"
-    mkdir -m 0700 "$retained" || die "resolution survey retained target already exists"
     mv -- "$frozen_output" "${retained}/survey-output"
     frozen_output="${retained}/survey-output"
     local restore_outcome=restored restore_diagnostic=""
@@ -1429,37 +1606,10 @@ survey_resolution() {
     printf '%s\n' "$READINESS_INSPECTION" >"${retained}/restore.json"
     chmod 0600 "${retained}/restore.json"
 
-    jq -e \
-        --arg output "$output" '
-        .output_dir == $output
-        and .profiles == 3
-        and (.roots_walked | type == "number" and . >= 0)
-        and (.candidate_failures | type == "number" and . >= 0)
-        and (.comparison_mismatches | type == "number" and . >= 0)
-        and (.comparison_profiles | type == "number" and . >= 0 and . <= 3)
-        and (.profile_results | type == "array" and length == 3)
-        and ([.profile_results[].profile] == ["fedora-44", "ubuntu-26.04", "arch"])
-        and all(.profile_results[];
-          (.candidate | keys | sort) == ["counts", "total_failures"]
-          and (.candidate.counts | type == "object")
-          and (.candidate.total_failures | type == "number" and . >= 0)
-          and if .candidate.total_failures == 0 then
-            (.comparison | type == "object")
-            and ((.comparison | keys | sort)
-              == ["candidate_manifest_sha256", "counts", "total_mismatches"])
-            and (.comparison.candidate_manifest_sha256
-              | type == "string" and test("^[0-9a-f]{64}$"))
-            and (.comparison.counts | type == "object")
-            and (.comparison.total_mismatches | type == "number" and . >= 0)
-          else .comparison == null end)
-        and .roots_walked == ([.profile_results[].candidate.counts.roots_walked] | add)
-        and .candidate_failures == ([.profile_results[].candidate.total_failures] | add)
-        and .comparison_profiles == ([.profile_results[].comparison | select(. != null)] | length)
-        and .comparison_mismatches == (
-          [.profile_results[].comparison.total_mismatches // 0] | add)
-    ' "$outcome" >/dev/null || {
-        die "resolution survey did not return its exact typed outcome"
-    }
+    local outcome_clause
+    if ! outcome_clause="$(survey_validate_outcome "$outcome" "$output" 2>&1)"; then
+        die "resolution survey outcome rejected (command status ${survey_status}): ${outcome_clause}; sanitized outcome: $(survey_sanitize_outcome "$outcome")"
+    fi
     local candidate_failures comparison_mismatches
     candidate_failures="$(jq -r '.candidate_failures' "$outcome")"
     comparison_mismatches="$(jq -r '.comparison_mismatches' "$outcome")"
@@ -1642,7 +1792,6 @@ survey_resolution() {
     rm -f "$SURVEY_TRANSPORT_NEXT"
     SURVEY_TRANSPORT_NEXT=""
     restore_sha256="$(sha256sum "$restore_transport" | cut -d ' ' -f 1)"
-    trap - EXIT INT TERM
     rm -rf -- "$SURVEY_STAGING"
     SURVEY_STAGING=""
     printf 'Resolution survey: survey=%s export=%s transport=%s sha256=%s bytes=%s candidate_failures=%s comparison_mismatches=%s restore_outcome=%s restore_sha256=%s\n' \
@@ -1651,6 +1800,7 @@ survey_resolution() {
     if [[ "$restore_outcome" == restore_failed ]]; then
         die "failed to restore Remi after resolution survey: ${restore_diagnostic}"
     fi
+    trap - EXIT INT TERM
 }
 
 BENCHMARK_REMI_STOPPED=0
@@ -2110,6 +2260,10 @@ verify_access() {
     [[ -f "$(root_path /etc/conary/remi.toml)" ]] || die "missing /etc/conary/remi.toml"
 }
 
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return
+fi
+
 case "${1:-}" in
     deploy-conary)
         [[ $# -eq 3 ]] || usage
@@ -2150,6 +2304,10 @@ case "${1:-}" in
     survey-resolution)
         shift
         survey_resolution "$@"
+        ;;
+    export-resolution-survey-evidence)
+        [[ $# -eq 3 ]] || usage
+        export_resolution_survey_evidence "$2" "$3"
         ;;
     benchmark-remi-conversion)
         shift

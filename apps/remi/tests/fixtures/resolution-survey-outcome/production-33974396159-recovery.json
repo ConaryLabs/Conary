@@ -1,0 +1,36 @@
+{
+  "workflow_run_id": 33974396159,
+  "outcome_document": "not_retained",
+  "recovery": {
+    "authority": "diagnostic_only",
+    "availability": "retained",
+    "export_id": "slice6-33966202011-33966330309-1",
+    "files": [
+      {
+        "path": "restore.json",
+        "sha256": "2eade87b73713a9a95a762369df8983b446376c996f8dfbfbce09bc97af599af",
+        "size": 301
+      }
+    ],
+    "input_manifest_sha256": null,
+    "kind": "resolution_survey_recovery",
+    "schema_version": 1,
+    "survey_id": "survey-33966386251-33974396159-1",
+    "withheld": []
+  },
+  "restore": {
+    "basis_seconds": 2,
+    "budget_seconds": 4,
+    "budget_source": "last_recorded_duration",
+    "ceiling_seconds": 7200,
+    "elapsed_seconds": 1,
+    "last_ready_duration_seconds": 1,
+    "multiplier": 2,
+    "outcome": "restored",
+    "probe": "deploy_health",
+    "reason": "ready",
+    "restart_to_ready_seconds": 1,
+    "schema_version": 1,
+    "systemctl_status": 0
+  }
+}

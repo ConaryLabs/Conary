@@ -294,4 +294,102 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("already exists"));
     }
+    #[test]
+    fn resolution_survey_outcome_serialization_contract() {
+        use conary_core::repository::catalog::{
+            ConaryResolutionSurveyErrorCountV1, ConaryResolutionSurveyErrorKindV1,
+            ConaryResolutionSurveyErrorReasonV1, NativeResolutionSurveyErrorVariantV1,
+        };
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let fixtures = root.join("apps/remi/tests/fixtures/resolution-survey-outcome");
+        let generated = tempfile::tempdir().unwrap();
+        for (name, failures) in [
+            ("clean", [0, 0, 0]),
+            ("mixed", [0, 1, 0]),
+            ("failed", [1, 1, 1]),
+        ] {
+            let profile_results: Vec<_> = ["fedora-44", "ubuntu-26.04", "arch"]
+                .into_iter()
+                .zip(failures)
+                .map(
+                    |(profile, total_failures)| RemiResolutionSurveyProfileOutcome {
+                        profile: profile.to_owned(),
+                        candidate: RemiResolutionSurveyCandidateOutcome {
+                            counts: ConaryResolutionSurveyCountsV1 {
+                                roots_walked: 4,
+                                resolved_roots: 2 - total_failures,
+                                unresolved_roots: 1,
+                                not_installable_roots: 1,
+                                failed_roots: total_failures,
+                                error_kinds: if total_failures == 0 {
+                                    Vec::new()
+                                } else {
+                                    vec![ConaryResolutionSurveyErrorCountV1 {
+                                        kind: ConaryResolutionSurveyErrorKindV1 {
+                                            error_variant:
+                                                NativeResolutionSurveyErrorVariantV1::ConfigError,
+                                            reason:
+                                                ConaryResolutionSurveyErrorReasonV1::SolverFailed,
+                                        },
+                                        count: total_failures,
+                                    }]
+                                },
+                            },
+                            total_failures,
+                        },
+                        comparison: (total_failures == 0).then(|| {
+                            RemiResolutionSurveyComparisonOutcome {
+                                candidate_manifest_sha256: "a".repeat(64),
+                                counts: NativeResolutionComparisonSurveyCountsV1 {
+                                    roots_walked: 4,
+                                    matching_roots: 4,
+                                    mismatched_roots: 0,
+                                    mismatch_kinds: Vec::new(),
+                                    outcome_kind_pairs: Vec::new(),
+                                },
+                                total_mismatches: 0,
+                            }
+                        }),
+                    },
+                )
+                .collect();
+            let outcome = RemiResolutionSurveyOutcome {
+                output_dir: PathBuf::from("<survey-output>"),
+                profiles: profile_results.len(),
+                roots_walked: 12,
+                candidate_failures: failures.into_iter().sum(),
+                comparison_mismatches: 0,
+                comparison_profiles: profile_results
+                    .iter()
+                    .filter(|profile| profile.comparison.is_some())
+                    .count(),
+                profile_results,
+            };
+            let serialized = format!("{}\n", serde_json::to_string_pretty(&outcome).unwrap());
+            let file_name = format!("{name}.json");
+            fs::write(generated.path().join(&file_name), &serialized).unwrap();
+            if std::env::var_os("CONARY_REMI_UPDATE_OUTCOME_FIXTURES").is_some() {
+                fs::write(fixtures.join(&file_name), &serialized).unwrap();
+            }
+            assert_eq!(
+                serialized,
+                fs::read_to_string(fixtures.join(&file_name)).unwrap(),
+                "Rust outcome serialization drifted; regenerate the fixtures and update the helper contract together"
+            );
+        }
+        let result = std::process::Command::new("bash")
+            .arg(root.join("scripts/test-remi-deploy-helper.sh"))
+            .arg("--outcome-fixtures")
+            .arg(generated.path())
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "helper rejected Rust-serialized outcome fixtures:\n{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }

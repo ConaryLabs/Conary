@@ -2976,6 +2976,95 @@ def verify_output(args: argparse.Namespace) -> None:
         )
 
 
+def verify_recovery(args: argparse.Namespace) -> None:
+    """Admit digest-bound diagnostic bytes without granting survey authority."""
+    survey_id = require_identity(args.survey_id, "survey id")
+    export_id = require_identity(args.export_id, "export id")
+    _, _, input_sha256, _ = validate_input_evidence(args.input_evidence, survey_id, export_id)
+    allowed = {"outcome.json", "restore.json", "helper.json", "input-manifest.json", "manifest.json"}
+    allowed.update(
+        f"survey-output/{profile}.{suffix}.json"
+        for profile in PUBLIC_PROFILES
+        for suffix in (
+            "candidate-resolution-survey", "candidate-resolution-implementation",
+            "native-resolution-comparison-survey", "comparison-resolution-implementation",
+        )
+    )
+    plain_file(args.transport, "survey recovery transport")
+    with tarfile.open(args.transport, mode="r:") as archive:
+        members = []
+        for member in archive:
+            members.append(member)
+            if len(members) > len(allowed) + 1:
+                fail("survey recovery contains too many members")
+        if not members or members[0].name != "recovery.json":
+            fail("survey recovery must begin with its typed manifest")
+        if len(members) > len(allowed) + 1 or any(not member.isfile() for member in members):
+            fail("survey recovery contains unexpected member types or count")
+        manifest_bytes = read_tar_member(archive, members[0], MAX_MANIFEST_BYTES)
+        manifest = exact_object(decode_json(manifest_bytes, "survey recovery manifest"), {
+            "schema_version", "kind", "authority", "survey_id", "export_id",
+            "availability", "input_manifest_sha256", "files", "withheld",
+        }, "survey recovery manifest")
+        require_envelope_schema(manifest, 1, "survey recovery manifest")
+        if (
+            manifest["kind"] != "resolution_survey_recovery"
+            or manifest["authority"] != "diagnostic_only"
+            or manifest["survey_id"] != survey_id or manifest["export_id"] != export_id
+            or not isinstance(manifest["availability"], str)
+            or manifest["availability"] not in {"retained", "not_retained"}
+            or not isinstance(manifest["files"], list)
+            or not isinstance(manifest["withheld"], list)
+        ):
+            fail("survey recovery request/schema binding drifted")
+        bound_input = manifest["input_manifest_sha256"]
+        if bound_input is not None and bound_input != input_sha256:
+            fail("survey recovery differs from authenticated input manifest")
+        seen: set[str] = set()
+        entries = []
+        for item in manifest["files"]:
+            item = exact_object(item, {"path", "size", "sha256"}, "survey recovery file")
+            name = item["path"]
+            if not isinstance(name, str) or name not in allowed or name in seen:
+                fail("survey recovery file is unsafe or repeated")
+            seen.add(name)
+            exact_nonnegative_int(item["size"], "survey recovery file size")
+            require_sha256(item["sha256"], "survey recovery file digest")
+            entries.append(item)
+        for item in manifest["withheld"]:
+            item = exact_object(item, {"path", "reason"}, "withheld recovery file")
+            if not isinstance(item["path"], str) or item["path"] not in allowed or item["path"] in seen or item["reason"] != "private_host_path":
+                fail("survey recovery withheld file is unsafe or repeated")
+            seen.add(item["path"])
+        if manifest["availability"] == "not_retained" and (seen or bound_input is not None):
+            fail("unretained survey recovery claims retained evidence")
+        if [member.name for member in members] != ["recovery.json", *[item["path"] for item in entries]]:
+            fail("survey recovery members disagree with its manifest")
+        if (bound_input is not None) != ("input-manifest.json" in seen):
+            fail("survey recovery input binding lacks its retained manifest")
+        if args.output.exists():
+            fail("survey recovery destination already exists")
+        with tempfile.TemporaryDirectory(prefix="remi-survey-recovery-", dir=args.output.parent) as directory:
+            staging = Path(directory)
+            for member, item in zip(members[1:], entries):
+                destination = staging / item["path"]
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                copy_tar_member(archive, member, destination, item["size"], item["sha256"])
+                forbid_private_path_bytes(destination, "survey recovery member")
+                if item["path"] == "input-manifest.json" and item["sha256"] != input_sha256:
+                    fail("retained recovery input bytes differ from authenticated input")
+            write_new(staging / "recovery.json", canonical_json(manifest))
+            evidence = {
+                "schema_version": 1, "kind": "resolution_survey_recovery_verification",
+                "authority": "diagnostic_only", "survey_id": survey_id, "export_id": export_id,
+                "availability": manifest["availability"],
+                "input_binding": "verified" if bound_input is not None else "not_retained",
+                "transport": {"sha256": sha256_file(args.transport), "size": args.transport.stat().st_size},
+            }
+            write_new(staging / "recovery-verification.json", canonical_json(evidence))
+            staging.rename(args.output)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -3004,6 +3093,12 @@ def parse_args() -> argparse.Namespace:
     verify.add_argument("--oracle-transport", required=True, type=Path)
     verify.add_argument("--transport", required=True, type=Path)
     verify.add_argument("--evidence", required=True, type=Path)
+    recovery = subparsers.add_parser("verify-recovery")
+    recovery.add_argument("--survey-id", required=True)
+    recovery.add_argument("--export-id", required=True)
+    recovery.add_argument("--input-evidence", required=True, type=Path)
+    recovery.add_argument("--transport", required=True, type=Path)
+    recovery.add_argument("--output", required=True, type=Path)
     return parser.parse_args()
 
 
@@ -3011,8 +3106,10 @@ def main() -> None:
     args = parse_args()
     if args.command == "build-input":
         build_input(args)
-    else:
+    elif args.command == "verify-output":
         verify_output(args)
+    else:
+        verify_recovery(args)
 
 
 if __name__ == "__main__":
