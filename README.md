@@ -96,8 +96,11 @@ sudo conary install ./package.pkg.tar.zst --dry-run
 ```
 
 Preflight validates the package's declared capabilities against the target
-before anything is mutated. An unsupported declaration fails there; there is
-no capability-approval bypass.
+before the requested package mutates anything. An unsupported declaration
+fails there; there is no capability-approval bypass. Missing dependencies are
+installed as their own changeset before that preflight, so a capability
+failure can leave them in place
+([#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
 
 To test reversible adoption of packages the host's native package manager
 already owns:
@@ -109,7 +112,19 @@ sudo conary system unadopt --all --yes
 ```
 
 Commands that change packages, files, generation state, or native authority
-require `--yes`. Use `--dry-run` first when the command supports it. The
+require `--yes` unless run with `--dry-run`. The command-risk policy in
+`apps/conary/src/command_risk.rs` authorizes these state-changing commands
+without it: `conary self-update` (the `--check` and verify forms are
+read-only), `conary try keep`, `conary try rollback`, and
+`conary try --activate`, which carry apply intent themselves;
+`conary system adopt` in its `--system`, package, and `--refresh` forms,
+which change Conary's tracking records rather than host files; the root-only
+`conary system adopt --refresh --quiet --from-sync-hook` native
+package-manager hook; the hidden boot-time `conary system generation activate`
+continuation, authorized by the selected generation artifact and kernel
+command line; and local-state commands such as `conary repo`, `conary config`,
+`conary pin`, `conary unpin`, and `conary system init`, which change Conary's
+own records only. Use `--dry-run` first when the command supports it. The
 default `conary --help` shows the daily-driver commands;
 `conary --help-advanced` and
 [docs/guides/advanced-commands.md](docs/guides/advanced-commands.md) list the
@@ -133,7 +148,8 @@ packaging and platform surface.
 ### What will break
 
 - A package that needs a target capability the host does not provide fails
-  preflight before mutation.
+  preflight before it mutates anything; dependencies installed ahead of it
+  stay installed ([#917](https://github.com/FieldmouseWorks/Conary/issues/917)).
 - Source lifecycle forms outside the implemented RPM, Debian, or ALPM ABI are
   bugs to model and test; Conary does not guess behavior from script text.
 - Remi's first complete signed public universe is still blocked on
